@@ -8,6 +8,6 @@ WORKDIR /app
 COPY scripts/release/ ./scripts/release/
 RUN mkdir -p /state /mailbox
 COPY LICENSE THIRD_PARTY_NOTICES.md third_party/server-sources.md /licenses/
-COPY third_party/server-source-manifest.json third_party/server-component-evidence.json third_party/server-compiled-libraries.json third_party/server-shaded-components.json /licenses/
+COPY third_party/server-source-manifest.json third_party/server-component-evidence.json third_party/server-compiled-libraries.json third_party/server-shaded-components.json third_party/server-debian-license-decisions.json /licenses/
 COPY third_party/licenses /licenses/third_party
 CMD ["flock", "-n", "-F", "/state/updater.lock", "node", "scripts/release/updater.mjs"]

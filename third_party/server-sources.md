@@ -105,3 +105,18 @@ every class byte hash to the exact input JARs in the pinned dex2jar source tree;
 the module descriptor removed by shading is recorded explicitly. Original dx
 Apache-2.0 and ASM BSD notices accompany these components. Treating the whole
 shaded JAR as only dex2jar's project license is insufficient.
+
+`server-debian-license-decisions.json` records the Debian copyright documents that
+are not represented by a simple scanner SPDX label. Each decision is restricted
+to named packages and the exact retained copyright SHA-256. Additional `LicenseRef`
+terms refer to that complete text, not an ignored or assumed-permissive license.
+Unknown changed documents remain unresolved. For GCC runtime libraries the notice
+explicitly identifies GPL 3 or later with GCC Runtime Library Exception 3.1;
+compiler/documentation and other per-file terms remain separately preserved.
+
+To rebuild the supplied Temurin/OpenJDK source, follow its included build README
+and configure/make recipes with a supported boot JDK (JDK 20 or 21), build the
+`images` target and substitute the rebuilt JRE under `/payload/java` in your own
+APK image. The source archive contains the release's downstream source changes;
+no bit-identical vendor toolchain reproduction is claimed. The image's `release`
+file and per-module legal notices are preserved in evidence.

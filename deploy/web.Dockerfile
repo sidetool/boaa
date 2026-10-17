@@ -31,6 +31,6 @@ RUN chmod 755 /docker-entrypoint.d/40-boaa-runtime-config.sh
 EXPOSE 80
 COPY --from=build /opt/build-notices /usr/share/nginx/html/licenses/npm
 COPY LICENSE THIRD_PARTY_NOTICES.md third_party/server-sources.md /usr/share/nginx/html/licenses/
-COPY third_party/server-source-manifest.json third_party/server-component-evidence.json third_party/server-compiled-libraries.json third_party/server-shaded-components.json /usr/share/nginx/html/licenses/
+COPY third_party/server-source-manifest.json third_party/server-component-evidence.json third_party/server-compiled-libraries.json third_party/server-shaded-components.json third_party/server-debian-license-decisions.json /usr/share/nginx/html/licenses/
 COPY third_party/licenses /usr/share/nginx/html/licenses/third_party
 CMD ["sh", "-c", "/docker-entrypoint.d/40-boaa-runtime-config.sh && exec nginx -g 'daemon off;'"]

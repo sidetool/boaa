@@ -30,7 +30,7 @@ def run(*args):
 
 def is_notice(name):
     p = PurePosixPath(name)
-    return ('/licenses/' in '/' + name or re.match(r'^(licen[cs]e|copying|copyright|notice|third[-_]?party(?:notices?)?)([._-]|$)', p.name, re.I)
+    return ('/licenses/' in '/' + name or re.search(r'(^|[._-])(licen[cs]e|copying|copyright|notice|third[-_]?party(?:notices?)?)([._-]|$)', p.name, re.I)
             or '/usr/share/common-licenses/' in '/' + name
             or '/legal/' in '/' + name and p.suffix.lower() in ('.md', '.txt', ''))
 
@@ -48,7 +48,7 @@ def capture(image, component, output, syft):
            'SYFT_JAVA_MAVEN_URL': 'https://repo.maven.apache.org/maven2'}
     subprocess.run([syft, 'scan', 'docker:' + image_id, '-o', 'syft-json=' + str(sbom_file)], env=env, check=True)
     sbom = json.loads(sbom_file.read_text())
-    notices, metadata, packages, binaries, links, embedded_sources, shaded_classes = {}, {}, {}, {}, {}, {}, {}
+    notices, metadata, packages, binaries, links, embedded_sources, shaded_classes, notice_contents = {}, {}, {}, {}, {}, {}, {}, {}
     with tempfile.TemporaryDirectory(prefix='boaa-image-evidence-') as temporary:
         filesystem = Path(temporary) / 'rootfs.tar'
         container = run('docker', 'create', '--entrypoint', '/bin/true', image_id)
@@ -67,11 +67,13 @@ def capture(image, component, output, syft):
                 if name in notices:
                     return
                 notices[name] = {'sha256': hashlib.sha256(data).hexdigest(), 'bytes': len(data)}
+                if len(data) < 8 * 1024 * 1024:
+                    notice_contents[name] = data.decode('utf-8', errors='replace')
                 entry = tarfile.TarInfo(name)
                 entry.size, entry.mode = len(data), 0o644
                 archive.addfile(entry, io.BytesIO(data))
             for name, member in members.items():
-                if member.issym() and is_notice(name):
+                if member.issym() and (is_notice(name) or name.startswith('usr/share/doc/')):
                     target = posixpath.normpath(posixpath.join(posixpath.dirname(name), member.linkname)).lstrip('/')
                     links[name] = target
                 if not member.isfile():
@@ -92,7 +94,9 @@ def capture(image, component, output, syft):
                 if is_notice(name) and member.size < 64 * 1024 * 1024:
                     retain(name, fs.extractfile(member).read())
                 elif name.endswith('.jar') and member.size < 128 * 1024 * 1024:
-                    with zipfile.ZipFile(io.BytesIO(fs.extractfile(member).read())) as jar:
+                    jar_bytes = fs.extractfile(member).read()
+                    binaries[name] = {'sha256': hashlib.sha256(jar_bytes).hexdigest(), 'bytes': len(jar_bytes)}
+                    with zipfile.ZipFile(io.BytesIO(jar_bytes)) as jar:
                         if name.endswith('/d2j-external-2.4.37.jar'):
                             shaded_classes = {p.filename: hashlib.sha256(jar.read(p)).hexdigest() for p in jar.infolist() if p.filename.endswith('.class')}
                         for part in jar.infolist():
@@ -122,12 +126,25 @@ def capture(image, component, output, syft):
     extra_file = ROOT / 'third_party/server-component-evidence.json'
     extras = json.loads(extra_file.read_text())['components'] if extra_file.exists() else []
     static = {(r['ecosystem'], r['name'], r['version']): r for r in extras}
+    debian_decisions = json.loads((ROOT / 'third_party/server-debian-license-decisions.json').read_text())['decisions']
+    locked_jars = {r['coordinates']['binarySha256']: r for r in extras if r.get('coordinates', {}).get('binarySha256')}
     def extra_notices(row):
         refs = []
         for n in row['notices']:
             candidates = [p for p, v in notices.items() if v['sha256'] == n['sha256']]
             refs.extend(candidates)
         return sorted(set(refs))
+    def resolved_notice_path(path):
+        seen = set()
+        while path not in seen:
+            seen.add(path)
+            parent = path
+            while parent and parent not in links:
+                parent = posixpath.dirname(parent)
+            if not parent:
+                return path
+            path = links[parent] + path[len(parent):]
+        raise ValueError('notice_symlink_cycle')
     decisions = []
     for artifact in sbom['artifacts']:
         kind, name, version = artifact['type'], artifact['name'], artifact['version']
@@ -135,15 +152,38 @@ def capture(image, component, output, syft):
         refs, reason, parent = [], 'final package metadata and retained upstream notices', None
         locations = [l['path'].lstrip('/') for l in artifact.get('locations', [])]
         record = static.get((kind, name, version))
+        binary_verified = True
+        if kind == 'java-archive' and any(l.startswith('payload/runtime/dependencies/') for l in locations):
+            hashes = [binaries.get(l, {}).get('sha256') for l in locations]
+            record = next((locked_jars[h] for h in hashes if h in locked_jars), None)
+            binary_verified = record is not None
         if record is None and architecture == 'arm64':
             record = static.get((kind, name.replace('linux-arm64', 'linux-x64'), version))
         if record:
+            if record.get('declaredBuildVersion'):
+                flags = next((s['value'] for s in artifact.get('metadata', {}).get('goBuildSettings', []) if s['key'] == '-ldflags'), '')
+                revision_match = re.search(r'GitCommit=([a-f0-9]+)', flags)
+                binary_verified = bool(revision_match and ('Version=' + record['declaredBuildVersion']) in flags and record['declaredBuildRevision'].startswith(revision_match[1]))
             refs = extra_notices(record)
             licenses = record['licenses'] or licenses
             reason = record.get('decision', 'exact upstream component evidence; see server-component-evidence.json')
         if kind == 'deb':
             deb_name = name.split(':')[0]
-            refs = [p for p in notices if p in (f'usr/share/doc/{deb_name}/copyright', f'usr/share/doc/{deb_name}/LICENSE')]
+            candidates = [resolved_notice_path(f'usr/share/doc/{deb_name}/copyright'), resolved_notice_path(f'usr/share/doc/{deb_name}/LICENSE')]
+            refs = [p for p in candidates if p in notices]
+            if refs and any(l.startswith('sha256:') for l in licenses):
+                declared = sorted(set(l for p in refs for l in re.findall(r'^License: (.+)$', notice_contents.get(p, ''), re.M)))
+                if declared:
+                    licenses = declared
+                else:
+                    adjudication = next((r for r in debian_decisions if name in r['packages'] and any(notices[p]['sha256'] == r['copyrightSha256'] for p in refs)), None)
+                    if adjudication:
+                        licenses = adjudication['licenses']
+                        reason = adjudication['decision']
+                    else:
+                        binary_verified = False
+            if refs:
+                reason += '; installed Debian copyright symlink resolved and exact source package archived'
         elif kind == 'npm':
             for location in locations:
                 folder = posixpath.dirname(location)
@@ -173,6 +213,12 @@ def capture(image, component, output, syft):
                 expression = re.search(r'^License-Expression: (.+)$', text, re.M)
                 if not licenses and expression:
                     licenses = [expression[1]]
+                if not licenses:
+                    declared = re.search(r'^License: (.+)$', text, re.M)
+                    if declared and declared[1].strip() not in ('UNKNOWN', ''):
+                        licenses = [declared[1].strip()]
+                    elif 'Classifier: License :: OSI Approved :: MIT License' in text:
+                        licenses = ['MIT']
         elif kind == 'java-archive':
             refs.extend(p for p in notices if any(p.startswith(l + '.contents/') for l in locations))
             if name == 'apk-worker':
@@ -182,7 +228,9 @@ def capture(image, component, output, syft):
             elif name == 'jrt-fs':
                 refs.extend(p for p in notices if p.startswith('payload/java/legal/'))
                 licenses = ['GPL-2.0-only WITH Classpath-exception-2.0']
+                binary_verified = version == '21.0.12.1'
         elif kind == 'binary' and name == 'openjdk':
+            binary_verified = version == '21.0.12.1+1-LTS'
             refs.extend(p for p in notices if p.startswith('payload/java/legal/'))
             licenses = ['GPL-2.0-only WITH Classpath-exception-2.0']
         if not refs and parent:
@@ -192,7 +240,7 @@ def capture(image, component, output, syft):
                 licenses = licenses or row['licenses']
         decisions.append({'id': artifact['id'], 'name': name, 'version': version, 'type': kind,
                           'licenses': licenses, 'noticeFiles': sorted(set(refs)), 'packageParent': parent,
-                          'decision': reason, 'resolved': bool(licenses and refs)})
+                          'decision': reason, 'resolved': bool(licenses and refs and binary_verified)})
     supplemental = []
     from urllib.parse import quote
     for name, value in metadata.items():
@@ -263,7 +311,7 @@ def capture(image, component, output, syft):
         refs = [p for p in notices if p == 'usr/local/share/byedpi/LICENSE']
         supplemental.append({'type': 'copied-binary', 'name': 'ByeDPI', 'version': '0.17.3', 'licenses': ['MIT'],
                              'noticeFiles': refs, 'decision': 'Pinned source compiled into static binary; embedded source and build recipe retained',
-                             'resolved': bool(refs and 'usr/local/bin/byedpi' in binaries and 'usr/local/share/byedpi/source.tar.gz' in embedded_sources)})
+                             'resolved': bool(refs and 'usr/local/bin/byedpi' in binaries and embedded_sources.get('usr/local/share/byedpi/source.tar.gz', {}).get('sha256') == 'ca696af46ebe22f81dae66531aa7fcb53a77d636ffbb5685e68d08f6e61ebcc1')})
     compiled_file = ROOT / 'third_party/server-compiled-libraries.json'
     if compiled_file.exists():
         compiled = json.loads(compiled_file.read_text())
@@ -282,7 +330,7 @@ def capture(image, component, output, syft):
         'revision': info['Config'].get('Labels', {}).get('org.opencontainers.image.revision'),
         'sbom': {'file': sbom_file.name, 'sha256': digest(sbom_file), 'packages': len(sbom['artifacts'])},
         'noticesArchive': {'file': archive_path.name, 'sha256': digest(archive_path)},
-        'notices': notices, 'payloadMetadata': metadata, 'supplementalFiles': binaries,
+        'notices': notices, 'noticeLinks': links, 'payloadMetadata': metadata, 'supplementalFiles': binaries,
         'components': decisions, 'supplementalComponents': supplemental,
         'embeddedSources': embedded_sources,
         'embeddedSourcesArchive': {'file': source_archive_path.name, 'sha256': digest(source_archive_path)},

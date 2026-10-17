@@ -126,3 +126,6 @@ services/webnovel-metadata-collector/docs/viewer-auth-integration.md
 
 # Retired optional APK probe; the maintained worker remains public.
 scripts/apk-compat/
+
+# Signed release candidates and corresponding-source bundles are generated artifacts.
+/release/

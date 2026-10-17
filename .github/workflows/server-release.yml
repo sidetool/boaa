@@ -22,6 +22,8 @@ concurrency:
 
 jobs:
   validate:
+    permissions:
+      contents: write
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
@@ -61,17 +63,28 @@ jobs:
           from pathlib import Path
           Path('release/7z-rebuild.json').write_text(json.dumps({'commit':subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip(),'passed':True,'toolchain':'emscripten 4.0.10','test':'source rebuild and archive round trip'}))
           PY
+      - name: Retain corresponding sources on the existing draft
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_VERSION: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          test "$(gh release view "$RELEASE_VERSION" --json isDraft --jq .isDraft)" = true
+          gh release upload "$RELEASE_VERSION" --clobber release/*
       - uses: actions/upload-artifact@v7
         with:
-          name: server-sources
-          path: release/
+          name: server-source-receipt
+          path: |
+            release/7z-rebuild.json
+            release/7z-rebuild.log
+            release/boaa-server-sources.tar.gz.sha256
           if-no-files-found: error
           retention-days: 30
 
   build:
     needs: validate
     permissions:
-      contents: read
+      contents: write
       packages: write
     strategy:
       fail-fast: false
@@ -139,11 +152,21 @@ jobs:
           prefix=os.environ['COMPONENT']+'-'+os.environ['ARCHITECTURE']
           Path('evidence/'+prefix+'.json').write_text(json.dumps({'containerimage.digest':os.environ['IMAGE_DIGEST'],'containerimage.config.digest':os.environ['IMAGE_ID']}))
           PY
-      - uses: actions/upload-artifact@v7
+      - name: Retain final-image evidence and sources on the existing draft
         if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_VERSION: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          if [[ ! -d evidence ]] || ! find evidence -type f -print -quit | read -r _; then exit 0; fi
+          test "$(gh release view "$RELEASE_VERSION" --json isDraft --jq .isDraft)" = true
+          gh release upload "$RELEASE_VERSION" --clobber evidence/*
+      - uses: actions/upload-artifact@v7
+        if: success()
         with:
           name: image-${{ matrix.component }}-${{ matrix.architecture }}
-          path: evidence/
+          path: evidence/${{ matrix.component }}-${{ matrix.architecture }}.json
           if-no-files-found: error
           retention-days: 30
 
@@ -228,6 +251,7 @@ jobs:
         run: |
           set -euo pipefail
           printf '%s' "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          gh release download "$RELEASE_VERSION" --dir release --clobber
           mkdir image-metadata
           cp release/{server,web,updater,apk,browser,metadata}-{amd64,arm64}.json image-metadata/
           export BOAA_IMAGE_TAG="candidate-$(git rev-parse HEAD)"
@@ -237,12 +261,24 @@ jobs:
           node scripts/release/verify-bundle.mjs release/boaa-install.tar.gz release/boaa-install.tar.gz.sig deploy/release-public.pub
           python3 scripts/release/verify-server-evidence.py --directory release --assemble
           node scripts/release/sign-evidence.mjs
+          node scripts/release/verify-evidence.mjs release
           # Existing operator draft only: no tag creation, undrafting or public package changes.
           test "$(gh release view "$RELEASE_VERSION" --json isDraft --jq .isDraft)" = true
-          gh release upload "$RELEASE_VERSION" --clobber release/*
+          gh release upload "$RELEASE_VERSION" --clobber \
+            release/images.json release/children.json release/release.json release/release.json.sig \
+            release/boaa-install.tar.gz release/boaa-install.tar.gz.sig \
+            release/server-evidence.json release/server-evidence.json.sig
       - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: signed-server-release
-          path: release/
+          path: |
+            release/server-evidence.json
+            release/server-evidence.json.sig
+            release/release.json
+            release/release.json.sig
+            release/images.json
+            release/children.json
+            release/boaa-install.tar.gz
+            release/boaa-install.tar.gz.sig
           retention-days: 30

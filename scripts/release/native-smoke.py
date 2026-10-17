@@ -47,10 +47,14 @@ const require=createRequire(import.meta.resolve('@boaa/extension-runtime'));
 const { newQuickJSWASMModuleFromVariant }=require('quickjs-emscripten-core');
 const variant=require('@jitl/quickjs-wasmfile-release-sync').default;
 const image=await sharp({create:{width:2,height:2,channels:3,background:'#fff'}}).png().toBuffer();
-assert.equal((await sharp(image).resize(1,1).metadata()).format,'png');
+const resized=await sharp(image).resize(1,1).toBuffer({resolveWithObject:true});assert.equal(resized.info.width,1);assert.equal(resized.info.height,1);
 const q=await newQuickJSWASMModuleFromVariant(variant);const vm=q.newContext();const r=vm.evalCode('6*7');assert.equal(vm.dump(r.value),42);r.value.dispose();vm.dispose();
-const seven=await import('7z-wasm');const z=await (seven.default||seven)();assert.ok(z.FS);
-const lib=await import('libarchive-wasm');const mod=await lib.libarchiveWasm();assert.ok(mod);
+const lines=[];const seven=await import('7z-wasm');const z=await (seven.default||seven)({print:text=>lines.push(text),printErr:text=>lines.push(text)});assert.ok(z.FS);
+z.FS.writeFile('/fixture.txt','BOAA native WASM');z.callMain(['a','/fixture.7z','/fixture.txt']);
+assert.ok(lines.some(line=>line.includes('24.09')),'final 7-Zip version must match supplied sources');
+const bytes=new Uint8Array(z.FS.readFile('/fixture.7z'));
+const lib=await import('libarchive-wasm');const mod=await lib.libarchiveWasm();const reader=new lib.ArchiveReader(mod,bytes);
+const contents=[];for(const entry of reader.entries())contents.push(new TextDecoder().decode(entry.readData()));assert.equal(contents[0],'BOAA native WASM');reader.free();
 console.log('native sharp/QuickJS/7z/libarchive modules available');
 '''])
         execute('PDF structure, metadata and text without optional native Canvas', 'node', ['--input-type=module', '-e', r'''

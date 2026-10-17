@@ -15,7 +15,7 @@ RUN curl --fail --location --silent --show-error \
     && mkdir -p /output/usr/local/bin /output/usr/local/share/byedpi \
     && cp source/ciadpi /output/usr/local/bin/byedpi \
     && cp source/LICENSE source/README.md source.tar.gz /output/usr/local/share/byedpi/ \
-    && apk info -v musl musl-dev gcc > /output/usr/local/share/byedpi/build-packages.txt \
+    && apk info -v | sort > /output/usr/local/share/byedpi/build-packages.txt \
     && printf '%s\n%s\n' "${BYEDPI_REVISION}" "${BYEDPI_SOURCE_SHA256}" > /output/usr/local/share/byedpi/source-pin.txt
 
 
@@ -81,7 +81,7 @@ COPY THIRD_PARTY_NOTICES.md /app/THIRD_PARTY_NOTICES.md
 
 COPY --from=build /opt/build-notices /licenses/npm
 COPY LICENSE THIRD_PARTY_NOTICES.md third_party/server-sources.md /licenses/
-COPY third_party/server-source-manifest.json third_party/server-component-evidence.json third_party/server-compiled-libraries.json third_party/server-shaded-components.json /licenses/
+COPY third_party/server-source-manifest.json third_party/server-component-evidence.json third_party/server-compiled-libraries.json third_party/server-shaded-components.json third_party/server-debian-license-decisions.json /licenses/
 COPY third_party/licenses /licenses/third_party
 USER node
 EXPOSE 8787

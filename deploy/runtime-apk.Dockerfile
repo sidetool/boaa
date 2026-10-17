@@ -21,7 +21,7 @@ COPY services/runtime-components/common.mjs services/runtime-components/apk-payl
 COPY LICENSE THIRD_PARTY_NOTICES.md /payload/licenses/
 RUN node apk-payload.mjs manifest /payload
 COPY LICENSE THIRD_PARTY_NOTICES.md third_party/server-sources.md /licenses/
-COPY third_party/server-source-manifest.json third_party/server-component-evidence.json third_party/server-compiled-libraries.json third_party/server-shaded-components.json /licenses/
+COPY third_party/server-source-manifest.json third_party/server-component-evidence.json third_party/server-compiled-libraries.json third_party/server-shaded-components.json third_party/server-debian-license-decisions.json /licenses/
 COPY third_party/licenses /licenses/third_party
 # This is an idempotent oneshot provider. Exited(0) is its healthy installed state.
 CMD ["node", "apk-payload.mjs"]

@@ -25,7 +25,7 @@ COPY --from=proxy-build --chown=node:node /out/source-browser-proxy.js ./source-
 COPY --from=proxy-build /out/licenses /licenses/browser-proxy
 COPY LICENSE THIRD_PARTY_NOTICES.md /licenses/
 COPY LICENSE THIRD_PARTY_NOTICES.md third_party/server-sources.md /licenses/
-COPY third_party/server-source-manifest.json third_party/server-component-evidence.json third_party/server-compiled-libraries.json third_party/server-shaded-components.json /licenses/
+COPY third_party/server-source-manifest.json third_party/server-component-evidence.json third_party/server-compiled-libraries.json third_party/server-shaded-components.json third_party/server-debian-license-decisions.json /licenses/
 COPY third_party/licenses /licenses/third_party
 USER node
 COPY --chown=node:node services/runtime-components/browser-smoke.mjs ./browser-smoke.mjs

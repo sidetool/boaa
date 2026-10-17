@@ -102,6 +102,7 @@ def main():
     p.add_argument('--prefix')
     p.add_argument('--assemble', action='store_true')
     a = p.parse_args()
+    subprocess.run(['git', 'diff', '--quiet', 'HEAD'], cwd=ROOT, check=True)
     commit = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip()
     if a.prefix:
         verify(a.prefix, a.directory, commit)

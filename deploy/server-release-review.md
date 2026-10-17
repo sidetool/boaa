@@ -22,7 +22,8 @@ binary gate is unchanged and remains closed.
    merely counting two index descriptors is insufficient.
 4. Inspect component notices and corresponding source coverage, not only license
    labels. The source/component/compiled-library/shaded-component manifests are
-   in the source archive and images. Debian source versions and source bytes,
+   in the source archive and images. Hash-pinned Debian multi-license decisions
+   and their complete copyright texts must also be reviewed. Debian source versions and source bytes,
    copied libraries, native files, final Vite inputs, modified MPL source, JRE,
    Node, Docker/Compose Go modules and shaded dx/ASM have separate evidence.
 5. Review the explicit notice omissions: libarchive-wasm and tr46 declare MIT
