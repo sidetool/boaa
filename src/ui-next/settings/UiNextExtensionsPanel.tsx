@@ -23,11 +23,11 @@ import { InstalledSourceContentConnection } from '../../features/extensions/Inst
 import { InstalledSourcePreferences } from '../../features/extensions/InstalledSourcePreferences';
 import { PortableSourceVault } from '../../features/extensions/PortableSourceVault';
 import { SourceExtensionManagerPanel } from '../../features/extensions/SourceExtensionManagerPanel';
-import { SourceNetworkSettingsPanel } from '../../features/extensions/SourceNetworkSettingsPanel';
 import type { PackageReview } from '../../extensions/packages/installed-extension-manager';
 import { packageOperationMessage } from '../../extensions/packages/package-operation-error';
 import { cx, Segmented, Switch } from '../components/primitives';
 import { ExtensionAvatar } from './ExtensionAvatar';
+import { SourceNetworkSettings } from './SourceNetworkSettings';
 import './extensions.css';
 import { UiNextRepositoryCatalog } from './UiNextRepositoryCatalog';
 
@@ -626,7 +626,7 @@ export function UiNextExtensionsPanel({
           <ChevronDown size={18} className="un-ext-chevron" aria-hidden="true" />
         </summary>
         <PortableSourceVault manager={manager} />
-        <SourceNetworkSettingsPanel manager={manager} />
+        <SourceNetworkSettings manager={manager} />
       </details>
     </section>
   );

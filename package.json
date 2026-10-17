@@ -111,7 +111,9 @@
     "test:plugin-platform-packages": "vitest run src/extensions/packages/platform-package.test.ts scripts/plugins/platform-package.test.ts",
     "test:plugin-platform-store": "vitest run src/extensions/platform src/extensions/ui",
     "check:bundle-inventory": "node --test scripts/performance/web-bundle-inventory.check.mjs",
-    "test:plugin-reader": "vitest run src/reader/plugin-decoration-layers.test.ts src/features/reader/reader-plugin-paint.test.tsx src/test/text-decorations.test.ts src/features/reader/reader-hot-path.test.tsx src/features/reader/reader-pagination-model.test.ts --maxWorkers=2"
+    "test:plugin-reader": "vitest run src/reader/plugin-decoration-layers.test.ts src/features/reader/reader-plugin-paint.test.tsx src/test/text-decorations.test.ts src/features/reader/reader-hot-path.test.tsx src/features/reader/reader-pagination-model.test.ts --maxWorkers=2",
+    "test:server-management": "node --test scripts/release/*.test.mjs && vitest run apps/server/src/management",
+    "check:server-management-ui": "node scripts/server-management-ui-smoke.mjs"
   },
   "dependencies": {
     "@googleworkspace/drive-picker-element": "0.7.3",

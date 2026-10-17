@@ -11,6 +11,7 @@ import {
 import { ApkInstallations } from '../../../../services/apk-worker/installations.mjs';
 import { ApkSourceCatalog } from '../../../../services/apk-worker/catalog.mjs';
 import { createJavaApkTools } from '../../../../services/apk-worker/java-tools.mjs';
+import { validateApkRuntimeManifest } from './apk-runtime-manifest.js';
 import type { ApkRepositoryRecord } from '../../../../src/extensions/packages/apk-extension-manager.js';
 
 export class ApkExtensionHost {
@@ -21,8 +22,14 @@ export class ApkExtensionHost {
     readonly store: ApkInstallations,
     readonly catalog: ApkSourceCatalog,
   ) {}
-  static async open(java: string, build: string, root: string) {
-    const tools = await createJavaApkTools(java, build);
+  static async open(
+    java: string,
+    build: string,
+    root: string,
+    options: { resolveDefaultProxy?: () => string | undefined } = {},
+  ) {
+    await validateApkRuntimeManifest(java, build, process.env.BOAA_APK_RUNTIME_MANAGED === '1');
+    const tools = await createJavaApkTools(java, build, options);
     const store = await new ApkInstallations(root, tools).open();
     const catalog = new ApkSourceCatalog(store, tools, { transformCover: thumbnailCoverAsset });
     const host = new ApkExtensionHost(store, catalog);

@@ -12,6 +12,7 @@ import { mkdir, readFile, writeFile, rename } from 'node:fs/promises';
 import { join } from 'node:path';
 import { ApkSourceCatalog } from '../../../../../services/apk-worker/catalog.mjs';
 import type { ApkRecord } from '../../../../../services/apk-worker/installations.mjs';
+import { apkStateDirectory } from '../../../../../services/apk-worker/installations.mjs';
 import {
   compatibilityRepositoryUrl,
   parseMangayomiIndex,
@@ -84,6 +85,10 @@ export class MangayomiExtensionHost {
     this.catalog = new ApkSourceCatalog(
       store,
       {
+        networkIdentity: (directory) => {
+          const record = this.state.packages.find((record) => apkStateDirectory(root, record) === directory);
+          return hash(this.network.resolve(record ? this.options(record) : {}) ?? '');
+        },
         worker: (_archive, metadata) => {
           let closed = false,
             busy = 0;

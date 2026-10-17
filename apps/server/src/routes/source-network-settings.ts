@@ -16,12 +16,14 @@ export async function registerSourceNetworkSettingsRoutes(
     async (request, reply) => {
       reply.header('Cache-Control', 'no-store');
       try {
-        return settings.save(request.body);
+        return await settings.save(request.body);
       } catch (error) {
         if (error instanceof Error && error.message === 'source_network_conflict')
           return reply.code(409).send({ error: 'source_network_conflict' });
         if (error instanceof Error && error.message === 'compatibility_preferences_invalid')
           return reply.code(400).send({ error: 'compatibility_preferences_invalid' });
+        if (error instanceof Error && ['byedpi_unavailable', 'byedpi_start_failed'].includes(error.message))
+          return reply.code(503).send({ error: error.message });
         throw error;
       }
     },

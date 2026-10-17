@@ -1,6 +1,8 @@
 import { ChevronLeft, ChevronRight, RefreshCw, X } from 'lucide-react';
 import { useContext, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
+import { useOptionalAppRuntime } from '../../app/runtime/RuntimeProvider';
+import { serverManagementApi } from '../../features/server-management/use-server-management-client';
 import { EmbeddedAccessContext } from '../../platform/embedded-access-context';
 import {
   SETTINGS_SECTIONS,
@@ -21,6 +23,7 @@ const GROUPS: readonly { title: string; ids: readonly SettingsTab[] }[] = [
   { title: '읽기', ids: ['layout', 'gesture'] },
   { title: '콘텐츠', ids: ['sources', 'extensions'] },
   { title: '데이터', ids: ['storage', 'sync', 'remote-access'] },
+  { title: '관리', ids: ['server'] },
   { title: '정보', ids: ['application'] },
 ];
 
@@ -40,10 +43,13 @@ export default function UiNextSettingsPanel(props: ReaderSettingsPanelProps) {
   const contentRef = useRef<HTMLDivElement>(null);
   const embedded = useContext(EmbeddedAccessContext);
   const handledUpdates = useRef(0);
+  const serverManaged = Boolean(serverManagementApi(useOptionalAppRuntime()));
 
-  const sections = SETTINGS_SECTIONS.filter(
-    (section) => section.id !== 'remote-access' || Boolean(embedded) || Boolean(props.serverApiBaseUrl),
-  );
+  const sections = SETTINGS_SECTIONS.filter((section) => {
+    if (section.id === 'remote-access') return Boolean(embedded) || Boolean(props.serverApiBaseUrl);
+    if (section.id === 'server') return serverManaged;
+    return true;
+  });
   const current = sections.find((section) => section.id === tab) ?? sections[0];
   const status = saveStatusLabel(controller);
 

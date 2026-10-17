@@ -5,12 +5,11 @@ public final class NetworkHelper {
     private final okhttp3.OkHttpClient client;
     public NetworkHelper() { this(() -> ""); }
     public NetworkHelper(java.util.function.Supplier<String> configuredProxy) {
-        var defaults = java.net.ProxySelector.getDefault();
         client = new okhttp3.OkHttpClient.Builder().cookieJar(new SessionCookies())
             .proxySelector(new java.net.ProxySelector() {
                 public java.util.List<java.net.Proxy> select(java.net.URI target) {
                     String value = validateProxy(configuredProxy.get());
-                    if (value.isEmpty()) return defaults == null ? java.util.List.of(java.net.Proxy.NO_PROXY) : defaults.select(target);
+                    if (value.isEmpty()) return java.util.List.of(java.net.Proxy.NO_PROXY);
                     if (localHost(target.getHost())) return java.util.List.of(java.net.Proxy.NO_PROXY);
                     var proxy = java.net.URI.create(value);
                     int port = proxy.getPort() == -1 ? (proxy.getScheme().equals("socks5") ? 1080 : 80) : proxy.getPort();

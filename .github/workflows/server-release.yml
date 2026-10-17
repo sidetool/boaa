@@ -1,0 +1,121 @@
+name: Server release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing version tag (vX.Y.Z or vX.Y.Z-beta.N)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: server-release-${{ inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.tag }}
+          fetch-depth: 0
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 11.7.0
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Validate release version and trust configuration
+        env:
+          RELEASE_VERSION: ${{ inputs.tag }}
+          RELEASE_PRIVATE_KEY: ${{ secrets.BOAA_RELEASE_PRIVATE_KEY }}
+        run: node scripts/release/preflight.mjs
+      - run: pnpm check:web-server
+      - run: pnpm check:licenses:release
+      - run: node --test scripts/release/*.test.mjs services/apk-worker/*.test.mjs services/runtime-components/runtime.test.mjs
+      - run: pnpm exec vitest run apps/server/src/management apps/server/src/extensions/apk-runtime-manifest.test.ts apps/server/src/extensions/runtime-component-client.test.ts src/features/server-management src/ui-next/settings/pages/ServerPage.test.tsx
+      - run: python3 -m unittest discover -s services/runtime-components -p 'test_*.py'
+
+  build:
+    needs: validate
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        component: [server, web, apk, browser, metadata, updater]
+        architecture: [amd64, arm64]
+    runs-on: ${{ matrix.architecture == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.tag }}
+      - name: Build and push one native architecture
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          COMPONENT: ${{ matrix.component }}
+          ARCHITECTURE: ${{ matrix.architecture }}
+          RELEASE_VERSION: ${{ inputs.tag }}
+        run: |
+          printf '%s' "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          owner=$(printf '%s' "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')
+          recipe="deploy/$COMPONENT.Dockerfile"
+          case "$COMPONENT" in apk|browser|metadata) recipe="deploy/runtime-$COMPONENT.Dockerfile" ;; esac
+          docker buildx create --use
+          docker buildx build --platform "linux/$ARCHITECTURE" -f "$recipe" \
+            --build-arg "BOAA_COMPONENT_VERSION=${RELEASE_VERSION#v}" \
+            --label "org.opencontainers.image.source=https://github.com/$GITHUB_REPOSITORY" \
+            --label "org.opencontainers.image.version=${RELEASE_VERSION#v}" \
+            --label "org.opencontainers.image.revision=$(git rev-parse HEAD)" \
+            --provenance=false --sbom=false \
+            --output "type=image,name=ghcr.io/$owner/boaa-$COMPONENT,push-by-digest=true,name-canonical=true,push=true" \
+            --metadata-file "$COMPONENT-$ARCHITECTURE.json" .
+      - uses: actions/upload-artifact@v7
+        with:
+          name: image-${{ matrix.component }}-${{ matrix.architecture }}
+          path: ${{ matrix.component }}-${{ matrix.architecture }}.json
+          if-no-files-found: error
+          retention-days: 7
+
+  release:
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      packages: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.tag }}
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: image-*
+          merge-multiple: true
+          path: image-metadata
+      - name: Assemble signed release (draft)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_VERSION: ${{ inputs.tag }}
+          RELEASE_PRIVATE_KEY: ${{ secrets.BOAA_RELEASE_PRIVATE_KEY }}
+        run: |
+          printf '%s' "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          node scripts/release/collect-images.mjs
+          node scripts/release/bundle.mjs
+          node scripts/release/sign.mjs release/images.json
+          node scripts/release/verify-bundle.mjs release/boaa-install.tar.gz release/boaa-install.tar.gz.sig deploy/release-public.pem
+          prerelease=()
+          if [[ "$RELEASE_VERSION" == *-beta.* ]]; then prerelease=(--prerelease); fi
+          gh release create "$RELEASE_VERSION" --verify-tag --draft "${prerelease[@]}" \
+            --title "BOAA $RELEASE_VERSION" --generate-notes \
+            release/release.json release/release.json.sig release/boaa-install.tar.gz release/boaa-install.tar.gz.sig

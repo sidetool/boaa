@@ -13,6 +13,7 @@ handoff/
 .boaa-lab/
 # Web type-check includes extension integration tests that import this SDK helper.
 scripts/*
+!scripts/release/
 !scripts/extensions/
 !scripts/plugins/
 scripts/plugins/*
@@ -71,3 +72,7 @@ src-tauri/
 
 # Design prototypes are private development inputs.
 prototypes/ui-next/
+
+# Managed release secrets and local recovery records
+.boaa-release/
+release/

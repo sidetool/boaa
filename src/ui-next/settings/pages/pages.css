@@ -1231,3 +1231,302 @@ a.un-pref-link {
   color: var(--un-text-3);
   font-size: 12.5px;
 }
+
+/* 서버 관리: one card for the release, rows for optional runtimes. */
+.un-server-card {
+  --un-pref-surface: rgb(255 255 255 / 4%);
+
+  display: grid;
+  gap: 14px;
+  padding: 16px;
+  border: 1px solid transparent;
+  border-radius: 18px;
+  background: rgb(255 255 255 / 4.5%);
+}
+
+.un-server-card.has-update {
+  border-color: rgb(91 140 255 / 35%);
+  background: linear-gradient(160deg, rgb(91 140 255 / 14%), rgb(255 255 255 / 4%) 60%);
+}
+
+.un-server-card-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.un-server-card-icon {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  background: #7c5cd6;
+  color: #fff;
+}
+
+.un-server-card-title {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.un-server-card-title small {
+  color: var(--un-text-3);
+  font-size: 12.5px;
+}
+
+.un-server-card-title b {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 19px;
+  font-variant-numeric: tabular-nums;
+}
+
+.un-server-channel {
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgb(255 255 255 / 8%);
+  color: var(--un-text-2);
+  font-size: 11.5px;
+  font-weight: 650;
+}
+
+.un-server-channel.is-beta {
+  background: rgb(245 184 75 / 16%);
+  color: #f5b84b;
+}
+
+.un-server-card-status {
+  display: grid;
+  gap: 3px;
+}
+
+.un-server-card-status strong {
+  font-size: 15px;
+}
+
+.un-server-card-status p {
+  margin: 0;
+  color: var(--un-text-3);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.un-server-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.un-server-reason {
+  color: var(--un-text-3);
+}
+
+.un-server-steps {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.un-server-steps li {
+  display: grid;
+  justify-items: center;
+  gap: 6px;
+  color: var(--un-text-3);
+  font-size: 12px;
+  text-align: center;
+}
+
+.un-server-steps li > span {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: rgb(255 255 255 / 8%);
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.un-server-steps li.is-done {
+  color: var(--un-text-2);
+}
+
+.un-server-steps li.is-done > span {
+  background: rgb(63 207 142 / 18%);
+  color: var(--un-success);
+}
+
+.un-server-steps li.is-now {
+  color: var(--un-text);
+  font-weight: 650;
+}
+
+.un-server-steps li.is-now > span {
+  background: var(--un-accent-soft);
+  color: var(--un-accent-2);
+}
+
+.un-server-notes {
+  max-height: 280px;
+  overflow: auto;
+  padding: 0 16px 12px;
+  color: var(--un-text-2);
+  font-size: 13.5px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.un-server-notes-link {
+  margin: 0 6px 8px;
+  text-decoration: none;
+}
+
+.un-server-inline {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  padding: 0 4px;
+  color: var(--un-text-3);
+  font-size: 13px;
+}
+
+.un-server-component {
+  flex-wrap: nowrap;
+  align-items: flex-start;
+}
+
+.un-server-component .un-pref-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.un-server-component .un-pref-text strong {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+}
+
+.un-server-component .un-pref-control {
+  align-self: center;
+}
+
+.un-server-component-icon {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  background: rgb(255 255 255 / 7%);
+  color: var(--un-text-2);
+}
+
+.un-server-component.is-on .un-server-component-icon {
+  background: rgb(63 207 142 / 14%);
+  color: var(--un-success);
+}
+
+.un-server-component.is-error .un-server-component-icon {
+  background: rgb(255 90 106 / 14%);
+  color: var(--un-danger);
+}
+
+.un-server-state {
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: rgb(255 255 255 / 7%);
+  color: var(--un-text-3);
+  font-size: 11.5px;
+  font-weight: 650;
+}
+
+.un-server-state.is-on {
+  background: rgb(63 207 142 / 14%);
+  color: var(--un-success);
+}
+
+.un-server-state.is-off {
+  background: rgb(245 184 75 / 12%);
+  color: #f5b84b;
+}
+
+.un-server-state.is-error {
+  background: rgb(255 90 106 / 14%);
+  color: var(--un-danger);
+}
+
+.un-server-state.is-working {
+  background: var(--un-accent-soft);
+  color: var(--un-accent-2);
+}
+
+.un-server-meta {
+  color: var(--un-text-3);
+  font-variant-numeric: tabular-nums;
+}
+
+.un-pref-text small.un-server-error {
+  color: var(--un-danger);
+}
+
+.un-pref-text small.un-server-warning {
+  color: #f5b84b;
+}
+
+.un-server-state.is-setup {
+  background: rgb(245 184 75 / 12%);
+  color: #f5b84b;
+}
+
+.un-server-working {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--un-accent-2);
+  font-size: 13.5px;
+  font-weight: 600;
+}
+
+.un-server-component .un-pref-control {
+  flex: none;
+}
+
+.un-server-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+}
+
+.un-server-state.is-queued {
+  background: var(--un-accent-soft);
+  color: var(--un-accent-2);
+}
+
+.un-server-recheck {
+  height: auto;
+  margin-left: 4px;
+  padding: 0;
+  font-size: inherit;
+  text-decoration: underline;
+}
+
+@media (max-width: 520px) {
+  .un-server-component {
+    gap: 10px 12px;
+  }
+
+  .un-server-component .un-btn.is-sm {
+    padding: 0 10px;
+  }
+}

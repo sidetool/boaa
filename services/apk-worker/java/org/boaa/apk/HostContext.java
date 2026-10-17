@@ -17,6 +17,7 @@ public final class HostContext extends android.app.Application {
     private final Map<String, SharedPreferences> preferences = new HashMap<>();
     private final Map<String, Map<String, Object>> loadedValues = new HashMap<>();
     private final PreferenceStorage storage;
+    private volatile String defaultProxy = "";
     public HostContext(Path directory, String packageName) throws Exception {
         this.directory = directory.toRealPath(); this.packageName = packageName;
         storage = new PreferenceStorage(this.directory);
@@ -24,6 +25,31 @@ public final class HostContext extends android.app.Application {
     public String getPackageName() { return packageName; }
     public String getOutboundProxy() { return getSharedPreferences(NETWORK_PREFERENCES, 0).getString("proxy", ""); }
     public void setOutboundProxy(String value) { getSharedPreferences(NETWORK_PREFERENCES, 0).edit().putString("proxy", value).commit(); }
+    // The default is host-owned. Validate its transport only when used, so direct/custom
+    // overrides remain usable even if a default uses an unsupported Java proxy protocol.
+    public void setDefaultProxy(String value) {
+        if (value != null && value.length() > 2048) throw new IllegalArgumentException("invalid_proxy");
+        defaultProxy = value == null ? "" : value;
+    }
+    public String getProxyMode() {
+        return getSharedPreferences(NETWORK_PREFERENCES, 0).getString("mode", getOutboundProxy().isEmpty() ? "inherit" : "custom");
+    }
+    public void setProxyMode(String value) {
+        if (!Set.of("inherit", "direct", "custom").contains(value)) throw new IllegalArgumentException("invalid_proxy_mode");
+        getSharedPreferences(NETWORK_PREFERENCES, 0).edit().putString("mode", value).commit();
+    }
+    public String getEffectiveProxy() {
+        return switch (getProxyMode()) {
+            case "direct" -> "";
+            case "custom" -> {
+                String value = eu.kanade.tachiyomi.network.NetworkHelper.validateProxy(getOutboundProxy());
+                if (value.isEmpty()) throw new IllegalArgumentException("invalid_proxy");
+                yield value;
+            }
+            case "inherit" -> defaultProxy;
+            default -> throw new IllegalArgumentException("invalid_proxy_mode");
+        };
+    }
     public synchronized SharedPreferences getSharedPreferences(String name, int mode) {
         if (name == null || name.length() > 1024) throw new IllegalArgumentException("invalid_preference_name");
         return preferences.computeIfAbsent(name, key -> {

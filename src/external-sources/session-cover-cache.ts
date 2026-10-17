@@ -1,4 +1,4 @@
-import { publishCoverChange } from './cover-cache-changes';
+import { publishCoverChange } from './cover-change-events';
 import { sourceReadingPreferences } from './source-reading-preferences';
 import { COVER_KEEP_MS } from './cache-policy';
 import type { CoverStorage } from './persistent-cover-cache';

@@ -7,6 +7,7 @@ import {
   PlugZap,
   Puzzle,
   RefreshCw,
+  ServerCog,
   Type,
   type LucideIcon,
 } from 'lucide-react';
@@ -33,6 +34,7 @@ export type SettingsTab =
   | 'downloads'
   | 'sync'
   | 'remote-access'
+  | 'server'
   | 'application';
 
 interface SettingsSection {
@@ -85,6 +87,12 @@ export const SETTINGS_SECTIONS: readonly SettingsSection[] = [
     label: '원격 접속',
     detail: '다른 기기 연결, 접속 주소',
     icon: Network,
+  },
+  {
+    id: 'server',
+    label: '서버 관리',
+    detail: '업데이트, 추가 기능',
+    icon: ServerCog,
   },
   {
     id: 'application',

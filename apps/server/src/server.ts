@@ -1,3 +1,6 @@
+import { registerServerManagement } from './management/server-management.js';
+import { createManagedMetadataFetch } from './extensions/runtime-component-client.js';
+import { createByeDpiProcess } from './extensions/byedpi-process.js';
 import { registerPluginRuntimeRoutes } from './routes/plugin-runtime.js';
 import Fastify, { FastifyInstance, type FastifyError } from 'fastify';
 import { assertSecureServerConfig, corsAllowedOrigins, type ServerConfig } from './config.js';
@@ -197,6 +200,7 @@ export async function buildServer(config: ServerConfig): Promise<FastifyInstance
   const selfHostAuth = new SelfHostAuthService(new PostgresSelfHostAuthStore(pool), config.defaultUserId);
   await registerAuthHook(app, config, selfHostAuth);
   await registerSelfHostAuthRoutes(app, selfHostAuth, config);
+  await registerServerManagement(app, [importQueue, providerQueue]);
   await registerPluginRuntimeRoutes(app, config, pool, new URL('../dist/plugin-runtime-assets/', import.meta.url));
   if (config.webRoot) await registerWebAssets(app, config.webRoot);
 
@@ -247,9 +251,27 @@ export async function buildServer(config: ServerConfig): Promise<FastifyInstance
   await registerAIRoutes(app, pool, config, providerQueue);
   await registerSyncRoutes(app, pool, config);
   await registerBackupRoutes(app, pool, config);
-  await registerWebNovelMetadataCollectorGateway(app, config);
   const contentService = createConfiguredContentService(process.env, config.defaultUserId);
   app.addHook('onClose', () => contentService.dispose());
+  const extensionVault = new EncryptedSourceCredentialVault(
+    path.join(config.dataDir, 'extension-credentials', createHash('sha256').update(config.defaultUserId).digest('hex')),
+    loadProviderSecretMasterKey(config, process.env),
+  );
+  const sourceNetwork = createSourceNetworkSettings(extensionVault, config.sourceOutboundProxy, createByeDpiProcess());
+  await sourceNetwork.initialize();
+  app.addHook('onClose', () => sourceNetwork.close());
+  await registerSourceNetworkSettingsRoutes(app, sourceNetwork);
+  const managedMetadata = process.env.BOAA_MANAGED_METADATA_ENDPOINT;
+  await registerWebNovelMetadataCollectorGateway(app, config, {
+    ...(managedMetadata && managedMetadata === config.webNovelMetadataCollectorUrl
+      ? {
+          fetchImpl: createManagedMetadataFetch({
+            endpoint: managedMetadata,
+            resolveDefaultProxy: () => sourceNetwork.resolve(),
+          }),
+        }
+      : {}),
+  });
   const apkBuild = path.resolve(
     process.env.BOAA_APK_RUNTIME_DIR ??
       process.env.MOYA_APK_RUNTIME_DIR ??
@@ -259,10 +281,11 @@ export async function buildServer(config: ServerConfig): Promise<FastifyInstance
   );
   let apk: ApkExtensionHost | undefined;
   if (
-    await access(path.join(apkBuild, 'target', 'apk-worker-0.1.0.jar')).then(
+    process.env.BOAA_APK_RUNTIME_ENABLED !== '0' &&
+    (await access(path.join(apkBuild, 'target', 'apk-worker-0.1.0.jar')).then(
       () => true,
       () => false,
-    )
+    ))
   ) {
     const java =
       process.env.BOAA_APK_JAVA ??
@@ -271,18 +294,14 @@ export async function buildServer(config: ServerConfig): Promise<FastifyInstance
       process.env.MOA_APK_JAVA ??
       (process.env.JAVA_HOME ? path.join(process.env.JAVA_HOME, 'bin', 'java') : 'java');
     try {
-      apk = await ApkExtensionHost.open(java, apkBuild, apkOwnerDirectory(config.dataDir, config.defaultUserId));
+      apk = await ApkExtensionHost.open(java, apkBuild, apkOwnerDirectory(config.dataDir, config.defaultUserId), {
+        resolveDefaultProxy: () => sourceNetwork.resolve(),
+      });
     } catch {
       app.log.warn('APK extension runtime unavailable; existing sources remain available');
     }
   }
   await registerApkExtensionRoutes(app, apk);
-  const extensionVault = new EncryptedSourceCredentialVault(
-    path.join(config.dataDir, 'extension-credentials', createHash('sha256').update(config.defaultUserId).digest('hex')),
-    loadProviderSecretMasterKey(config, process.env),
-  );
-  const sourceNetwork = createSourceNetworkSettings(extensionVault, config.sourceOutboundProxy);
-  await registerSourceNetworkSettingsRoutes(app, sourceNetwork);
   let mangayomi: MangayomiExtensionHost | undefined;
   try {
     mangayomi = await MangayomiExtensionHost.open(

@@ -144,6 +144,10 @@
   background: #0891b2;
 }
 
+.un-settings-icon.is-server {
+  background: #7c5cd6;
+}
+
 .un-settings-item-text {
   display: flex;
   flex: 1;

@@ -5,6 +5,7 @@ import { ExtensionsPage } from './pages/ExtensionsPage';
 import { GesturePage } from './pages/GesturePage';
 import { ReaderLookPage } from './pages/ReaderLookPage';
 import { RemoteAccessPage } from './pages/RemoteAccessPage';
+import { ServerManagementPage } from './pages/ServerPage';
 import { SourcesPage } from './pages/SourcesPage';
 import { StartupPage } from './pages/StartupPage';
 import { StoragePage } from './pages/StoragePage';
@@ -68,6 +69,8 @@ export function UiNextSettingsTabContent(props: SettingsTabContentProps) {
       );
     case 'remote-access':
       return <RemoteAccessPage serverApiBaseUrl={props.serverApiBaseUrl} />;
+    case 'server':
+      return <ServerManagementPage />;
     case 'application':
       return (
         <AppInfoPage

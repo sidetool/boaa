@@ -1,5 +1,6 @@
 import type { ApkTools, ApkMetadata } from './installations.mjs';
 export interface JavaApkTools extends ApkTools {
+  networkIdentity?(state: string): string;
   worker(
     path: string,
     metadata: ApkMetadata,
@@ -13,5 +14,5 @@ export interface JavaApkTools extends ApkTools {
 export function createJavaApkTools(
   java: string,
   build: string,
-  options?: { systemRoot?: string },
+  options?: { systemRoot?: string; resolveDefaultProxy?: () => string | undefined },
 ): Promise<JavaApkTools>;

@@ -51,17 +51,27 @@ function packageName(specifier) {
   return specifier.startsWith('@') ? parts.slice(0, 2).join('/') : parts[0];
 }
 
-const [packageText, buildSource, tsconfigSource, dockerfile, dockerignore, compose, sourceSchema, migrationSource] =
-  await Promise.all([
-    read('apps/server/package.json'),
-    read('apps/server/build.mjs'),
-    read('apps/server/tsconfig.json'),
-    read('deploy/server.Dockerfile'),
-    read('.dockerignore'),
-    read('compose.yaml'),
-    read('apps/server/src/db/schema.sql'),
-    read('apps/server/src/db/migrate.ts'),
-  ]);
+const [
+  packageText,
+  buildSource,
+  tsconfigSource,
+  dockerfile,
+  apkDockerfile,
+  dockerignore,
+  compose,
+  sourceSchema,
+  migrationSource,
+] = await Promise.all([
+  read('apps/server/package.json'),
+  read('apps/server/build.mjs'),
+  read('apps/server/tsconfig.json'),
+  read('deploy/server.Dockerfile'),
+  read('deploy/runtime-apk.Dockerfile'),
+  read('.dockerignore'),
+  read('compose.yaml'),
+  read('apps/server/src/db/schema.sql'),
+  read('apps/server/src/db/migrate.ts'),
+]);
 const serverPackage = JSON.parse(packageText);
 const serverTsconfig = JSON.parse(tsconfigSource);
 
@@ -227,19 +237,40 @@ check(
 );
 check(
   'runtime excludes application source and package-manager commands',
-  !/(?:COPY[^\n]*\bsrc\b|\bpnpm\b|\btsx\b|\bcorepack\b)/i.test(
-    // APK runtime corresponding source is a distributed license artifact, not an application entry point.
-    // Exempt only this exact copy; other source copies and package-manager commands remain forbidden.
-    runtimeStage.replace(
-      /^COPY --from=apk-build \/workspace\/services\/apk-worker\/build\/src \/opt\/boaa-apk\/source\r?$/m,
-      '',
-    ),
-  ),
+  !/(?:COPY[^\n]*\bsrc\b|\bpnpm\b|\btsx\b|\bcorepack\b)/i.test(runtimeStage),
 );
 check(
-  'runtime retains APK corresponding source and build recipe',
-  runtimeStage.includes('COPY --from=apk-build /workspace/services/apk-worker/build/src /opt/boaa-apk/source') &&
-    runtimeStage.includes('COPY services/apk-worker /opt/boaa-apk/build-recipe/'),
+  'basic server build excludes Java and APK payload stages',
+  !/^FROM\s+(?:maven:|[^\s]*(?:temurin|openjdk|jre)[^\s]*)/im.test(dockerfile) &&
+    !/^COPY\s+--from=apk-/im.test(dockerfile),
+);
+check(
+  'basic server runtime excludes Chromium, Java and APK payloads',
+  !/\b(?:chromium|openjdk|default-jre)\b/i.test(runtimeStage) &&
+    !/\bBOAA_(?:APK_JAVA|APK_RUNTIME_DIR|SOURCE_BROWSER_EXECUTABLE)\b/.test(runtimeStage) &&
+    !/(?:COPY|ADD)[^\n]*(?:\/opt\/(?:java|boaa-apk)|\/payload|\.jar\b)/i.test(runtimeStage),
+);
+check(
+  'optional APK image builds the host and provides its own JRE',
+  /^FROM maven:[^\n]+ AS apk-build$/im.test(apkDockerfile) &&
+    /RUN python3 services\/apk-worker\/build\.py/.test(apkDockerfile) &&
+    /^FROM eclipse-temurin:[^\n]*jre[^\n]* AS java$/im.test(apkDockerfile) &&
+    apkDockerfile.includes('COPY --from=java /opt/java/openjdk /payload/java'),
+);
+check(
+  'optional APK image retains corresponding source, licenses, inventory and build recipe',
+  apkDockerfile.includes('COPY --from=apk-build /workspace/services/apk-worker/build/src /payload/runtime/source') &&
+    apkDockerfile.includes('COPY services/apk-worker /payload/runtime/build-recipe') &&
+    apkDockerfile.includes('/payload/runtime/UPSTREAM-LICENSE') &&
+    apkDockerfile.includes('/payload/runtime/build-inventory.json') &&
+    apkDockerfile.includes('/payload/licenses/'),
+);
+check(
+  'optional APK payload includes its JAR, dependencies and versioned oneshot provider',
+  apkDockerfile.includes('/payload/runtime/target/apk-worker-0.1.0.jar') &&
+    apkDockerfile.includes('/payload/runtime/dependencies') &&
+    apkDockerfile.includes('node apk-payload.mjs manifest /payload') &&
+    apkDockerfile.includes('CMD ["node", "apk-payload.mjs"]'),
 );
 check('runtime runs as the node user', runtimeStage.includes('USER node'));
 check('runtime starts compiled JavaScript', runtimeStage.includes('CMD ["node", "dist/index.js"]'));
@@ -258,6 +289,8 @@ for (const ignored of [
   'ui-reference/',
   'fixtures/generated/',
   'src-tauri/',
+  'services/apk-worker/build/',
+  'services/apk-worker/data/',
 ]) {
   check(`Docker context excludes ${ignored}`, ignoredPatterns.has(ignored));
 }

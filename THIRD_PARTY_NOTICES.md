@@ -147,3 +147,9 @@ Windows Cargo notices and pinned archive, Redis/Cygwin and libvips sources are r
 `third_party/windows-cargo-inventory.json` and `third_party/windows-source-manifest.json`.
 See `third_party/windows-sources.md` for capture scope, rebuild information and the companion source archive.
 This capture does not close the final binary redistribution gate described above.
+
+## Embedded ByeDPI in Docker server images
+
+The managed Docker API image includes [ByeDPI](https://github.com/hufrea/byedpi), release v0.17.3, revision `7efde1b1296eaaa187b70e951894dde17527489c`, under the MIT license. The binary is compiled from the pinned upstream source without application-specific changes. The image includes the upstream license, README, source archive, revision/checksum record, and build recipe under `/usr/local/share/byedpi/`. See `deploy/byedpi.Dockerfile` and `deploy/byedpi-integration.md`.
+
+Optional APK, Chromium browser, and Python metadata execution hosts are separate images. Their dependency and distribution obligations remain separate from the Apache-2.0 license of BOAA's host code. A public binary release must satisfy the repository's release license gate; source-only validation does not certify those artifacts.

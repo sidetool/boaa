@@ -30,7 +30,8 @@ object Main {
         // Extension logging must never corrupt RPC frames.
         System.setOut(PrintStream(System.err, true, Charsets.UTF_8))
         val context = HostContext(Path.of(args[1]), args[2])
-        val network = NetworkHelper { context.outboundProxy }
+        context.setDefaultProxy(args.getOrNull(3) ?: "")
+        val network = NetworkHelper { context.effectiveProxy }
         val json = Json { ignoreUnknownKeys = true; isLenient = true }
         val registrar = Proxy.newProxyInstance(Main::class.java.classLoader, arrayOf(InjektRegistrar::class.java)) { _, method, params ->
             if (method.name == "hasFactory") true else when (params[0].toString()) {
@@ -59,6 +60,7 @@ object Main {
                 val request = JSONObject(line.toString(Charsets.UTF_8))
                 id = request.get("id")
                 val params = request.optJSONObject("params") ?: JSONObject()
+                context.setDefaultProxy(if (params.has("defaultProxy")) params.getString("defaultProxy") else "")
                 // Page discovery may include an original extension's external authentication job.
                 // Ordinary catalog/image HTTP deadlines stay short; cancellation still kills the worker.
                 val result = runBlocking { withTimeout(if (request.getString("method") == "pages") 150_000 else 30_000) {

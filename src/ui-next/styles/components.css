@@ -486,6 +486,8 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
+  /* `.ui-next` itself too: portal layers (sheets, dialogs) carry the class on their own root. */
+  .ui-next,
   .ui-next *,
   .ui-next *::before,
   .ui-next *::after {

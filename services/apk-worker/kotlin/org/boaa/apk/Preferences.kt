@@ -10,6 +10,7 @@ import eu.kanade.tachiyomi.network.NetworkHelper
 /** Original source settings only. No provider names, guessed preference keys, or connection-success claims. */
 object Preferences {
     private const val proxyKey = "__boaa_outbound_proxy"
+    private const val modeKey = "__boaa_proxy_mode"
     private val secret = Regex("password|secret|token|credential|access.?key|auth.*key|api.?key|접속.?키|인증.?키|비밀번호", RegexOption.IGNORE_CASE)
     private fun screen(source: HttpSource, context: HostContext): List<Preference> {
         if (source !is ConfigurableSource) return emptyList()
@@ -26,9 +27,14 @@ object Preferences {
     }
     fun read(sources: Map<String, HttpSource>, context: HostContext): JSONObject {
         val fields = JSONArray()
-        fields.put(JSONObject().put("key", proxyKey).put("title", "요청에 사용할 프록시 (선택)")
+        fields.put(JSONObject().put("key", modeKey).put("title", "소스 연결 방식").put("kind", "select")
+            .put("secret", false).put("value", context.proxyMode)
+            .put("choices", JSONArray(listOf("inherit" to "기본값 사용", "direct" to "직접 연결", "custom" to "개별 프록시")
+                .map { (value, label) -> JSONObject().put("value", value).put("label", label) }))
+            .put("summary", "기본값은 서버의 콘텐츠 소스 연결 설정을 따릅니다."))
+        fields.put(JSONObject().put("key", proxyKey).put("title", "개별 프록시 주소")
             .put("kind", "text").put("secret", false).put("value", context.outboundProxy)
-            .put("summary", "비워두면 기존 연결을 사용합니다. HTTP·SOCKS5 주소를 입력하세요. 서버 실행 시 주소는 서버 기준이며, 로컬 서버와 운영체제의 VPN 설정은 유지됩니다."))
+            .put("summary", "개별 프록시를 선택했을 때 사용할 HTTP·SOCKS5 주소입니다. 주소는 서버 실행 환경 기준입니다."))
         val groups = JSONArray()
         for ((id, source) in sources) {
             var unsupported = 0
@@ -67,6 +73,7 @@ object Preferences {
             }
         }
         return JSONObject().put("fields", fields).put("groups", groups)
+            .put("effectiveProxy", context.effectiveProxy)
     }
     fun save(sources: Map<String, HttpSource>, context: HostContext, changes: JSONObject): JSONObject {
         require(changes.length() <= 128)
@@ -74,8 +81,12 @@ object Preferences {
             require(changes.get(proxyKey) is String)
             NetworkHelper.validateProxy(changes.getString(proxyKey))
         } else null
+        val mode = if (changes.has(modeKey)) changes.getString(modeKey) else
+            if (proxy != null) (if (proxy.isEmpty()) "inherit" else "custom") else context.proxyMode
+        require(mode in listOf("inherit", "direct", "custom"))
+        require(mode != "custom" || (proxy ?: context.outboundProxy).isNotEmpty())
         val screens = mutableMapOf<String, List<Preference>>()
-        val prepared = changes.keySet().filter { it != proxyKey }.map { key ->
+        val prepared = changes.keySet().filter { it != proxyKey && it != modeKey }.map { key ->
             val pair = JSONArray(key); require(pair.length() == 2)
             val sourceId = pair.getString(0)
             val source = sources[sourceId] ?: error("unknown_source")
@@ -95,6 +106,7 @@ object Preferences {
         for ((field, value) in prepared) require(field.callChangeListener(value)) { "preference_rejected" }
         for ((field, value) in prepared) field.saveNewValue(value)
         if (proxy != null) context.setOutboundProxy(proxy)
+        if (changes.has(modeKey) || proxy != null) context.setProxyMode(mode)
         return JSONObject().put("saved", true)
     }
 }

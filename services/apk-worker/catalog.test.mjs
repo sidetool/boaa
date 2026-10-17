@@ -52,6 +52,59 @@ async function fixture(t, count = 1) {
     catalog.invoke(source, `source.${method}`, input, new AbortController().signal);
   return { catalog, store, tools, source, calls, invoke };
 }
+test('a changed effective default refreshes workers, catalogs and image caches and expires old stream/cursor sessions', async (t) => {
+  const { tools, invoke } = await fixture(t, 700);
+  let identity = 'socks5://api:1080',
+    created = 0,
+    closed = 0;
+  tools.networkIdentity = () => identity;
+  const original = tools.worker;
+  tools.worker = (...args) => {
+    created++;
+    return {
+      ...original(...args),
+      close: () => {
+        closed++;
+      },
+    };
+  };
+  const list = (await invoke('listWorks')).result;
+  const workId = list.items[0].id;
+  const releaseId = (await invoke('listReleases', { workId })).result.items[0].id;
+  await invoke('getCover', { workId });
+  const stream = (await invoke('openStream', { workId, releaseId })).result;
+  await invoke('streamPage', { token: stream.token, index: 0 });
+  assert.equal(created, 1);
+  identity = 'http://operator:8080';
+  await assert.rejects(invoke('streamPage', { token: stream.token, index: 0 }), /source_stream_expired/);
+  await assert.rejects(invoke('listWorks', { cursor: list.nextCursor }), /invalid_source_cursor/);
+  assert.equal((await invoke('listWorks')).result.items[0].id, workId);
+  await invoke('listReleases', { workId });
+  await invoke('getCover', { workId });
+  await invoke('getContent', { workId, releaseId });
+  assert.equal(created, 2);
+  assert.equal(closed, 1);
+});
+test('fences an already running response when the default proxy changes', async (t) => {
+  const { tools, invoke } = await fixture(t);
+  let identity = 'socks5://api:1080',
+    finish;
+  tools.networkIdentity = () => identity;
+  tools.worker = () => ({
+    busy: true,
+    close() {},
+    request: () =>
+      new Promise((resolve) => {
+        finish = resolve;
+      }),
+  });
+  const pending = invoke('listWorks');
+  const rejected = assert.rejects(pending, /source_network_changed/);
+  while (!finish) await new Promise((resolve) => setImmediate(resolve));
+  identity = '';
+  finish({ items: [], hasNextPage: false });
+  await rejected;
+});
 test('legacy pages larger than 500 remain browsable without repeating upstream requests', async (t) => {
   const { invoke, calls } = await fixture(t, 764);
   const first = (await invoke('listWorks')).result;
