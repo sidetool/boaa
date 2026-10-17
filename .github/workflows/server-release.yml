@@ -4,9 +4,14 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Existing version tag (vX.Y.Z or vX.Y.Z-beta.N)
+        description: Version label (candidate mode does not require or create a Git tag)
         required: true
         type: string
+      mode:
+        description: Candidate validates this dispatch commit; release requires an existing reviewed version tag
+        type: choice
+        options: [candidate, release]
+        default: candidate
 
 permissions:
   contents: read
@@ -18,10 +23,11 @@ concurrency:
 jobs:
   validate:
     runs-on: ubuntu-24.04
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: ${{ inputs.tag }}
+          ref: ${{ inputs.mode == 'release' && inputs.tag || github.sha }}
           fetch-depth: 0
       - uses: pnpm/action-setup@v6
         with:
@@ -31,16 +37,36 @@ jobs:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - name: Validate release version and trust configuration
+      - name: Validate version, trust configuration and candidate boundary
         env:
           RELEASE_VERSION: ${{ inputs.tag }}
+          RELEASE_CANDIDATE: ${{ inputs.mode == 'candidate' && 'true' || 'false' }}
           RELEASE_PRIVATE_KEY: ${{ secrets.BOAA_RELEASE_PRIVATE_KEY }}
         run: node scripts/release/preflight.mjs
       - run: pnpm check:web-server
-      - run: pnpm check:licenses:release
+      # The global desktop/mobile binary gate remains closed. This release has its own
+      # fail-closed, final-image evidence verifier, executed for every native child below.
+      - run: pnpm check:licenses:source-release
       - run: node --test scripts/release/*.test.mjs services/apk-worker/*.test.mjs services/runtime-components/runtime.test.mjs
-      - run: pnpm exec vitest run apps/server/src/management apps/server/src/extensions/apk-runtime-manifest.test.ts apps/server/src/extensions/runtime-component-client.test.ts src/features/server-management src/ui-next/settings/pages/ServerPage.test.tsx
       - run: python3 -m unittest discover -s services/runtime-components -p 'test_*.py'
+      - run: python3 -m unittest discover -s scripts/release -p 'test_*.py'
+      - name: Prepare pinned corresponding-source archive
+        run: python3 scripts/release/prepare-server-sources.py
+      - name: Demonstrate WASM replacement build
+        run: |
+          set -euo pipefail
+          scripts/release/rebuild-7z.sh > release/7z-rebuild.log 2>&1
+          python3 - <<'PY'
+          import json,subprocess
+          from pathlib import Path
+          Path('release/7z-rebuild.json').write_text(json.dumps({'commit':subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip(),'passed':True,'toolchain':'emscripten 4.0.10','test':'source rebuild and archive round trip'}))
+          PY
+      - uses: actions/upload-artifact@v7
+        with:
+          name: server-sources
+          path: release/
+          if-no-files-found: error
+          retention-days: 30
 
   build:
     needs: validate
@@ -53,40 +79,132 @@ jobs:
         component: [server, web, apk, browser, metadata, updater]
         architecture: [amd64, arm64]
     runs-on: ${{ matrix.architecture == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
-    timeout-minutes: 60
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: ${{ inputs.tag }}
-      - name: Build and push one native architecture
+          ref: ${{ inputs.mode == 'release' && inputs.tag || github.sha }}
+      - name: Build final native image locally
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           COMPONENT: ${{ matrix.component }}
           ARCHITECTURE: ${{ matrix.architecture }}
           RELEASE_VERSION: ${{ inputs.tag }}
         run: |
-          printf '%s' "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
-          owner=$(printf '%s' "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')
+          set -euo pipefail
           recipe="deploy/$COMPONENT.Dockerfile"
           case "$COMPONENT" in apk|browser|metadata) recipe="deploy/runtime-$COMPONENT.Dockerfile" ;; esac
           docker buildx create --use
-          docker buildx build --platform "linux/$ARCHITECTURE" -f "$recipe" \
+          docker buildx build --load --platform "linux/$ARCHITECTURE" -f "$recipe" \
             --build-arg "BOAA_COMPONENT_VERSION=${RELEASE_VERSION#v}" \
             --label "org.opencontainers.image.source=https://github.com/$GITHUB_REPOSITORY" \
             --label "org.opencontainers.image.version=${RELEASE_VERSION#v}" \
             --label "org.opencontainers.image.revision=$(git rev-parse HEAD)" \
-            --provenance=false --sbom=false \
-            --output "type=image,name=ghcr.io/$owner/boaa-$COMPONENT,push-by-digest=true,name-canonical=true,push=true" \
-            --metadata-file "$COMPONENT-$ARCHITECTURE.json" .
+            --provenance=false --sbom=false --tag "boaa-$COMPONENT:final" .
+      - name: Capture final image and native execution evidence
+        env:
+          COMPONENT: ${{ matrix.component }}
+          ARCHITECTURE: ${{ matrix.architecture }}
+        run: |
+          set -euo pipefail
+          sudo scripts/release/install-syft.sh
+          python3 scripts/release/native-smoke.py --image "boaa-$COMPONENT:final" --component "$COMPONENT" --output evidence
+          python3 scripts/release/image-evidence.py --image "boaa-$COMPONENT:final" --component "$COMPONENT" --output evidence
+          python3 scripts/release/capture-debian-sources.py --image "boaa-$COMPONENT:final" --component "$COMPONENT" --output evidence
+          python3 scripts/release/verify-server-evidence.py --prefix "$COMPONENT-$ARCHITECTURE" --directory evidence
+      - name: Store reviewed candidate image in private registry
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          COMPONENT: ${{ matrix.component }}
+          ARCHITECTURE: ${{ matrix.architecture }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          owner=$(printf '%s' "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')
+          # All newly created GHCR packages are private. Fail if this package is already public:
+          # sources/draft evidence are not yet publicly downloadable during candidate validation.
+          if gh api "users/$owner/packages/container/boaa-$COMPONENT" --jq .visibility > /tmp/visibility 2>/tmp/visibility-error; then
+            test "$(cat /tmp/visibility)" = private
+          elif ! rg -q '404|not_found' /tmp/visibility-error; then
+            cat /tmp/visibility-error >&2; exit 1
+          fi
+          candidate="ghcr.io/$owner/boaa-$COMPONENT:candidate-$(git rev-parse --short=12 HEAD)-$ARCHITECTURE"
+          docker tag "boaa-$COMPONENT:final" "$candidate"
+          docker push "$candidate" > /tmp/image-push.log 2>&1
+          test "$(gh api "users/$owner/packages/container/boaa-$COMPONENT" --jq .visibility)" = private
+          digest=$(sed -n 's/.*digest: \(sha256:[a-f0-9]*\).*/\1/p' /tmp/image-push.log | tail -1)
+          test -n "$digest"
+          IMAGE_DIGEST="$digest" IMAGE_ID="$(docker image inspect --format '{{.Id}}' "boaa-$COMPONENT:final")" python3 - <<'PY'
+          import json,os
+          from pathlib import Path
+          prefix=os.environ['COMPONENT']+'-'+os.environ['ARCHITECTURE']
+          Path('evidence/'+prefix+'.json').write_text(json.dumps({'containerimage.digest':os.environ['IMAGE_DIGEST'],'containerimage.config.digest':os.environ['IMAGE_ID']}))
+          PY
       - uses: actions/upload-artifact@v7
+        if: always()
         with:
           name: image-${{ matrix.component }}-${{ matrix.architecture }}
-          path: ${{ matrix.component }}-${{ matrix.architecture }}.json
+          path: evidence/
           if-no-files-found: error
-          retention-days: 7
+          retention-days: 30
 
-  release:
+  integration:
     needs: build
+    permissions:
+      contents: read
+      packages: read
+    strategy:
+      fail-fast: false
+      matrix:
+        architecture: [amd64, arm64]
+    runs-on: ${{ matrix.architecture == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.mode == 'release' && inputs.tag || github.sha }}
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: image-*-${{ matrix.architecture }}
+          merge-multiple: true
+          path: evidence
+      - name: Execute update, backup and rollback inside final updater image
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ARCHITECTURE: ${{ matrix.architecture }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          owner=$(printf '%s' "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')
+          for component in server web apk browser metadata updater; do
+            digest=$(jq -r '."containerimage.digest"' "evidence/$component-$ARCHITECTURE.json")
+            docker pull "ghcr.io/$owner/boaa-$component@$digest"
+            docker tag "ghcr.io/$owner/boaa-$component@$digest" "boaa-$component:final"
+          done
+          docker pull postgres:16-alpine
+          docker pull redis:7-alpine
+          docker pull quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z
+          docker run --name boaa-release-integration \
+            -v /var/run/docker.sock:/var/run/docker.sock -v /tmp:/tmp \
+            -e BOAA_SMOKE_SERVER_IMAGE=boaa-server:final -e BOAA_SMOKE_WEB_IMAGE=boaa-web:final \
+            -e BOAA_SMOKE_APK_IMAGE=boaa-apk:final -e BOAA_SMOKE_BROWSER_IMAGE=boaa-browser:final \
+            -e BOAA_SMOKE_METADATA_IMAGE=boaa-metadata:final \
+            --entrypoint node boaa-updater:final scripts/release/docker-smoke.mjs | tee evidence/integration.log
+          docker rm boaa-release-integration
+          python3 - <<'PY'
+          import json,os,subprocess
+          from pathlib import Path
+          Path('evidence/integration-'+os.environ['ARCHITECTURE']+'.json').write_text(json.dumps({'commit':subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip(),'architecture':os.environ['ARCHITECTURE'],'passed':True}))
+          PY
+          mv evidence/integration.log "evidence/integration-$ARCHITECTURE.log"
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: integration-${{ matrix.architecture }}
+          path: evidence/integration-*
+          retention-days: 30
+
+  draft:
+    needs: integration
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -94,39 +212,37 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: ${{ inputs.tag }}
+          ref: ${{ inputs.mode == 'release' && inputs.tag || github.sha }}
       - uses: actions/setup-node@v7
         with:
           node-version: 22
       - uses: actions/download-artifact@v8
         with:
-          pattern: image-*
           merge-multiple: true
-          path: image-metadata
-      - name: Assemble signed release (draft)
+          path: release
+      - name: Assemble digest-bound, signed draft assets (never publish)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RELEASE_VERSION: ${{ inputs.tag }}
           RELEASE_PRIVATE_KEY: ${{ secrets.BOAA_RELEASE_PRIVATE_KEY }}
         run: |
+          set -euo pipefail
           printf '%s' "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          mkdir image-metadata
+          cp release/{server,web,updater,apk,browser,metadata}-{amd64,arm64}.json image-metadata/
+          export BOAA_IMAGE_TAG="candidate-$(git rev-parse HEAD)"
           node scripts/release/collect-images.mjs
           node scripts/release/bundle.mjs
           node scripts/release/sign.mjs release/images.json
           node scripts/release/verify-bundle.mjs release/boaa-install.tar.gz release/boaa-install.tar.gz.sig deploy/release-public.pub
-          prerelease=()
-          if [[ "$RELEASE_VERSION" == *-beta.* ]]; then prerelease=(--prerelease); fi
-          if gh release view "$RELEASE_VERSION" --json isDraft --jq '.isDraft' > /tmp/boaa-release-is-draft; then
-            # An operator may prepare release notes before the binary distribution gate is ready.
-            # Resume that draft, but never replace assets on an already published version.
-            if [[ "$(cat /tmp/boaa-release-is-draft)" != true ]]; then
-              echo 'Refusing to replace a published release.' >&2
-              exit 1
-            fi
-            gh release upload "$RELEASE_VERSION" --clobber \
-              release/release.json release/release.json.sig release/boaa-install.tar.gz release/boaa-install.tar.gz.sig
-          else
-            gh release create "$RELEASE_VERSION" --verify-tag --draft "${prerelease[@]}" \
-              --title "BOAA $RELEASE_VERSION" --generate-notes \
-              release/release.json release/release.json.sig release/boaa-install.tar.gz release/boaa-install.tar.gz.sig
-          fi
+          python3 scripts/release/verify-server-evidence.py --directory release --assemble
+          node scripts/release/sign-evidence.mjs
+          # Existing operator draft only: no tag creation, undrafting or public package changes.
+          test "$(gh release view "$RELEASE_VERSION" --json isDraft --jq .isDraft)" = true
+          gh release upload "$RELEASE_VERSION" --clobber release/*
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: signed-server-release
+          path: release/
+          retention-days: 30

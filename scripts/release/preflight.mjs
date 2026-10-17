@@ -12,8 +12,9 @@ if (
 )
   throw new Error('release_version_mismatch');
 if (
+  process.env.RELEASE_CANDIDATE !== 'true' &&
   execFileSync('git', ['rev-parse', `${version}^{commit}`], { encoding: 'utf8' }).trim() !==
-  execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim()
+    execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim()
 )
   throw new Error('release_tag_mismatch');
 const key = createPrivateKey(process.env.RELEASE_PRIVATE_KEY || '');

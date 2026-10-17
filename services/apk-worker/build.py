@@ -113,8 +113,13 @@ def main():
     (build / 'build-inventory.json').write_text(json.dumps(inventory, indent=2) + '\n', encoding='utf-8')
     java = str(Path(os.environ['JAVA_HOME']) / 'bin' / ('java.exe' if os.name == 'nt' else 'java')) if os.environ.get('JAVA_HOME') else 'java'
     classpath = os.pathsep.join([str(build / 'target/apk-worker-0.1.0.jar'), str(build / 'dependencies/*')])
-    for test in ['AndroidDispatcherSmoke.java', 'NetworkSessionSmoke.java', 'PreferencesSmoke.java', 'FiltersSmoke.java']:
-        subprocess.run([java, '-cp', classpath, str(HERE / 'test' / test)], check=True, timeout=15)
+    tests = ['AndroidDispatcherSmoke.java', 'NetworkSessionSmoke.java', 'PreferencesSmoke.java', 'FiltersSmoke.java']
+    smoke = build / 'smoke'
+    smoke.mkdir(exist_ok=True)
+    javac = str(Path(os.environ['JAVA_HOME']) / 'bin' / ('javac.exe' if os.name == 'nt' else 'javac')) if os.environ.get('JAVA_HOME') else 'javac'
+    subprocess.run([javac, '-cp', classpath, '-d', str(smoke), *[str(HERE / 'test' / test) for test in tests]], check=True, timeout=30)
+    for test in tests:
+        subprocess.run([java, '-cp', classpath + os.pathsep + str(smoke), Path(test).stem], check=True, timeout=15)
     print('Minimal APK worker built. No server/DB/WebUI included.')
 
 

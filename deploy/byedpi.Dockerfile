@@ -15,6 +15,7 @@ RUN curl --fail --location --silent --show-error \
     && mkdir -p /output/usr/local/bin /output/usr/local/share/byedpi \
     && cp source/ciadpi /output/usr/local/bin/byedpi \
     && cp source/LICENSE source/README.md source.tar.gz /output/usr/local/share/byedpi/ \
+    && apk info -v musl musl-dev gcc > /output/usr/local/share/byedpi/build-packages.txt \
     && printf '%s\n%s\n' "${BYEDPI_REVISION}" "${BYEDPI_SOURCE_SHA256}" > /output/usr/local/share/byedpi/source-pin.txt
 
 FROM scratch AS artifact

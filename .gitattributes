@@ -7,3 +7,7 @@
 
 # Preserve upstream license bytes used by the notice inventory.
 third_party/licenses/** -text
+
+# Preserve byte hashes and upstream whitespace in captured notice evidence.
+third_party/licenses/server-extra/*.txt -text -whitespace
+third_party/licenses/server-sources/*.txt -text -whitespace

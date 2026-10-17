@@ -153,3 +153,16 @@ This capture does not close the final binary redistribution gate described above
 The managed Docker API image includes [ByeDPI](https://github.com/hufrea/byedpi), release v0.17.3, revision `7efde1b1296eaaa187b70e951894dde17527489c`, under the MIT license. The binary is compiled from the pinned upstream source without application-specific changes. The image includes the upstream license, README, source archive, revision/checksum record, and build recipe under `/usr/local/share/byedpi/`. See `deploy/byedpi.Dockerfile` and `deploy/byedpi-integration.md`.
 
 Optional APK, Chromium browser, and Python metadata execution hosts are separate images. Their dependency and distribution obligations remain separate from the Apache-2.0 license of BOAA's host code. A public binary release must satisfy the repository's release license gate; source-only validation does not certify those artifacts.
+
+
+## Hosted server candidate evidence
+
+The managed server release uses a separate final-artifact gate for the six hosted
+images on amd64 and arm64. It does not open the global desktop/Android binary
+release gate. See `third_party/server-sources.md`, the pinned source/component
+manifests and the per-image release evidence for its precise distribution scope.
+Each image includes this notice, project terms, source instructions and component
+notice texts (`/licenses`; the web serves `/licenses/`). Corresponding source,
+modified APK source, exact Debian source packages and signed digest-bound evidence
+are companion release assets. Inventory collection alone is not approval to
+publish a candidate. A release remains private/draft until final review.

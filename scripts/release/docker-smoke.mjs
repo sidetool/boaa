@@ -1,5 +1,6 @@
 // Opt-in integration test: real API/worker/PostgreSQL/Redis/MinIO and optional runtimes,
-// isolated volumes/network, local images and a fixture release feed. No registry publication.
+// isolated volumes/network, final images and a fixture release feed. No registry publication.
+// Run inside the final updater image with /var/run/docker.sock and /tmp mounted at the same paths.
 import assert from 'node:assert/strict';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { chmod, mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
@@ -13,7 +14,7 @@ const project = `boaa-managed-smoke-${randomUUID().slice(0, 8)}`;
 const network = `${project}-network`;
 const images = {
   server: process.env.BOAA_SMOKE_SERVER_IMAGE || 'boaa-server-runtime-check:local',
-  web: 'nginx:1.27-alpine',
+  web: process.env.BOAA_SMOKE_WEB_IMAGE || 'boaa-web:release-check',
   apk: process.env.BOAA_SMOKE_APK_IMAGE || 'boaa-runtime-apk:local-check',
   browser: process.env.BOAA_SMOKE_BROWSER_IMAGE || 'boaa-runtime-browser:local-check',
   metadata: process.env.BOAA_SMOKE_METADATA_IMAGE || 'boaa-runtime-metadata:local-check',
@@ -174,7 +175,6 @@ try {
           volumes('apk', '/opt/boaa-runtimes/apk', true),
           bind(mailbox, '/mailbox', false),
           bind(token, '/runtime-token'),
-          bind(path.resolve('apps/server/dist'), '/app/dist'),
         ],
         depends_on: Object.fromEntries(
           ['postgres', 'redis', 'minio'].map((name) => [name, { condition: 'service_healthy' }]),
@@ -190,13 +190,12 @@ try {
         image: images.server,
         command: ['node', 'dist/worker.js'],
         environment: { ...environment, RUN_MIGRATIONS_ON_START: 'false' },
-        volumes: [volumes('server', '/data/server'), bind(path.resolve('apps/server/dist'), '/app/dist')],
+        volumes: [volumes('server', '/data/server')],
         depends_on: { api: { condition: 'service_healthy' } },
       },
       web: {
         image: images.web,
         environment: { BOAA_RELEASE_VERSION: '1.0.0' },
-        volumes: [bind(path.resolve('deploy/nginx.conf'), '/etc/nginx/conf.d/default.conf')],
         depends_on: { api: { condition: 'service_healthy' } },
         healthcheck: health(['CMD', 'wget', '-qO-', 'http://127.0.0.1/health']),
       },
@@ -294,6 +293,18 @@ try {
   for (const componentId of ['browser', 'metadata', 'apk']) {
     assert.equal((await request({ action: 'component', componentId, enabled: true })).outcome, 'complete');
     await healthyWeb();
+    if (componentId === 'apk') {
+      await deployment.compose(deployment.current.compose, [
+        'exec',
+        '-T',
+        'api',
+        '/opt/boaa-runtimes/apk/current/java/bin/java',
+        '-cp',
+        '/opt/boaa-runtimes/apk/current/runtime/target/apk-worker-0.1.0.jar:/opt/boaa-runtimes/apk/current/runtime/dependencies/*:/opt/boaa-runtimes/apk/current/runtime/smoke',
+        'AndroidDispatcherSmoke',
+      ]);
+      console.log('PASS APK runtime/JRE executes inside receiving API image');
+    }
     console.log(`PASS ${componentId} install, real API IP change and web reconnect`);
   }
   assert.equal(await deployment.compose(deployment.current.compose, ['ps', '-q', 'web']), webBefore);

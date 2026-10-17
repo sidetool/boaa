@@ -76,3 +76,7 @@ prototypes/ui-next/
 # Managed release secrets and local recovery records
 .boaa-release/
 release/
+
+# Local Python caches are not distribution inputs.
+**/__pycache__
+**/*.pyc

@@ -1,0 +1,11 @@
+{
+  "name": "libarchive-wasm",
+  "version": "1.2.0",
+  "author": {
+    "url": "https://github.com/ofk/",
+    "name": "ofk",
+    "email": "ofkjpn+npm@gmail.com"
+  },
+  "license": "MIT",
+  "gitHead": "2e72c66d92fb8aa5914d0ff2f9e29608e38f2294"
+}

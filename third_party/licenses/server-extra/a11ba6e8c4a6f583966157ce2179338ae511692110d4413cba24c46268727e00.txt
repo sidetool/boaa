@@ -1,0 +1,7 @@
+/*
+ * Copyright (c) 2002-2004 Extreme! Lab, Indiana University. All rights reserved.
+ *
+ * This software is open source. See the bottom of this file for the licence.
+ *
+ * $Id: MXParserFactory.java,v 1.6 2004/03/02 09:14:41 aslom Exp $
+ */

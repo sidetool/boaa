@@ -1,0 +1,10 @@
+{
+  "name": "tr46",
+  "version": "0.0.3",
+  "author": {
+    "name": "Sebastian Mayr",
+    "email": "npm@smayr.name"
+  },
+  "license": "MIT",
+  "gitHead": "a8009f9ce80ff5dbe71dd71e203afe4e4c878d28"
+}
