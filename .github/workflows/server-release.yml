@@ -137,7 +137,7 @@ jobs:
           # sources/draft evidence are not yet publicly downloadable during candidate validation.
           if gh api "users/$owner/packages/container/boaa-$COMPONENT" --jq .visibility > /tmp/visibility 2>/tmp/visibility-error; then
             test "$(cat /tmp/visibility)" = private
-          elif ! rg -q '404|not_found' /tmp/visibility-error; then
+          elif ! grep -Eq '404|not_found' /tmp/visibility-error; then
             cat /tmp/visibility-error >&2; exit 1
           fi
           candidate="ghcr.io/$owner/boaa-$COMPONENT:candidate-$(git rev-parse --short=12 HEAD)-$ARCHITECTURE"
