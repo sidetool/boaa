@@ -457,7 +457,7 @@ export class ServerUpdater {
 
 async function main() {
   const publicKey = await readFile(
-    process.env.BOAA_RELEASE_PUBLIC_KEY_FILE || '/installation/deploy/release-public.pem',
+    process.env.BOAA_RELEASE_PUBLIC_KEY_FILE || '/installation/deploy/release-public.pub',
     'utf8',
   ).catch(() => '');
   const updater = new ServerUpdater({

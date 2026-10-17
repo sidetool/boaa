@@ -18,6 +18,6 @@ if (
   throw new Error('release_tag_mismatch');
 const key = createPrivateKey(process.env.RELEASE_PRIVATE_KEY || '');
 if (key.asymmetricKeyType !== 'ed25519') throw new Error('release_key_invalid');
-const publicKey = createPublicKey(await readFile('deploy/release-public.pem')).export({ type: 'spki', format: 'pem' });
+const publicKey = createPublicKey(await readFile('deploy/release-public.pub')).export({ type: 'spki', format: 'pem' });
 if (createPublicKey(key).export({ type: 'spki', format: 'pem' }) !== publicKey)
   throw new Error('release_trust_mismatch');

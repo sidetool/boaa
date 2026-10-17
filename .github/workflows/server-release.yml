@@ -113,7 +113,7 @@ jobs:
           node scripts/release/collect-images.mjs
           node scripts/release/bundle.mjs
           node scripts/release/sign.mjs release/images.json
-          node scripts/release/verify-bundle.mjs release/boaa-install.tar.gz release/boaa-install.tar.gz.sig deploy/release-public.pem
+          node scripts/release/verify-bundle.mjs release/boaa-install.tar.gz release/boaa-install.tar.gz.sig deploy/release-public.pub
           prerelease=()
           if [[ "$RELEASE_VERSION" == *-beta.* ]]; then prerelease=(--prerelease); fi
           if gh release view "$RELEASE_VERSION" --json isDraft --jq '.isDraft' > /tmp/boaa-release-is-draft; then

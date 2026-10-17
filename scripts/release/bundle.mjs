@@ -9,7 +9,7 @@ const files = [
   '.env.example',
   'LICENSE',
   'THIRD_PARTY_NOTICES.md',
-  'deploy/release-public.pem',
+  'deploy/release-public.pub',
   'deploy/release-management.md',
   'deploy/byedpi-integration.md',
   'services/runtime-components/README.md',

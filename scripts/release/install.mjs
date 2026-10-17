@@ -28,7 +28,7 @@ export async function install({
   )
     throw new Error('deployment_already_installed');
   await mkdir(state, { recursive: true, mode: 0o700 });
-  const keyTarget = path.join(directory, 'deploy/release-public.pem');
+  const keyTarget = path.join(directory, 'deploy/release-public.pub');
   const previousKey = await readFile(keyTarget, 'utf8').catch((error) => {
     if (error.code === 'ENOENT') return null;
     throw error;

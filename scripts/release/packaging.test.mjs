@@ -29,7 +29,7 @@ test('release bundle is allowlisted, signed and rejects modified archive bytes',
   }
   await writeFile(path.join(directory, '.env'), 'SYNTHETIC_PRIVATE_VALUE=must-not-be-packaged\n');
   const { publicKey, privateKey } = generateKeyPairSync('ed25519');
-  await writeFile(path.join(directory, 'deploy/release-public.pem'), publicKey.export({ format: 'pem', type: 'spki' }));
+  await writeFile(path.join(directory, 'deploy/release-public.pub'), publicKey.export({ format: 'pem', type: 'spki' }));
   const run = (args) => execFileSync(process.execPath, args, { cwd: directory, stdio: 'pipe' });
   run(['scripts/release/bundle.mjs']);
   const archive = path.join(directory, 'release/boaa-install.tar.gz');
@@ -66,7 +66,7 @@ test('release bundle is allowlisted, signed and rejects modified archive bytes',
     'scripts/release/verify-bundle.mjs',
     'release/boaa-install.tar.gz',
     'release/boaa-install.tar.gz.sig',
-    'deploy/release-public.pem',
+    'deploy/release-public.pub',
   ];
   run(verifyArgs);
   await appendFile(archive, 'modified');

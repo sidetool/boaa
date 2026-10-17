@@ -10,10 +10,10 @@
 2. 새 설치 디렉터리에 압축을 풀고 다음 명령을 실행한다. 버전은 실제 발행된 태그로 대체한다.
 
 ```sh
-node /trusted/verify-bundle.mjs boaa-install.tar.gz boaa-install.tar.gz.sig /trusted/boaa-release-public.pem
+node /trusted/verify-bundle.mjs boaa-install.tar.gz boaa-install.tar.gz.sig /trusted/boaa-release-public.pub
 tar -xzf boaa-install.tar.gz -C /srv/boaa
 cd /srv/boaa
-node scripts/release/install.mjs --version vX.Y.Z --key /trusted/boaa-release-public.pem
+node scripts/release/install.mjs --version vX.Y.Z --key /trusted/boaa-release-public.pub
 ```
 
 설치기는 서명을 검증한 manifest의 digest로 모든 BOAA 이미지를 고정한다. `.env`가 없으면 무작위 비밀 값을 생성하고, 기존 `.env`는 보존한다. 기본 다운로드에는 API/작업자/웹/업데이터와 저장소 서비스만 포함된다. APK Java, Chromium, Python 메타데이터 실행기는 필요할 때 설정에서 별도로 설치한다.
@@ -82,13 +82,13 @@ docker compose -f compose.release.yaml -f .boaa-release/bootstrap.json start upd
 
 ## 릴리즈 발행 준비
 
-저장소에는 비밀 서명 키를 넣지 않는다. 관리자가 Ed25519 키를 안전한 별도 장소에서 생성하고 공개 키만 `deploy/release-public.pem`에 커밋한다. 개인 키 PEM은 GitHub Actions secret `BOAA_RELEASE_PRIVATE_KEY`로 등록한다. 키 교체는 기존 설치의 신뢰 키 전환 계획과 함께 진행한다.
+저장소에는 비밀 서명 키를 넣지 않는다. 관리자가 Ed25519 키를 안전한 별도 장소에서 생성하고 공개 키만 `deploy/release-public.pub`에 커밋한다. 개인 키 PEM은 GitHub Actions secret `BOAA_RELEASE_PRIVATE_KEY`로 등록한다. 키 교체는 기존 설치의 신뢰 키 전환 계획과 함께 진행한다.
 
 ```sh
 # 실제 개인 키 경로는 저장소 밖의 비공개 경로로 지정한다.
 umask 077
 openssl genpkey -algorithm ED25519 -out /secure/boaa-release-private.pem
-openssl pkey -in /secure/boaa-release-private.pem -pubout -out deploy/release-public.pem
+openssl pkey -in /secure/boaa-release-private.pem -pubout -out deploy/release-public.pub
 ```
 
 `package.json`과 `deploy/release-policy.json` 버전을 맞추고, 최소 지원 버전·스키마 epoch·복구 안전성을 검토한 뒤 버전 태그를 만든다. Server release workflow는 해당 태그를 검증하고 amd64/arm64에서 각 이미지를 빌드한 후 digest 목록과 설치 묶음을 서명하여 **초안 릴리즈**를 만든다. 이미지 공개 접근과 설치·업데이트 검증 후 관리자가 초안을 발행해야 앱에 나타난다. 같은 버전의 manifest를 교체하지 않는다.

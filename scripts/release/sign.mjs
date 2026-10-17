@@ -16,7 +16,7 @@ const manifest = validateManifest(
 const key = createPrivateKey(process.env.RELEASE_PRIVATE_KEY || '');
 if (key.asymmetricKeyType !== 'ed25519') throw new Error('release_key_invalid');
 const publicKey = createPublicKey(key).export({ format: 'pem', type: 'spki' });
-const trustedKey = await readFile('deploy/release-public.pem', 'utf8');
+const trustedKey = await readFile('deploy/release-public.pub', 'utf8');
 if (createPublicKey(trustedKey).export({ format: 'pem', type: 'spki' }) !== publicKey)
   throw new Error('release_trust_mismatch');
 await mkdir('release', { recursive: true });
