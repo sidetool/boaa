@@ -593,9 +593,15 @@ check(
   includes(files.serverUploadImport, 'DEFAULT_SERVER_UPLOAD_CHUNK_BYTES = 2 * 1024 * 1024'),
 );
 
-check('nginx proxies /api to api service', includes(files.nginx, 'proxy_pass http://api:8787/api/;'));
-check('nginx proxies /health', includes(files.nginx, 'proxy_pass http://api:8787/health;'));
-check('nginx proxies /ready', includes(files.nginx, 'proxy_pass http://api:8787/ready;'));
+check(
+  'nginx resolves recreated API containers through Docker DNS',
+  includes(files.nginx, 'resolver 127.0.0.11 valid=5s ipv6=off;', 'set $boaa_api_upstream api:8787;'),
+);
+for (const route of ['/api/', '/health', '/ready'])
+  check(
+    `nginx proxies ${route} with its original URI`,
+    new RegExp(`location ${route} \\{[^}]*proxy_pass http://\\$boaa_api_upstream;`).test(files.nginx),
+  );
 check('nginx serves SPA fallback', includes(files.nginx, 'try_files $uri $uri/ /index.html;'));
 check(
   'nginx gives streamed backups their separate 257 GiB request boundary',

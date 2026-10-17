@@ -56,7 +56,7 @@ class PreferencesSmoke {
             var context = new HostContext(root, "org.example.fixture");
             Map<String, HttpSource> sources = Map.of("1", new Source(context, 1), "2", new Source(context, 2));
             var snapshot = Preferences.INSTANCE.read(sources, context);
-            require(snapshot.getJSONArray("fields").length() == 9, "host proxy and original fields/source grouping");
+            require(snapshot.getJSONArray("fields").length() == 10, "host proxy mode and original fields/source grouping");
             require(!snapshot.toString().contains("fixture-secret"), "redacted credential");
             require(!snapshot.toString().contains("dynamic summary"), "redacted summary");
             var changes = new JSONObject().put(key("1", "enabled"), true).put(key("1", "endpoint"), "http://127.0.0.1:8080")
@@ -66,6 +66,34 @@ class PreferencesSmoke {
             require(!new String(Files.readAllBytes(root.resolve("preferences.enc")), StandardCharsets.ISO_8859_1).contains("fixture-secret"), "encrypted at rest");
             var restored = new HostContext(root, "org.example.fixture");
             require(restored.getOutboundProxy().equals("socks5://127.0.0.1:40000"), "proxy survives encrypted restart");
+            require(restored.getProxyMode().equals("custom"), "legacy address-only saves stay custom");
+            restored.setDefaultProxy("socks5://api:1080");
+            require(restored.getEffectiveProxy().equals("socks5://127.0.0.1:40000"), "custom takes precedence over default");
+            restored.setDefaultProxy("https://operator:8443");
+            require(new eu.kanade.tachiyomi.network.NetworkHelper(restored::getEffectiveProxy).getClient().proxySelector()
+                .select(java.net.URI.create("https://198.51.100.1/page")).get(0).type() == java.net.Proxy.Type.SOCKS,
+                "custom survives unsupported default protocol");
+            restored.setDefaultProxy("socks5://api:1080");
+            Map<String, HttpSource> networkSources = Map.of("1", new Source(restored, 1));
+            restored.transaction(() -> Preferences.INSTANCE.save(networkSources, restored, new JSONObject().put("__boaa_proxy_mode", "inherit")));
+            require(restored.getEffectiveProxy().equals("socks5://api:1080"), "inherit uses request default");
+            restored.setDefaultProxy("http://operator:8080");
+            require(restored.getEffectiveProxy().equals("http://operator:8080"), "request default changes without rewriting saved proxy");
+            restored.transaction(() -> Preferences.INSTANCE.save(networkSources, restored, new JSONObject().put("__boaa_proxy_mode", "direct")));
+            require(restored.getEffectiveProxy().isEmpty(), "direct bypasses built-in default");
+            restored.setDefaultProxy("https://operator:8443");
+            require(new eu.kanade.tachiyomi.network.NetworkHelper(restored::getEffectiveProxy).getClient().proxySelector()
+                .select(java.net.URI.create("https://198.51.100.1/page")).get(0).type() == java.net.Proxy.Type.DIRECT,
+                "direct survives unsupported default protocol");
+            var networkRestart = new HostContext(root, "org.example.fixture");
+            require(networkRestart.getProxyMode().equals("direct"), "direct survives encrypted restart");
+            require(networkRestart.getEffectiveProxy().isEmpty(), "request defaults are never persisted");
+            restored.transaction(() -> Preferences.INSTANCE.save(networkSources, restored, new JSONObject().put("__boaa_outbound_proxy", "")));
+            require(restored.getProxyMode().equals("inherit"), "legacy clear restores inheritance");
+            try {
+                restored.transaction(() -> Preferences.INSTANCE.save(networkSources, restored, new JSONObject().put("__boaa_proxy_mode", "custom")));
+                throw new AssertionError("custom needs an address");
+            } catch (IllegalArgumentException expected) { }
             var prefs = restored.getSharedPreferences("source_1", 0);
             require(prefs.getBoolean("enabled", false), "enabled survives restart");
             require(prefs.getString("endpoint", "").equals("http://127.0.0.1:8080"), "endpoint survives restart");

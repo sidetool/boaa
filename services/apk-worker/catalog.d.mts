@@ -4,7 +4,7 @@ import type { JavaApkTools } from './java-tools.mjs';
 export class ApkSourceCatalog implements InstalledSourceCatalogPort {
   constructor(
     store: Pick<ApkInstallations, 'root' | 'snapshot' | 'setEnabled'>,
-    tools: Pick<JavaApkTools, 'worker'>,
+    tools: Pick<JavaApkTools, 'worker'> & Partial<Pick<JavaApkTools, 'networkIdentity'>>,
     options?: {
       maxWorkers?: number;
       namespace?: string;

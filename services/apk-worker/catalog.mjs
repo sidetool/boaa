@@ -93,7 +93,8 @@ export class ApkSourceCatalog {
     for (const [pkg, worker] of this.#workers) {
       if (
         !records.some(
-          (record) => record.pkg === pkg && record.enabled !== false && generation(record) === worker.generation,
+          (record) =>
+            record.pkg === pkg && record.enabled !== false && this.#workerGeneration(record) === worker.generation,
         )
       ) {
         worker.process.close();
@@ -152,9 +153,16 @@ export class ApkSourceCatalog {
     if (current.revision !== snapshot.revision) throw new Error('apk_install_conflict');
     return { ...result, revision: snapshot.revision, privateOrigins: [], networkPolicy: 'direct' };
   }
+  #networkIdentity(record) {
+    return this.tools.networkIdentity?.(apkStateDirectory(this.store.root, record)) ?? '';
+  }
+  #workerGeneration(record) {
+    return `${generation(record)}:${this.#networkIdentity(record)}`;
+  }
   #worker(record) {
     let active = this.#workers.get(record.pkg);
-    if (active?.generation === generation(record)) return active.process;
+    const identity = this.#workerGeneration(record);
+    if (active?.generation === identity) return active.process;
     if (active) {
       active.process.close();
       this.#workers.delete(record.pkg);
@@ -170,7 +178,7 @@ export class ApkSourceCatalog {
       record,
       apkStateDirectory(this.store.root, record),
     );
-    this.#workers.set(record.pkg, { generation: generation(record), process });
+    this.#workers.set(record.pkg, { generation: identity, process });
     return process;
   }
   async #read(path) {
@@ -198,12 +206,15 @@ export class ApkSourceCatalog {
     const record =
       source && this.store.snapshot().packages.find((p) => p.pkg === source.packageId && p.enabled !== false);
     if (!source || !record || generation(record) !== source.generation) throw new Error('package_source_unavailable');
+    const networkIdentity = this.#networkIdentity(record);
+    const requestGeneration = `${generation(record)}:${networkIdentity}`;
     const remoteId = record.sources.find((s) => sourceId(record.pkg, s.id, this.namespace) === contributionId)?.id;
     const current = (requestSignal = signal) => {
       requestSignal.throwIfAborted();
       const active = this.store.snapshot().packages.find((p) => p.pkg === record.pkg);
       if (!active || active.enabled === false || generation(active) !== source.generation)
         throw new Error('package_generation_changed');
+      if (this.#networkIdentity(active) !== networkIdentity) throw new Error('source_network_changed');
     };
     const request = async (method, params = {}, requestSignal = signal) => {
       current(requestSignal);
@@ -263,7 +274,7 @@ export class ApkSourceCatalog {
       return { handle, byteLength: blob.size, sha256, contentType: blob.type };
     };
     const pageImage = (page, requestSignal) => {
-      const key = JSON.stringify([contributionId, generation(record), page]);
+      const key = JSON.stringify([contributionId, requestGeneration, page]);
       if (method === 'source.streamPage' && options.cacheMode === 'reload') this.#pages.invalidatePrefix(key);
       const foreground = method === 'source.streamPage';
       const result = this.#pages.resolve(
@@ -285,7 +296,7 @@ export class ApkSourceCatalog {
       if (
         !stream ||
         stream.source !== contributionId ||
-        stream.generation !== generation(record) ||
+        stream.generation !== requestGeneration ||
         stream.expires <= Date.now()
       )
         throw new Error('source_stream_expired');
@@ -311,7 +322,7 @@ export class ApkSourceCatalog {
         const offset = Number(match[2]);
         if (
           !cached ||
-          cached.generation !== generation(record) ||
+          cached.generation !== requestGeneration ||
           cached.browsing !== browsing ||
           !Number.isSafeInteger(offset) ||
           offset < 0 ||
@@ -343,7 +354,7 @@ export class ApkSourceCatalog {
       // Coalesce simultaneous readers, but a later explicit refresh still reaches the source.
       const response = await joinTask(
         this.#pending,
-        `list:${contributionId}:${generation(record)}:${hash(browsing)}:${page}`,
+        `list:${contributionId}:${requestGeneration}:${hash(browsing)}:${page}`,
         signal,
         (sharedSignal) =>
           request(
@@ -369,16 +380,16 @@ export class ApkSourceCatalog {
           references
             .slice(offset, offset + 8)
             .map(([workId, raw]) =>
-              this.#save(workPath(workId), { raw, listedAt: Date.now(), generation: generation(record) }),
+              this.#save(workPath(workId), { raw, listedAt: Date.now(), generation: requestGeneration }),
             ),
         );
       }
       // Source API limits pages to 500. Keep large legacy results available through a host snapshot cursor.
       if (items.length > 500) {
-        const key = hash(JSON.stringify([generation(record), browsing, page]));
+        const key = hash(JSON.stringify([requestGeneration, browsing, page]));
         await this.#save(join(directory, `page-${key}.json`), {
           items,
-          generation: generation(record),
+          generation: requestGeneration,
           browsing,
           browse: response.browse,
           next: response.hasNextPage ? String(page + 1) : undefined,
@@ -392,7 +403,7 @@ export class ApkSourceCatalog {
       if (!saved?.raw || hash(saved.raw.url) !== input.workId) throw new Error('source_work_unavailable');
       if (method === 'source.getWork' || method === 'source.getCover') {
         const fresh = (value, time = value?.fetchedAt) =>
-          value?.generation === generation(record) && Number.isFinite(time) && time + TTL > Date.now();
+          value?.generation === requestGeneration && Number.isFinite(time) && time + TTL > Date.now();
         const detailPath = join(directory, `${input.workId}-detail.json`);
         // Separate files avoid list/detail read-modify-write races. Old combined records remain readable.
         let detail = (await readReference(detailPath)) ?? (saved.fetchedAt > 0 ? saved : undefined);
@@ -400,7 +411,7 @@ export class ApkSourceCatalog {
         if (!(method === 'source.getCover' && listedCover) && (options.cacheMode === 'reload' || !fresh(detail))) {
           detail = await joinTask(
             this.#pending,
-            `detail:${contributionId}:${generation(record)}:${input.workId}:${options.cacheMode ?? ''}`,
+            `detail:${contributionId}:${requestGeneration}:${input.workId}:${options.cacheMode ?? ''}`,
             signal,
             async (sharedSignal) => {
               const cached = await readReference(detailPath);
@@ -410,12 +421,12 @@ export class ApkSourceCatalog {
               const value = {
                 raw: {
                   ...saved.raw,
-                  ...(saved.generation !== generation(record) ? { cover: undefined } : {}),
+                  ...(saved.generation !== requestGeneration ? { cover: undefined } : {}),
                   ...raw,
                   url: saved.raw.url,
                 },
                 fetchedAt: Date.now(),
-                generation: generation(record),
+                generation: requestGeneration,
               };
               toWork(value.raw);
               current(sharedSignal);
@@ -437,7 +448,7 @@ export class ApkSourceCatalog {
             : validUrl(raw.cover)
               ? asset(
                   await this.#covers.resolve(
-                    `${contributionId}:${generation(record)}:${hash(JSON.stringify([raw.cover, raw.url, raw.coverHeaders]))}`,
+                    `${contributionId}:${requestGeneration}:${hash(JSON.stringify([raw.cover, raw.url, raw.coverHeaders]))}`,
                     signal,
                     async (sharedSignal) =>
                       this.transformCover(
@@ -459,10 +470,10 @@ export class ApkSourceCatalog {
         let cache = await readReference(cachePath);
         if (
           !cache ||
-          cache.generation !== generation(record) ||
+          cache.generation !== requestGeneration ||
           (!input.cursor && (options.cacheMode === 'reload' || cache.fetchedAt + 2 * 60 * 1000 <= Date.now()))
         ) {
-          const key = `${contributionId}:${generation(record)}:${input.workId}`;
+          const key = `${contributionId}:${requestGeneration}:${input.workId}`;
           cache = await joinTask(this.#pending, key, signal, async (sharedSignal) => {
             const rows = await request('chapters', { workUrl: saved.raw.url, title: saved.raw.title }, sharedSignal);
             if (
@@ -475,7 +486,7 @@ export class ApkSourceCatalog {
               rows: [...rows].reverse(),
               fetchedAt: Date.now(),
               snapshot: randomUUID(),
-              generation: generation(record),
+              generation: requestGeneration,
             };
             await this.#save(cachePath, value);
             return value;
@@ -513,7 +524,7 @@ export class ApkSourceCatalog {
             assets.set(handle, new Blob([bytes], { type: contentType }));
             result = { kind: 'text', asset: { handle, byteLength: bytes.length, sha256: hash(bytes), contentType } };
           } else {
-            const pageKey = JSON.stringify([contributionId, generation(record), chapter.url]);
+            const pageKey = JSON.stringify([contributionId, requestGeneration, chapter.url]);
             for (const [key, value] of this.#pageLists) if (value.expires <= Date.now()) this.#pageLists.delete(key);
             const pages =
               this.#pageLists.get(pageKey)?.pages ??
@@ -536,7 +547,7 @@ export class ApkSourceCatalog {
               const token = randomUUID();
               this.#streams.set(token, {
                 source: contributionId,
-                generation: generation(record),
+                generation: requestGeneration,
                 pages,
                 imageTtl: [0, 2, 10].includes(input.imageMinutes) ? input.imageMinutes * 60000 : 120000,
                 expires: Date.now() + 30 * 60000,

@@ -115,3 +115,7 @@ corepack pnpm lint         # 코드 검사
 ## 라이선스
 
 [Apache License 2.0](LICENSE). 포함된 외부 구성 요소의 라이선스는 [Third-party notices](THIRD_PARTY_NOTICES.md)에 있습니다.
+
+## Docker 릴리즈 업데이트와 선택 런타임
+
+Docker 서버에서 앱 내 업데이트, 선택적 APK/브라우저/메타데이터 실행기, 내장 ByeDPI를 사용할 수 있도록 관리형 배포 경로를 제공합니다. 최초 서명 릴리즈 준비·설치·기존 설치 전환 제약과 복구 절차는 [배포 안내](deploy/release-management.md)를 참고하세요. 데스크톱 배포는 이 경로의 대상이 아닙니다.

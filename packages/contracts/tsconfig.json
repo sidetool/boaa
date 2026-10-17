@@ -8,5 +8,5 @@
     "skipLibCheck": true,
     "noEmit": true
   },
-  "include": ["index.ts", "sync.ts", "src/**/*.ts"]
+  "include": ["index.ts", "sync.ts", "server-management.ts", "src/**/*.ts"]
 }

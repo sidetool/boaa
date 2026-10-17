@@ -27,6 +27,15 @@ class NetworkSessionSmoke {
         require(selector.select(publicTarget).get(0).type() == java.net.Proxy.Type.SOCKS);
         require(selector.select(java.net.URI.create("http://127.0.0.1:9870/jobs")).get(0).type() == java.net.Proxy.Type.DIRECT);
         require(selector.select(java.net.URI.create("http://192.168.1.10/jobs")).get(0).type() == java.net.Proxy.Type.DIRECT);
+        var ambient = java.net.ProxySelector.getDefault();
+        java.net.ProxySelector.setDefault(new java.net.ProxySelector() {
+            public List<java.net.Proxy> select(java.net.URI uri) { throw new AssertionError("direct must not use an ambient proxy"); }
+            public void connectFailed(java.net.URI uri, java.net.SocketAddress address, java.io.IOException error) { }
+        });
+        try {
+            configured.set("");
+            require(new NetworkHelper(configured::get).getClient().proxySelector().select(publicTarget).equals(List.of(java.net.Proxy.NO_PROXY)));
+        } finally { java.net.ProxySelector.setDefault(ambient); }
         for (String invalid : List.of("file:///tmp/x", "http://user:pass@localhost:80", "http://localhost:0", "socks5://localhost/path")) {
             try { NetworkHelper.validateProxy(invalid); throw new AssertionError("invalid proxy accepted"); }
             catch (IllegalArgumentException expected) { }

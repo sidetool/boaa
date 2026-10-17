@@ -46,6 +46,7 @@ jobs:
           pnpm exec vite build
       - name: Validate Compose files
         run: |
+          docker compose -f compose.release.yaml config --quiet
           docker compose config --quiet
           docker compose -f compose.yaml -f compose.public.yaml config --quiet
         env:
@@ -70,4 +71,7 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - name: Unit and integration tests
-        run: node scripts/ci/quality-tests.mjs
+        run: |
+          node scripts/ci/quality-tests.mjs
+          node --test scripts/release/*.test.mjs services/apk-worker/*.test.mjs services/runtime-components/runtime.test.mjs
+          python3 -m unittest discover -s services/runtime-components -p 'test_*.py'

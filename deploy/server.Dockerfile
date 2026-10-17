@@ -1,10 +1,22 @@
-FROM maven:3.9.11-eclipse-temurin-21 AS apk-build
-RUN apt-get update && apt-get install -y --no-install-recommends python3 && rm -rf /var/lib/apt/lists/*
-WORKDIR /workspace
-COPY services/apk-worker services/apk-worker
-RUN python3 services/apk-worker/build.py
+# Build with: docker build -f deploy/byedpi.Dockerfile --target artifact -t boaa-byedpi:0.17.3 .
+# Static musl binary can be copied into the Debian Node API image without runtime packages.
+FROM alpine:3.22 AS byedpi-build
+RUN apk add --no-cache build-base linux-headers curl
+WORKDIR /build
+# Release v0.17.3. Verify the immutable upstream source archive before compilation.
+ARG BYEDPI_REVISION=7efde1b1296eaaa187b70e951894dde17527489c
+ARG BYEDPI_SOURCE_SHA256=ca696af46ebe22f81dae66531aa7fcb53a77d636ffbb5685e68d08f6e61ebcc1
+RUN curl --fail --location --silent --show-error \
+      "https://codeload.github.com/hufrea/byedpi/tar.gz/${BYEDPI_REVISION}" -o source.tar.gz \
+    && echo "${BYEDPI_SOURCE_SHA256}  source.tar.gz" | sha256sum -c - \
+    && mkdir source \
+    && tar -xzf source.tar.gz --strip-components=1 -C source \
+    && make -C source LDFLAGS=-static \
+    && mkdir -p /output/usr/local/bin /output/usr/local/share/byedpi \
+    && cp source/ciadpi /output/usr/local/bin/byedpi \
+    && cp source/LICENSE source/README.md source.tar.gz /output/usr/local/share/byedpi/ \
+    && printf '%s\n%s\n' "${BYEDPI_REVISION}" "${BYEDPI_SOURCE_SHA256}" > /output/usr/local/share/byedpi/source-pin.txt
 
-FROM eclipse-temurin:21-jre-jammy AS apk-java
 
 FROM node:22-bookworm-slim AS build
 
@@ -34,6 +46,7 @@ COPY packages/text-core packages/text-core
 COPY packages/reader-core packages/reader-core
 COPY src src
 COPY scripts/plugins/build-product-runtime.mjs scripts/plugins/build-product-runtime.mjs
+COPY scripts/release scripts/release
 COPY services/apk-worker services/apk-worker
 RUN pnpm --filter server build && pnpm --filter server bundle
 
@@ -42,13 +55,11 @@ RUN pnpm --config.inject-workspace-packages=true --filter server deploy --prod /
 
 FROM node:22-bookworm-slim AS runtime
 
-RUN apt-get update && apt-get install -y --no-install-recommends chromium fonts-noto-cjk \
-    && rm -rf /var/lib/apt/lists/*
-ENV BOAA_SOURCE_BROWSER_EXECUTABLE=/usr/bin/chromium
-
+COPY --from=byedpi-build /output/usr/local/bin/byedpi /usr/local/bin/byedpi
+COPY --from=byedpi-build /output/usr/local/share/byedpi /usr/local/share/byedpi
+COPY deploy/byedpi.Dockerfile /usr/local/share/byedpi/build.Dockerfile
+ENV BYEDPI_BINARY=/usr/local/bin/byedpi
 ENV NODE_ENV=production
-ENV BOAA_APK_RUNTIME_DIR=/opt/boaa-apk
-ENV BOAA_APK_JAVA=/opt/java/openjdk/bin/java
 WORKDIR /app
 
 RUN mkdir -p /data/server && chown node:node /data/server
@@ -56,13 +67,6 @@ RUN mkdir -p /data/server && chown node:node /data/server
 COPY --from=production-dependencies --chown=node:node /opt/server/node_modules ./node_modules
 COPY --from=build --chown=node:node /workspace/apps/server/package.json ./package.json
 COPY --from=build --chown=node:node /workspace/apps/server/dist ./dist
-COPY --from=apk-java /opt/java/openjdk /opt/java/openjdk
-COPY --from=apk-build /workspace/services/apk-worker/build/target/apk-worker-0.1.0.jar /opt/boaa-apk/target/apk-worker-0.1.0.jar
-COPY --from=apk-build /workspace/services/apk-worker/build/dependencies /opt/boaa-apk/dependencies
-COPY --from=apk-build /workspace/services/apk-worker/build/src /opt/boaa-apk/source
-COPY --from=apk-build /workspace/services/apk-worker/build/UPSTREAM-LICENSE /opt/boaa-apk/UPSTREAM-LICENSE
-COPY --from=apk-build /workspace/services/apk-worker/build/build-inventory.json /opt/boaa-apk/build-inventory.json
-COPY services/apk-worker /opt/boaa-apk/build-recipe/
 COPY third_party/licenses/mangayomi-dom /app/licenses/mangayomi-dom
 COPY THIRD_PARTY_NOTICES.md /app/THIRD_PARTY_NOTICES.md
 

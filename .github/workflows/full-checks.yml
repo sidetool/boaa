@@ -204,3 +204,21 @@ jobs:
       - run: pnpm check:rust
       - run: pnpm check:native-source
       - run: pnpm check:mobile-readiness
+
+  browser-server-management:
+    needs: changes
+    if: needs.changes.outputs.deploy == 'true' || needs.changes.outputs.settings == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 11.7.0
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec playwright-core install --with-deps chromium
+      - run: pnpm check:server-management-ui

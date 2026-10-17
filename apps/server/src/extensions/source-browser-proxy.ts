@@ -10,6 +10,7 @@ import { isPublicSourceAddress } from '@boaa/extension-runtime/source-http';
 import { parseOutboundProxy } from './outbound-proxy.js';
 import type { SourceWebViewScope } from './source-webview.js';
 import { sourceBrowserLimits } from './source-browser-limits.js';
+import { sourceBrowserUsesRemote } from './source-browser-launch.js';
 
 /** CONNECT transports opaque browser TLS bytes: no origin TLS termination or Node impersonation. */
 async function tunnel(address: string, port: number, proxy: string | undefined, signal: AbortSignal): Promise<Socket> {
@@ -71,6 +72,10 @@ async function tunnel(address: string, port: number, proxy: string | undefined, 
 
 export async function openSourceBrowserProxy(scope: SourceWebViewScope, signal: AbortSignal) {
   const limits = sourceBrowserLimits(scope.purpose);
+  const remote = sourceBrowserUsesRemote();
+  const bind = remote ? process.env.BOAA_SOURCE_BROWSER_PROXY_BIND : '127.0.0.1';
+  const advertised = remote ? process.env.BOAA_SOURCE_BROWSER_PROXY_HOST : '127.0.0.1';
+  if (!bind || !advertised || !/^[a-zA-Z0-9.-]+$/.test(advertised)) throw new Error('source_browser_proxy_unavailable');
   const username = randomBytes(16).toString('hex'),
     password = randomBytes(24).toString('hex');
   const authorization = 'Basic ' + Buffer.from(username + ':' + password).toString('base64');
@@ -203,7 +208,7 @@ export async function openSourceBrowserProxy(scope: SourceWebViewScope, signal: 
   };
   signal.addEventListener('abort', close, { once: true });
   try {
-    server.listen(0, '127.0.0.1');
+    server.listen(0, bind);
     await once(server, 'listening', { signal });
   } catch (error) {
     close();
@@ -212,7 +217,7 @@ export async function openSourceBrowserProxy(scope: SourceWebViewScope, signal: 
   }
   return {
     proxy: {
-      server: `http://127.0.0.1:${(server.address() as { port: number }).port}`,
+      server: `http://${advertised}:${(server.address() as { port: number }).port}`,
       username,
       password,
       bypass: '<-loopback>',

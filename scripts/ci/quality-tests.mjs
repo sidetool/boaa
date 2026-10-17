@@ -18,6 +18,11 @@ const suites = [
   'test:settings-ux',
 ];
 const extraFilters = [
+  'apps/server/src/management',
+  'apps/server/src/extensions/apk-runtime-manifest.test.ts',
+  'apps/server/src/extensions/byedpi-process.test.ts',
+  'apps/server/src/extensions/runtime-component-client.test.ts',
+  'src/features/server-management',
   'src/ui-next',
   'src/app/composition',
   'src/features/tts/useVoiceProfileEditor.test.tsx',

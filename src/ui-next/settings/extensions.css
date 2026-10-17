@@ -839,19 +839,6 @@
   margin-top: 12px;
 }
 
-.un-ext .source-network-settings {
-  padding: 0;
-  border: 0;
-  background: none;
-}
-
-.un-ext .source-network-settings > summary {
-  padding: 4px 0;
-  color: var(--un-text-2);
-  font-size: 14px;
-  font-weight: 600;
-}
-
 /* ───────── phones ───────── */
 
 @media (max-width: 699px) {
@@ -1166,4 +1153,47 @@
   .un-ext .apk-extension-manager div.extension-repository-add > button {
     flex: 1;
   }
+}
+
+/* 고급 → 기본 연결 방식 */
+.un-ext-advanced > .un-network {
+  background: rgb(255 255 255 / 4%);
+}
+
+.un-network-body {
+  display: grid;
+  gap: 12px;
+  padding: 0 14px 14px;
+}
+
+.un-network-custom {
+  display: grid;
+  gap: 10px;
+}
+
+.un-network-custom .un-pref-field {
+  padding: 0;
+}
+
+.un-network-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.un-network-now {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  margin: 0;
+  padding: 0 2px;
+  color: var(--un-text-3);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.un-network-now b {
+  color: var(--un-text-2);
+  font-weight: 600;
 }
