@@ -44,7 +44,7 @@ describe('BookCover hosted loading', () => {
     });
     const getActiveCover = vi
       .fn()
-      .mockResolvedValueOnce({ blob: new Blob(['first']) })
+      .mockResolvedValueOnce({ blob: new Blob(['first'], { type: 'image/png' }) })
       .mockReturnValueOnce(nextCover);
     const runtime = { readerRuntime: { bookAssetRepository: { getActiveCover } } } as unknown as AppRuntime;
     const first = { ...novel(), id: 'cover-switch-first' };
@@ -64,7 +64,7 @@ describe('BookCover hosted loading', () => {
       expect(renderer.root.findAllByType('img')).toHaveLength(0);
       expect(renderer.root.findByType('strong').children).toEqual(['다음 작품']);
       await act(async () => {
-        finish({ blob: new Blob(['second']) });
+        finish({ blob: new Blob(['second'], { type: 'image/png' }) });
       });
       expect(renderer.root.findAllByType('img')).toHaveLength(1);
     } finally {

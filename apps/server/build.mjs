@@ -25,6 +25,7 @@ await build({
     '@boaa/extension-contracts/source-protocol': '../../packages/extension-contracts/source-protocol.ts',
     '@boaa/extension-contracts/package': '../../packages/extension-contracts/package-manifest.ts',
     '@boaa/extension-contracts/ui-json': '../../packages/extension-contracts/ui-json.ts',
+    '@boaa/extension-contracts/brand-compat': '../../packages/extension-contracts/brand-compat.ts',
     '@boaa/extension-contracts': '../../packages/extension-contracts/index.ts',
     '@boaa/contracts/sync': '../../packages/contracts/sync.ts',
     '@boaa/contracts': '../../packages/contracts/index.ts',
