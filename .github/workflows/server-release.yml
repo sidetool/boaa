@@ -116,6 +116,17 @@ jobs:
           node scripts/release/verify-bundle.mjs release/boaa-install.tar.gz release/boaa-install.tar.gz.sig deploy/release-public.pem
           prerelease=()
           if [[ "$RELEASE_VERSION" == *-beta.* ]]; then prerelease=(--prerelease); fi
-          gh release create "$RELEASE_VERSION" --verify-tag --draft "${prerelease[@]}" \
-            --title "BOAA $RELEASE_VERSION" --generate-notes \
-            release/release.json release/release.json.sig release/boaa-install.tar.gz release/boaa-install.tar.gz.sig
+          if gh release view "$RELEASE_VERSION" --json isDraft --jq '.isDraft' > /tmp/boaa-release-is-draft; then
+            # An operator may prepare release notes before the binary distribution gate is ready.
+            # Resume that draft, but never replace assets on an already published version.
+            if [[ "$(cat /tmp/boaa-release-is-draft)" != true ]]; then
+              echo 'Refusing to replace a published release.' >&2
+              exit 1
+            fi
+            gh release upload "$RELEASE_VERSION" --clobber \
+              release/release.json release/release.json.sig release/boaa-install.tar.gz release/boaa-install.tar.gz.sig
+          else
+            gh release create "$RELEASE_VERSION" --verify-tag --draft "${prerelease[@]}" \
+              --title "BOAA $RELEASE_VERSION" --generate-notes \
+              release/release.json release/release.json.sig release/boaa-install.tar.gz release/boaa-install.tar.gz.sig
+          fi
