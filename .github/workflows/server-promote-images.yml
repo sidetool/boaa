@@ -7,7 +7,8 @@ on:
         required: true
         type: string
 permissions:
-  contents: read
+  # Draft release assets require repository write access even for read operations.
+  contents: write
   packages: write
 concurrency:
   group: server-promotion-${{ inputs.tag }}
