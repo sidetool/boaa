@@ -29,7 +29,7 @@ for (const name of IMAGE_NAMES) {
     ['api', `users/${owner}/packages/container/boaa-${name}`, '--jq', '.visibility'],
     { encoding: 'utf8' },
   ).trim();
-  if (visibility !== 'private') throw new Error('promotion_requires_private_package');
+  if (!['private', 'public'].includes(visibility)) throw new Error('promotion_package_visibility_invalid');
   const target = `${expected}:${tag.replace(/^v/, '')}`;
   execFileSync('docker', ['buildx', 'imagetools', 'create', '--tag', target, `${expected}@${image.digest}`], {
     stdio: 'inherit',
@@ -38,4 +38,4 @@ for (const name of IMAGE_NAMES) {
   if (`sha256:${createHash('sha256').update(raw).digest('hex')}` !== image.digest)
     throw new Error('promotion_index_digest_changed');
 }
-console.log(`Promoted six reviewed private image indexes for ${tag}; release draft and visibility unchanged.`);
+console.log(`Promoted six reviewed image indexes for ${tag}; release draft and visibility unchanged.`);

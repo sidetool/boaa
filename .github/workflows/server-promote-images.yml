@@ -23,7 +23,7 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: 22
-      - name: Promote approved digests while keeping packages private
+      - name: Promote approved digests without changing package visibility
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RELEASE_VERSION: ${{ inputs.tag }}

@@ -71,6 +71,14 @@ jobs:
           set -euo pipefail
           test "$(gh release view "$RELEASE_VERSION" --json isDraft --jq .isDraft)" = true
           gh release upload "$RELEASE_VERSION" --clobber release/*
+          # Source-only tags are deliberately outside releaseVersion(), so clients never install them.
+          source_tag="server-sources-$(git rev-parse HEAD)"
+          if ! gh release view "$source_tag" >/dev/null 2>&1; then
+            gh release create "$source_tag" --target "$(git rev-parse HEAD)" --prerelease --latest=false \
+              --title "Server source materials ($(git rev-parse --short HEAD))" \
+              --notes 'Corresponding source materials for candidate container images. This is not an installable BOAA release.'
+          fi
+          gh release upload "$source_tag" --clobber release/boaa-server-sources.tar.gz release/boaa-server-sources.tar.gz.sha256
       - uses: actions/upload-artifact@v7
         with:
           name: server-source-receipt
@@ -124,7 +132,21 @@ jobs:
           python3 scripts/release/image-evidence.py --image "boaa-$COMPONENT:final" --component "$COMPONENT" --output evidence
           python3 scripts/release/capture-debian-sources.py --image "boaa-$COMPONENT:final" --component "$COMPONENT" --output evidence
           python3 scripts/release/verify-server-evidence.py --prefix "$COMPONENT-$ARCHITECTURE" --directory evidence
-      - name: Store reviewed candidate image in private registry
+      - name: Publish image sources before registry upload
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          COMPONENT: ${{ matrix.component }}
+          ARCHITECTURE: ${{ matrix.architecture }}
+        run: |
+          set -euo pipefail
+          source_tag="server-sources-$(git rev-parse HEAD)"
+          test "$(gh release view "$source_tag" --json isDraft --jq .isDraft)" = false
+          gh release upload "$source_tag" --clobber \
+            "evidence/$COMPONENT-$ARCHITECTURE-debian-sources.tar.gz" \
+            "evidence/$COMPONENT-$ARCHITECTURE-debian-sources.json" \
+            "evidence/$COMPONENT-$ARCHITECTURE-embedded-sources.tar.gz" \
+            "evidence/$COMPONENT-$ARCHITECTURE-notices.tar.gz"
+      - name: Store verified candidate image in registry
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           COMPONENT: ${{ matrix.component }}
@@ -133,17 +155,10 @@ jobs:
           set -euo pipefail
           printf '%s' "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
           owner=$(printf '%s' "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')
-          # All newly created GHCR packages are private. Fail if this package is already public:
-          # sources/draft evidence are not yet publicly downloadable during candidate validation.
-          if gh api "users/$owner/packages/container/boaa-$COMPONENT" --jq .visibility > /tmp/visibility 2>/tmp/visibility-error; then
-            test "$(cat /tmp/visibility)" = private
-          elif ! grep -Eq '404|not_found' /tmp/visibility-error; then
-            cat /tmp/visibility-error >&2; exit 1
-          fi
+          # Packages can already be public after the first release. Sources are public first.
           candidate="ghcr.io/$owner/boaa-$COMPONENT:candidate-$(git rev-parse --short=12 HEAD)-$ARCHITECTURE"
           docker tag "boaa-$COMPONENT:final" "$candidate"
-          docker push "$candidate" > /tmp/image-push.log 2>&1
-          test "$(gh api "users/$owner/packages/container/boaa-$COMPONENT" --jq .visibility)" = private
+          docker push "$candidate" 2>&1 | tee /tmp/image-push.log
           digest=$(sed -n 's/.*digest: \(sha256:[a-f0-9]*\).*/\1/p' /tmp/image-push.log | tail -1)
           test -n "$digest"
           IMAGE_DIGEST="$digest" IMAGE_ID="$(docker image inspect --format '{{.Id}}' "boaa-$COMPONENT:final")" python3 - <<'PY'
