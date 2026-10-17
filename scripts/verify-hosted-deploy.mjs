@@ -340,8 +340,8 @@ check(
 );
 
 check(
-  'server Dockerfile uses a Debian Bookworm build stage',
-  includes(files.serverDockerfile, 'FROM node:22-bookworm-slim AS build'),
+  'server Dockerfile uses a digest-pinned Debian Bookworm build stage',
+  /^FROM node:22-bookworm-slim@sha256:[a-f0-9]{64} AS build$/im.test(files.serverDockerfile),
 );
 check(
   'server Dockerfile installs and copies shared workspaces',
@@ -369,8 +369,8 @@ check(
   includes(files.serverDockerfile, 'deploy --prod /opt/server'),
 );
 check(
-  'server Dockerfile uses a Debian Bookworm runtime stage',
-  includes(files.serverDockerfile, 'FROM node:22-bookworm-slim AS runtime'),
+  'server Dockerfile uses a digest-pinned Debian Bookworm runtime stage',
+  /^FROM node:22-bookworm-slim@sha256:[a-f0-9]{64} AS runtime$/im.test(files.serverDockerfile),
 );
 check('server Dockerfile exposes API port', includes(files.serverDockerfile, 'EXPOSE 8787'));
 check(
