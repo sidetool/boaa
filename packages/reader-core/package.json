@@ -1,0 +1,47 @@
+{
+  "name": "@boaa/reader-core",
+  "version": "0.1.0",
+  "private": true,
+  "license": "Apache-2.0",
+  "type": "module",
+  "exports": {
+    "./settings": {
+      "types": "./settings.ts",
+      "default": "./settings.ts"
+    },
+    "./defaults": {
+      "types": "./defaults.ts",
+      "default": "./defaults.ts"
+    },
+    "./settings-scope": {
+      "types": "./settings-scope.ts",
+      "default": "./settings-scope.ts"
+    },
+    "./search-policy": {
+      "types": "./search-policy.ts",
+      "default": "./search-policy.ts"
+    },
+    "./query-contract": {
+      "types": "./query-contract.ts",
+      "default": "./query-contract.ts"
+    },
+    "./discovery-settings": {
+      "types": "./discovery-settings.ts",
+      "default": "./discovery-settings.ts"
+    },
+    "./sync-contract": {
+      "types": "./sync-contract.ts",
+      "default": "./sync-contract.ts"
+    }
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@boaa/contracts": "workspace:*"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.3",
+    "@boaa/extension-contracts": "workspace:*"
+  }
+}

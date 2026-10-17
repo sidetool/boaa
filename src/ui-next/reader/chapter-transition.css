@@ -1,0 +1,139 @@
+/* ui-next 회차 전환: hairline + pill over the page; never covers the text. */
+
+.un-chapter-transition {
+  position: fixed;
+  inset: 0;
+  z-index: 45;
+  pointer-events: none;
+}
+
+.un-chapter-transition-bar {
+  position: absolute;
+  animation: un-chapter-fade 0.2s ease-out 0.3s both;
+  top: var(--un-safe-t, 0px);
+  left: 0;
+  width: 100%;
+  height: 2px;
+  overflow: hidden;
+}
+
+.un-chapter-transition-bar::after {
+  content: '';
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 36%;
+  border-radius: 2px;
+  background: linear-gradient(90deg, transparent, var(--un-accent, #6f8cff), transparent);
+  animation: un-chapter-bar 1.2s cubic-bezier(0.2, 0.8, 0.2, 1) infinite;
+}
+
+@keyframes un-chapter-bar {
+  from {
+    transform: translateX(-100%);
+  }
+
+  to {
+    transform: translateX(290%);
+  }
+}
+
+.un-chapter-transition-pill {
+  position: absolute;
+  top: calc(68px + var(--un-safe-t, 0px));
+  left: 50%;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  max-width: calc(100% - 32px);
+  margin: 0;
+  padding: 10px 16px;
+  border-radius: 999px;
+  background: rgb(22 22 26 / 90%);
+  box-shadow:
+    0 10px 30px rgb(0 0 0 / 40%),
+    inset 0 0 0 1px rgb(255 255 255 / 8%);
+  color: #f2f2f4;
+  font-family: var(--un-font, inherit);
+  font-size: 13.5px;
+  font-weight: 650;
+  white-space: nowrap;
+  transform: translateX(-50%);
+  /* Fast switches finish before this shows, so they never flash a label. */
+  animation: un-chapter-in 0.2s ease-out 0.3s both;
+  -webkit-backdrop-filter: blur(18px);
+  backdrop-filter: blur(18px);
+}
+
+@keyframes un-chapter-fade {
+  from {
+    opacity: 0;
+  }
+}
+
+@keyframes un-chapter-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, -8px);
+  }
+}
+
+.un-chapter-transition-pill > span:not(.un-chapter-transition-spinner) {
+  display: grid;
+  min-width: 0;
+}
+
+.un-chapter-transition-pill small {
+  color: rgb(242 242 244 / 55%);
+  font-size: 11.5px;
+  font-weight: 500;
+}
+
+.un-chapter-transition-spinner {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  border: 2px solid rgb(255 255 255 / 22%);
+  border-top-color: #f2f2f4;
+  border-radius: 50%;
+  animation: un-chapter-spin 0.8s linear infinite;
+}
+
+@keyframes un-chapter-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.un-chapter-transition.has-error .un-chapter-transition-pill {
+  pointer-events: auto;
+}
+
+.un-chapter-transition-pill > svg {
+  flex: none;
+  color: #ff98a2;
+}
+
+.un-chapter-transition-pill button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 30px;
+  margin-right: -8px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 999px;
+  background: rgb(255 255 255 / 12%);
+  color: inherit;
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .un-chapter-transition-bar,
+  .un-chapter-transition-bar::after,
+  .un-chapter-transition-spinner,
+  .un-chapter-transition-pill {
+    animation: none;
+  }
+}

@@ -1,0 +1,30 @@
+/* ui-next 소스에서 읽기: grouped preference rows, same surfaces as the extension list above. */
+
+.un-source-reading {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 10px;
+  min-width: 0;
+  scroll-margin-top: 24px;
+  --un-pref-surface: rgb(255 255 255 / 4.5%);
+}
+
+.un-source-reading-head {
+  padding: 0 4px;
+}
+
+/* Same section heading as components/prefs. */
+.un-source-reading-head h3 {
+  margin: 0;
+  color: var(--un-text-2);
+  font-size: 13px;
+  font-weight: 650;
+  letter-spacing: 0.01em;
+}
+
+.un-source-reading-head p {
+  margin: 3px 0 0;
+  color: var(--un-text-3);
+  font-size: 12.5px;
+  line-height: 1.5;
+}

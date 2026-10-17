@@ -1,0 +1,102 @@
+{
+  "name": "@boaa/extension-contracts",
+  "version": "0.1.0",
+  "private": true,
+  "license": "Apache-2.0",
+  "type": "module",
+  "types": "./index.ts",
+  "main": "./index.ts",
+  "typesVersions": {
+    "*": {
+      "package": [
+        "./package-manifest.ts"
+      ],
+      "source-sdk": [
+        "./source-sdk.ts"
+      ],
+      "source-protocol": [
+        "./source-protocol.ts"
+      ],
+      "ui-package": [
+        "./ui-package-manifest.ts"
+      ],
+      "ui-protocol": [
+        "./ui-protocol.ts"
+      ],
+      "ui-sdk": [
+        "./ui-sdk.ts"
+      ],
+      "platform-package": [
+        "./plugin-platform-manifest.ts"
+      ],
+      "ui-json": [
+        "./ui-json.ts"
+      ],
+      "source-browse": [
+        "./source-browse.ts"
+      ],
+      "brand-compat": [
+        "./brand-compat.ts"
+      ],
+      "source-identity": [
+        "./source-identity.d.mts"
+      ]
+    }
+  },
+  "exports": {
+    "./package": {
+      "types": "./package-manifest.ts",
+      "default": "./package-manifest.ts"
+    },
+    ".": {
+      "types": "./index.ts",
+      "default": "./index.ts"
+    },
+    "./source-sdk": {
+      "types": "./source-sdk.ts",
+      "default": "./source-sdk.ts"
+    },
+    "./source-protocol": {
+      "types": "./source-protocol.ts",
+      "default": "./source-protocol.ts"
+    },
+    "./ui-package": {
+      "types": "./ui-package-manifest.ts",
+      "default": "./ui-package-manifest.ts"
+    },
+    "./ui-protocol": {
+      "types": "./ui-protocol.ts",
+      "default": "./ui-protocol.ts"
+    },
+    "./ui-sdk": {
+      "types": "./ui-sdk.ts",
+      "default": "./ui-sdk.ts"
+    },
+    "./platform-package": {
+      "types": "./plugin-platform-manifest.ts",
+      "default": "./plugin-platform-manifest.ts"
+    },
+    "./ui-json": {
+      "types": "./ui-json.ts",
+      "default": "./ui-json.ts"
+    },
+    "./source-browse": {
+      "types": "./source-browse.ts",
+      "default": "./source-browse.ts"
+    },
+    "./brand-compat": {
+      "types": "./brand-compat.ts",
+      "default": "./brand-compat.ts"
+    },
+    "./source-identity": {
+      "types": "./source-identity.d.mts",
+      "default": "./source-identity.mjs"
+    }
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.3"
+  }
+}

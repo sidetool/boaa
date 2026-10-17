@@ -1,0 +1,40 @@
+import type { InstalledSourceCatalogPort } from '../../src/external-sources/installed-package-source-registry';
+import type { ApkInstallations } from './installations.mjs';
+import type { JavaApkTools } from './java-tools.mjs';
+export class ApkSourceCatalog implements InstalledSourceCatalogPort {
+  constructor(
+    store: Pick<ApkInstallations, 'root' | 'snapshot' | 'setEnabled'>,
+    tools: Pick<JavaApkTools, 'worker'>,
+    options?: {
+      maxWorkers?: number;
+      namespace?: string;
+      sourceFile?: string;
+      description?: string;
+      pageConcurrency?: 1 | 2 | 3;
+      transformCover?: (
+        image: { blob: Blob; sha256: string },
+        signal: AbortSignal,
+      ) => Promise<{ blob: Blob; sha256: string }>;
+    },
+  );
+  getSources: InstalledSourceCatalogPort['getSources'];
+  getSource: InstalledSourceCatalogPort['getSource'];
+  subscribe: InstalledSourceCatalogPort['subscribe'];
+  invoke: InstalledSourceCatalogPort['invoke'];
+  disable: InstalledSourceCatalogPort['disable'];
+  refresh(): Promise<void>;
+  openStream(
+    source: string,
+    input: { workId: string; releaseId: string; imageMinutes?: number },
+    signal: AbortSignal,
+  ): Promise<{ token: string; pageCount: number }>;
+  streamPage(source: string, token: string, index: number, signal: AbortSignal, reload?: boolean): Promise<Blob>;
+  closeStream(source: string, token: string): void;
+  close(): void;
+  setCacheOwner(owner: symbol): void;
+  preferences(
+    pkg: string,
+    values?: Record<string, unknown>,
+    signal?: AbortSignal,
+  ): Promise<import('../../src/extensions/packages/compatibility-preferences').CompatibilityPreferences>;
+}

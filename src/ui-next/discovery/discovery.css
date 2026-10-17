@@ -1,0 +1,302 @@
+/* Discovery: source tabs, rows of source works and a full catalog per source. */
+
+.un-discover {
+  position: relative;
+  height: 100dvh;
+  overflow-y: auto;
+  padding: calc(var(--un-topbar) + var(--un-safe-t)) 0 64px;
+  overscroll-behavior: contain;
+  animation: un-rise 0.3s var(--un-ease);
+}
+
+.un-discover-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  min-height: 72px;
+  padding: 18px var(--un-pad) 4px;
+}
+
+.un-discover-head h1 {
+  margin: 0;
+  font-size: 30px;
+  font-weight: 800;
+  letter-spacing: -0.03em;
+}
+
+.un-discover-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.un-discover-actions .un-btn {
+  margin-left: 6px;
+}
+
+.un-discover-tabs {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  background: rgb(9 9 11 / 92%);
+  -webkit-backdrop-filter: blur(16px);
+  backdrop-filter: blur(16px);
+}
+
+.un-discover-tabs .un-underline-tabs button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.un-discover-pin {
+  color: var(--un-accent-2);
+}
+
+.un-discover-quick-tab svg {
+  color: var(--un-text-3);
+}
+
+.un-discover-alert {
+  margin: 14px var(--un-pad) 0;
+}
+
+.un-discover-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 560px;
+  height: 46px;
+  padding: 0 6px 0 16px;
+  border-radius: 12px;
+  background: var(--un-bg-2);
+  color: var(--un-text-3);
+}
+
+.un-discover-search.is-tab {
+  margin: 18px var(--un-pad) 0;
+}
+
+.un-discover-search:focus-within {
+  box-shadow: inset 0 0 0 1px var(--un-line-2);
+}
+
+.un-discover-search input {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  border: 0;
+  outline: none;
+  background: none;
+  color: var(--un-text);
+  font: inherit;
+  font-size: 15px;
+}
+
+.un-discover-search input::-webkit-search-cancel-button {
+  display: none;
+}
+
+.un-discover-search select {
+  max-width: 40%;
+  height: 34px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 8px;
+  background: var(--un-bg-3);
+  color: var(--un-text-2);
+  font: inherit;
+  font-size: 13px;
+}
+
+.un-discover-rows .un-row:first-child {
+  margin-top: 22px;
+}
+
+.un-discover-row-title {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.un-discover-row-title small {
+  color: var(--un-text-3);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.un-discover-row-title h2 {
+  overflow: hidden;
+  margin: 0;
+  font-size: 20px;
+  font-weight: 750;
+  letter-spacing: -0.02em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.un-discover .un-row-head {
+  align-items: flex-end;
+}
+
+.un-discover-row-actions {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 8px;
+}
+
+.un-chip.is-accent {
+  height: 30px;
+  background: var(--un-accent-soft);
+  color: var(--un-accent-2);
+  font-size: 13px;
+}
+
+.un-row.is-compact .un-row-track {
+  grid-auto-columns: clamp(96px, 8.5vw, 124px);
+  gap: 12px;
+}
+
+.un-row.is-compact .un-tile-title {
+  font-size: 13px;
+}
+
+.un-row.is-compact .un-tile-sub {
+  font-size: 12px;
+}
+
+.un-tile-flag.is-owned {
+  background: rgb(9 9 11 / 72%);
+  color: var(--un-text);
+  -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(8px);
+}
+
+.un-discover-note {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  margin: 0;
+  padding: 18px var(--un-pad);
+  color: var(--un-text-3);
+  font-size: 14px;
+}
+
+.un-source-view {
+  scroll-margin-top: 60px;
+}
+
+.un-source-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 12px;
+  padding: 18px 0 6px;
+}
+
+.un-source-controls .un-chip-row {
+  padding-bottom: 0;
+}
+
+.un-source-controls .un-discover-search {
+  flex: 1 1 260px;
+  margin: 0 var(--un-pad) 0 0;
+}
+
+.un-discover-grid {
+  padding-top: 16px;
+}
+
+.un-discover-more {
+  display: flex;
+  justify-content: center;
+  padding: 8px var(--un-pad) 0;
+}
+
+.un-filter-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.un-discover-empty {
+  padding-top: 10vh;
+}
+
+.un-discover-empty .un-empty-icon {
+  margin-bottom: 16px;
+}
+
+.un-discover-empty h1 {
+  font-size: 19px;
+}
+
+.un-discover-empty p {
+  margin: 8px 0 22px;
+  font-size: 14px;
+}
+
+/* Classic editor dialogs keep their markup but take the dark palette. */
+.un-classic-dialog {
+  display: contents;
+}
+
+@media (max-width: 899px) {
+  .un-discover {
+    padding-bottom: calc(var(--un-tabbar) + var(--un-safe-b) + 24px);
+  }
+
+  .un-discover-head {
+    min-height: 60px;
+    padding-top: 12px;
+  }
+
+  .un-discover-head h1 {
+    font-size: 26px;
+  }
+
+  .un-discover-actions {
+    gap: 0;
+  }
+
+  .un-discover-actions .un-btn {
+    width: 40px;
+    margin-left: 0;
+    padding: 0;
+    background: none;
+  }
+
+  .un-discover-actions .un-btn span {
+    display: none;
+  }
+
+  .un-discover-search {
+    max-width: none;
+  }
+
+  .un-discover-search.is-tab {
+    margin-top: 14px;
+  }
+
+  .un-discover-row-title h2 {
+    font-size: 18px;
+  }
+
+  .un-discover .un-row-more {
+    display: inline;
+  }
+
+  .un-row.is-compact .un-row-track {
+    grid-auto-columns: 24vw;
+    gap: 10px;
+  }
+
+  .un-source-controls .un-discover-search {
+    flex-basis: 100%;
+    margin: 0 var(--un-pad);
+  }
+}

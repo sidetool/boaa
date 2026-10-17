@@ -1,0 +1,328 @@
+/* ui-next skin for the PDF and comic viewer: a near-black stage, glass bars and rounded panels.
+   Only applies when the screen carries `.un-kit`; layout and behaviour stay with fixed-document.css. */
+
+.fixed-doc-screen.un-kit {
+  --fixed-doc-panel: var(--un-bg-1);
+  --fixed-doc-stage: #0b0b0d;
+  --fixed-doc-line: var(--un-line);
+  --fixed-doc-header-height: calc(56px + var(--un-safe-t));
+  --fixed-doc-footer-height: calc(52px + var(--un-safe-b));
+
+  color: var(--un-text);
+  font-family: var(--un-font);
+}
+
+/* ───────── bars ───────── */
+
+.fixed-doc-screen.un-kit :is(.fixed-doc-header, .fixed-doc-footer) {
+  border: 0;
+  background: rgb(14 14 17 / 86%);
+  -webkit-backdrop-filter: blur(22px) saturate(1.4);
+  backdrop-filter: blur(22px) saturate(1.4);
+}
+
+.fixed-doc-screen.un-kit .fixed-doc-header {
+  padding: var(--un-safe-t) 10px 0 6px;
+  box-shadow: 0 1px 0 rgb(255 255 255 / 6%);
+}
+
+.fixed-doc-screen.un-kit .fixed-doc-title-group strong {
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.fixed-doc-screen.un-kit .fixed-doc-title-group span {
+  color: var(--un-text-3);
+  font-size: 12px;
+}
+
+.fixed-doc-screen.un-kit :is(.fixed-doc-icon-button, .fixed-doc-toolbar button) {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  color: var(--un-text);
+}
+
+.fixed-doc-screen.un-kit :is(.fixed-doc-icon-button, .fixed-doc-toolbar button):hover,
+.fixed-doc-screen.un-kit .fixed-doc-toolbar button[aria-pressed='true'] {
+  background: rgb(255 255 255 / 9%);
+}
+
+.fixed-doc-screen.un-kit .fixed-doc-toolbar button[aria-pressed='true'] {
+  color: var(--un-accent-2);
+}
+
+.fixed-doc-screen.un-kit .fixed-doc-toolbar i {
+  background: var(--un-line-2);
+}
+
+.fixed-doc-screen.un-kit .fixed-doc-zoom-label {
+  color: var(--un-text-2);
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+.fixed-doc-screen.un-kit .fixed-doc-section-select select {
+  height: 34px;
+  min-height: 0;
+  border: 0;
+  border-radius: 999px;
+  background-color: rgb(255 255 255 / 8%);
+  font-size: 13px;
+}
+
+.fixed-doc-screen.un-kit .fixed-doc-page-input {
+  color: var(--un-text-3);
+  font-size: 13px;
+}
+
+.fixed-doc-screen.un-kit .fixed-doc-page-input input {
+  width: 56px;
+  height: 32px;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: rgb(255 255 255 / 8%);
+  font-size: 13.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+.fixed-doc-screen.un-kit .fixed-doc-footer {
+  gap: 12px;
+  padding: 0 12px var(--un-safe-b);
+  color: var(--un-text-2);
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+.fixed-doc-screen.un-kit .fixed-doc-page-seek {
+  height: 32px;
+  min-height: 0;
+  padding: 0;
+  background: transparent;
+}
+
+.fixed-doc-screen.un-kit .fixed-doc-page-seek::-webkit-slider-runnable-track {
+  background: linear-gradient(
+    to right,
+    var(--un-accent) 0 var(--fixed-doc-progress),
+    rgb(255 255 255 / 16%) var(--fixed-doc-progress) 100%
+  );
+}
+
+.fixed-doc-screen.un-kit .fixed-doc-page-seek::-webkit-slider-thumb {
+  border: 0;
+  background: #fff;
+  box-shadow: 0 1px 4px rgb(0 0 0 / 50%);
+}
+
+.fixed-doc-screen.un-kit .fixed-doc-chapter-step {
+  height: 34px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 999px;
+  background: rgb(255 255 255 / 8%);
+  color: var(--un-text);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.fixed-doc-screen.un-kit .fixed-doc-chapter-step:hover:not(:disabled) {
+  background: rgb(255 255 255 / 14%);
+}
+
+/* ───────── page list ───────── */
+
+.fixed-doc-screen.un-kit .fixed-doc-sidebar {
+  border-right: 1px solid var(--un-line);
+  background: var(--un-bg);
+}
+
+.fixed-doc-screen.un-kit .fixed-doc-sidebar button {
+  border: 0;
+  border-radius: 10px;
+  background: none;
+  color: var(--un-text-3);
+}
+
+.fixed-doc-screen.un-kit .fixed-doc-sidebar button:hover {
+  background: rgb(255 255 255 / 5%);
+}
+
+.fixed-doc-screen.un-kit .fixed-doc-sidebar button.is-active {
+  background: var(--un-accent-soft);
+  box-shadow: inset 0 0 0 1.5px var(--un-accent);
+  color: var(--un-text);
+}
+
+.fixed-doc-screen.un-kit .fixed-doc-thumbnail-actions {
+  color: var(--un-text-3);
+}
+
+.fixed-doc-screen.un-kit .fixed-doc-thumbnail-actions button {
+  min-height: 30px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--un-bg-2);
+  box-shadow: none;
+  color: var(--un-text-2);
+}
+
+/* ───────── panels: menu, search, comic settings, notes ───────── */
+
+.fixed-doc-screen.un-kit .fixed-doc-search-panel {
+  border: 0;
+  background: rgb(18 18 21 / 97%);
+  box-shadow: -24px 0 60px rgb(0 0 0 / 45%);
+  color: var(--un-text);
+  -webkit-backdrop-filter: blur(22px);
+  backdrop-filter: blur(22px);
+}
+
+.fixed-doc-screen.un-kit .fixed-doc-search-panel > header {
+  min-height: 56px;
+  border-bottom-color: var(--un-line);
+  font-size: 16px;
+  font-weight: 750;
+}
+
+.fixed-doc-screen.un-kit .fixed-doc-search-panel button {
+  border: 0;
+  border-radius: 12px;
+  background: var(--un-bg-2);
+  color: var(--un-text);
+}
+
+.fixed-doc-screen.un-kit .fixed-doc-search-panel button:hover,
+.fixed-doc-screen.un-kit .fixed-doc-search-panel button.is-active {
+  background: var(--un-bg-3);
+}
+
+.fixed-doc-screen.un-kit .fixed-doc-search-panel > header > button {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: none;
+}
+
+.fixed-doc-screen.un-kit .fixed-doc-mobile-actions {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  padding: 14px 16px calc(16px + var(--un-safe-b));
+}
+
+.fixed-doc-screen.un-kit .fixed-doc-mobile-actions button {
+  display: grid;
+  justify-items: center;
+  align-content: center;
+  gap: 6px;
+  min-height: 72px;
+  padding: 10px 6px;
+  border-radius: 14px;
+  font-size: 12.5px;
+  font-weight: 600;
+  text-align: center;
+}
+
+.fixed-doc-screen.un-kit .fixed-doc-mobile-actions button svg {
+  width: 21px;
+  height: 21px;
+}
+
+.fixed-doc-screen.un-kit
+  .fixed-doc-comic-settings
+  :is(select, button:not(.reader-settings-slider-thumb, .reader-settings-slider-step)) {
+  min-height: 38px;
+  border: 0;
+  border-radius: 10px;
+  background-color: var(--un-bg-2);
+  color: var(--un-text);
+}
+
+.fixed-doc-screen.un-kit .fixed-doc-comic-settings fieldset {
+  border: 0;
+  border-radius: 14px;
+  background: rgb(255 255 255 / 3%);
+}
+
+.fixed-doc-screen.un-kit .fixed-doc-comic-settings legend {
+  color: var(--un-text-2);
+  font-weight: 650;
+}
+
+.fixed-doc-screen.un-kit .fixed-doc-selection-toolbar {
+  border: 0;
+  border-radius: 14px;
+  background: rgb(26 26 31 / 94%);
+  box-shadow: 0 12px 34px rgb(0 0 0 / 45%);
+  -webkit-backdrop-filter: blur(22px);
+  backdrop-filter: blur(22px);
+}
+
+/* Phones: the menu rises as a bottom sheet. */
+@media (max-width: 720px) {
+  /* The page field is position: fixed inside the header here; a backdrop filter would trap it in the bar. */
+  .fixed-doc-screen.un-kit .fixed-doc-header {
+    background: rgb(14 14 17 / 96%);
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+
+  /* Comics already show the page count beside the seek bar; the floating field only covered it. */
+  .fixed-doc-screen.un-kit.is-comic .fixed-doc-page-input {
+    display: none;
+  }
+
+  .fixed-doc-screen.un-kit .fixed-doc-toolbar .fixed-doc-mobile-top-action {
+    background: none;
+  }
+
+  .fixed-doc-screen.un-kit .fixed-doc-search-panel.fixed-doc-mobile-menu {
+    border-radius: 22px 22px 0 0;
+  }
+
+  .fixed-doc-screen.un-kit .fixed-doc-footer.has-chapter-steps .fixed-doc-chapter-step {
+    min-width: 40px;
+    padding: 0 8px;
+  }
+}
+
+/* ───────── pages on their way ───────── */
+
+/* Pages that are still on their way inside the viewer: same soft column, no gray card. */
+.fixed-doc-screen.un-kit .fixed-doc-page-loading {
+  background: linear-gradient(100deg, rgb(255 255 255 / 3%) 30%, rgb(255 255 255 / 6.5%) 50%, rgb(255 255 255 / 3%) 70%)
+    0 0 / 250% 100%;
+  color: var(--un-text-3);
+  font-size: 12.5px;
+  animation: un-doc-shimmer 1.6s linear infinite;
+}
+
+.fixed-doc-screen.un-kit .fixed-doc-transition-status {
+  top: auto;
+  bottom: calc(var(--fixed-doc-footer-height) + 16px);
+  padding: 10px 16px;
+  border-radius: 999px;
+  background: rgb(22 22 26 / 88%);
+  box-shadow:
+    0 10px 30px rgb(0 0 0 / 45%),
+    inset 0 0 0 1px rgb(255 255 255 / 7%);
+  color: var(--un-text-2);
+  font-size: 13.5px;
+  font-weight: 600;
+  -webkit-backdrop-filter: blur(18px);
+  backdrop-filter: blur(18px);
+}
+
+@keyframes un-doc-shimmer {
+  to {
+    background-position: -250% 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fixed-doc-screen.un-kit .fixed-doc-page-loading {
+    animation: none;
+  }
+}

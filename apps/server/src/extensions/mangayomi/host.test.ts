@@ -1,0 +1,566 @@
+import 'fake-indexeddb/auto';
+import { afterEach, expect, it } from 'vitest';
+import Fastify from 'fastify';
+import { registerAuthHook } from '../../auth.js';
+import type { ServerConfig } from '../../config.js';
+import type { SelfHostAuthService } from '../../services/self-host-auth-service.js';
+import { registerApkExtensionRoutes } from '../../routes/apk-extensions.js';
+import { registerExtensionPackageRoutes } from '../../routes/extension-packages.js';
+import { IndexedDbPackageInstallStore } from '../../../../../src/extensions/packages/package-install-store.js';
+import { createNodePackageExecution } from '../node-package-execution.js';
+import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { MangayomiExtensionHost } from './host.js';
+import { EncryptedSourceCredentialVault } from '../source-credential-vault.js';
+import { fixtureRow, fixtureSource } from './test-fixture.js';
+import type { compatibilityHttp } from './http.js';
+import { dispatchApkCommand } from '../apk-command.js';
+import { OUTBOUND_PROXY_KEY } from '../outbound-proxy.js';
+import { createSourceNetworkSettings } from '../source-network-settings.js';
+const roots: string[] = [];
+const hosts: MangayomiExtensionHost[] = [];
+it('installs parameterized JS and preserves work referers for protected covers', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'boaa-parameterized-js-'));
+  roots.push(root);
+  const row = {
+    ...fixtureRow,
+    additionalParams: '{"gallery":"comic_new6"}',
+    sourceCodeUrl: 'https://repo.example/source.min.js?v=1.0.8',
+  };
+  const script = `class DefaultExtension extends MProvider {
+    getSourcePreferences(){return [{key:'gallery',editTextPreference:{title:'Gallery',value:JSON.parse(this.source.additionalParams).gallery}}]}
+    async getHeaders(url){return {Referer:url};}
+    async getPopular(){return {list:[{name:JSON.parse(this.source.additionalParams).gallery,link:'/work/1',imageUrl:'https://cdn.example/cover.jpg'}],hasNextPage:false};}
+  }`;
+  const headers: unknown[] = [];
+  const transport: typeof compatibilityHttp = async (input) => {
+    if (input.url.includes('cdn.example')) headers.push(input.headers);
+    return {
+      bytes: Buffer.from(
+        input.url.endsWith('.json')
+          ? JSON.stringify([row])
+          : input.url.includes('source.min.js')
+            ? script
+            : Buffer.from([255, 216, 255, 217]),
+      ),
+      statusCode: 200,
+      headers: {},
+      contentType: 'text/plain',
+      url: input.url,
+    };
+  };
+  const vault = new EncryptedSourceCredentialVault(join(root, 'vault'), Buffer.alloc(32, 3));
+  let host = await MangayomiExtensionHost.open(join(root, 'host'), vault, transport);
+  hosts.push(host);
+  const repo = 'https://repo.example/index.json',
+    signal = AbortSignal.timeout(15000);
+  await host.refreshRepository(repo, signal);
+  const entry = host.snapshot().repositories[0].entries[0];
+  const review = await host.inspect(repo, entry.pkg, entry.code, signal);
+  await host.install(review.id, review.revision, signal);
+  host.close();
+  host = await MangayomiExtensionHost.open(join(root, 'host'), vault, transport);
+  hosts.push(host);
+  const id = host.catalog.getSources()[0].descriptor.id;
+  // This prefix is part of saved home rows, library links and cover-cache keys.
+  expect(id).toMatch(/^moya\.mangayomi\.[a-f0-9]{24}\.\d+$/);
+  const list = await host.catalog.invoke(id, 'source.listWorks', {}, signal);
+  expect(list.result.items[0].title).toBe('comic_new6');
+  await host.catalog.invoke(id, 'source.getCover', { workId: list.result.items[0].id }, signal);
+  expect(headers).toEqual([{ Referer: 'https://site.example/work/1' }]);
+});
+it('returns lists with large source caches after reopen and applies default/custom/direct proxy choices to list and covers', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'boaa-cache-proxy-'));
+  roots.push(root);
+  const vault = new EncryptedSourceCredentialVault(join(root, 'vault'), Buffer.alloc(32, 7));
+  const network = createSourceNetworkSettings(vault, undefined);
+  network.save({ revision: 0, defaultProxy: 'socks5://default:1080' });
+  const observed: (string | undefined)[] = [];
+  let overflow = false;
+  const script = `class DefaultExtension extends MProvider {
+    async getPopular(){
+      const prefs=new SharedPreferences();
+      const saved=prefs.getString('status');
+      if(!saved){
+        prefs.setString('status',String.fromCharCode(34).repeat(600000));
+        prefs.setString('mapping','y'.repeat(54000));
+        for(let i=0;i<300;i++)prefs.setString('work_'+i,'kept');
+      } else if(saved.length!==600000||prefs.getString('work_299')!=='kept')throw new Error('lost state');
+      if(prefs.getString('tooBig'))throw new Error('partial write');
+      const response=await new Client().get('https://site.example/list');
+      if(response.body==='overflow')prefs.setString('tooBig','x'.repeat(2*1024*1024));
+      return {list:[{name:saved?'restored':'first',link:'/work',imageUrl:'https://site.example/cover.jpg'}],hasNextPage:false};
+    }
+  }`;
+  const transport: typeof compatibilityHttp = async (input, _signal, _origins, _max, proxy) => {
+    if (new URL(input.url).hostname === 'site.example') observed.push(proxy);
+    return {
+      bytes: input.url.endsWith('.json')
+        ? Buffer.from(JSON.stringify([fixtureRow]))
+        : input.url.endsWith('.js')
+          ? Buffer.from(script)
+          : input.url.endsWith('.jpg')
+            ? Buffer.from([255, 216, 255, 217])
+            : Buffer.from(overflow ? 'overflow' : '{}'),
+      statusCode: 200,
+      headers: {},
+      contentType: 'text/plain',
+      url: input.url,
+    };
+  };
+  let host = await MangayomiExtensionHost.open(join(root, 'host'), vault, transport);
+  hosts.push(host);
+  const repo = 'https://repo.example/index.min.json',
+    signal = AbortSignal.timeout(15000);
+  await host.refreshRepository(repo, signal);
+  const entry = host.snapshot().repositories[0].entries[0];
+  const review = await host.inspect(repo, entry.pkg, entry.code, signal);
+  await host.install(review.id, review.revision, signal);
+  const source = host.catalog.getSources()[0].descriptor.id;
+  expect((await host.catalog.invoke(source, 'source.listWorks', {}, signal)).result.items[0].title).toBe('first');
+  host.close();
+  host = await MangayomiExtensionHost.open(
+    join(root, 'host'),
+    new EncryptedSourceCredentialVault(join(root, 'vault'), Buffer.alloc(32, 7)),
+    transport,
+  );
+  hosts.push(host);
+  expect((await host.catalog.invoke(source, 'source.listWorks', {}, signal)).result.items[0].title).toBe('restored');
+  expect(observed).toEqual(['socks5://default:1080', 'socks5://default:1080']);
+  for (const [values, expected] of [
+    [{ __boaa_proxy_mode: 'direct' }, undefined],
+    [{ __boaa_proxy_mode: 'custom', __boaa_outbound_proxy: 'socks5://custom:1081' }, 'socks5://custom:1081'],
+    [{ __boaa_proxy_mode: 'inherit' }, 'socks5://default:1080'],
+  ] as const) {
+    await host.savePreferences(entry.pkg, host.snapshot().revision, values, []);
+    const listing = await host.catalog.invoke(source, 'source.listWorks', {}, signal);
+    expect(observed.at(-1)).toBe(expected);
+    await host.catalog.invoke(source, 'source.getCover', { workId: listing.result.items[0].id }, signal);
+    expect(observed.at(-1)).toBe(expected);
+  }
+  overflow = true;
+  await expect(host.catalog.invoke(source, 'source.listWorks', {}, signal)).rejects.toThrow('source_storage_limit');
+  overflow = false;
+  expect((await host.catalog.invoke(source, 'source.listWorks', {}, signal)).result.items[0].title).toBe('restored');
+}, 20000);
+it('updates a newer repository version with identical JS bytes and preserves disabled state after reopen', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'boaa-version-only-update-'));
+  roots.push(root);
+  let version = '0.2.4';
+  const vault = new EncryptedSourceCredentialVault(join(root, 'vault'), Buffer.alloc(32, 4));
+  const transport: typeof compatibilityHttp = async (input) => ({
+    bytes: Buffer.from(input.url.endsWith('.json') ? JSON.stringify([{ ...fixtureRow, version }]) : fixtureSource),
+    statusCode: 200,
+    headers: {},
+    contentType: 'text/plain',
+    url: input.url,
+  });
+  let host = await MangayomiExtensionHost.open(join(root, 'host'), vault, transport);
+  hosts.push(host);
+  const repo = 'https://repo.example/index.min.json';
+  const signal = new AbortController().signal;
+  const install = async () => {
+    await host.refreshRepository(repo, signal);
+    const entry = host.snapshot().repositories[0]!.entries[0]!;
+    const plan = await host.inspect(repo, entry.pkg, entry.code, signal);
+    await host.install(plan.id, plan.revision, signal);
+    return plan;
+  };
+  const first = await install();
+  await host.change(first.pkg, host.snapshot().revision, 'disable');
+  version = '0.2.7';
+  const updated = await install();
+  expect(updated.digest).toBe(first.digest);
+  expect(host.snapshot().packages[0]).toMatchObject({ version: '0.2.7', enabled: false });
+  host.close();
+  host = await MangayomiExtensionHost.open(join(root, 'host'), vault, transport);
+  hosts.push(host);
+  expect(host.snapshot().packages[0]).toMatchObject({ version: '0.2.7', enabled: false });
+  await expect(install()).rejects.toThrow('apk_version_not_newer');
+  version = '0.2.4';
+  await expect(install()).rejects.toThrow('apk_version_not_newer');
+});
+it('installs a novel repository and returns cleaned UTF-8 chapters instead of image pages', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'boaa-mangayomi-novel-'));
+  roots.push(root);
+  const row = { ...fixtureRow, itemType: 2, isManga: false };
+  const script =
+    fixtureSource +
+    `
+    DefaultExtension.prototype.getHtmlContent=async function(name,url){
+      if(name!=='One'||url!=='/1')throw new Error('wrong chapter');
+      return this.cleanHtmlContent('<h2>제1화</h2><p>첫 &amp; 문장<br>다음 줄</p><p>둘째 <b>문장</b></p><script>untrusted()</script>');
+    };
+    DefaultExtension.prototype.cleanHtmlContent=async function(html){return html.replace('둘째','마지막');};
+    DefaultExtension.prototype.getPageList=function(){throw new Error('not manga');};`;
+  const host = await MangayomiExtensionHost.open(
+    join(root, 'host'),
+    new EncryptedSourceCredentialVault(join(root, 'vault'), Buffer.alloc(32, 3)),
+    async (input) => ({
+      bytes: Buffer.from(input.url.endsWith('.json') ? JSON.stringify([row]) : script),
+      statusCode: 200,
+      headers: {},
+      contentType: 'text/plain',
+      url: input.url,
+    }),
+  );
+  hosts.push(host);
+  const signal = new AbortController().signal;
+  const repo = 'https://repo.example/index.min.json';
+  await host.refreshRepository(repo, signal);
+  const pkg = host.snapshot().repositories[0].entries[0];
+  const review = await host.inspect(repo, pkg.pkg, pkg.code, signal);
+  await host.install(review.id, review.revision, signal);
+  const descriptor = host.catalog.getSources()[0].descriptor;
+  expect(descriptor.seriesProfile).toMatchObject({ kind: 'document_series', format: 'txt' });
+  const works = await host.catalog.invoke(descriptor.id, 'source.listWorks', {}, signal);
+  const workId = works.result.items[0].id;
+  const releases = await host.catalog.invoke(descriptor.id, 'source.listReleases', { workId }, signal);
+  const content = await host.catalog.invoke(
+    descriptor.id,
+    'source.getContent',
+    { workId, releaseId: releases.result.items[0].id },
+    signal,
+  );
+  expect(content.result.kind).toBe('text');
+  if (content.result.kind !== 'text') throw new Error('wrong content');
+  expect(await content.assets.get(content.result.asset.handle)?.text()).toBe(
+    '제1화\n\n첫 & 문장\n다음 줄\n\n마지막 문장',
+  );
+});
+afterEach(async () => {
+  hosts.splice(0).forEach((h) => h.close());
+  await Promise.all(roots.splice(0).map((path) => rm(path, { recursive: true, force: true })));
+});
+it('does not retain review slots when cancellation arrives with the downloaded script', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'boaa-mangayomi-cancel-'));
+  roots.push(root);
+  let abort: AbortController | undefined;
+  const transport: typeof compatibilityHttp = async (input) => {
+    const script = input.url.endsWith('.js');
+    if (script) abort?.abort();
+    return {
+      bytes: Buffer.from(script ? fixtureSource : JSON.stringify([fixtureRow])),
+      statusCode: 200,
+      headers: {},
+      contentType: 'text/plain',
+      url: input.url,
+    };
+  };
+  const host = await MangayomiExtensionHost.open(
+    join(root, 'host'),
+    new EncryptedSourceCredentialVault(join(root, 'vault'), Buffer.alloc(32, 8)),
+    transport,
+  );
+  hosts.push(host);
+  const repo = 'https://repo.example/index.min.json';
+  await host.refreshRepository(repo, new AbortController().signal);
+  const pkg = host.snapshot().repositories[0].entries[0];
+  for (let index = 0; index < 6; index++) {
+    abort = new AbortController();
+    await expect(host.inspect(repo, pkg.pkg, pkg.code, abort.signal)).rejects.toMatchObject({ name: 'AbortError' });
+  }
+  abort = undefined;
+  const review = await host.inspect(repo, pkg.pkg, pkg.code, new AbortController().signal);
+  expect(review.pkg).toBe(pkg.pkg);
+});
+it('preserves encrypted options across restart and imports original-script pages through the common image contract', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'boaa-mangayomi-'));
+  roots.push(root);
+  const vaultPath = join(root, 'vault'),
+    key = Buffer.alloc(32, 27);
+  const vault = new EncryptedSourceCredentialVault(vaultPath, key);
+  const calls: string[] = [];
+  let version = '1.0.0';
+  const transport: typeof compatibilityHttp = async (input, _signal, privateOrigins, _maximum, proxy) => {
+    calls.push(input.url);
+    let bytes: Buffer<ArrayBuffer>;
+    if (input.url.endsWith('.json')) bytes = Buffer.from(JSON.stringify([{ ...fixtureRow, version }]));
+    else if (input.url.endsWith('.js'))
+      bytes = Buffer.from(
+        fixtureSource.replace(
+          'async getDetail(){return {',
+          "async getDetail(){return {imageUrl:'https://site.example/cover.jpg',imageHeaders:{Referer:'https://site.example/1'},",
+        ) + `\n// version ${version}`,
+      );
+    else if (input.url.endsWith('.jpg')) {
+      expect(input.options?.timeout).toBe(input.url.endsWith('/image.jpg') ? 30 : undefined);
+      expect(proxy).toBe('socks5://127.0.0.1:40000');
+      expect(input.headers?.Referer).toBe('https://site.example/1');
+      bytes = Buffer.from([255, 216, 255, 217]);
+    } else {
+      expect(privateOrigins).toEqual(['http://127.0.0.1:9870']);
+      if (input.url.endsWith('/jobs')) expect(input.headers?.Authorization).toBe('Bearer secret-fixture-key');
+      bytes = Buffer.from('{}');
+    }
+    return {
+      bytes,
+      statusCode: 200,
+      headers: {},
+      contentType: input.url.endsWith('.jpg') ? 'image/jpeg' : 'application/json',
+      url: input.url,
+    };
+  };
+  let host = await MangayomiExtensionHost.open(join(root, 'host'), vault, transport);
+  hosts.push(host);
+  const signal = new AbortController().signal,
+    repo = 'https://repo.example/index.min.json';
+  await host.refreshRepository(repo, signal);
+  await host.refreshRepository('https://second.example/index.min.json', signal);
+  expect(host.snapshot().repositories).toHaveLength(2);
+  const pkg = host.snapshot().repositories[0].entries[0];
+  for (let index = 0; index < 6; index++) {
+    const dismissed = await host.inspect(repo, pkg.pkg, pkg.code, signal);
+    await dispatchApkCommand(host, { action: 'discard', id: dismissed.id }, signal);
+    await expect(host.install(dismissed.id, dismissed.revision, signal)).rejects.toThrow('apk_review_expired');
+  }
+  const review = await host.inspect(repo, pkg.pkg, pkg.code, signal);
+  expect(host.snapshot().packages).toHaveLength(0);
+  await expect(
+    dispatchApkCommand(host, { action: 'install', id: review.id, revision: review.revision }, signal),
+  ).rejects.toThrow('apk_input_invalid');
+  await host.install(review.id, review.revision, signal);
+  await expect(host.savePreferences(pkg.pkg, host.snapshot().revision, { enabled: 'false' }, [])).rejects.toThrow(
+    'compatibility_preferences_invalid',
+  );
+  await host.savePreferences(
+    pkg.pkg,
+    host.snapshot().revision,
+    {
+      enabled: true,
+      endpoint: 'http://127.0.0.1:9870',
+      access_key: 'secret-fixture-key',
+      [OUTBOUND_PROXY_KEY]: 'socks5://127.0.0.1:40000',
+    },
+    ['http://127.0.0.1:9870'],
+  );
+  expect(host.preferences(pkg.pkg).fields.find((f) => f.key === 'access_key')).toMatchObject({
+    configured: true,
+    value: undefined,
+  });
+  expect(JSON.stringify(host.snapshot()) + JSON.stringify(host.preferences(pkg.pkg))).not.toContain(
+    'secret-fixture-key',
+  );
+  for (const file of await readdir(vaultPath))
+    expect((await readFile(join(vaultPath, file))).includes(Buffer.from('secret-fixture-key'))).toBe(false);
+  host.close();
+  host = await MangayomiExtensionHost.open(
+    join(root, 'host'),
+    new EncryptedSourceCredentialVault(vaultPath, key),
+    transport,
+  );
+  hosts.push(host);
+  const source = host.catalog.getSources()[0].descriptor.id;
+  expect(host.preferences(pkg.pkg).fields.find((field) => field.key === OUTBOUND_PROXY_KEY)?.value).toBe(
+    'socks5://127.0.0.1:40000',
+  );
+  const listing = await host.catalog.invoke(source, 'source.listWorks', {}, signal);
+  const work = listing.result.items[0];
+  const releases = await host.catalog.invoke(source, 'source.listReleases', { workId: work.id }, signal);
+  const rows = releases.result.items;
+  expect(rows.map((r) => r.title)).toEqual(['One', 'Two']);
+  const downloaded = await host.catalog.invoke(
+    source,
+    'source.getContent',
+    { workId: work.id, releaseId: rows[0].id },
+    signal,
+  );
+  expect(downloaded.result).toMatchObject({ kind: 'images' });
+  expect(downloaded.assets.size).toBe(1);
+  expect(calls).toContain('http://127.0.0.1:9870/close');
+  const app = Fastify();
+  const headers = { cookie: 'moya_session=legacy-fixture-session' };
+  await registerAuthHook(
+    app,
+    { host: '127.0.0.1', authToken: 'fixture-auth' } as ServerConfig,
+    {
+      authenticateSession: async (token?: string) => (token === 'legacy-fixture-session' ? { id: 'owner' } : undefined),
+      setupRequired: async () => false,
+    } as unknown as SelfHostAuthService,
+  );
+  await registerApkExtensionRoutes(app, host, '/api/mangayomi-extensions');
+  await registerExtensionPackageRoutes(
+    app,
+    new IndexedDbPackageInstallStore(`mg-${crypto.randomUUID()}`),
+    createNodePackageExecution(),
+    undefined,
+    host,
+  );
+  try {
+    expect((await app.inject('/api/mangayomi-extensions')).statusCode).toBe(401);
+    expect(
+      (
+        await app.inject({
+          method: 'POST',
+          url: '/api/mangayomi-extensions/preferences',
+          headers,
+          payload: { pkg: pkg.pkg },
+        })
+      )
+        .json()
+        .fields.find((f: { key: string }) => f.key === 'access_key').value,
+    ).toBeUndefined();
+    const prefix = '/api/extensions/sources/' + encodeURIComponent(source);
+    expect(source).toMatch(/^moya\.mangayomi\./);
+    for (const id of [source, source.replace(/^moya\./, 'boaa.')]) {
+      const cover = await app.inject({
+        method: 'POST',
+        url: '/api/extensions/sources/' + encodeURIComponent(id) + '/cover',
+        headers,
+        payload: { workId: work.id },
+      });
+      expect(cover.statusCode).toBe(200);
+      expect(cover.headers['content-type']).toContain('image/');
+      expect(cover.headers['set-cookie']).toEqual(
+        expect.arrayContaining([expect.stringContaining('boaa_session=legacy-fixture-session; Path=/api;')]),
+      );
+    }
+    const canonical = await app.inject({
+      method: 'POST',
+      url: prefix + '/cover',
+      headers: { cookie: 'boaa_session=legacy-fixture-session' },
+      payload: { workId: work.id },
+    });
+    expect(canonical.statusCode).toBe(200);
+    expect(canonical.headers['set-cookie']).toBeUndefined();
+    const chapters = (
+      await app.inject({ method: 'POST', url: prefix + '/list', headers, payload: { parentRef: work.id } })
+    ).json().items;
+    const openStream = await app.inject({
+      method: 'POST',
+      url: prefix + '/stream',
+      headers,
+      payload: { remoteId: chapters[0].key.remoteId },
+    });
+    expect(openStream.statusCode).toBe(200);
+    const stream = openStream.json();
+    expect(stream.pageCount).toBe(1);
+    expect((await app.inject(prefix + '/stream/' + stream.token + '/0')).statusCode).toBe(401);
+    const image = await app.inject({ url: prefix + '/stream/' + stream.token + '/0', headers });
+    expect(image.statusCode).toBe(200);
+    expect(image.headers['content-type']).toContain('image/');
+    expect(image.rawPayload.length).toBeGreaterThan(0);
+    const reloaded = await app.inject({ url: prefix + '/stream/' + stream.token + '/0?reload=1', headers });
+    expect(reloaded.statusCode).toBe(200);
+    expect(reloaded.rawPayload).toEqual(image.rawPayload);
+    expect(JSON.stringify(stream)).not.toContain('site.example');
+    await app.inject({ method: 'DELETE', url: prefix + '/stream/' + stream.token, headers });
+    expect((await app.inject({ url: prefix + '/stream/' + stream.token + '/0', headers })).json().error).toBe(
+      'source_stream_expired',
+    );
+    const cbz = await app.inject({
+      method: 'POST',
+      url: prefix + '/download',
+      headers,
+      payload: { key: chapters[0].key, fileName: chapters[0].importFileName },
+    });
+    expect(cbz.statusCode).toBe(200);
+    expect(cbz.rawPayload.subarray(0, 2).toString()).toBe('PK');
+  } finally {
+    await app.close();
+  }
+  // Route shutdown disposes the host; reopen durable state for update checks.
+  host = await MangayomiExtensionHost.open(join(root, 'host'), vault, transport);
+  hosts.push(host);
+  version = '0.9.0';
+  await host.refreshRepository(repo, signal);
+  await expect(
+    host.inspect(repo, pkg.pkg, host.snapshot().repositories.find((r) => r.url === repo)!.entries[0].code, signal),
+  ).rejects.toThrow('apk_version_not_newer');
+  version = '1.1.0';
+  await host.refreshRepository(repo, signal);
+  const update = await host.inspect(
+    repo,
+    pkg.pkg,
+    host.snapshot().repositories.find((r) => r.url === repo)!.entries[0].code,
+    signal,
+  );
+  const previousActivation = host.snapshot().packages.find((record) => record.pkg === pkg.pkg)!.digest;
+  await host.install(update.id, update.revision, signal);
+  expect(host.snapshot().packages.find((record) => record.pkg === pkg.pkg)).toMatchObject({
+    version: '1.1.0',
+    digest: update.digest,
+    enabled: true,
+  });
+  expect(host.snapshot().packages.find((record) => record.pkg === pkg.pkg)!.digest).not.toBe(previousActivation);
+  expect(host.preferences(pkg.pkg).fields.find((f) => f.key === 'access_key')?.configured).toBe(true);
+  await host.change(pkg.pkg, host.snapshot().revision, 'disable');
+  expect(host.catalog.getSources()).toHaveLength(0);
+  version = '1.2.0';
+  await host.refreshRepository(repo, signal);
+  const disabledUpdate = await host.inspect(
+    repo,
+    pkg.pkg,
+    host.snapshot().repositories.find((r) => r.url === repo)!.entries[0].code,
+    signal,
+  );
+  await host.install(disabledUpdate.id, disabledUpdate.revision, signal);
+  expect(host.snapshot().packages.find((record) => record.pkg === pkg.pkg)).toMatchObject({
+    version: '1.2.0',
+    digest: disabledUpdate.digest,
+    enabled: false,
+  });
+  expect(host.catalog.getSources()).toHaveLength(0);
+  await host.change(pkg.pkg, host.snapshot().revision, 'enable');
+  expect(host.catalog.getSources()).toHaveLength(1);
+  await host.change(pkg.pkg, host.snapshot().revision, 'remove');
+  expect(await readdir(vaultPath)).toHaveLength(0);
+});
+
+it('imports original JS files without a repository, preserves multi-source choice and review cancellation', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'boaa-file-import-'));
+  roots.push(root);
+  const host = await MangayomiExtensionHost.open(
+    join(root, 'host'),
+    new EncryptedSourceCredentialVault(join(root, 'vault'), Buffer.alloc(32, 6)),
+    async () => {
+      throw new Error('unexpected_network');
+    },
+  );
+  hosts.push(host);
+  const source = Buffer.from(
+    `const mangayomiSources=${JSON.stringify([
+      { ...fixtureRow, name: 'First' },
+      { ...fixtureRow, name: 'Second', lang: 'en' },
+    ])};` + fixtureSource,
+  );
+  const signal = new AbortController().signal;
+  for (const index of [-1, 0.5, 2])
+    await expect(host.inspectFile(source, 'extension.js', index, signal)).rejects.toThrow('compatibility_file_invalid');
+  const malformed = Buffer.from(
+    `const mangayomiSources=${JSON.stringify([{ ...fixtureRow, lang: undefined, langs: ['en', 'en'] }])};` +
+      fixtureSource,
+  );
+  await expect(host.inspectFile(malformed, 'extension.js', 0, signal)).rejects.toThrow('compatibility_file_invalid');
+  const review = await host.inspectFile(source, 'extension.js', 1, signal);
+  expect(review.fileSources).toHaveLength(2);
+  await host.install(review.id, review.revision, signal);
+  expect(host.catalog.getSources()[0].descriptor.title).toBe('Second');
+  expect(host.snapshot().repositories).toHaveLength(0);
+  await expect(host.inspectFile(source, 'extension.js', 1, signal)).rejects.toThrow('apk_version_not_newer');
+  const app = Fastify();
+  await registerApkExtensionRoutes(app, host, '/api/mangayomi-extensions');
+  const request = { name: 'extension.js', base64: source.toString('base64'), sourceIndex: 0 };
+  const uploaded = await app.inject({
+    method: 'POST',
+    url: '/api/mangayomi-extensions/inspect-file',
+    payload: request,
+  });
+  expect(uploaded.statusCode).toBe(200);
+  host.discard(uploaded.json().id);
+  const native = await dispatchApkCommand(host, { action: 'inspect-file', ...request }, signal);
+  expect(native.kind).toBe('json');
+  if (native.kind === 'json') host.discard((native.value as { id: string }).id);
+  const invalid = await app.inject({
+    method: 'POST',
+    url: '/api/mangayomi-extensions/inspect-file',
+    payload: { ...request, name: '../bad.js' },
+  });
+  expect(invalid.statusCode).toBe(422);
+  const cancelled = await host.inspectFile(source, 'extension.js', 0, signal);
+  host.discard(cancelled.id);
+  await expect(host.install(cancelled.id, cancelled.revision, signal)).rejects.toThrow('apk_review_expired');
+  await expect(host.inspectFile(Buffer.from('process.exit()'), 'bad.js', 0, signal)).rejects.toThrow();
+  await app.close();
+});

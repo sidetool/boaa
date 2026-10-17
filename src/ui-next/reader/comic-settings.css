@@ -1,0 +1,269 @@
+/* ui-next 만화 보기: low sheet over the page, like 보기 in the text reader. */
+
+.un-comic-sheet {
+  position: fixed;
+  bottom: calc(var(--fixed-doc-footer-height, 52px) + 12px);
+  left: 50%;
+  z-index: 40;
+  display: grid;
+  gap: 12px;
+  overflow-y: auto;
+  width: min(460px, calc(100% - 24px));
+  max-height: min(
+    78dvh,
+    calc(100dvh - var(--fixed-doc-header-height, 56px) - var(--fixed-doc-footer-height, 52px) - 32px)
+  );
+  padding: 8px 18px 16px;
+  border-radius: 22px;
+  background: rgb(22 22 26 / 95%);
+  box-shadow:
+    0 20px 60px rgb(0 0 0 / 55%),
+    inset 0 0 0 1px rgb(255 255 255 / 6%);
+  color: var(--un-text);
+  font-family: var(--un-font);
+  outline: none;
+  overscroll-behavior: contain;
+  transform: translateX(-50%);
+  -webkit-backdrop-filter: blur(24px) saturate(1.4);
+  backdrop-filter: blur(24px) saturate(1.4);
+  animation: un-comic-in 0.24s var(--un-ease);
+}
+
+@keyframes un-comic-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, 20px);
+  }
+}
+
+.un-comic-sheet .un-sheet-grabber {
+  display: none;
+}
+
+.un-comic-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 40px;
+}
+
+.un-comic-head h2 {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 750;
+}
+
+/* View modes as picture tiles: the choice is visual, so it reads faster than a select. */
+.un-comic-modes {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.un-comic-modes button {
+  display: grid;
+  justify-items: center;
+  gap: 6px;
+  padding: 12px 4px 10px;
+  border: 0;
+  border-radius: 14px;
+  background: rgb(255 255 255 / 6%);
+  color: var(--un-text-2);
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 650;
+  transition:
+    background 0.15s,
+    color 0.15s;
+}
+
+.un-comic-modes button:hover {
+  background: rgb(255 255 255 / 10%);
+}
+
+.un-comic-modes button.is-active {
+  background: var(--un-accent-soft);
+  box-shadow: inset 0 0 0 1.5px var(--un-accent);
+  color: var(--un-text);
+}
+
+.un-comic-note {
+  margin: -4px 0 0;
+  color: var(--un-text-3);
+  font-size: 12.5px;
+}
+
+.un-comic-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 40px;
+}
+
+.un-comic-row > span {
+  flex: none;
+  color: var(--un-text-2);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.un-comic-row .un-segmented {
+  flex: 0 1 280px;
+  background: rgb(255 255 255 / 6%);
+}
+
+.un-comic-row .un-segmented button {
+  flex: 1;
+  white-space: nowrap;
+}
+
+.un-comic-swatches {
+  display: flex;
+  gap: 10px;
+}
+
+.un-comic-swatches button {
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 1px rgb(255 255 255 / 18%);
+}
+
+.un-comic-swatches .is-black {
+  background: #000;
+}
+
+.un-comic-swatches .is-charcoal {
+  background: #1d1d21;
+}
+
+.un-comic-swatches .is-white {
+  background: #f4f4f2;
+}
+
+.un-comic-swatches button.is-active {
+  box-shadow:
+    0 0 0 2px rgb(22 22 26),
+    0 0 0 4px var(--un-accent);
+}
+
+.un-comic-fold {
+  border-top: 1px solid var(--un-line);
+}
+
+.un-comic-fold > summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 46px;
+  font-size: 14.5px;
+  font-weight: 650;
+  list-style: none;
+  cursor: pointer;
+}
+
+.un-comic-fold > summary::-webkit-details-marker {
+  display: none;
+}
+
+.un-comic-fold > summary em {
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--un-accent-soft);
+  color: var(--un-accent-2);
+  font-size: 11.5px;
+  font-style: normal;
+}
+
+.un-comic-fold > summary svg {
+  margin-left: auto;
+  color: var(--un-text-3);
+  transition: transform 0.2s var(--un-ease);
+}
+
+.un-comic-fold[open] > summary svg {
+  transform: rotate(180deg);
+}
+
+.un-comic-fold-body {
+  display: grid;
+  gap: 10px;
+  padding-bottom: 6px;
+}
+
+.un-comic-fold-body > .un-segmented {
+  background: rgb(255 255 255 / 6%);
+}
+
+.un-comic-fold-body > .un-segmented button {
+  flex: 1;
+}
+
+.un-comic-switches {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 18px;
+}
+
+.un-comic-switches label {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.un-comic-switches .un-btn {
+  margin-left: auto;
+}
+
+.un-comic-crop {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  color: var(--un-text-2);
+  font-size: 13px;
+}
+
+.un-comic-crop small {
+  flex-basis: 100%;
+  color: #ffc875;
+  font-size: 12.5px;
+}
+
+.un-comic-foot {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  color: var(--un-text-3);
+  font-size: 12.5px;
+}
+
+@media (max-width: 699px) {
+  .un-comic-sheet {
+    bottom: 0;
+    width: 100%;
+    max-height: 72dvh;
+    padding: 0 var(--un-pad) calc(14px + var(--un-safe-b));
+    border-radius: 22px 22px 0 0;
+  }
+
+  .un-comic-sheet .un-sheet-grabber {
+    display: block;
+  }
+
+  .un-comic-row {
+    flex-wrap: wrap;
+  }
+
+  .un-comic-row .un-segmented {
+    flex: 1 1 100%;
+  }
+}

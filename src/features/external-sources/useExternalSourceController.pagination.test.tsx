@@ -1,0 +1,706 @@
+import { act, create, type ReactTestRenderer } from 'react-test-renderer';
+import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
+import type { ExtensionContributionId } from '@boaa/extension-contracts';
+import { externalItemKeyId } from '../../external-sources/contracts';
+import type {
+  ExternalItemPage,
+  ExternalCatalogCachePage,
+  ExternalItemSummary,
+  ExternalSourceLink,
+  ExternalSourceListInput,
+} from '../../external-sources/contracts';
+import {
+  externalSourceSubscriptionId,
+  type ExternalSourceLocalState,
+  type ExternalSourceSubscriptionRecord,
+} from '../../external-sources/local-state';
+import { testChapter, testNovel } from '../book-workspace/book-workspace-test-fixtures';
+import { externalItemSectionId } from './serial-work-projection';
+import { useSourceStreamNavigation } from './use-source-stream-navigation';
+import type { BookAssetRepository } from '../../repositories/book-asset-repository';
+import { useSourceReleaseList } from './useSourceReleaseList';
+import {
+  useExternalSourceController,
+  type ExternalSourceController,
+  type ExternalSourceRegistryPort,
+} from './useExternalSourceController';
+
+beforeEach(() => {
+  const values = new Map([['boaa.source-reading.v1', JSON.stringify({ mode: 'stream', textMode: 'stream' })]]);
+  vi.stubGlobal('localStorage', {
+    getItem: (key: string) => values.get(key) ?? null,
+    setItem: (key: string, value: string) => values.set(key, value),
+  });
+});
+afterEach(() => vi.unstubAllGlobals());
+
+const sourceId = 'fixture.source' as ExtensionContributionId;
+const otherSourceId = 'fixture.other' as ExtensionContributionId;
+const now = '2026-09-05T00:00:00.000Z';
+function release(id: number, format: 'txt' | 'image_archive' = 'txt'): ExternalItemSummary {
+  return {
+    key: { connectorId: sourceId, accountConnectionId: 'account', remoteId: `release-${id}` },
+    kind: 'file',
+    title: `${id}화`,
+    importability: 'supported',
+    collection: {
+      remoteId: 'work',
+      title: 'Work',
+      ...(format === 'txt'
+        ? {
+            seriesProfile: {
+              kind: 'document_series' as const,
+              format: 'txt' as const,
+              encoding: 'utf-8' as const,
+              chapterSplitMode: 'single' as const,
+            },
+          }
+        : {}),
+    },
+    release: { title: `${id}화`, sourceOrder: id },
+  };
+}
+function subscription(connectorId: string): ExternalSourceSubscriptionRecord {
+  return {
+    id: externalSourceSubscriptionId(connectorId, 'account', 'work'),
+    connectorId,
+    accountConnectionId: 'account',
+    collectionRemoteId: 'work',
+    navigationRef: 'work',
+    title: 'Work',
+    knownReleaseIds: [],
+    newReleaseIds: [],
+    availableReleaseCount: 0,
+    createdAt: now,
+    updatedAt: now,
+    lastCheckedAt: now,
+    schemaVersion: 1,
+  };
+}
+
+async function fixture(format: 'txt' | 'image_archive' = 'txt', showPanel = false, withStream = false) {
+  const novel = testNovel({ id: 'book', format, documentSectionCount: 3 });
+  const otherNovel = testNovel({ id: 'other-book', format: 'txt', documentSectionCount: 1 });
+  const chapters = [1, 2, 3].map((id) =>
+    testChapter(id, {
+      novelId: novel.id,
+      documentSectionId: externalItemSectionId(release(id, format)),
+      documentSectionTitle: `${id}화`,
+      documentSectionIndex: id,
+    }),
+  );
+  const links: ExternalSourceLink[] = [1, 2, 3].map((id) => ({
+    id: `link-${id}`,
+    source: release(id, format).key,
+    localBookId: novel.id,
+    collectionRemoteId: 'work',
+    linkedAt: now,
+  }));
+  links.push({
+    id: 'other-link',
+    source: { connectorId: otherSourceId, accountConnectionId: 'account', remoteId: 'other-release' },
+    localBookId: otherNovel.id,
+    collectionRemoteId: 'work',
+    linkedAt: now,
+  });
+  let records: ExternalSourceSubscriptionRecord[] = [];
+  const listLinks = vi.fn(async (id?: string) => links.filter((link) => !id || link.source.connectorId === id));
+  const cachedPages = new Map<string, ExternalCatalogCachePage>();
+  const state = {
+    listLinks,
+    listSubscriptions: vi.fn(async (id?: string, account?: string) =>
+      records.filter(
+        (record) => (!id || record.connectorId === id) && (!account || record.accountConnectionId === account),
+      ),
+    ),
+    saveSubscription: vi.fn(async (record: ExternalSourceSubscriptionRecord) => {
+      records = [...records.filter((entry) => entry.id !== record.id), record];
+    }),
+    getDefaultFolder: vi.fn(async () => undefined),
+    getCatalogPreference: vi.fn(async () => undefined),
+    getCachePage: vi.fn(async (id: string) => cachedPages.get(id)),
+    saveCachePage: vi.fn(async (page: ExternalCatalogCachePage) => {
+      cachedPages.set(page.id, page);
+    }),
+  } as unknown as ExternalSourceLocalState;
+  let page: (cursor?: string, parentRef?: string) => Promise<ExternalItemPage> = async () => ({
+    detail: { title: 'Work' },
+    items: [release(1, format)],
+  });
+  let generation = 'initial';
+  const download = vi.fn();
+  const registry = {
+    getExternalSources: () =>
+      [sourceId, otherSourceId].map((id) => ({
+        descriptor: {
+          id,
+          schemaVersion: 1,
+          title: id,
+          kind: 'catalog',
+          capabilities: ['browse', 'subscriptions'],
+          runtimes: ['web-direct'],
+        },
+      })),
+    getExternalSourceStatus: () => ({
+      state: 'connected',
+      accountConnectionId: 'account',
+      connectionGeneration: generation,
+    }),
+    listExternalSource: vi.fn(async (_id: string, _host: unknown, input: ExternalSourceListInput) =>
+      page(input.cursor, input.parentRef),
+    ),
+    disconnectExternalSource: vi.fn(async () => undefined),
+    downloadExternalSource: download,
+    getSourceStream: withStream
+      ? () => (format === 'txt' ? { kind: 'text', open: vi.fn() } : { open: vi.fn() })
+      : undefined,
+  } as unknown as ExternalSourceRegistryPort;
+  const notify = vi.fn();
+  const listNovels = vi.fn(async () => [novel, otherNovel]);
+  const getNovel = vi.fn(async (id: string) => (id === novel.id ? novel : otherNovel));
+  let controller!: ExternalSourceController;
+  let navigation!: ReturnType<typeof useSourceStreamNavigation>;
+  let renderer!: ReactTestRenderer;
+  function Harness() {
+    controller = useExternalSourceController({
+      registry,
+      ...(withStream ? { assets: {} as BookAssetRepository, getParagraphPage: vi.fn() } : {}),
+      hostContext: { brokers: { get: () => undefined } },
+      state,
+      importService: { importFile: vi.fn() },
+      extensionRevision: 0,
+      listNovels,
+      listChapters: async () => chapters,
+      getNovel,
+      openNovel: vi.fn(async () => undefined),
+      onLibraryChanged: vi.fn(async () => undefined),
+      notify,
+      confirm: () => true,
+    });
+    navigation = useSourceStreamNavigation(controller, false);
+    return showPanel && controller.localSeriesNovel ? <ReleaseHarness /> : null;
+  }
+  let releases!: ReturnType<typeof useSourceReleaseList>;
+  function ReleaseHarness() {
+    releases = useSourceReleaseList(controller, controller.items);
+    return null;
+  }
+  await act(async () => {
+    renderer = create(<Harness />);
+  });
+  return {
+    get releases() {
+      return releases;
+    },
+    get controller() {
+      return controller;
+    },
+    get navigation() {
+      return navigation;
+    },
+    renderer,
+    novel,
+    chapters,
+    state,
+    listLinks,
+    download,
+    registry,
+    cachedPages,
+    notify,
+    listNovels,
+    getNovel,
+    setPage(value: typeof page) {
+      page = value;
+    },
+    setSubscriptions(value: ExternalSourceSubscriptionRecord[]) {
+      records = value;
+    },
+    changeGeneration() {
+      generation = 'changed';
+    },
+  };
+}
+
+describe('source series pagination integration', () => {
+  it('opens detail before remote metadata arrives without fetching the whole library, and respects closing', async () => {
+    const h = await fixture();
+    let finish!: (value: typeof h.novel) => void;
+    h.getNovel.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    );
+    const priorReads = h.listNovels.mock.calls.length;
+    let opening!: Promise<void>;
+    await act(async () => {
+      opening = h.controller.showLocalSeries(h.novel);
+    });
+    expect(h.controller.open).toBe(true);
+    expect(h.controller.detail?.title).toBe(h.novel.title);
+    expect(h.listNovels).toHaveBeenCalledTimes(priorReads);
+    await act(async () => h.controller.close());
+    await act(async () => {
+      finish(h.novel);
+      await opening;
+    });
+    expect(h.controller.open).toBe(false);
+    await act(async () => h.renderer.unmount());
+  });
+  it.each(['txt', 'image_archive'] as const)(
+    'positions the real %s local-series panel after the remote catalog arrives',
+    async (format) => {
+      const h = await fixture(format, true);
+      const current = h.chapters[0]!;
+      current.documentSectionId = externalItemSectionId(release(46, format));
+      current.documentSectionTitle = 'Release 46';
+      current.documentSectionIndex = 46;
+      h.novel.lastReadChapterId = current.id;
+      h.novel.lastReadChapterIndex = current.index;
+      h.novel.lastReadProgress = 0.5;
+      let finish!: (value: ExternalItemPage) => void;
+      h.setPage(
+        () =>
+          new Promise((resolve) => {
+            finish = resolve;
+          }),
+      );
+      let opening!: Promise<void>;
+      await act(async () => {
+        opening = h.controller.showLocalSeries(h.novel);
+      });
+      expect(h.controller.loading).toBe(false);
+      expect(h.controller.catalogLoading).toBe(true);
+      expect(h.controller.items.some((item) => item.readingState === 'current')).toBe(true);
+      await act(async () => {
+        finish({ detail: { title: 'Work' }, items: Array.from({ length: 100 }, (_, i) => release(i + 1, format)) });
+        await opening;
+      });
+      expect(h.controller.loading).toBe(false);
+      expect(h.releases.page.page).toBe(5);
+      expect(h.releases.page.items.some((row) => row.title === '46화')).toBe(true);
+      await act(async () => h.renderer.unmount());
+    },
+  );
+
+  it.each(['txt', 'image_archive'] as const)(
+    'loads the persisted streamed episode before positioning the %s detail, including cached catalogs',
+    async (format) => {
+      const h = await fixture(format, true);
+      h.novel.lastReadChapterId = h.chapters[0].id;
+      h.novel.lastReadChapterIndex = h.chapters[0].index;
+      h.novel.lastReadProgress = 0.5;
+      h.setPage(async () => ({ items: Array.from({ length: 100 }, (_, i) => release(i + 1, format)) }));
+      let currentEpisode = 46;
+      h.state.listReleasePreferences = async () => [
+        {
+          id: 'stream-visit',
+          kind: 'releasePreference',
+          source: release(currentEpisode, format).key,
+          collectionRemoteId: 'work',
+          read: true,
+          readingMode: 'stream',
+          lastReadAt: '2026-09-28T00:00:00.000Z',
+          updatedAt: '2026-09-28T00:00:00.000Z',
+        },
+      ];
+      try {
+        await act(async () => h.controller.showLocalSeries(h.novel));
+        expect(h.releases.page.page).toBe(5);
+        expect(h.controller.items.filter((item) => item.readingState === 'current').map((item) => item.title)).toEqual([
+          '46화',
+        ]);
+        await act(async () => h.controller.close());
+        currentEpisode = 86;
+        await act(async () => h.controller.showLocalSeries(h.novel));
+        expect(h.releases.page.page).toBe(9);
+      } finally {
+        await act(async () => h.renderer.unmount());
+      }
+    },
+  );
+
+  it.each([
+    { format: 'txt', mode: 'stream' },
+    { format: 'image_archive', mode: 'stream' },
+    { format: 'txt', mode: 'stream-save' },
+    { format: 'image_archive', mode: 'stream-save' },
+  ] as const)(
+    'resumes a partly downloaded $format series in $mode mode using the cached full catalog',
+    async ({ format, mode }) => {
+      const storage = new Map<string, string>([
+        ['boaa.source-reading.v1', JSON.stringify({ mode, textMode: 'stream' })],
+      ]);
+      vi.stubGlobal('localStorage', {
+        getItem: (key: string) => storage.get(key) ?? null,
+        setItem: (key: string, value: string) => {
+          storage.set(key, value);
+        },
+      });
+      const h = await fixture(format, false, true);
+      h.state.listReleasePreferences = async () => [
+        {
+          id: 'stream-visit',
+          kind: 'releasePreference',
+          source: release(3, format).key,
+          collectionRemoteId: 'work',
+          readingMode: 'stream',
+          lastReadAt: '2026-09-28T00:00:00Z',
+          updatedAt: '2026-09-28T00:00:00Z',
+        },
+      ];
+      // Three downloaded episodes, five known source episodes. No detail visit in this session.
+      h.setPage(async (cursor) =>
+        cursor
+          ? { items: [release(2, format), release(1, format)] }
+          : {
+              detail: { title: 'Work' },
+              items: [release(5, format), release(4, format), release(3, format)],
+              nextCursor: 'older',
+            },
+      );
+      try {
+        await act(async () => {
+          expect(await h.controller.continueSourceReading!(h.novel)).toBe(true);
+        });
+        expect(h.controller.streaming?.item.key.remoteId).toBe('release-3');
+        expect(h.controller.streaming?.fromStart).toBe(false);
+        expect(h.navigation.nextItem?.key.remoteId).toBe('release-4');
+        expect(h.registry.listExternalSource).toHaveBeenCalledTimes(3);
+        let moving!: Promise<void>;
+        await act(async () => {
+          moving = h.navigation.next!();
+        });
+        await moving;
+        expect(h.controller.streaming?.item.key.remoteId).toBe('release-4');
+        expect(h.registry.listExternalSource).toHaveBeenCalledTimes(3);
+        expect(h.download).not.toHaveBeenCalled();
+        await act(async () => h.controller.close());
+        await act(async () => {
+          await h.controller.continueSourceReading!(h.novel);
+        });
+        expect(h.controller.streaming?.item.key.remoteId).toBe('release-3');
+        expect(h.controller.streaming?.fromStart).toBe(false);
+        expect(h.registry.listExternalSource).toHaveBeenCalledTimes(3);
+      } finally {
+        await act(async () => h.renderer.unmount());
+        vi.unstubAllGlobals();
+      }
+    },
+  );
+
+  it('starts an unread streaming work with one catalog request shared by detail, start and next', async () => {
+    const h = await fixture('txt', false, true);
+    const work = { ...subscription(sourceId), thumbnailUrl: 'https://example.test/cover.png' };
+    h.setSubscriptions([work]);
+    h.setPage(async () => ({
+      detail: { title: 'Work', thumbnailUrl: work.thumbnailUrl },
+      items: [1, 2, 3, 4].map((id) => release(id)),
+    }));
+    try {
+      await act(async () => h.controller.continueLibraryWork!(work.id));
+      expect(h.controller.streaming?.item.key.remoteId).toBe('release-1');
+      expect(h.navigation.nextItem?.key.remoteId).toBe('release-2');
+      expect(h.registry.listExternalSource).toHaveBeenCalledOnce();
+    } finally {
+      await act(async () => h.renderer.unmount());
+    }
+  });
+
+  it('waits for the in-flight detail and stream catalogs without another request from next', async () => {
+    const h = await fixture('txt', false, true);
+    let finish!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      finish = resolve;
+    });
+    h.setPage(async () => {
+      await gate;
+      return { detail: { title: 'Work' }, items: [1, 2, 3, 4].map((id) => release(id)) };
+    });
+    let opening!: Promise<void>;
+    try {
+      await act(async () => {
+        opening = h.controller.showLocalSeries(h.novel);
+        await vi.waitFor(() => expect(h.registry.listExternalSource).toHaveBeenCalledOnce());
+      });
+      await act(async () => h.controller.openStreamItem!(h.controller.items[2]));
+      expect(h.controller.streaming?.item.key.remoteId).toBe('release-3');
+      let moving!: Promise<void>;
+      await act(async () => {
+        moving = h.navigation.next!();
+      });
+      expect(h.controller.streaming?.item.key.remoteId).toBe('release-3');
+      expect(h.registry.listExternalSource).toHaveBeenCalledTimes(2);
+      await act(async () => {
+        finish();
+        await opening;
+      });
+      await moving;
+      expect(h.controller.streaming?.item.key.remoteId).toBe('release-4');
+      expect(h.registry.listExternalSource).toHaveBeenCalledTimes(2);
+    } finally {
+      finish();
+      await opening;
+      await act(async () => h.renderer.unmount());
+    }
+  });
+
+  it('publishes the first complete snapshot once, reuses it without requests, and automatically applies background changes', async () => {
+    const h = await fixture();
+    let finish!: () => void;
+    let gate = new Promise<void>((resolve) => {
+      finish = resolve;
+    });
+    h.setPage(async (cursor) => {
+      if (cursor) {
+        await gate;
+        return { items: [release(2), release(1)] };
+      }
+      return { detail: { title: 'Work' }, items: [release(9), release(8)], nextCursor: 'older' };
+    });
+    let pending!: Promise<void>;
+    try {
+      await act(async () => {
+        pending = h.controller.showLocalSeries(h.novel);
+        await vi.waitFor(() => expect(h.registry.listExternalSource).toHaveBeenCalledTimes(2));
+      });
+      expect(h.controller.loading).toBe(false);
+      expect(h.controller.catalogLoading).toBe(true);
+      expect(h.controller.items.map((item) => item.key.remoteId)).toEqual(['release-1', 'release-2', 'release-3']);
+      finish();
+      await act(async () => pending);
+      expect(h.controller.loading).toBe(false);
+      const initialKeys = h.controller.items.map((item) => item.key.remoteId);
+      expect(initialKeys).toEqual(['release-9', 'release-8', 'release-2', 'release-1', 'release-3']);
+      await act(async () => h.controller.close());
+      await act(async () => h.controller.showLocalSeries(h.novel));
+      expect(h.registry.listExternalSource).toHaveBeenCalledTimes(2);
+      for (const [id, entry] of h.cachedPages) h.cachedPages.set(id, { ...entry, expiresAt: '2000-01-01T00:00:00Z' });
+      gate = new Promise<void>((resolve) => {
+        finish = resolve;
+      });
+      h.setPage(async (cursor) =>
+        cursor
+          ? (await gate, { items: [release(2), release(1)] })
+          : { detail: { title: 'Work' }, items: [release(10), release(9), release(8)], nextCursor: 'older' },
+      );
+      await act(async () => {
+        pending = h.controller.showLocalSeries(h.novel);
+        await vi.waitFor(() => expect(h.registry.listExternalSource).toHaveBeenCalledTimes(4));
+      });
+      expect(h.controller.loading).toBe(false);
+      expect(h.controller.catalogLoading).toBe(true);
+      expect(h.controller.items.map((item) => item.key.remoteId)).toEqual(initialKeys);
+      finish();
+      await act(async () => pending);
+      expect(h.controller.catalogLoading).toBe(false);
+      expect(h.controller.items[0]!.key.remoteId).toBe('release-10');
+      expect(h.download).not.toHaveBeenCalled();
+    } finally {
+      finish();
+      await pending;
+      await act(async () => h.renderer.unmount());
+    }
+  });
+  it('preserves selections on other pages and includes saved releases for bulk deletion', async () => {
+    const h = await fixture();
+    h.setPage(async () => ({ detail: { title: 'Work' }, items: [1, 2, 3, 4, 5, 6].map((id) => release(id)) }));
+    await act(async () => h.controller.showLocalSeries(h.novel));
+    const keys = h.controller.items.map((item) => externalItemKeyId(item.key));
+    await act(async () => h.controller.selectAllSupported(true, keys.slice(0, 4)));
+    expect(h.controller.items.filter((item) => item.selected).map((item) => item.key.remoteId)).toEqual([
+      'release-1',
+      'release-2',
+      'release-3',
+      'release-4',
+    ]);
+    await act(async () => h.controller.selectAllSupported(true, keys.slice(4)));
+    await act(async () => h.controller.selectAllSupported(false, [keys[3]!]));
+    expect(h.controller.items.filter((item) => item.selected).map((item) => item.key.remoteId)).toEqual([
+      'release-1',
+      'release-2',
+      'release-3',
+      'release-5',
+      'release-6',
+    ]);
+    await act(async () => h.controller.selectAllSupported(false));
+    expect(h.controller.items.some((item) => item.selected)).toBe(false);
+    await act(async () => h.renderer.unmount());
+  });
+
+  it.each(['txt', 'image_archive'] as const)(
+    'projects saved read states when opening %s through the source catalog',
+    async (format) => {
+      const h = await fixture(format);
+      h.chapters[0]!.documentSectionReadAt = now;
+      h.setPage(async () => ({ detail: { title: 'Work' }, items: [1, 2, 3].map((id) => release(id, format)) }));
+      await act(async () => h.controller.show(sourceId));
+      await act(async () =>
+        h.controller.openItem({
+          key: { connectorId: sourceId, remoteId: 'work' },
+          kind: 'work',
+          title: 'Work',
+          navigationRef: 'work',
+          importability: 'unsupported',
+          importState: 'unsupported',
+          selected: false,
+        }),
+      );
+      expect(h.controller.items[0]!.readingState).toBe('read');
+      expect(h.controller.items[1]!.readingState).toBe('unread');
+      expect(h.download).not.toHaveBeenCalled();
+      await act(async () => h.renderer.unmount());
+    },
+  );
+  it.each(['txt', 'image_archive'] as const)(
+    'retains all downloaded %s releases across remote refresh/pages/errors',
+    async (format) => {
+      const h = await fixture(format);
+      await act(async () => h.controller.showLocalSeries(h.novel));
+      expect(h.controller.items.map((item) => item.key.remoteId)).toEqual(['release-1', 'release-2', 'release-3']);
+      h.setPage(async () => ({ detail: { title: 'Work' }, items: [release(2, format), release(4, format)] }));
+      await act(async () => h.controller.refresh());
+      expect(h.controller.catalogLoading).toBe(false);
+      expect(h.controller.items.map((item) => item.key.remoteId)).toEqual([
+        'release-2',
+        'release-4',
+        'release-1',
+        'release-3',
+      ]);
+      h.setPage(async () => {
+        throw new Error('offline');
+      });
+      await act(async () => h.controller.refresh());
+      expect(h.controller.items.map((item) => item.key.remoteId)).toEqual([
+        'release-2',
+        'release-4',
+        'release-1',
+        'release-3',
+      ]);
+      expect(h.download).not.toHaveBeenCalled();
+      await act(async () => h.renderer.unmount());
+    },
+  );
+
+  it('does not mark older pages new, then detects later pages against the complete baseline', async () => {
+    const h = await fixture();
+    let added = false;
+    h.setPage(async (cursor) => ({
+      detail: { title: 'Work' },
+      items: (cursor ? (added ? [3, 4, 5] : [3, 4]) : [1, 2]).map((id) => release(id)),
+      nextCursor: cursor ? undefined : 'older',
+    }));
+    await act(async () => h.controller.selectSource(sourceId));
+    await act(async () =>
+      h.controller.openItem({
+        key: { connectorId: sourceId, remoteId: 'work' },
+        kind: 'work',
+        title: 'Work',
+        navigationRef: 'work',
+        importability: 'unsupported',
+        importState: 'unsupported',
+        selected: false,
+      }),
+    );
+    await act(async () => h.controller.addCurrentWorkToLibrary());
+    expect(h.controller.activeSubscription?.releaseBaselineComplete).toBe(true);
+    await act(async () => h.controller.loadMore());
+    expect(h.controller.activeSubscription).toMatchObject({ newReleaseIds: [], availableReleaseCount: 4 });
+    await act(async () => h.controller.checkSubscriptions());
+    expect(h.controller.activeSubscription).toMatchObject({
+      releaseBaselineComplete: true,
+      newReleaseIds: [],
+      availableReleaseCount: 4,
+    });
+    added = true;
+    await act(async () => h.controller.checkSubscriptions());
+    expect(h.controller.activeSubscription).toMatchObject({ newReleaseIds: ['release-5'], availableReleaseCount: 5 });
+    await act(async () => h.controller.refresh());
+    expect(h.controller.activeSubscription).toMatchObject({ newReleaseIds: ['release-5'], availableReleaseCount: 5 });
+    expect(h.download).not.toHaveBeenCalled();
+    await act(async () => h.renderer.unmount());
+  });
+
+  it('keeps other-source library links when opening, refreshing and disconnecting one source', async () => {
+    const h = await fixture();
+    h.setSubscriptions([subscription(sourceId), subscription(otherSourceId)]);
+    await act(async () => h.controller.selectSource(sourceId));
+    expect(h.controller.libraryWorks.find((work) => work.connectorId === otherSourceId)?.localBookId).toBe(
+      'other-book',
+    );
+    await act(async () => h.controller.showLocalSeries(h.novel));
+    expect(h.controller.libraryWorks.find((work) => work.connectorId === otherSourceId)?.localBookId).toBe(
+      'other-book',
+    );
+    await act(async () => h.controller.disconnect());
+    expect(h.controller.libraryWorks.find((work) => work.connectorId === otherSourceId)?.localBookId).toBe(
+      'other-book',
+    );
+    expect(h.listLinks.mock.calls.every((args) => args.length === 0)).toBe(true);
+    await act(async () => h.renderer.unmount());
+  });
+
+  it('does not publish a late page after connection generation changes', async () => {
+    const h = await fixture();
+    await act(async () => h.controller.showLocalSeries(h.novel));
+    h.setPage(async () => {
+      h.changeGeneration();
+      return { detail: { title: 'Other account' }, items: [release(9)] };
+    });
+    await act(async () => h.controller.refresh());
+    expect(h.controller.items.map((item) => item.key.remoteId)).toEqual(['release-1', 'release-2', 'release-3']);
+    expect(h.controller.detail?.title).toBe('Work');
+    await act(async () => h.renderer.unmount());
+  });
+
+  it('restarts expired page cursors and sends subscription checks through the origin refresh path', async () => {
+    const h = await fixture();
+    h.setPage(async (cursor) => {
+      if (cursor) throw new Error('source_catalog_changed');
+      return { items: [release(1)], nextCursor: 'expired-cursor' };
+    });
+    await act(async () => h.controller.selectSource(sourceId));
+    await act(async () => h.controller.loadMore());
+    expect(h.controller.listError).toBeDefined();
+    await act(async () => h.controller.listError!.retry());
+    expect(h.controller.listError).toBeUndefined();
+    const requests = vi.mocked(h.registry.listExternalSource).mock.calls;
+    expect(requests.at(-1)?.[2]).toMatchObject({ cursor: undefined, cacheMode: 'reload' });
+    h.setSubscriptions([subscription(sourceId)]);
+    h.setPage(async () => ({ detail: { title: 'Work' }, items: [release(1)] }));
+    await act(async () => h.controller.refresh());
+    await act(async () => h.controller.checkSubscriptions());
+    expect(vi.mocked(h.registry.listExternalSource).mock.calls.at(-1)?.[2]).toMatchObject({ cacheMode: 'reload' });
+    await act(async () => h.renderer.unmount());
+  });
+
+  it('caps one subscription check at 50 metadata pages and starts with deferred works next time', async () => {
+    const h = await fixture();
+    await act(async () => h.controller.showLocalSeries(h.novel));
+    h.setSubscriptions(
+      Array.from({ length: 4 }, (_, index) => ({
+        ...subscription(sourceId),
+        id: `subscription-${index}`,
+        collectionRemoteId: `work-${index}`,
+        navigationRef: `work-${index}`,
+      })),
+    );
+    await act(async () => h.controller.refresh());
+    const requests: string[] = [];
+    h.setPage(async (cursor, parentRef) => {
+      requests.push(parentRef!);
+      const index = Number(cursor ?? 0);
+      return { detail: { title: 'Work' }, items: [release(index)], nextCursor: String(index + 1) };
+    });
+    await act(async () => h.controller.checkSubscriptions());
+    expect(requests).toHaveLength(50);
+    expect(requests).not.toContain('work-3');
+    expect(h.notify).toHaveBeenCalledWith(expect.stringContaining('미완료'), 'warning');
+    requests.length = 0;
+    await act(async () => h.controller.checkSubscriptions());
+    expect(requests).toHaveLength(50);
+    expect(requests[0]).toBe('work-3');
+    expect(h.download).not.toHaveBeenCalled();
+    await act(async () => h.renderer.unmount());
+  });
+});

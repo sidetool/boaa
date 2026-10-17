@@ -1,0 +1,1527 @@
+import { integrityHash } from '../../domain/id-hash-contract';
+import type { PlainTTSRequest, PlainTTSVoices } from '../../providers/plain-tts';
+import { RemoteImportTransport, type RemoteImportJob } from './remote-import-transport';
+export type { RemoteImportJobStatus, RemoteImportJobStage, RemoteImportJob } from './remote-import-transport';
+import { RemoteProviderTransport } from './remote-provider-transport';
+import type {
+  RemoteProviderJob,
+  RemoteProviderCatalog,
+  RemoteProviderSettings,
+  RemoteProviderSettingsResponse,
+  RemoteProviderSecretResponse,
+  EnqueueAnalysisJobInput,
+  GetBookAIWorkflowPlanOptions,
+  RemoteBookAIWorkflow,
+  StartBookAIWorkflowInput,
+} from './remote-provider-contracts';
+export type {
+  RemoteProviderJob,
+  RemoteProviderCatalog,
+  RemoteProviderSettings,
+  RemoteProviderSettingsBundle,
+  RemoteProviderSettingsResponse,
+  RemoteProviderSecretResponse,
+  EnqueueAnalysisJobInput,
+  GetBookAIWorkflowPlanOptions,
+  RemoteBookAIWorkflowJob,
+  RemoteBookAIWorkflow,
+  StartBookAIWorkflowInput,
+} from './remote-provider-contracts';
+export {
+  mapServerProviderJob,
+  mapServerBookAIWorkflow,
+  mapServerTTSCacheItem,
+  mapProviderSettings,
+  mapProviderSettingsBundle,
+} from './remote-provider-mappers';
+import { numberValue, stringValue, booleanValue } from './remote-value-mappers';
+import { RemoteBackupTransport } from './remote-backup-transport';
+import type { TaskProgressCallback } from '@boaa/contracts';
+import type { OriginalFileEntry } from '@boaa/contracts';
+import type { DiscoveryConfig, DiscoverySettings } from '../../integration-settings/discovery-settings';
+import {
+  Bookmark,
+  ChapterSplitMode,
+  Character,
+  DocumentTextBlock,
+  DocumentTextRevision,
+  EncodingMode,
+  LabeledSegment,
+  Novel,
+  Paragraph,
+  ReaderHighlight,
+  ReaderNote,
+  ReaderSettings,
+  UserCorrection,
+  VoiceProfile,
+} from '../../domain/types';
+import type { ResourceMutationOptions } from '../../domain/resource-revisions';
+import type { ProviderSecretStatus, TTSCacheResolveInput, TTSCacheResolveResult } from '../../providers/provider-jobs';
+import type { CharacterGraph, CharacterRelation } from '../../providers/ai';
+import type { ChapterLabelAnalysisReviewArtifact } from '../../providers/analysis-review';
+import type { AnalysisReviewEditIntentMap } from '../../providers/analysis-review-correction';
+import type {
+  ApplyLabelCorrectionsCommandV2,
+  ApplyLabelCorrectionsResultV2,
+} from '../../providers/label-mutation-contract';
+import type { BookAIWorkflowPlan } from '../../providers/book-ai-workflow-plan';
+
+import { defaultSettings } from '../../repositories/reader-defaults';
+import {
+  NegotiatedSyncContract,
+  PullSyncResult,
+  PushSyncResult,
+  ReadingPosition,
+  RemoteBookSnapshot,
+  RemoteBookSnapshotStream,
+  ResolvedSyncContract,
+  SyncCapabilities,
+  SyncEvent,
+} from '../../sync/types';
+import {
+  getRemoteBookSnapshot,
+  getRemoteBookSnapshotStream,
+  type RemoteBookManifestResponse,
+  type RemoteChapterListResponse,
+  type RemotePageListResponse,
+} from './remote-book-snapshot';
+import {
+  RemoteApiError,
+  RemoteApiRequestTimeoutError,
+  type RemoteMutationResult,
+  type RemoteUploadStatus,
+} from './remote-api-contracts';
+import { RemoteBookTransport } from './remote-book-transport';
+import { RemoteSearchTransport } from './remote-search-transport';
+import { RemoteSyncTransport } from './remote-sync-transport';
+import type { ReaderSearchPage, ReaderSearchPageRequest } from '../../repositories/reader-query-contract';
+import type { BackupInspection, BackupRestoreOptions, BackupRestoreResult } from '../../repositories/backup-repository';
+import type { BookMetadataPatch } from '@boaa/text-core/library-metadata';
+
+import type { SelfHostIntegrationSettingsV1 } from '../../integration-settings/self-host-integration-settings';
+import type {
+  BatchLibraryCommand,
+  BatchLibraryReceipt,
+  BatchLibraryTarget,
+} from '../../repositories/library-catalog-repository';
+import type {
+  ChapterStructureCommand,
+  ChapterStructureEditorState,
+  ChapterStructurePreview,
+  ChapterStructureReceipt,
+  ChapterStructureReviewItem,
+} from '../../repositories/chapter-structure-repository';
+
+export {
+  mapServerBook,
+  mapServerChapter,
+  mapServerParagraphPage,
+  mapServerReadingPosition,
+  RemoteSnapshotRevisionMismatchError,
+} from './remote-book-snapshot';
+export { RemoteApiError, RemoteApiRequestTimeoutError, type RemoteUploadStatus } from './remote-api-contracts';
+export { mapServerSyncEvent } from './remote-sync-transport';
+
+type JsonRecord = Record<string, unknown>;
+
+function remoteSnapshotNotFound(error: unknown): boolean {
+  return error instanceof RemoteApiError && error.status === 404;
+}
+
+async function remoteError(response: Response): Promise<RemoteApiError> {
+  const raw = await response.text();
+  // Reverse proxies return HTML during an upstream outage; never expose their error page as UI text.
+  if (/text\/html/i.test(response.headers.get('content-type') ?? '') || /^\s*(?:<!doctype\s+html|<html\b)/i.test(raw))
+    return new RemoteApiError(
+      `서버에 일시적으로 연결하지 못했습니다 (${response.status}). 잠시 후 다시 시도해 주세요.`,
+      response.status,
+    );
+  if (!raw) return new RemoteApiError(response.statusText, response.status);
+  try {
+    const payload = JSON.parse(raw) as unknown;
+    if (typeof payload === 'object' && payload !== null) {
+      const record = payload as Record<string, unknown>;
+      const message =
+        (typeof record.error === 'string' && record.error) ||
+        (typeof record.message === 'string' && record.message) ||
+        response.statusText;
+      return new RemoteApiError(message, response.status, payload);
+    }
+  } catch {
+    // Plain-text responses remain valid error messages.
+  }
+  return new RemoteApiError(raw, response.status);
+}
+
+function decodedHeader(value: string | null): string | undefined {
+  if (!value) return undefined;
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+}
+
+function coverMetadataFromHeaders(bookId: string, headers: Headers): JsonRecord | undefined {
+  const id = headers.get('x-asset-id');
+  const provenance = headers.get('x-asset-provenance');
+  const contentHash = headers.get('x-asset-content-hash') ?? headers.get('etag');
+  if (!id || !provenance || !contentHash) return undefined;
+  return {
+    id,
+    book_id: bookId,
+    provenance,
+    status: headers.get('x-asset-status') ?? 'active',
+    file_name: decodedHeader(headers.get('x-asset-file-name')),
+    content_type: headers.get('content-type') ?? 'image/jpeg',
+    byte_length: Number(headers.get('content-length')) || 0,
+    content_hash: contentHash,
+    pixel_width: Number(headers.get('x-asset-pixel-width')) || undefined,
+    pixel_height: Number(headers.get('x-asset-pixel-height')) || undefined,
+    created_at: headers.get('x-asset-created-at') ?? undefined,
+    activated_at: headers.get('x-asset-activated-at') ?? undefined,
+  };
+}
+
+export function mapServerBookmark(row: JsonRecord): Bookmark {
+  return {
+    id: stringValue(row.id),
+    novelId: stringValue(row.book_id),
+    chapterId: stringValue(row.chapter_id),
+    paragraphId: stringValue(row.paragraph_id) || undefined,
+    label: stringValue(row.label),
+    progress: numberValue(row.progress),
+    scrollTop: numberValue(row.scroll_top),
+    createdAt: stringValue(row.created_at, new Date(0).toISOString()),
+  };
+}
+
+export function mapServerHighlight(row: JsonRecord): ReaderHighlight {
+  return {
+    id: stringValue(row.id),
+    novelId: stringValue(row.book_id),
+    chapterId: stringValue(row.chapter_id),
+    paragraphId: stringValue(row.paragraph_id),
+    quote: stringValue(row.quote),
+    color: stringValue(row.color, 'yellow') as ReaderHighlight['color'],
+    progress: numberValue(row.progress),
+    createdAt: stringValue(row.created_at, new Date(0).toISOString()),
+    updatedAt: stringValue(row.updated_at, new Date(0).toISOString()),
+  };
+}
+
+export function mapServerNote(row: JsonRecord): ReaderNote {
+  return {
+    id: stringValue(row.id),
+    novelId: stringValue(row.book_id),
+    chapterId: stringValue(row.chapter_id),
+    paragraphId: stringValue(row.paragraph_id) || undefined,
+    quote: stringValue(row.quote) || undefined,
+    body: stringValue(row.body),
+    progress: numberValue(row.progress),
+    createdAt: stringValue(row.created_at, new Date(0).toISOString()),
+    updatedAt: stringValue(row.updated_at, new Date(0).toISOString()),
+  };
+}
+
+export function mapServerCharacter(row: JsonRecord): Character {
+  return {
+    id: stringValue(row.id),
+    novelId: stringValue(row.book_id, stringValue(row.novelId)),
+    canonicalName: stringValue(row.canonicalName, stringValue(row.canonical_name)),
+    aliases: Array.isArray(row.aliases)
+      ? row.aliases.filter((alias): alias is string => typeof alias === 'string')
+      : [],
+    color: stringValue(row.color),
+    description: stringValue(row.description) || undefined,
+    confidence: numberValue(row.confidence),
+    isUserConfirmed: booleanValue(row.isUserConfirmed, booleanValue(row.is_user_confirmed)),
+  };
+}
+
+export function mapServerCharacterRelation(row: JsonRecord): CharacterRelation {
+  return {
+    id: stringValue(row.id),
+    novelId: stringValue(row.novelId, stringValue(row.book_id)),
+    sourceCharacterId: stringValue(row.sourceCharacterId, stringValue(row.source_character_id)),
+    targetCharacterId: stringValue(row.targetCharacterId, stringValue(row.target_character_id)),
+    relationLabel: stringValue(row.relationLabel, stringValue(row.relation_label)),
+    termsUsedBySource: Array.isArray(row.termsUsedBySource)
+      ? row.termsUsedBySource.filter((term): term is string => typeof term === 'string')
+      : Array.isArray(row.terms_used_by_source)
+        ? row.terms_used_by_source.filter((term): term is string => typeof term === 'string')
+        : [],
+    termsUsedByTarget: Array.isArray(row.termsUsedByTarget)
+      ? row.termsUsedByTarget.filter((term): term is string => typeof term === 'string')
+      : Array.isArray(row.terms_used_by_target)
+        ? row.terms_used_by_target.filter((term): term is string => typeof term === 'string')
+        : [],
+    confidence: numberValue(row.confidence),
+    evidence: Array.isArray(row.evidence)
+      ? row.evidence.filter((item): item is string => typeof item === 'string')
+      : [],
+  };
+}
+
+export function mapServerSegment(row: JsonRecord): LabeledSegment {
+  const prosody = row.prosodyIntent ?? row.prosody_intent;
+  return {
+    id: stringValue(row.id),
+    novelId: stringValue(row.book_id, stringValue(row.novelId)),
+    chapterId: stringValue(row.chapterId, stringValue(row.chapter_id)),
+    paragraphId: stringValue(row.paragraphId, stringValue(row.paragraph_id)),
+    segmentIndex: numberValue(row.segmentIndex, numberValue(row.segment_index)),
+    startOffset: numberValue(row.startOffset, numberValue(row.start_offset)),
+    endOffset: numberValue(row.endOffset, numberValue(row.end_offset)),
+    segmentTextHash: stringValue(row.segmentTextHash, stringValue(row.segment_text_hash)),
+    type: stringValue(row.type, stringValue(row.segment_type, 'unknown')) as LabeledSegment['type'],
+    speakerId: stringValue(row.speakerId, stringValue(row.speaker_id, 'unknown')),
+    candidateSpeakers: Array.isArray(row.candidateSpeakers)
+      ? row.candidateSpeakers.filter((speaker): speaker is string => typeof speaker === 'string')
+      : Array.isArray(row.candidate_speakers)
+        ? row.candidate_speakers.filter((speaker): speaker is string => typeof speaker === 'string')
+        : [],
+    listenerIds: Array.isArray(row.listenerIds)
+      ? row.listenerIds.filter((listener): listener is string => typeof listener === 'string')
+      : Array.isArray(row.listener_ids)
+        ? row.listener_ids.filter((listener): listener is string => typeof listener === 'string')
+        : [],
+    emotion: stringValue(row.emotion, 'neutral'),
+    prosodyIntent:
+      prosody && typeof prosody === 'object' && !Array.isArray(prosody)
+        ? {
+            pace: stringValue((prosody as JsonRecord).pace) || undefined,
+            intensity: stringValue((prosody as JsonRecord).intensity) || undefined,
+            delivery: stringValue((prosody as JsonRecord).delivery) || undefined,
+          }
+        : undefined,
+    confidence: numberValue(row.confidence),
+    evidence: stringValue(row.evidence) || undefined,
+    voiceProfileId: stringValue(row.voiceProfileId, stringValue(row.voice_profile_id)) || undefined,
+    isUserCorrected: booleanValue(row.isUserCorrected, booleanValue(row.is_user_corrected)),
+  };
+}
+
+export function mapServerCorrection(row: JsonRecord): UserCorrection {
+  return {
+    id: stringValue(row.id),
+    novelId: stringValue(row.book_id, stringValue(row.novelId)),
+    chapterId: stringValue(row.chapterId, stringValue(row.chapter_id)),
+    paragraphId: stringValue(row.paragraphId, stringValue(row.paragraph_id)) || undefined,
+    segmentId: stringValue(row.segmentId, stringValue(row.segment_id)) || undefined,
+    correctionType: stringValue(
+      row.correctionType,
+      stringValue(row.correction_type, 'note'),
+    ) as UserCorrection['correctionType'],
+    beforeJson:
+      row.beforeJson !== undefined
+        ? stringValue(row.beforeJson)
+        : row.before_json === undefined || row.before_json === null
+          ? undefined
+          : JSON.stringify(row.before_json),
+    afterJson:
+      row.afterJson !== undefined ? stringValue(row.afterJson) : (JSON.stringify(row.after_json ?? {}) ?? '{}'),
+    applyScope: stringValue(row.applyScope, stringValue(row.apply_scope, 'chapter')) as UserCorrection['applyScope'],
+    operationId: stringValue(row.operationId, stringValue(row.operation_id)) || undefined,
+    intentKind: (stringValue(row.intentKind, stringValue(row.intent_kind)) ||
+      undefined) as UserCorrection['intentKind'],
+    intentJson:
+      row.intentJson !== undefined
+        ? stringValue(row.intentJson)
+        : row.intent_json === undefined || row.intent_json === null
+          ? undefined
+          : JSON.stringify(row.intent_json),
+    provenanceKind: (stringValue(row.provenanceKind, stringValue(row.provenance_kind)) ||
+      undefined) as UserCorrection['provenanceKind'],
+    sourceReviewArtifactId:
+      stringValue(row.sourceReviewArtifactId, stringValue(row.source_review_artifact_id)) || undefined,
+    createdAt: stringValue(row.createdAt, stringValue(row.created_at, new Date(0).toISOString())),
+  };
+}
+
+export function mapServerVoiceProfile(row: JsonRecord): VoiceProfile {
+  return {
+    id: stringValue(row.id),
+    novelId: stringValue(row.novelId, stringValue(row.book_id)),
+    characterId: stringValue(row.characterId, stringValue(row.character_id)) || undefined,
+    role: stringValue(row.role, 'unknown') as VoiceProfile['role'],
+    providerId: stringValue(row.providerId, stringValue(row.provider_id)),
+    providerVoiceId: stringValue(row.providerVoiceId, stringValue(row.provider_voice_id)),
+    providerModel: stringValue(row.providerModel, stringValue(row.provider_model)) || undefined,
+    label: stringValue(row.label),
+    language: stringValue(row.language) || undefined,
+    tone: stringValue(row.tone) || undefined,
+    speed: numberValue(row.speed, 1),
+    pitch: row.pitch === null || row.pitch === undefined ? undefined : numberValue(row.pitch),
+    emotionPolicy: stringValue(row.emotionPolicy, stringValue(row.emotion_policy)) || undefined,
+    providerOptions:
+      row.providerOptions && typeof row.providerOptions === 'object' && !Array.isArray(row.providerOptions)
+        ? (row.providerOptions as Record<string, unknown>)
+        : row.provider_options && typeof row.provider_options === 'object' && !Array.isArray(row.provider_options)
+          ? (row.provider_options as Record<string, unknown>)
+          : {},
+    isUserSelected: booleanValue(row.isUserSelected, booleanValue(row.is_user_selected)),
+    createdAt: stringValue(row.createdAt, stringValue(row.created_at)) || undefined,
+    updatedAt: stringValue(row.updatedAt, stringValue(row.updated_at)) || undefined,
+  };
+}
+
+export interface RemoteApiClientOptions {
+  getAuthToken?: () => string | undefined;
+  onUnauthorized?: () => void;
+  requestTimeoutMs?: number;
+}
+
+export const DEFAULT_REMOTE_REQUEST_TIMEOUT_MS = 30_000;
+export const DEFAULT_REMOTE_LARGE_UPLOAD_TIMEOUT_MS = 15 * 60_000;
+
+export class RemoteApiClient {
+  get coverCacheScope(): string {
+    return `${this.readerSettingsScope}:${integrityHash(new TextEncoder().encode(this.options.getAuthToken?.()?.trim() ?? 'cookie-session'))}`;
+  }
+  get readerSettingsScope(): string {
+    return `hosted:${this.baseUrl.replace(/\/$/, '')}`;
+  }
+  private readonly importTransport: RemoteImportTransport;
+  private readonly providerTransport: RemoteProviderTransport;
+  private readonly backupTransport: RemoteBackupTransport;
+  private readonly bookTransport: RemoteBookTransport;
+  private readonly searchTransport: RemoteSearchTransport;
+  private readonly syncTransport: RemoteSyncTransport;
+
+  constructor(
+    private readonly baseUrl: string,
+    private readonly options: RemoteApiClientOptions = {},
+  ) {
+    const request = <T>(path: string, init?: RequestInit) => this.request<T>(path, init);
+    this.backupTransport = new RemoteBackupTransport(baseUrl, {
+      request: (path, init, timeoutMs) => this.request(path, init, timeoutMs),
+      requestBlob: (path, init, timeoutMs, onProgress) => this.requestBlob(path, init, timeoutMs, onProgress),
+    });
+    this.importTransport = new RemoteImportTransport(request);
+    this.providerTransport = new RemoteProviderTransport(request);
+    this.bookTransport = new RemoteBookTransport(request);
+    this.searchTransport = new RemoteSearchTransport(request);
+    this.syncTransport = new RemoteSyncTransport({ request });
+  }
+
+  /** The text-source broker owns bounded body consumption and keeps this signal alive until it finishes. */
+  async fetchTextSourceGateway(path: string, signal: AbortSignal): Promise<Response> {
+    if (
+      !/^\/v1\/(?:health|sources(?:\/[A-Za-z0-9_-]{1,128}(?:\/works(?:\/[A-Za-z0-9_-]{1,128}(?:\/cover|\/releases(?:\/[A-Za-z0-9_-]{1,128}\/content)?)?)?)?)?)(?:\?[^#]*)?$/u.test(
+        path,
+      )
+    ) {
+      throw new Error('지원하지 않는 텍스트 서버 요청입니다.');
+    }
+    signal.throwIfAborted();
+    const token = this.options.getAuthToken?.()?.trim();
+    const response = await fetch(`${this.baseUrl}/integrations/text-sources${path}`, {
+      method: 'GET',
+      credentials: 'same-origin',
+      redirect: 'error',
+      signal,
+      headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+    });
+    if (response.status === 401) this.options.onUnauthorized?.();
+    return response;
+  }
+
+  private async fetch(
+    path: string,
+    init: RequestInit,
+    requestedTimeoutMs?: number,
+    consumeResponse?: (response: Response) => Promise<void>,
+  ): Promise<Response> {
+    const timeoutMs = Math.max(
+      1,
+      Math.floor(requestedTimeoutMs ?? this.options.requestTimeoutMs ?? DEFAULT_REMOTE_REQUEST_TIMEOUT_MS),
+    );
+    const controller = new AbortController();
+    const callerSignal = init.signal;
+    let timedOut = false;
+    const abortFromCaller = () => controller.abort(callerSignal?.reason);
+    if (callerSignal?.aborted) abortFromCaller();
+    else callerSignal?.addEventListener('abort', abortFromCaller, { once: true });
+    const timer = globalThis.setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, timeoutMs);
+    try {
+      const response = await fetch(`${this.baseUrl}${path}`, {
+        credentials: 'same-origin',
+        ...init,
+        signal: controller.signal,
+      });
+      // Keep caller cancellation connected until the response body has been consumed.
+      // The existing request timeout still covers response headers only.
+      globalThis.clearTimeout(timer);
+      await consumeResponse?.(response);
+      return response;
+    } catch (error) {
+      if (timedOut && !callerSignal?.aborted) throw new RemoteApiRequestTimeoutError(timeoutMs);
+      throw error;
+    } finally {
+      globalThis.clearTimeout(timer);
+      callerSignal?.removeEventListener('abort', abortFromCaller);
+    }
+  }
+
+  async request<T>(path: string, init: RequestInit = {}, timeoutMs?: number): Promise<T> {
+    const authToken = this.options.getAuthToken?.()?.trim();
+    let result!: T;
+    await this.fetch(
+      path,
+      {
+        ...init,
+        headers: {
+          ...(typeof init.body === 'string' && init.body.length > 0 ? { 'Content-Type': 'application/json' } : {}),
+          ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
+          ...init.headers,
+        },
+      },
+      timeoutMs,
+      async (response) => {
+        if (!response.ok) {
+          if (response.status === 401) this.options.onUnauthorized?.();
+          throw await remoteError(response);
+        }
+        if (response.status !== 204) result = (await response.json()) as T;
+      },
+    );
+    return result;
+  }
+
+  async requestBlob(
+    path: string,
+    init: RequestInit = {},
+    timeoutMs?: number,
+    onProgress?: TaskProgressCallback,
+  ): Promise<{ blob: Blob; headers: Headers; status: number }> {
+    const authToken = this.options.getAuthToken?.()?.trim();
+    let blob!: Blob;
+    const response = await this.fetch(
+      path,
+      {
+        ...init,
+        headers: {
+          ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
+          ...init.headers,
+        },
+      },
+      timeoutMs,
+      async (download) => {
+        if (!download.ok) {
+          if (download.status === 401) this.options.onUnauthorized?.();
+          throw await remoteError(download);
+        }
+        if (!onProgress || !download.body) {
+          blob = await download.blob();
+          return;
+        }
+        const length = Number(download.headers.get('content-length'));
+        const total =
+          !download.headers.get('content-encoding') && Number.isFinite(length) && length > 0 ? length : undefined;
+        let completed = 0;
+        const observed = download.body.pipeThrough(
+          new TransformStream<Uint8Array, Uint8Array>({
+            transform(chunk, controller) {
+              completed += chunk.byteLength;
+              onProgress({ phase: 'downloading', completed, total, unit: 'bytes' });
+              controller.enqueue(chunk);
+            },
+          }),
+        );
+        blob = await new Response(observed, { headers: download.headers }).blob();
+        onProgress({ phase: 'verifying' });
+      },
+    );
+    return { blob, headers: response.headers, status: response.status };
+  }
+
+  negotiateSyncContract(): Promise<NegotiatedSyncContract> {
+    return this.syncTransport.negotiateSyncContract();
+  }
+
+  getSyncCapabilities(): Promise<SyncCapabilities> {
+    return this.syncTransport.getSyncCapabilities();
+  }
+
+  listBooks(options?: { includeTrash?: boolean }): Promise<{ books: JsonRecord[] }> {
+    return this.bookTransport.listBooks(undefined, options);
+  }
+
+  listTrashBooks(): Promise<{ books: JsonRecord[] }> {
+    return this.request('/trash/books');
+  }
+
+  getBookSourceMetadata(bookId: string): Promise<{ source: JsonRecord }> {
+    return this.request(`/books/${encodeURIComponent(bookId)}/source/metadata`);
+  }
+
+  listOriginalFiles(bookId: string, signal?: AbortSignal): Promise<{ files: OriginalFileEntry[] | null }> {
+    return this.request(`/books/${encodeURIComponent(bookId)}/original-files`, { signal });
+  }
+
+  async createOriginalFileDownload(bookId: string, fileId: string): Promise<string> {
+    const { ticket } = await this.request<{ ticket: string }>(
+      `/books/${encodeURIComponent(bookId)}/original-files/${encodeURIComponent(fileId)}/download`,
+      { method: 'POST' },
+    );
+    if (!/^[A-Za-z0-9_-]{43}$/.test(ticket)) throw new Error('다운로드 주소를 확인하지 못했습니다.');
+    return `${this.baseUrl}/original-downloads/${ticket}`;
+  }
+
+  getBookSource(bookId: string): Promise<{ blob: Blob; headers: Headers; status: number }> {
+    return this.requestBlob(`/books/${encodeURIComponent(bookId)}/source`);
+  }
+
+  saveDocumentTextPage(
+    bookId: string,
+    revision: DocumentTextRevision,
+    blocks: readonly DocumentTextBlock[],
+    signal?: AbortSignal,
+  ): Promise<{ revisionId: string; blockCount: number }> {
+    return this.request(
+      `/books/${encodeURIComponent(bookId)}/document-text/pages/${encodeURIComponent(String(revision.pageIndex))}`,
+      {
+        method: 'PUT',
+        signal,
+        body: JSON.stringify({ revision, blocks }),
+      },
+    );
+  }
+
+  getBookSourceRange(
+    bookId: string,
+    startInclusive: number,
+    endExclusive: number,
+    signal?: AbortSignal,
+  ): Promise<{ blob: Blob; headers: Headers; status: number }> {
+    return this.requestBlob(`/books/${encodeURIComponent(bookId)}/source`, {
+      headers: { Range: `bytes=${startInclusive}-${Math.max(startInclusive, endExclusive - 1)}` },
+      signal,
+    });
+  }
+
+  reselectBookSource(
+    bookId: string,
+    source: Blob,
+    metadata: { fileName: string; contentType: string },
+  ): Promise<{ source: JsonRecord }> {
+    return this.request(
+      `/books/${encodeURIComponent(bookId)}/source`,
+      {
+        method: 'PUT',
+        body: source,
+        headers: {
+          'Content-Type': 'application/octet-stream',
+          'X-Source-File-Name': encodeURIComponent(metadata.fileName),
+          'X-Source-Content-Type': metadata.contentType || 'text/plain',
+        },
+      },
+      DEFAULT_REMOTE_LARGE_UPLOAD_TIMEOUT_MS,
+    );
+  }
+
+  getBookCoverMetadata(bookId: string): Promise<{ cover: JsonRecord }> {
+    return this.request(`/books/${encodeURIComponent(bookId)}/cover/metadata`);
+  }
+
+  async getBookCover(
+    bookId: string,
+    revision?: string,
+  ): Promise<{ blob: Blob; headers: Headers; status: number; metadata?: JsonRecord }> {
+    const query = revision ? `?v=${encodeURIComponent(revision)}` : '';
+    const response = await this.requestBlob(
+      `/books/${encodeURIComponent(bookId)}/cover${query}`,
+      revision ? { cache: 'force-cache' } : {},
+    );
+    return { ...response, metadata: coverMetadataFromHeaders(bookId, response.headers) };
+  }
+
+  getBookResource(
+    bookId: string,
+    assetId: string,
+    signal?: AbortSignal,
+  ): Promise<{ blob: Blob; headers: Headers; status: number }> {
+    return this.requestBlob(`/books/${encodeURIComponent(bookId)}/resources/${encodeURIComponent(assetId)}`, {
+      signal,
+    });
+  }
+
+  saveBookCover(
+    bookId: string,
+    cover: Blob,
+    metadata: {
+      fileName: string;
+      contentType: string;
+      contentHash: string;
+      pixelWidth: number;
+      pixelHeight: number;
+      fit: 'crop' | 'contain';
+      positionX: number;
+      positionY: number;
+      expectedMetadataRevision?: number;
+      provenance?: 'user_supplied' | 'approved_enrichment' | 'generated_preview';
+    },
+  ): Promise<{ cover: JsonRecord; previousCover?: JsonRecord; metadataRevision?: number }> {
+    return this.request(`/books/${encodeURIComponent(bookId)}/cover`, {
+      method: 'PUT',
+      body: cover,
+      headers: {
+        'Content-Type': 'application/octet-stream',
+        'X-Cover-File-Name': encodeURIComponent(metadata.fileName),
+        'X-Cover-Content-Type': metadata.contentType,
+        'X-Cover-Content-Hash': metadata.contentHash,
+        'X-Cover-Width': String(metadata.pixelWidth),
+        'X-Cover-Height': String(metadata.pixelHeight),
+        'X-Cover-Fit': metadata.fit,
+        'X-Cover-Position-X': String(metadata.positionX),
+        'X-Cover-Position-Y': String(metadata.positionY),
+        'X-Cover-Provenance': metadata.provenance ?? 'user_supplied',
+        ...(metadata.expectedMetadataRevision === undefined
+          ? {}
+          : { 'X-Expected-Metadata-Revision': String(metadata.expectedMetadataRevision) }),
+      },
+    });
+  }
+
+  saveApprovedEnrichmentBookCover(
+    bookId: string,
+    cover: Blob,
+    metadata: {
+      fileName: string;
+      contentType: string;
+      contentHash: string;
+      pixelWidth: number;
+      pixelHeight: number;
+      fit: 'crop' | 'contain';
+      positionX: number;
+      positionY: number;
+      expectedMetadataRevision: number;
+    },
+  ): Promise<{ cover: JsonRecord; previousCover: JsonRecord | null; metadataRevision: number }> {
+    return this.request(`/books/${encodeURIComponent(bookId)}/cover/approved-enrichment`, {
+      method: 'PUT',
+      body: cover,
+      headers: {
+        'Content-Type': 'application/octet-stream',
+        'X-Cover-File-Name': encodeURIComponent(metadata.fileName),
+        'X-Cover-Content-Type': metadata.contentType,
+        'X-Cover-Content-Hash': metadata.contentHash,
+        'X-Cover-Width': String(metadata.pixelWidth),
+        'X-Cover-Height': String(metadata.pixelHeight),
+        'X-Cover-Fit': metadata.fit,
+        'X-Cover-Position-X': String(metadata.positionX),
+        'X-Cover-Position-Y': String(metadata.positionY),
+        'X-Expected-Metadata-Revision': String(metadata.expectedMetadataRevision),
+      },
+    });
+  }
+
+  restoreApprovedEnrichmentBookCover(
+    bookId: string,
+    input: {
+      expectedMetadataRevision: number;
+      expectedActiveAssetId: string;
+      expectedActiveContentHash: string;
+      previousAssetId?: string;
+      previousContentHash?: string;
+      previousFit: 'crop' | 'contain';
+      previousPositionX: number;
+      previousPositionY: number;
+    },
+  ): Promise<{ cover: JsonRecord | null; metadataRevision: number }> {
+    return this.request(`/books/${encodeURIComponent(bookId)}/cover/approved-enrichment/restore`, {
+      method: 'POST',
+      body: JSON.stringify(input),
+    });
+  }
+
+  removeBookCover(bookId: string, expectedMetadataRevision?: number): Promise<{ ok: true }> {
+    return this.request(`/books/${encodeURIComponent(bookId)}/cover`, {
+      method: 'DELETE',
+      body: JSON.stringify({ expectedRevision: expectedMetadataRevision }),
+    });
+  }
+
+  exportBackup(onProgress?: TaskProgressCallback): Promise<{ blob: Blob; headers: Headers; status: number }> {
+    return this.backupTransport.exportBackup(onProgress);
+  }
+
+  createBackupDownload(): Promise<string> {
+    return this.backupTransport.createBackupDownload();
+  }
+
+  discardBackupInspection(id: string): Promise<void> {
+    return this.backupTransport.discardBackupInspection(id);
+  }
+
+  restoreInspectedBackup(
+    id: string,
+    options: BackupRestoreOptions,
+    onProgress?: TaskProgressCallback,
+  ): Promise<BackupRestoreResult> {
+    return this.backupTransport.restoreInspectedBackup(id, options, onProgress);
+  }
+
+  inspectBackup(archive: Blob, onProgress?: TaskProgressCallback): Promise<BackupInspection> {
+    return this.backupTransport.inspectBackup(archive, onProgress);
+  }
+
+  restoreBackup(
+    archive: Blob,
+    options: BackupRestoreOptions,
+    onProgress?: TaskProgressCallback,
+  ): Promise<BackupRestoreResult> {
+    return this.backupTransport.restoreBackup(archive, options, onProgress);
+  }
+
+  getChapterStructureEditor(bookId: string): Promise<{ editor: ChapterStructureEditorState }> {
+    return this.request(`/books/${encodeURIComponent(bookId)}/chapter-structure`);
+  }
+
+  previewChapterStructure(
+    bookId: string,
+    commands: readonly ChapterStructureCommand[],
+  ): Promise<{ preview: ChapterStructurePreview }> {
+    return this.request(`/books/${encodeURIComponent(bookId)}/chapter-structure/preview`, {
+      method: 'POST',
+      body: JSON.stringify({ commands }),
+    });
+  }
+
+  applyChapterStructure(draftId: string): Promise<{ receipt: ChapterStructureReceipt }> {
+    return this.request(`/chapter-structure/drafts/${encodeURIComponent(draftId)}/apply`, { method: 'POST' });
+  }
+
+  rollbackChapterStructure(receiptId: string): Promise<{ receipt: ChapterStructureReceipt }> {
+    return this.request(`/chapter-structure/receipts/${encodeURIComponent(receiptId)}/rollback`, { method: 'POST' });
+  }
+
+  listChapterStructureReview(bookId: string): Promise<{ items: ChapterStructureReviewItem[] }> {
+    return this.request(`/books/${encodeURIComponent(bookId)}/chapter-structure/review`);
+  }
+
+  getBookManifest(bookId: string, sourceRevision?: string): Promise<RemoteBookManifestResponse> {
+    return this.bookTransport.getBookManifest(bookId, sourceRevision);
+  }
+
+  listChapters(bookId: string, sourceRevision?: string): Promise<RemoteChapterListResponse> {
+    return this.bookTransport.listChapters(bookId, sourceRevision);
+  }
+
+  getChapter(chapterId: string, signal?: AbortSignal): Promise<{ chapter: JsonRecord }> {
+    return this.bookTransport.getChapter(chapterId, signal);
+  }
+
+  listPages(
+    chapterId: string,
+    from = 0,
+    count = 5,
+    sourceRevision?: string,
+    signal?: AbortSignal,
+  ): Promise<RemotePageListResponse> {
+    return this.bookTransport.listPages(chapterId, from, count, sourceRevision, signal);
+  }
+
+  getParagraph(paragraphId: string, signal?: AbortSignal): Promise<{ paragraph: Paragraph }> {
+    return this.bookTransport.getParagraph(paragraphId, signal);
+  }
+
+  searchParagraphPage(input: ReaderSearchPageRequest): Promise<ReaderSearchPage> {
+    return this.searchTransport.searchParagraphPage(input);
+  }
+
+  getSettings(): Promise<{ settings: ReaderSettings }> {
+    return this.request('/settings');
+  }
+
+  saveSettings(settings: Partial<ReaderSettings>): Promise<{ ok: true }> {
+    return this.request('/settings', { method: 'PUT', body: JSON.stringify({ ...defaultSettings, ...settings }) });
+  }
+
+  getDiscoverySettings(signal?: AbortSignal): Promise<{ settings?: DiscoverySettings }> {
+    return this.request('/discovery-settings', { signal }, 15000);
+  }
+
+  saveDiscoverySettings(
+    config: DiscoveryConfig,
+    expectedRevision: number,
+    signal?: AbortSignal,
+  ): Promise<{ settings: DiscoverySettings }> {
+    return this.request(
+      '/discovery-settings',
+      { method: 'PUT', body: JSON.stringify({ config, expectedRevision }), signal },
+      15000,
+    );
+  }
+
+  getIntegrationSettings(revision?: number): Promise<{ settings?: SelfHostIntegrationSettingsV1 }> {
+    const query = revision === undefined ? '' : `?revision=${encodeURIComponent(String(revision))}`;
+    return this.request(`/integration-settings${query}`);
+  }
+
+  saveIntegrationSettings(
+    settings: SelfHostIntegrationSettingsV1,
+    expectedRevision: number,
+  ): Promise<{ ok: true; settings: SelfHostIntegrationSettingsV1 }> {
+    return this.request('/integration-settings', {
+      method: 'PUT',
+      body: JSON.stringify({ settings, expectedRevision }),
+    });
+  }
+
+  patchBook(
+    bookId: string,
+    body: BookMetadataPatch & Pick<Partial<Novel>, 'analysisStatus'> & { expectedRevision?: number },
+  ): Promise<{ ok: true; metadataRevision: number }> {
+    return this.request(`/books/${encodeURIComponent(bookId)}`, {
+      method: 'PATCH',
+      body: JSON.stringify(body),
+    });
+  }
+
+  listShelves(): Promise<{ shelves: JsonRecord[]; memberships: JsonRecord[] }> {
+    return this.request('/shelves');
+  }
+
+  createShelf(input: { name: string; color?: string }): Promise<{ shelf: JsonRecord }> {
+    return this.request('/shelves', { method: 'POST', body: JSON.stringify(input) });
+  }
+
+  updateShelf(
+    shelfId: string,
+    patch: { name?: string; color?: string | null; sortOrder?: number; expectedRevision?: number },
+  ): Promise<{ shelf: JsonRecord }> {
+    return this.request(`/shelves/${encodeURIComponent(shelfId)}`, {
+      method: 'PATCH',
+      body: JSON.stringify(patch),
+    });
+  }
+
+  deleteShelf(shelfId: string, expectedRevision?: number): Promise<{ shelf: JsonRecord }> {
+    return this.request(`/shelves/${encodeURIComponent(shelfId)}`, {
+      method: 'DELETE',
+      body: JSON.stringify({ expectedRevision }),
+    });
+  }
+
+  setShelfMembership(shelfId: string, bookId: string, included: boolean): Promise<{ ok: true }> {
+    return this.request(`/shelves/${encodeURIComponent(shelfId)}/books/${encodeURIComponent(bookId)}`, {
+      method: included ? 'PUT' : 'DELETE',
+    });
+  }
+
+  applyLibraryBatch(
+    command: BatchLibraryCommand,
+    targets: readonly BatchLibraryTarget[],
+    idempotencyKey: string,
+  ): Promise<{ receipt: BatchLibraryReceipt }> {
+    return this.request('/library/batch', {
+      method: 'POST',
+      body: JSON.stringify({ command, targets, idempotencyKey }),
+    });
+  }
+
+  deleteBook(
+    bookId: string,
+    deviceId?: string,
+    expectedRevision?: number,
+  ): Promise<{ ok: true; metadataRevision: number }> {
+    return this.request(`/books/${encodeURIComponent(bookId)}`, {
+      method: 'DELETE',
+      body: JSON.stringify({ deviceId, expectedRevision }),
+    });
+  }
+
+  restoreBook(bookId: string, expectedRevision?: number): Promise<{ ok: true; metadataRevision: number }> {
+    return this.request(`/trash/books/${encodeURIComponent(bookId)}/restore`, {
+      method: 'POST',
+      body: JSON.stringify({ expectedRevision }),
+    });
+  }
+
+  purgeBook(bookId: string, expectedRevision?: number): Promise<{ ok: true }> {
+    return this.request(`/trash/books/${encodeURIComponent(bookId)}`, {
+      method: 'DELETE',
+      body: JSON.stringify({ expectedRevision }),
+    });
+  }
+
+  emptyTrash(): Promise<{ ok: true; purged: number }> {
+    return this.request('/trash/books', { method: 'DELETE' });
+  }
+
+  async saveReadingPosition(
+    bookId: string,
+    position: Omit<ReadingPosition, 'id' | 'novelId'> & { readonly documentSectionId?: string },
+  ): Promise<RemoteMutationResult> {
+    const path = `/books/${encodeURIComponent(bookId)}/reading-position`;
+    const init: RequestInit = {
+      method: 'PATCH',
+      // This bounded position write also runs during pagehide. Preserve delivery across navigation.
+      keepalive: true,
+      body: JSON.stringify({
+        chapterId: position.chapterId,
+        documentSectionId: position.documentSectionId,
+        paragraphId: position.paragraphId,
+        paragraphIndex: position.paragraphIndex,
+        offsetInParagraph: position.offsetInParagraph,
+        chapterProgress: position.chapterProgress,
+        scrollTop: position.scrollTop,
+        deviceId: position.deviceId,
+        updatedAt: position.updatedAt,
+      }),
+    };
+    const budget = Math.max(1, this.options.requestTimeoutMs ?? DEFAULT_REMOTE_REQUEST_TIMEOUT_MS);
+    const deadline = Date.now() + budget;
+    try {
+      return await this.request(path, init, budget);
+    } catch (error) {
+      const transient =
+        error instanceof TypeError ||
+        (error instanceof RemoteApiError && [408, 500, 502, 503, 504].includes(error.status));
+      // Replay only this idempotent mutation, with the original timestamp and body.
+      // A late retry must not become newer than another device's/reset position.
+      if (!transient || deadline - Date.now() <= 750) throw error;
+      await new Promise<void>((resolve) => globalThis.setTimeout(resolve, 750));
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) throw error;
+      return this.request(path, init, remaining);
+    }
+  }
+
+  deleteReadingPosition(bookId: string, body: { deviceId?: string; updatedAt: string }): Promise<RemoteMutationResult> {
+    return this.request(`/books/${encodeURIComponent(bookId)}/reading-position`, {
+      method: 'DELETE',
+      body: JSON.stringify(body),
+    });
+  }
+
+  listAnnotationPage(
+    bookId: string,
+    kind: 'bookmark' | 'highlight' | 'note',
+    after?: string,
+  ): Promise<{ entries: JsonRecord[]; nextAfter: string | null }> {
+    const query = after === undefined ? '' : `?after=${encodeURIComponent(after)}`;
+    return this.request(`/books/${encodeURIComponent(bookId)}/annotations/${kind}${query}`);
+  }
+
+  listBookmarks(bookId: string): Promise<{ bookmarks: JsonRecord[] }> {
+    return this.request(`/books/${encodeURIComponent(bookId)}/bookmarks`);
+  }
+
+  saveBookmark(bookmark: Bookmark, options?: ResourceMutationOptions): Promise<RemoteMutationResult> {
+    return this.request(`/books/${encodeURIComponent(bookmark.novelId)}/bookmarks`, {
+      method: 'POST',
+      body: JSON.stringify({ ...bookmark, ...(options ?? {}) }),
+    });
+  }
+
+  deleteBookmark(id: string, options?: ResourceMutationOptions): Promise<{ ok: true }> {
+    return this.request(`/bookmarks/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+      body: JSON.stringify(options ?? {}),
+    });
+  }
+
+  listHighlights(bookId: string): Promise<{ highlights: JsonRecord[] }> {
+    return this.request(`/books/${encodeURIComponent(bookId)}/highlights`);
+  }
+
+  saveHighlight(highlight: ReaderHighlight, options?: ResourceMutationOptions): Promise<RemoteMutationResult> {
+    return this.request(`/books/${encodeURIComponent(highlight.novelId)}/highlights`, {
+      method: 'POST',
+      body: JSON.stringify({ ...highlight, ...(options ?? {}) }),
+    });
+  }
+
+  deleteHighlight(id: string, options?: ResourceMutationOptions): Promise<{ ok: true }> {
+    return this.request(`/highlights/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+      body: JSON.stringify(options ?? {}),
+    });
+  }
+
+  listNotes(bookId: string): Promise<{ notes: JsonRecord[] }> {
+    return this.request(`/books/${encodeURIComponent(bookId)}/notes`);
+  }
+
+  saveNote(note: ReaderNote, options?: ResourceMutationOptions): Promise<RemoteMutationResult> {
+    return this.request(`/books/${encodeURIComponent(note.novelId)}/notes`, {
+      method: 'POST',
+      body: JSON.stringify({ ...note, ...(options ?? {}) }),
+    });
+  }
+
+  deleteNote(id: string, options?: ResourceMutationOptions): Promise<{ ok: true }> {
+    return this.request(`/notes/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+      body: JSON.stringify(options ?? {}),
+    });
+  }
+
+  listProviders(): Promise<RemoteProviderCatalog> {
+    return this.providerTransport.listProviders();
+  }
+
+  async getProviderSettings(): Promise<RemoteProviderSettingsResponse> {
+    return this.providerTransport.getProviderSettings();
+  }
+
+  async saveProviderSettings(
+    scope: RemoteProviderSettings['scope'],
+    input: Partial<Omit<RemoteProviderSettings, 'scope' | 'updatedAt'>>,
+  ): Promise<{
+    settings: RemoteProviderSettings;
+    catalog: RemoteProviderCatalog;
+    secretStatuses: ProviderSecretStatus[];
+  }> {
+    return this.providerTransport.saveProviderSettings(scope, input);
+  }
+
+  async saveProviderSecret(
+    scope: RemoteProviderSettings['scope'],
+    providerId: string,
+    secretName: string,
+    secretValue: string,
+  ): Promise<RemoteProviderSecretResponse> {
+    return this.providerTransport.saveProviderSecret(scope, providerId, secretName, secretValue);
+  }
+
+  async deleteProviderSecret(
+    scope: RemoteProviderSettings['scope'],
+    providerId: string,
+    secretName: string,
+  ): Promise<RemoteProviderSecretResponse> {
+    return this.providerTransport.deleteProviderSecret(scope, providerId, secretName);
+  }
+
+  async testProviderSecret(
+    scope: RemoteProviderSettings['scope'],
+    providerId: string,
+    secretName: string,
+  ): Promise<RemoteProviderSecretResponse & { ok?: true; message?: string }> {
+    return this.providerTransport.testProviderSecret(scope, providerId, secretName);
+  }
+
+  async listTTSProviderVoices(
+    providerId: string,
+  ): Promise<{ voices: Array<{ id: string; label: string; lang: string }> }> {
+    return this.providerTransport.listTTSProviderVoices(providerId);
+  }
+
+  async listCharacters(bookId: string): Promise<{ characters: Character[] }> {
+    const response = await this.request<{ characters: JsonRecord[] }>(
+      `/books/${encodeURIComponent(bookId)}/characters`,
+    );
+    return { characters: response.characters.map(mapServerCharacter) };
+  }
+
+  async listCharacterGraph(bookId: string): Promise<{ graph: CharacterGraph }> {
+    const response = await this.request<{
+      graph: JsonRecord & { characters?: JsonRecord[]; relations?: JsonRecord[] };
+    }>(`/books/${encodeURIComponent(bookId)}/character-graph`);
+    return {
+      graph: {
+        novelId: stringValue(response.graph.novelId, stringValue(response.graph.book_id, bookId)),
+        characters: Array.isArray(response.graph.characters) ? response.graph.characters.map(mapServerCharacter) : [],
+        relations: Array.isArray(response.graph.relations)
+          ? response.graph.relations.map(mapServerCharacterRelation)
+          : [],
+      },
+    };
+  }
+
+  async getCharacterGraphKnowledgeV2(
+    bookId: string,
+  ): Promise<{ knowledge: import('../../providers/character-graph-v2').CharacterGraphKnowledgeV2 }> {
+    return this.request(`/books/${encodeURIComponent(bookId)}/character-graph-v2`);
+  }
+
+  async saveCharacterGraphObservationsV2(
+    bookId: string,
+    knowledge: import('../../providers/character-graph-v2').CharacterGraphKnowledgeV2,
+  ): Promise<{ ok: true }> {
+    return this.request(`/books/${encodeURIComponent(bookId)}/character-graph-v2/observations`, {
+      method: 'POST',
+      body: JSON.stringify({ knowledge }),
+    });
+  }
+
+  async applyCharacterIdentityCommandV2(
+    bookId: string,
+    command: import('../../providers/character-graph-v2').CharacterIdentityCommandV2,
+  ): Promise<{ result: import('../../providers/character-graph-v2').CharacterIdentityOperationResultV2 }> {
+    return this.request(`/books/${encodeURIComponent(bookId)}/character-identity-operations`, {
+      method: 'POST',
+      body: JSON.stringify({ command }),
+    });
+  }
+
+  saveCharacters(
+    bookId: string,
+    characters: Character[],
+    options?: ResourceMutationOptions,
+  ): Promise<{ ok: true; characters: Character[] }> {
+    return this.request(`/books/${encodeURIComponent(bookId)}/characters`, {
+      method: 'PUT',
+      body: JSON.stringify({ characters, ...(options ? { expectedRevision: options.expectedRevision } : {}) }),
+    });
+  }
+
+  async saveCharacterGraph(
+    bookId: string,
+    graph: CharacterGraph,
+    options?: ResourceMutationOptions,
+  ): Promise<{ ok: true; graph: CharacterGraph }> {
+    const response = await this.request<{
+      ok: true;
+      graph: JsonRecord & { characters?: JsonRecord[]; relations?: JsonRecord[] };
+    }>(`/books/${encodeURIComponent(bookId)}/character-graph`, {
+      method: 'PUT',
+      body: JSON.stringify({ graph, ...(options ? { expectedRevision: options.expectedRevision } : {}) }),
+    });
+    return {
+      ok: true,
+      graph: {
+        novelId: stringValue(response.graph.novelId, stringValue(response.graph.book_id, bookId)),
+        characters: Array.isArray(response.graph.characters) ? response.graph.characters.map(mapServerCharacter) : [],
+        relations: Array.isArray(response.graph.relations)
+          ? response.graph.relations.map(mapServerCharacterRelation)
+          : [],
+      },
+    };
+  }
+
+  async listVoiceProfiles(bookId: string): Promise<{ voiceProfiles: VoiceProfile[] }> {
+    const response = await this.request<{ voiceProfiles: JsonRecord[] }>(
+      `/books/${encodeURIComponent(bookId)}/voice-profiles`,
+    );
+    return { voiceProfiles: response.voiceProfiles.map(mapServerVoiceProfile) };
+  }
+
+  saveVoiceProfiles(
+    bookId: string,
+    voiceProfiles: VoiceProfile[],
+    options?: ResourceMutationOptions,
+  ): Promise<{ ok: true; voiceProfiles: VoiceProfile[] }> {
+    return this.request(`/books/${encodeURIComponent(bookId)}/voice-profiles`, {
+      method: 'PUT',
+      body: JSON.stringify({ voiceProfiles, ...(options ? { expectedRevision: options.expectedRevision } : {}) }),
+    });
+  }
+
+  getVoiceProductState(
+    bookId: string,
+  ): Promise<{ state: import('../../providers/voice-product').VoiceProductStateV1 }> {
+    return this.request(`/books/${encodeURIComponent(bookId)}/voice-product`);
+  }
+
+  saveVoiceProductState(
+    bookId: string,
+    state: import('../../providers/voice-product').VoiceProductStateV1,
+  ): Promise<{ ok: true; state: import('../../providers/voice-product').VoiceProductStateV1 }> {
+    return this.request(`/books/${encodeURIComponent(bookId)}/voice-product`, {
+      method: 'PUT',
+      body: JSON.stringify({ state }),
+    });
+  }
+
+  getVoiceCastingState(bookId: string): Promise<{
+    revision: number;
+    state: import('../../providers/voice-casting').VoiceCastingStateV1 | null;
+    userArtifacts: import('../../providers/voice-casting').VoiceCastingWorkspaceUserArtifactsV1 | null;
+    derivedArtifacts: Omit<
+      import('../../providers/voice-casting').VoiceCastingWorkspaceDerivedArtifactsV1,
+      'utterances' | 'state'
+    > | null;
+  }> {
+    return this.request(`/books/${encodeURIComponent(bookId)}/voice-casting`);
+  }
+
+  saveVoiceCastingState(input: {
+    readonly bookId: string;
+    readonly expectedRevision: number;
+    readonly state: import('../../providers/voice-casting').VoiceCastingStateV1;
+    readonly userArtifacts: import('../../providers/voice-casting').VoiceCastingWorkspaceUserArtifactsV1;
+    readonly derivedArtifacts: Omit<
+      import('../../providers/voice-casting').VoiceCastingWorkspaceDerivedArtifactsV1,
+      'utterances' | 'state'
+    >;
+  }): Promise<{
+    revision: number;
+    state: import('../../providers/voice-casting').VoiceCastingStateV1;
+  }> {
+    return this.request(`/books/${encodeURIComponent(input.bookId)}/voice-casting`, {
+      method: 'PUT',
+      body: JSON.stringify({
+        expectedRevision: input.expectedRevision,
+        state: input.state,
+        userArtifacts: input.userArtifacts,
+        derivedArtifacts: input.derivedArtifacts,
+      }),
+    });
+  }
+
+  listVoiceCastingSource(
+    bookId: string,
+  ): Promise<{ utterances: import('../../providers/voice-casting').AcceptedSpeakerUtteranceV1[] }> {
+    return this.request(`/books/${encodeURIComponent(bookId)}/voice-casting/source`);
+  }
+
+  async listSegments(chapterId: string): Promise<{ segments: LabeledSegment[] }> {
+    const response = await this.request<{ segments: JsonRecord[] }>(
+      `/chapters/${encodeURIComponent(chapterId)}/segments`,
+    );
+    return { segments: response.segments.map(mapServerSegment) };
+  }
+
+  saveSegments(
+    chapterId: string,
+    segments: LabeledSegment[],
+    options?: ResourceMutationOptions,
+  ): Promise<{ ok: true; segments: LabeledSegment[] }> {
+    return this.request(`/chapters/${encodeURIComponent(chapterId)}/segments`, {
+      method: 'PUT',
+      body: JSON.stringify({ segments, ...(options ? { expectedRevision: options.expectedRevision } : {}) }),
+    });
+  }
+
+  async listCorrections(
+    bookId: string,
+    input: { chapterId?: string } = {},
+  ): Promise<{ corrections: UserCorrection[] }> {
+    const search = input.chapterId ? `?chapterId=${encodeURIComponent(input.chapterId)}` : '';
+    const response = await this.request<{ corrections: JsonRecord[] }>(
+      `/books/${encodeURIComponent(bookId)}/corrections${search}`,
+    );
+    return { corrections: response.corrections.map(mapServerCorrection) };
+  }
+
+  saveCorrection(
+    correction: UserCorrection,
+    options?: ResourceMutationOptions,
+  ): Promise<{ ok: true; correction: UserCorrection }> {
+    return this.request(`/books/${encodeURIComponent(correction.novelId)}/corrections`, {
+      method: 'POST',
+      body: JSON.stringify({ ...correction, ...(options ? { expectedRevision: options.expectedRevision } : {}) }),
+    });
+  }
+
+  deleteCorrection(
+    bookId: string,
+    correctionId: string,
+    options?: ResourceMutationOptions,
+  ): Promise<{ ok: true; id: string; deletedAt: string }> {
+    return this.request(`/books/${encodeURIComponent(bookId)}/corrections/${encodeURIComponent(correctionId)}`, {
+      method: 'DELETE',
+      body: JSON.stringify(options ?? {}),
+    });
+  }
+
+  applyLabelCorrections(command: ApplyLabelCorrectionsCommandV2): Promise<ApplyLabelCorrectionsResultV2> {
+    return this.request(`/books/${encodeURIComponent(command.bookId)}/label-mutations`, {
+      method: 'POST',
+      body: JSON.stringify(command),
+    });
+  }
+
+  getBookAIWorkflowPlan(
+    bookId: string,
+    options: GetBookAIWorkflowPlanOptions = {},
+  ): Promise<{ plan: BookAIWorkflowPlan }> {
+    return this.providerTransport.getBookAIWorkflowPlan(bookId, options);
+  }
+
+  async startBookAIWorkflow(input: StartBookAIWorkflowInput): Promise<{ workflow: RemoteBookAIWorkflow }> {
+    return this.providerTransport.startBookAIWorkflow(input);
+  }
+
+  async getBookAIWorkflow(workflowId: string, signal?: AbortSignal): Promise<{ workflow: RemoteBookAIWorkflow }> {
+    return this.providerTransport.getBookAIWorkflow(workflowId, signal);
+  }
+
+  listBookAIWorkflowReviews(
+    workflowId: string,
+    signal?: AbortSignal,
+  ): Promise<{ reviews: ChapterLabelAnalysisReviewArtifact[] }> {
+    return this.providerTransport.listBookAIWorkflowReviews(workflowId, signal);
+  }
+
+  getAnalysisReviewArtifact(
+    reviewId: string,
+    signal?: AbortSignal,
+  ): Promise<{ review: ChapterLabelAnalysisReviewArtifact }> {
+    return this.providerTransport.getAnalysisReviewArtifact(reviewId, signal);
+  }
+
+  saveAnalysisReviewDraft(
+    reviewId: string,
+    input: {
+      expectedReviewRevision: number;
+      candidate: ChapterLabelAnalysisReviewArtifact['candidate'];
+      editIntents?: AnalysisReviewEditIntentMap;
+    },
+    signal?: AbortSignal,
+  ): Promise<{ review: ChapterLabelAnalysisReviewArtifact }> {
+    return this.providerTransport.saveAnalysisReviewDraft(reviewId, input, signal);
+  }
+
+  rejectAnalysisReviewArtifact(
+    reviewId: string,
+    input: { expectedReviewRevision: number; reason?: string },
+    signal?: AbortSignal,
+  ): Promise<{ review: ChapterLabelAnalysisReviewArtifact }> {
+    return this.providerTransport.rejectAnalysisReviewArtifact(reviewId, input, signal);
+  }
+
+  approveAnalysisReviewArtifact(
+    reviewId: string,
+    expectedReviewRevision: number,
+    signal?: AbortSignal,
+  ): Promise<{ review: ChapterLabelAnalysisReviewArtifact }> {
+    return this.providerTransport.approveAnalysisReviewArtifact(reviewId, expectedReviewRevision, signal);
+  }
+
+  async retryBookAIWorkflow(workflowId: string, signal?: AbortSignal): Promise<{ workflow: RemoteBookAIWorkflow }> {
+    return this.providerTransport.retryBookAIWorkflow(workflowId, signal);
+  }
+
+  async cancelBookAIWorkflow(workflowId: string, signal?: AbortSignal): Promise<{ workflow: RemoteBookAIWorkflow }> {
+    return this.providerTransport.cancelBookAIWorkflow(workflowId, signal);
+  }
+
+  async refreshBookAIWorkflowTTSCacheReadiness(
+    workflowId: string,
+    signal?: AbortSignal,
+  ): Promise<{ workflow: RemoteBookAIWorkflow }> {
+    return this.providerTransport.refreshBookAIWorkflowTTSCacheReadiness(workflowId, signal);
+  }
+
+  async enqueueAnalysisJob(input: EnqueueAnalysisJobInput): Promise<{ job: RemoteProviderJob }> {
+    return this.providerTransport.enqueueAnalysisJob(input);
+  }
+
+  async getProviderJob(jobId: string, signal?: AbortSignal): Promise<{ job: RemoteProviderJob }> {
+    return this.providerTransport.getProviderJob(jobId, signal);
+  }
+
+  async cancelProviderJob(jobId: string, signal?: AbortSignal): Promise<{ job: RemoteProviderJob }> {
+    return this.providerTransport.cancelProviderJob(jobId, signal);
+  }
+
+  listPlainTTSVoices(signal?: AbortSignal): Promise<PlainTTSVoices> {
+    return this.request('/tts/plain/voices', { signal });
+  }
+
+  async synthesizePlainTTS(
+    chapterId: string | undefined,
+    input: PlainTTSRequest | { voiceId: string; modelRevision: string; rate: number },
+    signal?: AbortSignal,
+  ): Promise<Blob> {
+    const path = chapterId ? `/chapters/${encodeURIComponent(chapterId)}/tts/plain` : '/tts/plain/sample';
+    const response = await this.requestBlob(
+      path,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(input),
+        signal,
+      },
+      60_000,
+    );
+    return response.blob;
+  }
+
+  async resolveTTSCache(
+    chapterId: string,
+    input: TTSCacheResolveInput,
+    signal?: AbortSignal,
+  ): Promise<TTSCacheResolveResult> {
+    return this.providerTransport.resolveTTSCache(chapterId, input, signal);
+  }
+
+  ttsCacheAudioUrl(chapterId: string, cacheKey: string): string {
+    return `${this.baseUrl}/chapters/${encodeURIComponent(chapterId)}/tts-cache/${encodeURIComponent(cacheKey)}/audio`;
+  }
+
+  async fetchTTSCacheAudio(chapterId: string, cacheKey: string, signal?: AbortSignal): Promise<Blob> {
+    const authToken = this.options.getAuthToken?.()?.trim();
+    const path = `/chapters/${encodeURIComponent(chapterId)}/tts-cache/${encodeURIComponent(cacheKey)}/audio`;
+    const response = await this.fetch(path, {
+      signal,
+      headers: authToken ? { Authorization: `Bearer ${authToken}` } : undefined,
+    });
+    if (!response.ok) {
+      if (response.status === 401) this.options.onUnauthorized?.();
+      throw await remoteError(response);
+    }
+    return response.blob();
+  }
+
+  async pullSync(since = 0, requestedContract?: ResolvedSyncContract): Promise<PullSyncResult> {
+    return this.syncTransport.pullSync(since, requestedContract);
+  }
+
+  async pushSync(events: SyncEvent[], requestedContract?: ResolvedSyncContract): Promise<PushSyncResult> {
+    return this.syncTransport.pushSync(events, requestedContract);
+  }
+
+  async getBookSnapshotStream(bookId: string): Promise<RemoteBookSnapshotStream | undefined> {
+    return getRemoteBookSnapshotStream(this, bookId, remoteSnapshotNotFound);
+  }
+
+  async getBookSnapshot(bookId: string): Promise<RemoteBookSnapshot | undefined> {
+    return getRemoteBookSnapshot(this, bookId, remoteSnapshotNotFound);
+  }
+
+  initUpload(
+    input: {
+      fileName: string;
+      sizeBytes: number;
+      contentType: string;
+      encoding: EncodingMode;
+      chapterSplitMode?: ChapterSplitMode;
+      importMode?: 'replace_book' | 'append_image_series' | 'append_local_archive';
+      baseActiveContentRevisionId?: string;
+      expectedBase?: import('@boaa/contracts').ImportExpectedBase;
+      totalChunks: number;
+      clientBookId?: string;
+      sourceContentHash?: string;
+    },
+    signal?: AbortSignal,
+  ): Promise<{ uploadId: string; chunkUrlTemplate: string }> {
+    return this.importTransport.initUpload(input, signal);
+  }
+
+  getUpload(uploadId: string, signal?: AbortSignal): Promise<RemoteUploadStatus> {
+    return this.importTransport.getUpload(uploadId, signal);
+  }
+
+  putUploadChunk(
+    uploadId: string,
+    chunkIndex: number,
+    chunk: Blob,
+    signal?: AbortSignal,
+  ): Promise<{ ok: true; upload?: RemoteUploadStatus }> {
+    return this.importTransport.putUploadChunk(uploadId, chunkIndex, chunk, signal);
+  }
+
+  completeUpload(uploadId: string, signal?: AbortSignal): Promise<{ jobId: string; statusUrl: string }> {
+    return this.importTransport.completeUpload(uploadId, signal);
+  }
+
+  cancelUpload(
+    uploadId: string,
+    signal?: AbortSignal,
+  ): Promise<{ ok: true; cancellationState?: 'requested' | 'cancelled'; upload?: RemoteUploadStatus }> {
+    return this.importTransport.cancelUpload(uploadId, signal);
+  }
+
+  getImportJob(jobId: string, signal?: AbortSignal): Promise<RemoteImportJob> {
+    return this.importTransport.getImportJob(jobId, signal);
+  }
+}

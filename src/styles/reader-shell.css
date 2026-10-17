@@ -1,0 +1,349 @@
+.reader-screen {
+  --reader-layout-margin-x: var(--reading-margin-x);
+  position: relative;
+  height: 100dvh;
+  overflow: hidden;
+  background: var(--reading-background, var(--reader-canvas));
+}
+
+.top-progress {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: var(--layer-chrome);
+  height: 2px;
+  background: color-mix(in srgb, var(--border) 35%, transparent);
+}
+
+.reader-topbar,
+.reader-bottombar {
+  position: fixed;
+  left: 0;
+  right: 0;
+  z-index: var(--layer-chrome);
+  justify-content: space-between;
+  min-height: 58px;
+  padding: 8px 14px;
+  background: color-mix(in srgb, var(--reader-surface) 96%, transparent);
+  border-radius: 0;
+  backdrop-filter: blur(16px);
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(-100%);
+  transition:
+    opacity var(--motion-fast) var(--ease-standard),
+    transform var(--motion-base) var(--ease-emphasized-decelerate),
+    visibility var(--motion-base);
+}
+
+.reader-topbar {
+  top: 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.reader-bottombar {
+  bottom: 0;
+  gap: 10px;
+  padding-bottom: max(8px, env(safe-area-inset-bottom, 0px));
+  border-top: 1px solid var(--border);
+  transform: translateY(100%);
+}
+
+.reader-screen.chrome-visible .reader-topbar,
+.reader-screen.chrome-visible .reader-bottombar,
+.reader-topbar:focus-within,
+.reader-bottombar:focus-within,
+.reader-topbar.always-visible,
+.reader-bottombar.always-visible {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateY(0);
+}
+
+.reader-title {
+  min-width: 0;
+  flex: 1;
+  display: flex;
+  align-items: baseline;
+  gap: 9px;
+}
+
+.reader-title strong,
+.reader-title span {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.reader-title span {
+  color: var(--text-2);
+  font-size: 0.74rem;
+}
+
+.reader-scroll {
+  --reader-content-inset-top: max(var(--reading-margin-y), env(safe-area-inset-top, 0px));
+  --reader-content-inset-bottom: max(var(--reading-margin-y), env(safe-area-inset-bottom, 0px));
+  height: 100dvh;
+  overflow: auto;
+  overflow-anchor: none;
+  padding: var(--reader-content-inset-top) var(--reader-layout-margin-x) var(--reader-content-inset-bottom);
+  background: var(--reading-background, var(--reader-canvas));
+  filter: brightness(var(--reading-brightness, 1));
+}
+
+.reader-scroll:not(.reader-paginated-root) {
+  clip-path: inset(var(--reader-content-inset-top) 0 var(--reader-content-inset-bottom) 0);
+}
+
+/* Reader navigation remains available through wheel, touch, keys, and the scrubber. */
+.reader-scroll[data-reader-layer='scroll'] {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+  touch-action: pan-y;
+  overscroll-behavior-y: contain;
+}
+
+.reader-scroll[data-reader-layer='scroll']::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
+}
+
+.reader-viewport-stack {
+  position: relative;
+  height: 100dvh;
+  overflow: hidden;
+}
+
+.reader-viewport-stack > .reader-viewport-layer {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+}
+
+.reader-viewport-layer.is-active {
+  z-index: 1;
+  visibility: visible;
+}
+
+.reader-viewport-layer.is-inactive {
+  z-index: 0;
+  visibility: hidden;
+  pointer-events: none;
+}
+
+/*
+ * A warm scroll layer still needs several frames to restore the exact source
+ * range. Keep the current page visible until that hidden layer has settled so
+ * the user never sees its stale virtualized position.
+ */
+.reader-screen.page-to-scroll-settling .reader-paginated-root.is-inactive {
+  z-index: 2;
+  visibility: visible;
+}
+
+.reader-screen.page-to-scroll-settling [data-reader-layer='scroll'].is-active {
+  z-index: 1;
+  visibility: hidden;
+  pointer-events: none;
+}
+
+/* Do not expose both animated page articles while handing off to scroll. */
+.reader-screen.page-to-scroll-settling .reader-pagination-stage,
+.reader-screen.page-to-scroll-settling .reader-paginated-page.is-current {
+  animation: none !important;
+  transform: none !important;
+}
+
+.reader-screen.page-to-scroll-settling .reader-paginated-page.is-outgoing {
+  display: none;
+}
+
+.reader-screen.addon-open .reader-scroll {
+  padding-right: max(var(--reader-layout-margin-x), calc(var(--reader-panel-width) + 20px));
+}
+
+.reader-scroll.page-flow {
+  overflow-y: hidden;
+  scroll-snap-type: y mandatory;
+}
+
+.reader-scroll.page-flow .reader-virtual-row {
+  scroll-snap-align: start;
+  scroll-snap-stop: always;
+}
+
+.reader-scroll:focus {
+  outline: none;
+}
+
+.reader-scroll:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--primary) 72%, transparent);
+  outline-offset: -3px;
+}
+
+.reader-screen.addon-open .reader-topbar,
+.reader-screen.addon-open .reader-bottombar {
+  right: var(--reader-panel-width);
+}
+
+/*
+ * Immersive reading is a latched state; the center tap explicitly opens/closes chrome.
+ * Keep these overrides stronger than hover/focus/"always visible" rules so
+ * pointer movement, scrolling and chapter navigation cannot reveal controls.
+ */
+.reader-screen.immersive .top-progress,
+.reader-screen.immersive .reader-mobile-search,
+.reader-screen.immersive .reader-search-results-layer,
+.reader-screen.immersive .reader-footnote-backdrop,
+.reader-screen.immersive .reader-pagination-controls,
+.reader-screen.immersive .chapter-nav {
+  display: none;
+}
+
+.reader-screen.immersive .reader-topbar,
+.reader-screen.immersive .reader-bottombar,
+.reader-screen.immersive .reader-topbar:focus-within,
+.reader-screen.immersive .reader-bottombar:focus-within,
+.reader-screen.immersive .reader-topbar.always-visible,
+.reader-screen.immersive .reader-bottombar.always-visible {
+  opacity: 0;
+  pointer-events: none;
+  visibility: hidden;
+}
+
+.reader-screen.immersive .reader-topbar {
+  transform: translateY(-100%);
+}
+
+.reader-screen.immersive .reader-bottombar {
+  transform: translateY(100%);
+}
+
+.reader-screen.immersive .reader-scroll,
+.reader-screen.immersive.addon-open .reader-scroll {
+  --reader-content-inset-top: max(var(--reading-margin-y), env(safe-area-inset-top, 0px));
+  --reader-content-inset-bottom: max(var(--reading-margin-y), env(safe-area-inset-bottom, 0px));
+  padding-top: var(--reader-content-inset-top);
+  padding-right: var(--reader-layout-margin-x);
+  padding-bottom: var(--reader-content-inset-bottom);
+  padding-left: var(--reader-layout-margin-x);
+}
+
+.reader-screen.immersive ~ .tts-compact-bar {
+  display: none;
+}
+
+.reader-mobile-search {
+  position: fixed;
+  top: 58px;
+  left: 8px;
+  right: 8px;
+  z-index: 28;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px;
+  background: color-mix(in srgb, var(--surface) 96%, transparent);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-panel);
+  box-shadow: var(--shadow-soft);
+  backdrop-filter: blur(16px);
+}
+
+.reader-search-results-layer {
+  position: fixed;
+  z-index: var(--layer-floating);
+  top: 66px;
+  left: 50%;
+  width: min(460px, calc(100vw - 28px));
+  transform: translateX(-50%);
+}
+
+.reader-overflow {
+  position: relative;
+  display: inline-flex;
+}
+
+.reader-auto-reading-overlay {
+  position: fixed;
+  z-index: 4;
+  pointer-events: none;
+  overflow: hidden;
+  background: var(--reading-background, var(--reader-canvas));
+  color: var(--reading-foreground, var(--text));
+  border-bottom: 2px solid var(--primary);
+}
+
+.reader-auto-reading-overlay[data-mode='rsvp'] {
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  font-family: var(--reading-font-family, var(--font-serif));
+  font-size: clamp(24px, 5vw, 42px);
+  overflow-wrap: anywhere;
+  text-align: center;
+  border: 0;
+}
+
+.reader-auto-reading-overlay[hidden] {
+  display: none;
+}
+
+.reader-auto-reading-overlay[data-mode^='blind-'] {
+  border: 0;
+}
+
+.reader-auto-reading-overlay img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
+
+.reader-loading::after {
+  content: '본문을 준비하는 중입니다.';
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  color: var(--text-2);
+  font-size: 0.9rem;
+}
+
+/* Keep the real layout measurable, but do not expose or scroll chapter start during resume. */
+.reader-scroll.is-opening {
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.reader-scroll.is-opening .reader-document {
+  visibility: hidden;
+}
+
+.reader-opening {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 24px;
+  color: var(--text-2);
+  background: var(--reading-background, var(--reader-canvas));
+  text-align: center;
+  touch-action: none;
+}
+
+/* Keep the restored source frame until the destination page has both geometry and text. */
+.reader-screen.scroll-to-page-settling [data-reader-layer='scroll'].is-inactive {
+  z-index: 2;
+  visibility: visible;
+}
+.reader-screen.scroll-to-page-settling .reader-paginated-root.is-active {
+  visibility: hidden;
+  pointer-events: none;
+}

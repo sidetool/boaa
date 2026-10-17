@@ -1,0 +1,374 @@
+import { createLibraryCoverResolver } from '../../features/external-sources/library-cover-resolver';
+import { compositeSourceRegistry } from '../../external-sources/composite-source-registry';
+import { AppExternalSourceRegistry } from '../../external-sources/app-external-source-registry';
+import { describe, expect, it, vi } from 'vitest';
+import { RemoteInstalledExtensions } from './remote-installed-extensions';
+import { RemoteApiClient } from '../../services/remote/remote-api-client';
+import { examplePackageManifest } from '../../test/extension-package-fixture';
+import type { ExtensionContributionId } from '@boaa/extension-contracts';
+import type { BoaaPackageManifestV1 } from '@boaa/extension-contracts/package';
+import { createServer } from 'node:http';
+
+function inventory(revision = 1, preparedImageImports?: boolean, preparedDocumentImports?: boolean) {
+  const manifest = examplePackageManifest();
+  return {
+    preparedImageImports,
+    preparedDocumentImports,
+    packages: [
+      {
+        id: manifest.extension.id,
+        revision,
+        enabled: true,
+        publisherPin: 'unsigned',
+        active: { digest: 'a'.repeat(64), manifest },
+        updatedAt: '2026-09-12T00:00:00Z',
+      },
+    ],
+    sources: manifest.extension.contributes.externalSources.map((descriptor) => ({ descriptor })),
+    errors: [],
+  };
+}
+function compatibilityInventory(
+  review: { pkg: string; version: string; digest: string; revision: number },
+  overrides: Partial<{ version: string; digest: string; revision: number }> = {},
+) {
+  return {
+    available: true,
+    revision: overrides.revision ?? review.revision + 1,
+    packages: [
+      {
+        pkg: review.pkg,
+        version: overrides.version ?? review.version,
+        digest: overrides.digest ?? review.digest,
+        code: 2,
+        sources: [],
+      },
+    ],
+    repositories: [],
+  };
+}
+const context = { brokers: { get: () => undefined } };
+describe('remote package inventory and source client', () => {
+  it('negotiates plain text streaming independently of image compatibility formats', async () => {
+    const snapshot = inventory();
+    const descriptor = {
+      ...snapshot.sources[0]!.descriptor,
+      schemaVersion: 2,
+      seriesProfile: { kind: 'document_series', format: 'txt' },
+    };
+    let supported = false;
+    const request = vi.fn(async () => ({ ...snapshot, sourceTextStreaming: supported, sources: [{ descriptor }] }));
+    const requestBlob = vi.fn(async () => ({ blob: new Blob(['소설 본문'], { type: 'text/plain' }) }));
+    const client = new RemoteInstalledExtensions({ request, requestBlob } as unknown as RemoteApiClient);
+    await client.refresh();
+    expect(client.getSourceStream('org.example.catalog.source')).toBeUndefined();
+    supported = true;
+    await client.refresh();
+    const port = client.getSourceStream('org.example.catalog.source')!;
+    const signal = new AbortController().signal;
+    if (!('kind' in port) || port.kind !== 'text') throw new Error('expected text port');
+    expect(await port.open('episode', signal, 'revision-2')).toEqual({ text: '소설 본문' });
+    expect(requestBlob).toHaveBeenCalledWith(
+      expect.stringMatching(/\/download$/),
+      expect.objectContaining({
+        method: 'POST',
+        signal,
+        body: JSON.stringify({
+          key: { connectorId: 'org.example.catalog.source', remoteId: 'episode' },
+          remoteRevision: 'revision-2',
+          fileName: 'chapter.txt',
+        }),
+      }),
+      expect.any(Number),
+    );
+    requestBlob.mockResolvedValueOnce({ blob: new Blob(['']) });
+    await expect(port.open('empty', signal)).rejects.toThrow('invalid_source_content');
+  });
+  it('reloads a rejected image through the authenticated stream endpoint, then resumes normal caching', async () => {
+    const snapshot = inventory();
+    const descriptor = {
+      ...snapshot.sources[0]!.descriptor,
+      schemaVersion: 2,
+      seriesProfile: { kind: 'image_series' },
+    };
+    const request = vi.fn(async (path: string) =>
+      path.endsWith('/stream')
+        ? { token: 'session', pageCount: 2 }
+        : { ...snapshot, sourceStreaming: true, sources: [{ descriptor, mangayomiPackageId: 'fixture' }] },
+    );
+    const requestBlob = vi.fn(async () => ({ blob: new Blob(['image']) }));
+    const client = new RemoteInstalledExtensions({ request, requestBlob } as unknown as RemoteApiClient);
+    await client.refresh();
+    const signal = new AbortController().signal;
+    const session = await client.getSourceStream('org.example.catalog.source')!.open('episode', signal);
+    if ('text' in session) throw new Error('expected image stream');
+    await session.loadPage(0, signal);
+    expect(requestBlob).toHaveBeenLastCalledWith(expect.stringMatching(/\/session\/0$/), { signal }, 60000);
+    session.invalidatePage?.(0);
+    requestBlob.mockRejectedValueOnce(new Error('network interrupted'));
+    await expect(session.loadPage(0, signal)).rejects.toThrow('network interrupted');
+    await session.loadPage(0, signal);
+    expect(requestBlob).toHaveBeenLastCalledWith(expect.stringMatching(/\/session\/0\?reload=1$/), { signal }, 60000);
+    await session.loadPage(0, signal);
+    expect(requestBlob).toHaveBeenLastCalledWith(expect.stringMatching(/\/session\/0$/), { signal }, 60000);
+    session.close();
+  });
+  it.each(['apk', 'mangayomi'] as const)(
+    'supersedes pre-install inventory for %s and ignores its late result',
+    async (kind) => {
+      let resolveOld!: (value: unknown) => void;
+      let oldSignal!: AbortSignal;
+      const review = {
+        id: 'review',
+        revision: 1,
+        pkg: 'org.example.compat',
+        version: '2',
+        digest: 'b'.repeat(64),
+        signers: [],
+      };
+      let reads = 0;
+      const request = vi.fn(async (path: string, init?: RequestInit) => {
+        if (path === '/extensions/packages') {
+          if (++reads === 1) {
+            oldSignal = init!.signal!;
+            return new Promise((resolve) => {
+              resolveOld = resolve;
+            });
+          }
+          return inventory(2);
+        }
+        if (path === `/${kind}-extensions`) return compatibilityInventory(review);
+        return {};
+      });
+      const client = new RemoteInstalledExtensions({ request, requestBlob: vi.fn() } as unknown as RemoteApiClient);
+      const old = client.refresh();
+      await client[kind].install(review);
+      await client.refresh();
+      expect(oldSignal.aborted).toBe(true);
+      expect(reads).toBe(2);
+      expect(client.getExternalSources()).toHaveLength(1);
+      resolveOld({ packages: [], sources: [], errors: [] });
+      await old;
+      expect(client.getExternalSources()).toHaveLength(1);
+      await client.refresh();
+      expect(reads).toBe(3);
+    },
+  );
+  it('uses the server-owned import path only when the server advertises it', async () => {
+    const request = vi.fn(async () => inventory());
+    const client = new RemoteInstalledExtensions({ request, requestBlob: vi.fn() } as unknown as RemoteApiClient);
+    await client.refresh();
+    expect(client.getHostedImageImport('org.example.catalog.source')).toBeUndefined();
+    expect(client.getHostedDocumentImport('org.example.catalog.source')).toBeUndefined();
+    request.mockResolvedValueOnce(inventory(1, true, true));
+    await client.refresh();
+    expect(client.getHostedImageImport('org.example.catalog.source')).toBeDefined();
+    expect(client.getHostedDocumentImport('org.example.catalog.source')).toBeDefined();
+    request.mockResolvedValueOnce(inventory());
+    await client.refresh();
+    expect(client.getHostedImageImport('org.example.catalog.source')).toBeUndefined();
+    expect(client.getHostedDocumentImport('org.example.catalog.source')).toBeUndefined();
+  });
+  it('exposes original APK preferences through the existing authenticated client and refreshes after saving', async () => {
+    const snapshot = { revision: 4, fields: [], groups: [], privateOrigins: [], networkPolicy: 'direct' };
+    const request = vi.fn(async (path: string) => (path.endsWith('/preferences') ? snapshot : inventory()));
+    const client = new RemoteInstalledExtensions({ request, requestBlob: vi.fn() } as unknown as RemoteApiClient);
+    expect(await client.apk.preferences!('org.example.apk')).toEqual(snapshot);
+    await client.apk.savePreferences!('org.example.apk', 4, { '["1","enabled"]': true }, []);
+    expect(request).toHaveBeenCalledWith(
+      '/apk-extensions/preferences-save',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({
+          pkg: 'org.example.apk',
+          revision: 4,
+          values: { '["1","enabled"]': true },
+          privateOrigins: [],
+        }),
+      }),
+      120000,
+    );
+    expect(request).toHaveBeenCalledWith(
+      '/extensions/packages',
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+      60000,
+    );
+  });
+  it('coalesces requests, keeps unchanged snapshots quiet and preserves known sources during transient failure', async () => {
+    const request = vi.fn(async () => inventory());
+    const client = new RemoteInstalledExtensions({ request, requestBlob: vi.fn() } as unknown as RemoteApiClient);
+    const changed = vi.fn();
+    client.subscribe(changed);
+    await Promise.all([client.refresh(), client.refresh()]);
+    expect(request).toHaveBeenCalledTimes(1);
+    const first = client.getSnapshot();
+    await client.refresh();
+    expect(client.getSnapshot()).toBe(first);
+    expect(changed).toHaveBeenCalledTimes(1);
+    request.mockRejectedValueOnce(new Error('offline'));
+    await client.refresh();
+    expect(client.getExternalSourceStatus('org.example.catalog.source').state).toBe('connected');
+    expect(client.getSnapshot().error).toBeDefined();
+  });
+  it('propagates download cancellation and does not publish a cover from a replaced generation', async () => {
+    const request = vi.fn(async () => inventory());
+    let complete!: (value: { blob: Blob; headers: Headers; status: number }) => void;
+    const requestBlob = vi.fn(
+      (_path: string, _init?: RequestInit) =>
+        new Promise((resolve) => {
+          complete = resolve;
+        }),
+    );
+    const client = new RemoteInstalledExtensions({ request, requestBlob } as unknown as RemoteApiClient);
+    await client.refresh();
+    const controller = new AbortController();
+    const cover = client.resolveExternalSourceCover(
+      'org.example.catalog.source',
+      context,
+      { connectorId: 'org.example.catalog.source', remoteId: 'work' },
+      controller.signal,
+    );
+    expect(requestBlob.mock.calls[0]?.[1]).toMatchObject({ signal: controller.signal });
+    request.mockResolvedValueOnce(inventory(2));
+    await client.refresh();
+    complete({ blob: new Blob(['image'], { type: 'image/png' }), headers: new Headers(), status: 200 });
+    await expect(cover).rejects.toThrow('package_generation_changed');
+  });
+  it('rejects raw JS as an installation file while preserving the JS authoring workflow', async () => {
+    const request = vi.fn();
+    const client = new RemoteInstalledExtensions({ request, requestBlob: vi.fn() } as unknown as RemoteApiClient);
+    await expect(client.inspect(new File(['code'], 'source.js'))).rejects.toThrow('.boaaext');
+    expect(request).not.toHaveBeenCalled();
+  });
+  it('confirms the installed digest with a fresh inventory without waiting for a stale refresh', async () => {
+    let finishStale!: (value: ReturnType<typeof inventory>) => void;
+    let inventoryCalls = 0;
+    const request = vi.fn((path: string, _init?: RequestInit) => {
+      if (path.startsWith('/extensions/packages/install?')) return Promise.resolve({ installed: true });
+      inventoryCalls++;
+      if (inventoryCalls === 1)
+        return new Promise<ReturnType<typeof inventory>>((resolve) => {
+          finishStale = resolve;
+        });
+      return Promise.resolve(inventory());
+    });
+    const client = new RemoteInstalledExtensions({ request, requestBlob: vi.fn() } as unknown as RemoteApiClient);
+    const stale = client.refresh();
+    await Promise.resolve();
+    const manifest = examplePackageManifest() as BoaaPackageManifestV1;
+    const file = new File(['package'], 'source.boaaext');
+    await client.install(file, {
+      operation: 'install',
+      expectedRevision: 0,
+      publisherChanged: false,
+      expandedAccess: true,
+      downgrade: false,
+      package: { digest: 'a'.repeat(64), manifest },
+    });
+    expect(client.getSnapshot().packages[0]?.active?.digest).toBe('a'.repeat(64));
+    const installCall = request.mock.calls.find(([path]) => String(path).startsWith('/extensions/packages/install?'));
+    expect(installCall?.[1]).toMatchObject({ signal: expect.any(AbortSignal) });
+    finishStale({ ...inventory(), packages: [], sources: [] });
+    await stale;
+    expect(client.getSnapshot().packages).toHaveLength(1);
+  });
+  it('confirms compatibility installs with the caller signal and exact digest/version before resolving', async () => {
+    const review = {
+      id: 'review',
+      revision: 4,
+      pkg: 'org.example.mangayomi',
+      version: '2.0.0',
+      digest: 'b'.repeat(64),
+      signers: [],
+    };
+    const request = vi.fn(async (path: string) =>
+      path === '/mangayomi-extensions' ? compatibilityInventory(review) : { installed: true },
+    );
+    const client = new RemoteInstalledExtensions({ request, requestBlob: vi.fn() } as unknown as RemoteApiClient);
+    const controller = new AbortController();
+    await expect(client.mangayomi.install(review, controller.signal)).resolves.toMatchObject({ revision: 5 });
+    expect(request).toHaveBeenCalledWith('/mangayomi-extensions', { signal: expect.any(AbortSignal) }, 30000);
+    const mismatched = vi.fn(async (path: string) =>
+      path === '/mangayomi-extensions'
+        ? compatibilityInventory(review, { digest: 'c'.repeat(64) })
+        : { installed: true },
+    );
+    const mismatchClient = new RemoteInstalledExtensions({
+      request: mismatched,
+      requestBlob: vi.fn(),
+    } as unknown as RemoteApiClient);
+    await expect(mismatchClient.mangayomi.install(review, controller.signal)).rejects.toThrow(
+      'apk_install_unconfirmed',
+    );
+  });
+  it('aborts a compatibility confirmation whose real HTTP body stalls after headers', async () => {
+    const review = {
+      id: 'review',
+      revision: 4,
+      pkg: 'org.example.mangayomi',
+      version: '2.0.0',
+      digest: 'b'.repeat(64),
+      signers: [],
+    };
+    let confirmationClosed!: () => void;
+    const closed = new Promise<void>((resolve) => {
+      confirmationClosed = resolve;
+    });
+    const server = createServer((request, response) => {
+      if (request.method === 'POST') {
+        response.writeHead(200, { 'content-type': 'application/json' });
+        response.end('{"installed":true}');
+        return;
+      }
+      request.once('close', confirmationClosed);
+      response.writeHead(200, { 'content-type': 'application/json' });
+      response.write('{"available":true');
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const address = server.address();
+    if (!address || typeof address === 'string') throw new Error('missing test server address');
+    const api = new RemoteApiClient(`http://127.0.0.1:${address.port}`);
+    const client = new RemoteInstalledExtensions(api, { operationMs: 500, confirmationMs: 25 });
+    try {
+      await expect(client.mangayomi.install(review)).rejects.toThrow('apk_install_unconfirmed');
+      await closed;
+    } finally {
+      server.closeAllConnections();
+      await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
+    }
+  });
+});
+
+it.each(['apk', 'mangayomi'])(
+  'resolves legacy library covers and transitional IDs against the installed %s inventory',
+  async (kind) => {
+    const id = `moya.${kind}.${'a'.repeat(24)}.123`;
+    const descriptor = { ...inventory().sources[0].descriptor, id };
+    const source = {
+      descriptor,
+      generation: 'existing-generation',
+      [kind === 'apk' ? 'apkPackageId' : 'mangayomiPackageId']: 'org.example.installed',
+    };
+    const request = vi.fn(async () => ({ packages: [], sources: [source], errors: [] }));
+    const requestBlob = vi.fn(async () => ({ blob: new Blob(['cover'], { type: 'image/png' }) }));
+    const client = new RemoteInstalledExtensions({ request, requestBlob } as unknown as RemoteApiClient);
+    await client.refresh();
+    const registry = new AppExternalSourceRegistry([], compositeSourceRegistry(client));
+    const resolver = createLibraryCoverResolver(() => ({
+      registry,
+      hostContext: { brokers: { get: () => undefined } },
+    }));
+    for (const connectorId of [id, id.replace(/^moya\./, 'boaa.')] as ExtensionContributionId[]) {
+      expect(registry.getExternalSourceStatus(connectorId, { brokers: { get: () => undefined } }).state).toBe(
+        'connected',
+      );
+      const url = await resolver.resolve(
+        { id: 'saved-work', connectorId, collectionRemoteId: 'saved-work', navigationRef: 'saved-work' },
+        new AbortController().signal,
+      );
+      expect(url).toMatch(/^blob:/);
+    }
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(requestBlob).toHaveBeenCalledTimes(2);
+  },
+);

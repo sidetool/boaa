@@ -1,0 +1,73 @@
+.git
+.github
+.idea
+.vscode
+AGENTS.md
+
+# Internal planning, review packets, and local artifacts are not image inputs
+artifacts/
+.codex-remote-attachments/
+.tmp/
+docs/
+handoff/
+.boaa-lab/
+# Web type-check includes extension integration tests that import this SDK helper.
+scripts/*
+!scripts/extensions/
+!scripts/plugins/
+scripts/plugins/*
+!scripts/plugins/build-product-runtime.mjs
+scripts/extensions/*
+!scripts/extensions/project.ts
+!scripts/extensions/development-context.ts
+!scripts/extensions/bounded-file.ts
+speaker-review-studio/
+
+# Local credentials and runtime data
+vertex env/
+vertex env/**
+secrets/
+.codex-provider-pg/
+.server-test-data/
+services/text-source-server/data/
+services/text-source-server/.env
+services/text-source-server/.env.*
+services/web-auth/.env
+services/web-auth/.env.*
+services/web-auth/.data/
+services/apk-worker/build/
+services/apk-worker/data/
+
+node_modules
+**/node_modules
+.pnpm-store
+
+dist
+coverage
+screenshots
+fixtures/generated/
+
+# Test corpora and design/reference packs are not build inputs
+test_novel/
+smart-novel-reader-codex-pack/
+ui-reference/
+
+# Native desktop/mobile sources are not used by the hosted images
+src-tauri/
+
+*.log
+*.tmp
+*.local
+.env
+.env.*
+!.env.example
+
+# Legacy local data stays excluded during the BOAA transition.
+.noveldesk-lab/
+
+.vite-dev.config.mjs
+
+.vite-srv.config.mjs
+
+# Design prototypes are private development inputs.
+prototypes/ui-next/

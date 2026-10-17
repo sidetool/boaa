@@ -1,0 +1,28 @@
+{
+  "id": "/",
+  "name": "BOAA - 텍스트 및 만화 뷰어",
+  "short_name": "BOAA",
+  "description": "TXT·EPUB·PDF와 이미지 만화를 한곳에서 읽고 관리하는 개인용 뷰어",
+  "lang": "ko-KR",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "display_override": ["window-controls-overlay", "standalone", "minimal-ui"],
+  "background_color": "#111315",
+  "theme_color": "#111416",
+  "orientation": "any",
+  "icons": [
+    {
+      "src": "/icons/boaa-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/boaa-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    }
+  ]
+}

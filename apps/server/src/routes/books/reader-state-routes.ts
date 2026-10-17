@@ -1,0 +1,360 @@
+import { registerDiscoverySettingsRoutes } from './discovery-settings-routes.js';
+import { registerChapterReadRoutes } from './chapter-read-routes.js';
+import type { FastifyInstance } from 'fastify';
+import { sharedReaderSettings } from '@boaa/reader-core/settings-scope';
+import pg from 'pg';
+import type { ServerConfig } from '../../config.js';
+import { defaultSettings } from '@boaa/reader-core/settings';
+import { normalizeSelfHostIntegrationSettings } from '../../../../../src/integration-settings/self-host-integration-settings.js';
+import {
+  validateReadingPositionBody,
+  validateReadingPositionDeleteBody,
+  validateSettingsBody,
+  type ReadingPositionBody,
+} from './request-contracts.js';
+import { createServerRevision, insertServerSyncEvent } from './sync-event-repository.js';
+
+export async function registerReaderStateRoutes(
+  app: FastifyInstance,
+  pool: pg.Pool,
+  config: ServerConfig,
+): Promise<void> {
+  app.patch<{ Params: { bookId: string }; Body: ReadingPositionBody }>(
+    '/api/books/:bookId/reading-position',
+    async (request, reply) => {
+      const parsed = validateReadingPositionBody(request.body);
+      if (!parsed.ok) return reply.code(400).send({ error: parsed.error });
+      const body = parsed.value;
+
+      const updatedAt = body.updatedAt;
+      const client = await pool.connect();
+      try {
+        await client.query('begin');
+        // Acquire the lock before the statement snapshot is taken. A lock inside
+        // the CTE can wait for a DELETE, then still read its pre-delete snapshot.
+        await client.query('select pg_advisory_xact_lock(hashtextextended($1, 7319))', [request.params.bookId]);
+        const positionResult = await client.query(
+          `
+          with requested_chapter as (
+            select c.id, c.book_id, c.document_section_id
+              from library_books b
+              join chapters c on c.book_id = b.id and c.id = $3
+             where b.id = $1 and b.user_id = $2 and b.deleted_at is null
+               and ($11::text is null or c.document_section_id = $11)
+          ),
+          position_write as (insert into reading_positions (
+            book_id, user_id, chapter_id, paragraph_id, paragraph_index, offset_in_paragraph,
+            chapter_progress, scroll_top, device_id, updated_at
+          )
+          select chapter.book_id, $2, chapter.id, $4, $5, $6, $7, $8, $9, $10::timestamptz
+            from requested_chapter chapter
+           where not exists (
+            select 1 from sync_events e where e.book_id = $1 and e.user_id = $2
+              and e.type = 'reading_position_deleted' and e.created_at >= $10::timestamptz
+          )
+          on conflict (book_id, user_id) do update
+            set chapter_id = excluded.chapter_id,
+                paragraph_id = excluded.paragraph_id,
+                paragraph_index = excluded.paragraph_index,
+                offset_in_paragraph = excluded.offset_in_paragraph,
+                chapter_progress = excluded.chapter_progress,
+                scroll_top = excluded.scroll_top,
+                device_id = excluded.device_id,
+                updated_at = excluded.updated_at
+            where reading_positions.updated_at <= excluded.updated_at
+          returning updated_at),
+          read_write as (
+            insert into fixed_document_section_read_states (book_id, user_id, document_section_id, last_read_at)
+            select chapter.book_id, $2, coalesce(chapter.document_section_id, chapter.id), $10::timestamptz
+              from requested_chapter chapter
+             where not exists (
+                 select 1 from sync_events e where e.book_id = $1 and e.user_id = $2
+                   and e.type = 'reading_position_deleted' and e.created_at >= $10::timestamptz
+               )
+            on conflict (book_id, user_id, document_section_id) do update
+              set last_read_at = excluded.last_read_at
+              where fixed_document_section_read_states.last_read_at < excluded.last_read_at
+            returning document_section_id
+          )
+          select exists(select 1 from requested_chapter) as chapter_found,
+                 exists(select 1 from position_write) as applied,
+                 exists(select 1 from read_write) as read_applied
+        `,
+          [
+            request.params.bookId,
+            config.defaultUserId,
+            body.chapterId,
+            body.paragraphId,
+            body.paragraphIndex ?? 0,
+            body.offsetInParagraph ?? 0,
+            body.chapterProgress ?? 0,
+            body.scrollTop ?? 0,
+            body.deviceId,
+            updatedAt,
+            body.documentSectionId ?? null,
+          ],
+        );
+        if (positionResult.rows[0]?.chapter_found !== true) {
+          await client.query('rollback');
+          return reply.code(404).send({ error: 'book or chapter not found' });
+        }
+        const applied = positionResult.rows[0]?.applied === true;
+        if (!applied && !positionResult.rows[0]?.read_applied) {
+          await client.query('rollback');
+          return { ok: true, applied: false };
+        }
+
+        const positionId = `reading_position_${request.params.bookId}`;
+        const payload = { position: { ...body, bookId: request.params.bookId, updatedAt } };
+        await insertServerSyncEvent(client, config.defaultUserId, {
+          seed: `reading_position:${request.params.bookId}:${updatedAt}`,
+          requireMatchingReplay: true,
+          type: 'reading_position_updated',
+          bookId: request.params.bookId,
+          entityId: positionId,
+          deviceId: body.deviceId,
+          payload,
+          revision: createServerRevision({
+            entityType: 'reading_position',
+            entityId: positionId,
+            novelId: request.params.bookId,
+            updatedAt,
+            payload,
+          }),
+          createdAt: updatedAt,
+        });
+
+        await client.query('commit');
+        return { ok: true, applied };
+      } catch (error) {
+        await client.query('rollback');
+        throw error;
+      } finally {
+        client.release();
+      }
+    },
+  );
+
+  app.delete<{ Params: { bookId: string }; Body: ReadingPositionBody }>(
+    '/api/books/:bookId/reading-position',
+    async (request, reply) => {
+      const parsed = validateReadingPositionDeleteBody(request.body);
+      if (!parsed.ok) return reply.code(400).send({ error: parsed.error });
+      const body = parsed.value;
+      const positionId = `reading_position_${request.params.bookId}`;
+
+      const client = await pool.connect();
+      try {
+        await client.query('begin');
+        await client.query('select pg_advisory_xact_lock(hashtextextended($1, 7319))', [request.params.bookId]);
+        const status = await client.query<{ book_exists: boolean; should_apply: boolean }>(
+          `
+          select
+            exists(select 1 from library_books where id = $1 and user_id = $2 and deleted_at is null) as book_exists,
+            coalesce(
+              (
+                select max(entity_updated_at) <= $3::timestamptz
+                from (
+                  select updated_at as entity_updated_at
+                  from reading_positions
+                  where book_id = $1 and user_id = $2
+                  union all
+                  select created_at as entity_updated_at
+                  from sync_events
+                  where user_id = $2
+                    and book_id = $1
+                    and type = 'reading_position_deleted'
+                    and entity_id = $4
+                ) versions
+              ),
+              true
+            ) as should_apply
+        `,
+          [request.params.bookId, config.defaultUserId, body.updatedAt, positionId],
+        );
+        const row = status.rows[0];
+        if (!row?.book_exists) {
+          await client.query('rollback');
+          return reply.code(404).send({ error: 'book not found' });
+        }
+        if (!row.should_apply) {
+          await client.query('rollback');
+          return { ok: true, applied: false };
+        }
+
+        await client.query('delete from reading_positions where book_id = $1 and user_id = $2', [
+          request.params.bookId,
+          config.defaultUserId,
+        ]);
+        await client.query('delete from fixed_document_section_read_states where book_id = $1 and user_id = $2', [
+          request.params.bookId,
+          config.defaultUserId,
+        ]);
+        await client.query(
+          "delete from reading_session_events where book_id = $1 and user_id = $2 and mode = 'reading' and ended_at <= $3::timestamptz",
+          [request.params.bookId, config.defaultUserId, body.updatedAt],
+        );
+        const payload = {
+          id: positionId,
+          bookId: request.params.bookId,
+          deletedAt: body.updatedAt,
+        };
+        await insertServerSyncEvent(client, config.defaultUserId, {
+          seed: `reading_position_deleted:${request.params.bookId}:${body.updatedAt}`,
+          requireMatchingReplay: true,
+          type: 'reading_position_deleted',
+          bookId: request.params.bookId,
+          entityId: positionId,
+          deviceId: body.deviceId,
+          payload,
+          revision: createServerRevision({
+            entityType: 'reading_position',
+            entityId: positionId,
+            novelId: request.params.bookId,
+            deletedAt: body.updatedAt,
+            payload,
+          }),
+          createdAt: body.updatedAt,
+        });
+
+        await client.query('commit');
+        return { ok: true, applied: true };
+      } catch (error) {
+        await client.query('rollback');
+        throw error;
+      } finally {
+        client.release();
+      }
+    },
+  );
+
+  registerDiscoverySettingsRoutes(app, pool, config);
+  registerChapterReadRoutes(app, pool, config);
+
+  app.get('/api/settings', async () => {
+    const result = await pool.query('select settings from reader_settings where user_id = $1', [config.defaultUserId]);
+    const {
+      _boaaIntegrations: _reservedIntegrations,
+      _boaaDiscovery: _reservedDiscovery,
+      ...stored
+    } = result.rows[0]?.settings ?? {};
+    void _reservedIntegrations;
+    void _reservedDiscovery;
+    return {
+      settings: {
+        ...defaultSettings,
+        ...stored,
+        ttsPlayback: {
+          ...defaultSettings.ttsPlayback,
+          ...(stored.ttsPlayback ?? {}),
+          rate: stored.ttsPlayback?.rate ?? stored.ttsSpeed ?? defaultSettings.ttsPlayback.rate,
+        },
+        readingProfile: { ...defaultSettings.readingProfile, ...(stored.readingProfile ?? {}) },
+        gestureBindings: { ...defaultSettings.gestureBindings, ...(stored.gestureBindings ?? {}) },
+      },
+    };
+  });
+
+  app.put<{ Body: Record<string, unknown> }>('/api/settings', async (request, reply) => {
+    const parsed = validateSettingsBody(request.body);
+    if (!parsed.ok) return reply.code(400).send({ error: parsed.error });
+    const settings = sharedReaderSettings(parsed.value);
+    await pool.query(
+      `
+        insert into reader_settings (user_id, settings, updated_at)
+        values ($1, $2, now())
+        on conflict (user_id) do update
+          set settings = (reader_settings.settings - array['ttsSpeed', 'ttsPlayback', 'ttsBookOverrides', 'aiWorkflows', 'cloudVaultUpdatedAt']) || excluded.settings || case
+                when reader_settings.settings ? '_boaaIntegrations'
+                  then jsonb_build_object('_boaaIntegrations', reader_settings.settings -> '_boaaIntegrations')
+                else '{}'::jsonb
+              end,
+              updated_at = excluded.updated_at
+      `,
+      [config.defaultUserId, JSON.stringify(settings)],
+    );
+    const updatedAt = new Date().toISOString();
+    const payload = { settings };
+    await insertServerSyncEvent(pool, config.defaultUserId, {
+      seed: `settings_updated:${updatedAt}`,
+      type: 'settings_updated',
+      entityId: defaultSettings.id,
+      payload,
+      revision: createServerRevision({
+        entityType: 'settings',
+        entityId: defaultSettings.id,
+        updatedAt,
+        payload,
+      }),
+      createdAt: updatedAt,
+    });
+    return { ok: true, settings };
+  });
+
+  app.get<{ Querystring: { revision?: string } }>('/api/integration-settings', async (request) => {
+    const parsedRevision = request.query.revision === undefined ? null : Number(request.query.revision);
+    const revision =
+      parsedRevision === null || (Number.isSafeInteger(parsedRevision) && parsedRevision >= 0) ? parsedRevision : null;
+    const result = await pool.query(
+      `select settings -> '_boaaIntegrations' as integration_settings
+       from reader_settings
+       where user_id = $1
+         and ($2::bigint is null
+           or coalesce(settings -> '_boaaIntegrations' ->> 'revision', '0') is distinct from $2::text)`,
+      [config.defaultUserId, revision],
+    );
+    const settings = normalizeSelfHostIntegrationSettings(result.rows[0]?.integration_settings);
+    return settings ? { settings } : {};
+  });
+
+  app.put<{ Body: unknown }>('/api/integration-settings', async (request, reply) => {
+    const body =
+      request.body && typeof request.body === 'object' && !Array.isArray(request.body)
+        ? (request.body as Record<string, unknown>)
+        : undefined;
+    const parsed = normalizeSelfHostIntegrationSettings(body?.settings);
+    const expectedRevision = body?.expectedRevision;
+    if (
+      !parsed ||
+      typeof expectedRevision !== 'number' ||
+      !Number.isSafeInteger(expectedRevision) ||
+      expectedRevision < 0 ||
+      expectedRevision >= Number.MAX_SAFE_INTEGER
+    ) {
+      return reply.code(400).send({ error: 'integration settings are invalid' });
+    }
+    const settings = { ...parsed, revision: expectedRevision + 1, updatedAt: new Date().toISOString() };
+    const result = await pool.query(
+      `with updated as (
+         update reader_settings
+            set settings = jsonb_set(reader_settings.settings, '{_boaaIntegrations}', $3::jsonb, true),
+                updated_at = now()
+          where user_id = $1
+            and coalesce(reader_settings.settings -> '_boaaIntegrations' ->> 'revision', '0') = $4::text
+        returning settings -> '_boaaIntegrations' as integration_settings
+       ), inserted as (
+         insert into reader_settings (user_id, settings, updated_at)
+         select $1, jsonb_set($2::jsonb, '{_boaaIntegrations}', $3::jsonb, true), now()
+          where $4::bigint = 0
+            and not exists (select 1 from reader_settings where user_id = $1)
+         on conflict (user_id) do nothing
+         returning settings -> '_boaaIntegrations' as integration_settings
+       )
+       select integration_settings from updated
+       union all
+       select integration_settings from inserted`,
+      [config.defaultUserId, JSON.stringify(defaultSettings), JSON.stringify(settings), expectedRevision],
+    );
+    if (result.rows.length === 0) {
+      const currentResult = await pool.query(
+        `select settings -> '_boaaIntegrations' as integration_settings
+         from reader_settings
+         where user_id = $1`,
+        [config.defaultUserId],
+      );
+      const current = normalizeSelfHostIntegrationSettings(currentResult.rows[0]?.integration_settings);
+      return reply.code(409).send({ error: 'integration settings changed', ...(current ? { settings: current } : {}) });
+    }
+    return { ok: true, settings };
+  });
+}

@@ -1,0 +1,25 @@
+.plugin-reader-hold-edge {
+  position: fixed;
+  top: 25%;
+  bottom: 25%;
+  width: 16px;
+  z-index: 12;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  opacity: 0.5;
+  touch-action: none;
+  user-select: none;
+}
+.plugin-reader-hold-edge.is-left {
+  left: max(0px, env(safe-area-inset-left));
+}
+.plugin-reader-hold-edge.is-right {
+  right: max(0px, env(safe-area-inset-right));
+}
+.plugin-reader-hold-edge:focus-visible,
+.plugin-reader-hold-edge:active {
+  opacity: 1;
+  outline: 2px solid var(--accent);
+}

@@ -1,0 +1,125 @@
+.un-app {
+  min-height: 100dvh;
+}
+
+.un-topbar {
+  position: fixed;
+  inset: 0 0 auto;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  gap: 36px;
+  height: calc(var(--un-topbar) + var(--un-safe-t));
+  padding: var(--un-safe-t) var(--un-pad) 0;
+  background: linear-gradient(to bottom, rgb(9 9 11 / 92%), rgb(9 9 11 / 0%));
+  color: var(--un-text);
+  transition:
+    background 0.25s,
+    box-shadow 0.25s;
+}
+
+.un-topbar.is-scrolled {
+  background: rgb(9 9 11 / 88%);
+  -webkit-backdrop-filter: blur(20px) saturate(1.4);
+  backdrop-filter: blur(20px) saturate(1.4);
+  box-shadow: 0 1px 0 var(--un-line);
+}
+
+.un-logo {
+  display: inline-flex;
+  align-items: flex-end;
+  gap: 3px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--un-text);
+  font: inherit;
+  font-size: 22px;
+  font-weight: 850;
+  letter-spacing: -0.04em;
+}
+
+.un-logo i {
+  width: 7px;
+  height: 7px;
+  margin-bottom: 5px;
+  border-radius: 50%;
+  background: var(--un-accent);
+}
+
+.un-topnav {
+  display: flex;
+  gap: 4px;
+}
+
+.un-topnav button {
+  height: 40px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: 10px;
+  background: none;
+  color: var(--un-text-2);
+  font: inherit;
+  font-size: 16px;
+  font-weight: 600;
+  transition: color 0.15s;
+}
+
+.un-topnav button:hover,
+.un-topnav button.is-active {
+  color: var(--un-text);
+}
+
+.un-topnav button.is-active {
+  font-weight: 750;
+}
+
+.un-topbar-actions {
+  display: flex;
+  gap: 4px;
+  margin-left: auto;
+}
+
+.un-tabbar {
+  display: none;
+}
+
+@media (max-width: 899px) {
+  .un-topnav,
+  .un-wide-only {
+    display: none;
+  }
+
+  .un-tabbar {
+    position: fixed;
+    inset: auto 0 0;
+    z-index: 60;
+    display: grid;
+    grid-auto-columns: minmax(0, 1fr);
+    grid-auto-flow: column;
+    height: calc(var(--un-tabbar) + var(--un-safe-b));
+    padding-bottom: var(--un-safe-b);
+    border-top: 1px solid var(--un-line);
+    background: rgb(12 12 14 / 92%);
+    -webkit-backdrop-filter: blur(20px) saturate(1.4);
+    backdrop-filter: blur(20px) saturate(1.4);
+  }
+
+  .un-tabbar button {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 3px;
+    border: 0;
+    background: none;
+    color: var(--un-text-3);
+    font: inherit;
+    font-size: 11px;
+    font-weight: 650;
+  }
+
+  .un-tabbar button.is-active {
+    color: var(--un-text);
+  }
+}

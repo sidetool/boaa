@@ -1,0 +1,149 @@
+# Third-party notices
+
+BOAA source code is distributed under the Apache License 2.0; see `LICENSE`. BOAA also includes
+third-party software under separate terms. This notice records the archive backends used by the web and hosted
+deployment, but it does not replace the license texts under `third_party/licenses/` or the generated production
+dependency inventory at `third_party/production-license-inventory.json`.
+
+## Google identity verification
+
+The browser Web edition uses `jose` 6.2.12 (MIT, copyright Filip Skokan) to verify Google ID tokens.
+Its license is included at `third_party/licenses/jose/LICENSE.md` in the static Web build.
+
+## Extension execution prototype
+
+`packages/extension-runtime` uses `quickjs-emscripten-core` and the release-sync QuickJS WebAssembly variant at
+0.32.0 (MIT), including the QuickJS engine notices. The copied license text is under
+`third_party/licenses/quickjs/`. The desktop embedded server includes this execution boundary. Its notices and the runtime binary's own notices must accompany the installer.
+
+## Bundled Desktop metadata collector
+
+The optional `웹소설 표지·작품 정보` trusted extension is packaged in Desktop releases as a Python/PyInstaller
+sidecar. Its direct runtime/build dependencies include Python, FastAPI, Uvicorn, HTTPX, Beautiful Soup, lxml,
+Playwright, Pydantic and PyInstaller. These projects use their own PSF, MIT, BSD, Apache-2.0 and PyInstaller
+bootloader-exception terms. The generated executable is not committed to this source repository.
+
+`pnpm collector:bundle` creates an isolated Python environment and emits the exact 37-component inventory at
+`src-tauri/collector-sidecar/python-license-inventory.json`. It also copies each component's detected license texts,
+the BOAA collector license and the Python runtime license under the packaged `collector-sidecar/third_party/licenses/`
+resource. The build fails when a component is unclassified or has no copied license file. This inventory is generated
+for the Desktop sidecar and is separate from the pnpm production inventory.
+
+The optional `compose.metadata-collector.yaml` image installs the collector's public metadata runtime without the
+Playwright authentication or PyInstaller build extras. It is built from source by the self-host operator and includes
+this notice and the project license. Publishing an official prebuilt collector container still requires an inventory
+for its exact Python base image and installed runtime distributions.
+
+The separate `compose.metadata-collector-auth.yaml` profile replaces that service image with an operator-built image
+that additionally installs Playwright, Chromium, Xvfb and their Debian runtime dependencies. It is not included in the
+base BOAA image or the public-metadata collector image. The source Dockerfile copies this notice and the project
+license, but publishing an official prebuilt auth image still requires an exact Python, Debian package and Chromium
+license/source inventory for the built artifact; the Desktop sidecar inventory is not evidence for that container.
+
+## Optional local TTS sidecar
+
+### MeloTTS / MeloTTS-Korean
+
+- Purpose: optional Korean CPU TTS service started through `compose.local-tts.yaml`.
+- Source: <https://github.com/myshell-ai/MeloTTS>, pinned by the `MELOTTS_COMMIT` build argument.
+- Model: <https://huggingface.co/myshell-ai/MeloTTS-Korean>, downloaded at first service start into a named volume.
+- License: MIT for the MeloTTS repository and the published Korean model card.
+- Distribution boundary: the default BOAA web/server images do not contain MeloTTS source or weights. The optional
+  Docker image is built separately by the operator and downloads the model at first start.
+
+## Archive backends
+
+### 7z-wasm 1.2.0
+
+- Purpose: encrypted 7z/CB7 fallback.
+- Source: <https://github.com/use-strict/7z-wasm>
+- Bundled output: `7zz.wasm`, based on 7-Zip 24.09.
+- License: GNU LGPL 2.1 or later plus the unRAR restriction for `7zz.*.js` and `7zz.wasm`.
+- Included texts: `third_party/licenses/7z-wasm/License.txt` and
+  `third_party/licenses/common/unRarLicense.txt`. The complete pinned official LGPL 2.1 text is included at
+  `third_party/licenses/common/LGPL-2.1.txt`.
+
+### node-unrar-js 2.0.2
+
+- Purpose: local single-volume RAR4/RAR5/CBR extraction.
+- Source: <https://github.com/YuJianrong/node-unrar.js>
+- Bundled output: UnRAR WebAssembly built from the official UnRAR source (the pinned package build script identifies
+  UnRAR 6.1.7).
+- License: MIT for the JavaScript/TypeScript wrapper; the embedded UnRAR code is subject to the unRAR restriction.
+- Included texts: `third_party/licenses/node-unrar-js/LICENSE.md` and
+  `third_party/licenses/common/unRarLicense.txt`.
+
+### libarchive-wasm 1.2.0
+
+- Purpose: ordinary local 7z/CB7 manifest and page extraction.
+- Source: <https://github.com/ofk/libarchive-wasm>
+- Runtime version reported by the bundled binary: libarchive 3.7.7, zlib 1.3.1, liblzma 5.6.4 and bzip2 1.0.8.
+- Package metadata license: MIT for the wrapper. libarchive is BSD-2-Clause; its compiled compression dependencies keep
+  their respective upstream licenses.
+- Source origins: <https://github.com/libarchive/libarchive>, <https://zlib.net/>, <https://tukaani.org/xz/> and
+  <https://sourceware.org/bzip2/>.
+- The npm tarball does not contain a standalone license file. A public release must capture the exact upstream license
+  texts/corresponding source for the emitted binary before this backend's redistribution gate is considered closed.
+
+## Mangayomi JavaScript compatibility DOM
+
+The compatibility adapter is independently implemented. It loads user-installed source scripts inside QuickJS;
+it does not embed the Mangayomi application or redistribute repository source scripts.
+
+HTML and CSS selection uses pinned `linkedom@0.18.12` and its dependency graph. The npm inventory records exact
+versions and declared licenses; captured upstream license files are under `third_party/licenses/mangayomi-dom/`.
+These notices accompany the Windows sidecar and Hosted image. `boolbase@1.0.0` declares ISC but omits the license
+text in its npm archive; its copyright/permission notice was captured from
+<https://raw.githubusercontent.com/fb55/boolbase/master/LICENSE> on 2026-09-13.
+
+## Source browser runtime
+
+The host uses `playwright-core@1.61.1` (Apache-2.0, Microsoft) to drive an isolated source browser,
+and `tough-cookie@6.0.0` (BSD-3-Clause, Salesforce and contributors) for HTTP/browser cookie interoperability.
+Their npm license texts are included with the packaged dependencies. Windows uses the installed Edge browser;
+the self-host image uses Debian's Chromium and CJK font packages, whose notices remain in the image's package inventory.
+No Mangayomi application source or private extension code is redistributed as part of this adapter.
+
+The Windows portable executable uses the system Microsoft Edge WebView2 Evergreen Runtime.
+It does not redistribute a Fixed Version Runtime. If missing, users are directed to Microsoft's
+runtime installation page. The portable Python collector uses the bundled source runtime's Node
+through Playwright's `PLAYWRIGHT_NODEJS_PATH`; Node's license remains in extension-sidecar.
+
+## Source cover thumbnails
+
+Hosted source-cover thumbnails use `sharp@0.34.5` (Apache-2.0) and its platform-specific libvips 8.17.3
+distribution. The dynamically loaded native libraries and dependency notices remain in the deployed npm packages;
+their exact npm versions are recorded in `third_party/production-license-inventory.json`. The libvips package README
+lists the bundled codec/library licenses. Upstream source and build recipes are at
+<https://github.com/lovell/sharp/tree/v0.34.5> and <https://github.com/lovell/sharp-libvips>.
+
+## Release requirements still open
+
+- Decide how corresponding source/relinking information for `7zz.wasm` is delivered with binary web/container
+  releases. The full pinned official GNU LGPL 2.1 text is already packaged.
+- Complete the libarchive 3.7.7 and compiled codec license/source capture described above.
+- Complete the container base-image, optional metadata-collector runtime and optional local-TTS Python dependency
+  inventories before publishing official prebuilt images.
+- Verify `LICENSE`, this notice, and bundled third-party license files in every official binary release artifact.
+
+`pnpm licenses:generate` refreshes the path-free, deterministic pnpm production inventory.
+`pnpm check:licenses:source-release` verifies the source-release license boundary. `pnpm check:licenses:release`
+intentionally remains blocked until the binary redistribution items in `third_party/license-release-policy.json` are
+resolved. Passing either automated inventory check is not legal approval.
+
+This inventory records engineering provenance and is not legal advice.
+
+## Cloudflare Tunnel desktop connector
+
+The embedded desktop runtime includes cloudflared 2026.9.1 for optional remote access.
+Copyright Cloudflare, Inc. Distributed under the Apache License, Version 2.0.
+Source: https://github.com/cloudflare/cloudflared/tree/2026.9.1
+License: `third_party/licenses/cloudflared/LICENSE` (also copied beside the bundled executable).
+The Cloudflare service's terms and availability are separate from the software license.
+
+## Windows candidate source capture
+
+Windows Cargo notices and pinned archive, Redis/Cygwin and libvips sources are recorded in
+`third_party/windows-cargo-inventory.json` and `third_party/windows-source-manifest.json`.
+See `third_party/windows-sources.md` for capture scope, rebuild information and the companion source archive.
+This capture does not close the final binary redistribution gate described above.

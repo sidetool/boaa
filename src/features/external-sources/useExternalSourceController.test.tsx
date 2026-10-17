@@ -1,0 +1,4107 @@
+import { novel, singlePageComicFile } from './source-controller-test-fixtures';
+import 'fake-indexeddb/auto';
+import { materializeDocumentSeriesArchive } from '@boaa/document-series-core';
+import { act, create, type ReactTestRenderer } from 'react-test-renderer';
+import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
+
+import type { ExtensionContributionId, ExternalSourceContributionDescriptor } from '@boaa/extension-contracts';
+import { integrityHash } from '@boaa/text-core/hash';
+import { sha256 } from '../../domain/hash';
+import type { BookAssetMetadata, Chapter, Novel } from '../../domain/types';
+import type {
+  ExternalSourceBrowseState,
+  ExternalSourceLink,
+  ExternalSourceWorkDetail,
+} from '../../external-sources/contracts';
+import type {
+  ExternalSourceCatalogPreference,
+  ExternalSourceDefaultFolder,
+  ExternalSourceLocalState,
+  ExternalSourceSubscriptionRecord,
+} from '../../external-sources/local-state';
+import {
+  ExternalSourceLocalStateStore,
+  externalSourceSubscriptionId,
+  resetExternalSourceLocalStateForTests,
+} from '../../external-sources/local-state';
+import type { ImportService } from '../../services/import/import-service';
+import type { BookAssetRepository } from '../../repositories/book-asset-repository';
+import { buildSeriesImageArchive, readSeriesImageArchiveManifest } from '../../services/import/series-image-archive';
+import { testChapter } from '../book-workspace/book-workspace-test-fixtures';
+import { externalItemSectionId } from './serial-work-projection';
+import { externalDocumentCollectionId } from '../../external-sources/series/document-series-identity';
+import { sourceDownloadQueueId } from '../../external-sources/source-user-state';
+import { TextServerRequestError, textServerErrorMessage } from '../../external-sources/text-server/text-server-errors';
+import {
+  useExternalSourceController,
+  type ExternalSourceController,
+  type ExternalSourceRegistryPort,
+} from './useExternalSourceController';
+
+let streamingFixture = false;
+beforeEach(() => {
+  vi.unstubAllGlobals();
+  streamingFixture = false;
+});
+afterEach(() => vi.unstubAllGlobals());
+
+const SOURCE_ID = 'fixture.source' as ExtensionContributionId;
+const ITEM_KEY = {
+  connectorId: SOURCE_ID,
+  accountConnectionId: 'fixture-account',
+  remoteId: 'work-1',
+} as const;
+
+async function createHarness(input: {
+  onRender?: (controller: ExternalSourceController) => void;
+  waitForReadingHistory?: () => Promise<void>;
+  clearReadingHistory?: (id: string) => Promise<void>;
+  saveTextPosition?: import('../../repositories/reader-repository').ReaderRepository['saveReadingPosition'];
+  getParagraphPage?: import('../../repositories/reader-repository').ReaderRepository['getParagraphPage'];
+  saveStreamPosition?: (pageIndex: number, chapter: Chapter, novel: Novel) => Promise<void>;
+  downloadedContent: string;
+  importedContent?: Novel;
+  importError?: Error;
+  getNovelErrorAfterImport?: boolean;
+  localBookMissing?: boolean;
+  defaultFolder?: ExternalSourceDefaultFolder;
+  failFolderRef?: string;
+  pickable?: boolean;
+  thumbnailUrl?: string;
+  coverRef?: boolean;
+  detail?: ExternalSourceWorkDetail;
+  resolveCover?: () => Promise<string | undefined>;
+  chapters?: Chapter[];
+  supportsSubscriptions?: boolean;
+  subscriptions?: ExternalSourceSubscriptionRecord[];
+  catalogPreference?: ExternalSourceCatalogPreference;
+  browse?: ExternalSourceBrowseState;
+  descriptor?: ExternalSourceContributionDescriptor;
+  serial?: boolean;
+  documentSerial?: boolean;
+  serialCount?: number;
+  downloadedFile?: File;
+  downloadGate?: Promise<void>;
+  assets?: BookAssetRepository;
+  supportsIncrementalImageSeriesAppend?: boolean;
+  supportsExpectedSourceContentHash?: boolean;
+  novelOverrides?: Partial<Novel>;
+  initialLinkOverrides?: Partial<ExternalSourceLink>;
+  libraryBooks?: () => Promise<Novel[]>;
+  getNovel?: (id: string) => Promise<Novel | undefined>;
+  sourceState?: ExternalSourceLocalState;
+  hostedImageImport?: import('../../services/import/hosted-image-import').HostedImageImportPort;
+  hostedDocumentImport?: import('../../services/import/hosted-document-import').HostedDocumentImportPort;
+  importPrepared?: ImportService['importPrepared'];
+}) {
+  const oldContent = '기존 원격 원문';
+  const oldHash = await sha256(oldContent);
+  const downloadedHash = await sha256(input.downloadedContent);
+  const currentNovel = novel({ sourceContentHash: oldHash, ...input.novelOverrides });
+  let currentLink: ExternalSourceLink = {
+    id: 'external-link::fixture.source::fixture-account::work-1',
+    source: ITEM_KEY,
+    localBookId: currentNovel.id,
+    importedRemoteRevision: 'remote-r1',
+    importedSourceContentHash: oldHash,
+    activeContentRevisionId: currentNovel.activeContentRevisionId,
+    linkedAt: '2026-08-23T00:00:00.000Z',
+    ...input.initialLinkOverrides,
+  };
+  const saveLink = vi.fn(async (link: ExternalSourceLink) => {
+    currentLink = link;
+  });
+  let subscriptions = [...(input.subscriptions ?? [])];
+  let catalogPreference = input.catalogPreference;
+  const state: ExternalSourceLocalState = {
+    getOrCreateCredentialKey: vi.fn(),
+    getCredential: vi.fn(async () => undefined),
+    saveCredential: vi.fn(async () => undefined),
+    deleteCredential: vi.fn(async () => undefined),
+    getCachePage: vi.fn(async () => undefined),
+    saveCachePage: vi.fn(async () => undefined),
+    clearCache: vi.fn(async () => undefined),
+    listLinks: vi.fn(async () => [currentLink]),
+    saveLink,
+    getDefaultFolder: vi.fn(async () => input.defaultFolder),
+    saveDefaultFolder: vi.fn(async () => undefined),
+    deleteDefaultFolder: vi.fn(async () => undefined),
+    getCatalogPreference: vi.fn(async () => catalogPreference),
+    saveCatalogPreference: vi.fn(async (preference) => {
+      catalogPreference = preference;
+    }),
+    listSubscriptions: vi.fn(async (connectorId, accountConnectionId) =>
+      subscriptions.filter(
+        (record) =>
+          (!connectorId || record.connectorId === connectorId) &&
+          (accountConnectionId === undefined || record.accountConnectionId === accountConnectionId),
+      ),
+    ),
+    saveSubscription: vi.fn(async (record) => {
+      subscriptions = [...subscriptions.filter((item) => item.id !== record.id), record];
+    }),
+    deleteSubscription: vi.fn(async (id) => {
+      subscriptions = subscriptions.filter((item) => item.id !== id);
+    }),
+    listSelectedItems: vi.fn(async () => []),
+    saveSelectedItem: vi.fn(async () => undefined),
+    deleteSelectedItem: vi.fn(async () => undefined),
+  };
+  let latestImportedNovel: Novel | undefined;
+  const importFile = vi.fn<ImportService['importFile']>((request) => {
+    return {
+      jobId: 'import-job',
+      cancel: vi.fn(),
+      promise: (async () => {
+        if (input.importError) throw input.importError;
+        latestImportedNovel =
+          input.importedContent ??
+          novel({
+            id: request.clientBookId ?? 'book-new',
+            format: input.novelOverrides?.format,
+            documentSectionCount: input.novelOverrides?.documentSectionCount,
+            sourceContentHash: input.serial ? await sha256(await request.file.arrayBuffer()) : downloadedHash,
+            activeContentRevisionId: 'content-new',
+          });
+        return { novel: latestImportedNovel };
+      })(),
+    };
+  });
+  const registry: ExternalSourceRegistryPort = {
+    getHostedImageImport: () => input.hostedImageImport,
+    getHostedDocumentImport: () => input.hostedDocumentImport,
+    getExternalSources: () => [
+      {
+        descriptor:
+          input.descriptor ??
+          ({
+            id: SOURCE_ID,
+            schemaVersion: 1,
+            title: '개발용 소스',
+            kind: 'catalog',
+            capabilities: [
+              'browse',
+              'work-import',
+              ...(input.supportsSubscriptions ? (['subscriptions'] as const) : []),
+            ],
+            runtimes: ['web-direct'],
+          } satisfies ExternalSourceContributionDescriptor),
+      },
+    ],
+    getExternalSourceStatus: () => ({
+      state: 'connected',
+      accountConnectionId: 'fixture-account',
+    }),
+    connectExternalSource: vi.fn(async () => undefined),
+    disconnectExternalSource: vi.fn(async () => undefined),
+    listExternalSource: vi.fn(async (_sourceId, _hostContext, listInput) => {
+      if (input.failFolderRef !== undefined && listInput.parentRef === input.failFolderRef) {
+        throw new Error('folder not found');
+      }
+      return {
+        detail: input.detail,
+        items: input.serial
+          ? Array.from({ length: input.serialCount ?? 1 }, (_, index) => ({
+              key: { ...ITEM_KEY, remoteId: `work-${index + 1}` },
+              kind: 'file' as const,
+              title: `${index + 1}화`,
+              mimeType: input.documentSerial ? 'text/plain' : 'application/vnd.comicbook+zip',
+              remoteRevision: 'remote-r2',
+              collection: {
+                remoteId: 'manga:1',
+                title: '연동 작품',
+                ...(input.documentSerial
+                  ? {
+                      seriesProfile: {
+                        kind: 'document_series' as const,
+                        format: 'txt' as const,
+                        encoding: 'utf-8' as const,
+                        chapterSplitMode: 'single' as const,
+                      },
+                    }
+                  : {}),
+              },
+              release: { title: `${index + 1}화`, chapterNumber: index + 1 },
+              importability: 'supported' as const,
+            }))
+          : [
+              {
+                key: ITEM_KEY,
+                kind: 'work' as const,
+                title: 'work.txt',
+                mimeType: 'text/plain',
+                thumbnailUrl: input.thumbnailUrl,
+                coverRef: input.coverRef ? ITEM_KEY : undefined,
+                remoteRevision: 'remote-r2',
+                importability: 'supported' as const,
+              },
+            ],
+        browse: input.browse
+          ? {
+              ...input.browse,
+              activeMode: listInput.browseMode ?? input.browse.activeMode,
+            }
+          : undefined,
+      };
+    }),
+    resolveExternalSourceCover: vi.fn(input.resolveCover ?? (async () => undefined)),
+    downloadExternalSource: vi.fn(async () => {
+      await input.downloadGate;
+      return {
+        file: input.downloadedFile ?? new File([input.downloadedContent], 'work.txt', { type: 'text/plain' }),
+        remoteRevision: 'remote-r2',
+      };
+    }),
+    canPickExternalSource: vi.fn(() => Boolean(input.pickable)),
+    pickExternalSource: vi.fn(async () => ({ selectedCount: 1, addedCount: 1 })),
+    canRemoveExternalSourceItem: vi.fn(() => Boolean(input.pickable)),
+    removeExternalSourceItem: vi.fn(async () => undefined),
+  };
+  const confirm = vi.fn(() => true);
+  const notify = vi.fn();
+  const openNovel = vi.fn();
+  const onLibraryItemCommitted = vi.fn(async () => undefined);
+  const onLibraryChanged = vi.fn(async () => undefined);
+  let controller!: ExternalSourceController;
+  function Harness({
+    libraryRevision = 0,
+    readingTarget,
+  }: {
+    libraryRevision?: number;
+    readingTarget?: { novelId: string; sectionId: string };
+  }) {
+    controller = useExternalSourceController({
+      saveStreamPosition: input.saveStreamPosition,
+      waitForReadingHistory: input.waitForReadingHistory,
+      saveTextPosition: input.saveTextPosition,
+      clearReadingHistory: input.clearReadingHistory,
+      getParagraphPage: input.getParagraphPage,
+      readingTarget,
+      registry,
+      hostContext: { brokers: { get: () => undefined } },
+      state: input.sourceState ?? state,
+      importService: {
+        importPrepared: input.importPrepared,
+        importFile,
+        supportsIncrementalImageSeriesAppend: input.supportsIncrementalImageSeriesAppend,
+        supportsExpectedSourceContentHash: input.supportsExpectedSourceContentHash,
+        supportsExpectedBase: input.documentSerial,
+      },
+      assets: input.assets,
+      extensionRevision: 0,
+      libraryRevision,
+      listNovels: input.libraryBooks ?? (async () => (input.localBookMissing ? [] : [currentNovel])),
+      listChapters: async () => input.chapters ?? [],
+      getNovel:
+        input.getNovel ??
+        (async (id) => {
+          if (input.getNovelErrorAfterImport && latestImportedNovel?.id === id) {
+            throw new Error('fixture post-import read failed');
+          }
+          return latestImportedNovel?.id === id
+            ? latestImportedNovel
+            : id === currentNovel.id
+              ? currentNovel
+              : undefined;
+        }),
+      openNovel,
+      onLibraryItemCommitted,
+      onLibraryChanged,
+      notify,
+      confirm,
+    });
+    input.onRender?.(controller);
+    return null;
+  }
+
+  let renderer!: ReactTestRenderer;
+  await act(async () => {
+    renderer = create(<Harness />);
+  });
+  await act(async () => {
+    if (streamingFixture) controller.show(SOURCE_ID);
+    await controller.selectSource(SOURCE_ID);
+  });
+  await act(async () => {
+    controller.toggleItem('fixture.source::fixture-account::work-1');
+  });
+
+  return {
+    get controller() {
+      return controller;
+    },
+    importFile,
+    saveLink,
+    confirm,
+    notify,
+    openNovel,
+    onLibraryItemCommitted,
+    onLibraryChanged,
+    registry,
+    state,
+    get currentLink() {
+      return currentLink;
+    },
+    get subscriptions() {
+      return subscriptions;
+    },
+    get catalogPreference() {
+      return catalogPreference;
+    },
+    renderer,
+    read: async (novelId: string, sectionId: string) => {
+      await act(async () => renderer.update(<Harness readingTarget={{ novelId, sectionId }} />));
+    },
+    refreshLibrary: async (libraryRevision: number) => {
+      await act(async () => renderer.update(<Harness libraryRevision={libraryRevision} />));
+    },
+    oldHash,
+  };
+}
+
+async function createDocumentHarness(serialCount = 3, chapters: Chapter[] = []) {
+  await resetExternalSourceLocalStateForTests();
+  const sourceState = new ExternalSourceLocalStateStore();
+  let current: Novel | undefined;
+  let source: File | undefined;
+  let revision = 0;
+  const libraryBooks = vi.fn(async () => (current ? [current] : []));
+  const assets = {
+    exportSource: async () =>
+      source && {
+        blob: source,
+        metadata: { contentHash: current!.sourceContentHash, contentType: source.type },
+      },
+  } as unknown as BookAssetRepository;
+  const harness = await createHarness({
+    downloadedContent: '',
+    chapters,
+    serial: true,
+    documentSerial: true,
+    serialCount,
+    localBookMissing: true,
+    sourceState,
+    assets,
+    libraryBooks,
+    getNovel: async (id) => (current?.id === id ? current : undefined),
+  });
+  harness.importFile.mockImplementation((request, onProgress) => ({
+    jobId: 'document-import',
+    cancel: vi.fn(),
+    promise: (async () => {
+      onProgress?.({
+        jobId: 'document-import',
+        status: 'writing',
+        bytesRead: request.file.size,
+        totalBytes: request.file.size,
+        chaptersDetected: 1,
+        paragraphsWritten: 1,
+      });
+      source = request.file;
+      const parsed = await materializeDocumentSeriesArchive(request.file, {
+        fileName: request.file.name,
+        clientBookId: request.clientBookId,
+      });
+      chapters.splice(0, chapters.length, ...parsed.chapters);
+      current = novel({
+        ...parsed.novel,
+        id: request.clientBookId!,
+        format: 'txt',
+        activeContentRevisionId: `revision-${++revision}`,
+        sourceContentHash: await sha256(await request.file.arrayBuffer()),
+      });
+      return { novel: current };
+    })(),
+  }));
+  const download = vi.mocked(harness.registry.downloadExternalSource);
+  download.mockImplementation(async (_id, _context, ref) => {
+    const file = new File([`Body ${ref.key.remoteId}.`], `${ref.key.remoteId}.txt`, { type: 'text/plain' });
+    return {
+      file,
+      content: { kind: 'document', file, format: 'txt', encoding: 'utf-8', chapterSplitMode: 'single' },
+      remoteRevision: 'remote-r2',
+    };
+  });
+  return {
+    ...harness,
+    get controller() {
+      return harness.controller;
+    },
+    sourceState,
+    download,
+    libraryBooks,
+  };
+}
+
+describe('text serial download task parity', () => {
+  beforeEach(() => {
+    // Isolate automatic download policy from the separate library-mode one-episode warmup.
+    const values = new Map([['boaa.source-reading.v1', JSON.stringify({ mode: 'stream', textMode: 'stream' })]]);
+    vi.stubGlobal('localStorage', {
+      getItem: (key: string) => values.get(key) ?? null,
+      setItem: (key: string, value: string) => values.set(key, value),
+    });
+  });
+  it('skips catalogue cover resolution when the device uses text view', async () => {
+    vi.stubGlobal('localStorage', { getItem: () => 'text' });
+    const resolveCover = vi.fn(async () => 'blob:unused');
+    let harness: Awaited<ReturnType<typeof createHarness>> | undefined;
+    try {
+      harness = await createHarness({ downloadedContent: 'fixture', coverRef: true, resolveCover });
+      await act(async () => harness!.controller.show(SOURCE_ID));
+      expect(harness.controller.items.length).toBeGreaterThan(0);
+      expect(resolveCover).not.toHaveBeenCalled();
+    } finally {
+      if (harness) await act(async () => harness!.renderer.unmount());
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('recovers only missing comic releases after restart and never opens the resumed work', async () => {
+    await resetExternalSourceLocalStateForTests();
+    const store = new ExternalSourceLocalStateStore();
+    await store.saveLink({
+      id: 'external-link::fixture.source::fixture-account::work-1',
+      source: ITEM_KEY,
+      localBookId: 'book-1',
+      collectionRemoteId: 'manga:1',
+      importedRemoteRevision: 'remote-r2',
+      linkedAt: new Date().toISOString(),
+    });
+    const queue = {
+      id: sourceDownloadQueueId(ITEM_KEY, 'manga:1'),
+      kind: 'downloadQueue' as const,
+      connectorId: SOURCE_ID,
+      accountConnectionId: ITEM_KEY.accountConnectionId,
+      collectionRemoteId: 'manga:1',
+      title: 'Work',
+      updatedAt: new Date().toISOString(),
+      items: [1, 2].map((n) => ({
+        key: { ...ITEM_KEY, remoteId: `work-${n}` },
+        title: `${n}`,
+        sectionId: `work-${n}`,
+        remoteRevision: 'remote-r2',
+      })),
+    };
+    await store.saveDownloadQueue(queue);
+    const h = await createHarness({
+      downloadedContent: '',
+      downloadedFile: await singlePageComicFile(),
+      sourceState: new ExternalSourceLocalStateStore(),
+      serial: true,
+      serialCount: 2,
+      supportsIncrementalImageSeriesAppend: true,
+      supportsExpectedSourceContentHash: true,
+      novelOverrides: { format: 'image_archive', documentSectionCount: 1 },
+      chapters: [testChapter(1, { documentSectionId: 'work-1', documentSectionTitle: '1화' })],
+    });
+    try {
+      await act(async () => {
+        await vi.waitFor(() => expect(h.controller.recoverableDownloads?.[0]?.items).toHaveLength(1));
+      });
+      const status = h.registry.getExternalSourceStatus(SOURCE_ID, {} as never);
+      const changedAccount = vi.spyOn(h.registry, 'getExternalSourceStatus').mockReturnValue({
+        ...status,
+        accountConnectionId: 'different-account',
+      });
+      await act(async () => h.controller.resumeDownloadQueue?.(h.controller.recoverableDownloads![0]!));
+      expect(h.registry.downloadExternalSource).not.toHaveBeenCalled();
+      expect((await store.listDownloadQueues())[0]!.items).toHaveLength(1);
+      changedAccount.mockRestore();
+      await act(async () => h.controller.resumeDownloadQueue?.(h.controller.recoverableDownloads![0]!));
+      expect(vi.mocked(h.registry.downloadExternalSource).mock.calls.map((call) => call[2].key.remoteId)).toEqual([
+        'work-2',
+      ]);
+      expect(h.openNovel).not.toHaveBeenCalled();
+      expect(await store.listDownloadQueues()).toEqual([]);
+    } finally {
+      act(() => h.renderer.unmount());
+    }
+  });
+
+  it('keeps personal titles and prior-release read changes after refreshing the remote catalog', async () => {
+    await resetExternalSourceLocalStateForTests();
+    const store = new ExternalSourceLocalStateStore();
+    const h = await createHarness({ downloadedContent: '', serial: true, serialCount: 13, sourceState: store });
+    try {
+      await act(async () => h.controller.renameRelease?.(h.controller.items[4]!, 'Personal chapter'));
+      await act(async () => h.controller.markPreviousReleasesRead?.(h.controller.items[10]!));
+      expect(h.controller.items.slice(0, 10).every((item) => item.readingState === 'read')).toBe(true);
+      expect(h.controller.items[10]!.readingState).toBe('unread');
+      await act(async () => h.controller.setReleasesRead?.([h.controller.items[0]!, h.controller.items[9]!], false));
+      await act(async () => h.controller.refresh());
+      expect(h.controller.items[4]!.title).toBe('Personal chapter');
+      expect(h.controller.items[4]!.release?.title).toBe('5화');
+      expect(h.controller.items[0]!.readingState).toBe('unread');
+      expect(h.controller.items[9]!.readingState).toBe('unread');
+      expect(h.registry.downloadExternalSource).not.toHaveBeenCalled();
+      expect(h.openNovel).not.toHaveBeenCalled();
+    } finally {
+      act(() => h.renderer.unmount());
+    }
+  });
+  it.each([false, true])(
+    'prefetches the immediate comic release only when missing (already stored: %s)',
+    async (alreadyStored) => {
+      const h = await createHarness({
+        downloadedContent: '',
+        downloadedFile: await singlePageComicFile(),
+        serial: true,
+        serialCount: 3,
+        initialLinkOverrides: { collectionRemoteId: 'manga:1' },
+        supportsIncrementalImageSeriesAppend: true,
+        supportsExpectedSourceContentHash: true,
+        novelOverrides: { format: 'image_archive', documentSectionCount: 1 },
+        chapters: [
+          testChapter(1, { documentSectionId: 'work-1', documentSectionTitle: '1화' }),
+          ...(alreadyStored ? [testChapter(2, { documentSectionId: 'work-2' })] : []),
+        ],
+      });
+      try {
+        await act(async () => h.controller.setAutoDownloadNext?.(true));
+        await h.read('book-1', 'work-1');
+        if (!alreadyStored) {
+          await act(async () => {
+            await vi.waitFor(() => expect(h.registry.downloadExternalSource).toHaveBeenCalledTimes(1));
+          });
+          await act(async () => {
+            await vi.waitFor(() => expect(h.controller.importBusy).toBe(false));
+          });
+          expect(vi.mocked(h.registry.downloadExternalSource).mock.calls[0]![2].key.remoteId).toBe('work-2');
+        } else {
+          expect(h.registry.downloadExternalSource).not.toHaveBeenCalled();
+        }
+        expect(h.openNovel).not.toHaveBeenCalled();
+      } finally {
+        act(() => h.renderer.unmount());
+      }
+    },
+  );
+  it('automatically gets only the next text release without opening it or chaining further', async () => {
+    const h = await createDocumentHarness();
+    try {
+      await act(async () => h.controller.importItem(h.controller.items[0]!));
+      const bookId = (await h.libraryBooks())[0]!.id;
+      const sectionId = externalItemSectionId(h.controller.items[0]!);
+      h.download.mockClear();
+      await act(async () => h.controller.setAutoDownloadNext?.(true));
+      await h.read(bookId, sectionId);
+      await act(async () => {
+        await vi.waitFor(() => expect(h.download).toHaveBeenCalledTimes(1));
+      });
+      await act(async () => {
+        await vi.waitFor(() => expect(h.controller.importBusy).toBe(false));
+      });
+      expect(h.download.mock.calls.map((call) => call[2].key.remoteId)).toEqual(['work-2']);
+      expect(h.openNovel).not.toHaveBeenCalled();
+      await h.read(bookId, sectionId);
+      expect(h.download).toHaveBeenCalledTimes(1);
+    } finally {
+      act(() => h.renderer.unmount());
+    }
+  });
+  it.each([2, 3] as const)('prefetches the next %i text releases without opening or chaining', async (count) => {
+    const h = await createDocumentHarness(4);
+    try {
+      await act(async () => h.controller.importItem(h.controller.items[0]!));
+      const bookId = (await h.libraryBooks())[0]!.id;
+      const sectionId = externalItemSectionId(h.controller.items[0]!);
+      h.download.mockClear();
+      await act(async () => h.controller.setAutoDownloadNextCount?.(count));
+      await act(async () => h.controller.setAutoDownloadNext?.(true));
+      await h.read(bookId, sectionId);
+      await act(async () => {
+        await vi.waitFor(() => expect(h.download).toHaveBeenCalledTimes(count));
+      });
+      await act(async () => {
+        await vi.waitFor(() => expect(h.controller.importBusy).toBe(false));
+      });
+      expect(h.download.mock.calls.map((call) => call[2].key.remoteId)).toEqual(
+        ['work-2', 'work-3', 'work-4'].slice(0, count),
+      );
+      expect(h.openNovel).not.toHaveBeenCalled();
+      await h.read(bookId, sectionId);
+      expect(h.download).toHaveBeenCalledTimes(count);
+    } finally {
+      act(() => h.renderer.unmount());
+    }
+  });
+  it('refreshes an expired complete catalog before deciding that there is no next release', async () => {
+    const h = await createDocumentHarness();
+    try {
+      await act(async () => h.controller.importItem(h.controller.items[0]!));
+      const bookId = (await h.libraryBooks())[0]!.id;
+      const currentRelease = h.controller.items[0]!;
+      vi.spyOn(h.sourceState, 'getCachePage').mockResolvedValue({
+        id: 'expired-series-catalog',
+        connectorId: SOURCE_ID,
+        accountConnectionId: ITEM_KEY.accountConnectionId,
+        queryFingerprint: 'expired',
+        items: [currentRelease],
+        completeSeries: true,
+        fetchedAt: '2000-01-01T00:00:00.000Z',
+        expiresAt: '2000-01-01T00:15:00.000Z',
+        schemaVersion: 1,
+      });
+      vi.mocked(h.registry.listExternalSource).mockClear();
+      h.download.mockClear();
+
+      await act(async () => h.controller.setAutoDownloadNext?.(true));
+      await h.read(bookId, externalItemSectionId(currentRelease));
+      await act(async () => {
+        await vi.waitFor(() => expect(h.download).toHaveBeenCalledTimes(1));
+      });
+
+      expect(h.registry.listExternalSource).toHaveBeenCalled();
+      expect(h.download.mock.calls[0]![2].key.remoteId).toBe('work-2');
+      expect(h.openNovel).not.toHaveBeenCalled();
+    } finally {
+      act(() => h.renderer.unmount());
+    }
+  });
+  it('holds a fast second text release until the first finishes, then commits in chapter order', async () => {
+    const h = await createDocumentHarness();
+    const normal = h.download.getMockImplementation()!;
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    h.download.mockImplementation(async (...args) => {
+      if (args[2].key.remoteId === 'work-1') await gate;
+      return normal(...args);
+    });
+    let pending: Promise<void> | undefined;
+    try {
+      await act(async () => h.controller.selectAllSupported(true));
+      await act(async () => {
+        pending = h.controller.importSelected();
+        await vi.waitFor(() => expect(h.controller.tasks[1]?.phase).toBe('downloaded'));
+      });
+      expect(h.download).toHaveBeenCalledTimes(2);
+      expect(h.importFile).not.toHaveBeenCalled();
+      expect(await h.sourceState.listLinks()).toEqual([]);
+      release();
+      await act(async () => pending);
+      expect(h.importFile).toHaveBeenCalledTimes(3);
+      expect(h.importFile.mock.calls.map(([request]) => request.expectedBase)).toEqual([
+        { kind: 'absent' },
+        { kind: 'revision', contentRevisionId: 'revision-1' },
+        { kind: 'revision', contentRevisionId: 'revision-2' },
+      ]);
+      expect((await h.sourceState.listLinks()).every((link) => !link.pendingImport)).toBe(true);
+    } finally {
+      release();
+      await pending;
+      await act(async () => h.renderer.unmount());
+      await resetExternalSourceLocalStateForTests();
+    }
+  });
+
+  it('retains authoritative reconciliation when committed text still has a pending link', async () => {
+    const h = await createDocumentHarness();
+    const finalize = vi
+      .spyOn(h.sourceState, 'compareAndSwapPendingLinks')
+      .mockRejectedValueOnce(new Error('temporary link write failure'))
+      .mockRejectedValueOnce(new Error('temporary link write failure'));
+    const catalogReads = h.libraryBooks.mock.calls.length;
+    try {
+      await act(async () => h.controller.importItem(h.controller.items[0]!));
+      expect(h.importFile).toHaveBeenCalledOnce();
+      expect(h.libraryBooks).toHaveBeenCalledTimes(catalogReads + 2);
+      expect(h.controller.items[0]?.importState).toBe('imported');
+      const links = await h.sourceState.listLinks();
+      expect(links).toHaveLength(1);
+      expect(links[0]?.pendingImport).toBeUndefined();
+      await act(async () => h.controller.openImported(h.controller.items[0]!));
+      expect(h.openNovel).toHaveBeenCalledOnce();
+    } finally {
+      finalize.mockRestore();
+      await act(async () => h.renderer.unmount());
+      await resetExternalSourceLocalStateForTests();
+    }
+  });
+
+  it('publishes completed text before a delayed library refresh without another per-release catalog read', async () => {
+    const h = await createDocumentHarness();
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    h.onLibraryItemCommitted.mockImplementation(async () => {
+      await gate;
+    });
+    const catalogReads = h.libraryBooks.mock.calls.length;
+    let pending!: Promise<void>;
+    try {
+      await act(async () => h.controller.selectAllSupported(true));
+      await act(async () => {
+        pending = h.controller.importSelected();
+        await vi.waitFor(() => expect(h.onLibraryItemCommitted).toHaveBeenCalledOnce());
+      });
+      await act(async () => {
+        await vi.waitFor(() => expect(h.controller.items[0]?.importState).toBe('imported'));
+      });
+      expect(h.libraryBooks).toHaveBeenCalledTimes(catalogReads);
+      expect(h.controller.importBusy).toBe(true);
+      await act(async () => h.controller.openImported(h.controller.items[0]!));
+      expect(h.openNovel).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ documentSectionTitle: '1화' }),
+      );
+      release();
+      await act(async () => pending);
+      expect(h.importFile).toHaveBeenCalledTimes(3);
+      // Only the final authoritative reconciliation reads the catalog again.
+      expect(h.libraryBooks).toHaveBeenCalledTimes(catalogReads + 1);
+      expect(h.controller.items.map((item) => item.importState)).toEqual(['imported', 'imported', 'imported']);
+    } finally {
+      release();
+      await pending;
+      await act(async () => h.renderer.unmount());
+      await resetExternalSourceLocalStateForTests();
+    }
+  });
+
+  it('downloads a reverse-ordered bulk selection from chapter one and opens it while chapter two is pending', async () => {
+    const h = await createDocumentHarness();
+    const reversed = [...h.controller.items].reverse();
+    vi.mocked(h.registry.listExternalSource).mockResolvedValue({ items: reversed });
+    await act(async () => h.controller.refresh());
+    const normalDownload = h.download.getMockImplementation()!;
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    h.download.mockImplementation(async (...args) => {
+      if (args[2].key.remoteId === 'work-2') await gate;
+      return normalDownload(...args);
+    });
+    let pending!: Promise<void>;
+    try {
+      await act(async () => h.controller.selectAllSupported(true));
+      await act(async () => {
+        pending = h.controller.importSelected();
+        await vi.waitFor(() =>
+          expect(h.controller.items.find((item) => item.key.remoteId === 'work-1')?.importState).toBe('imported'),
+        );
+      });
+      expect(h.download.mock.calls.map((call) => call[2].key.remoteId)).toEqual(['work-1', 'work-2', 'work-3']);
+      expect(h.importFile).toHaveBeenCalledOnce();
+      expect(h.controller.importBusy).toBe(true);
+      const first = h.controller.items.find((item) => item.key.remoteId === 'work-1')!;
+      expect(first.importState).toBe('imported');
+      await act(async () => h.controller.openImported(first));
+      expect(h.openNovel).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ documentSectionTitle: '1화' }),
+      );
+      expect(h.controller.importBusy).toBe(true);
+      release();
+      await act(async () => pending);
+      expect(h.download.mock.calls.map((call) => call[2].key.remoteId)).toEqual(['work-1', 'work-2', 'work-3']);
+      expect(h.importFile).toHaveBeenCalledTimes(3);
+    } finally {
+      release();
+      await pending;
+      await act(async () => h.renderer.unmount());
+      await resetExternalSourceLocalStateForTests();
+    }
+  });
+  it('keeps background progress and appends queued releases into the same linked book', async () => {
+    const harness = await createDocumentHarness();
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const normalDownload = harness.download.getMockImplementation()!;
+    harness.download.mockImplementation(async (...args) => {
+      if (args[2].key.remoteId === 'work-1') await gate;
+      return normalDownload(...args);
+    });
+    try {
+      let pending!: Promise<void>;
+      await act(async () => {
+        pending = harness.controller.importItem(harness.controller.items[0]!);
+        await vi.waitFor(() => expect(harness.download).toHaveBeenCalledOnce());
+      });
+      await act(async () => harness.controller.importItem(harness.controller.items[1]!));
+      await act(async () => harness.controller.close());
+      expect(harness.controller.tasks).toMatchObject([
+        { phase: 'downloading', total: 2 },
+        { phase: 'queued', total: 2 },
+      ]);
+      release();
+      await act(async () => pending);
+      expect(harness.importFile).toHaveBeenCalledTimes(2);
+      const ids = harness.importFile.mock.calls.map(([request]) => request.clientBookId);
+      expect(new Set(ids).size).toBe(1);
+      expect(await harness.sourceState.listLinks()).toHaveLength(2);
+      expect(harness.controller.tasks).toEqual([]);
+      await act(async () => harness.controller.selectAllSupported(true));
+      expect(harness.controller.items.filter((item) => item.selected).map((item) => item.key.remoteId)).toEqual([
+        'work-1',
+        'work-2',
+        'work-3',
+      ]);
+    } finally {
+      release();
+      await act(async () => harness.renderer.unmount());
+      await resetExternalSourceLocalStateForTests();
+    }
+  });
+
+  it('preserves a completed release when a later queued request fails and makes retry usable', async () => {
+    const harness = await createDocumentHarness();
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const normalDownload = harness.download.getMockImplementation()!;
+    let failSecond = true;
+    harness.download.mockImplementation(async (...args) => {
+      if (args[2].key.remoteId === 'work-1') await gate;
+      if (args[2].key.remoteId === 'work-2' && failSecond) throw new Error('Temporary failure');
+      return normalDownload(...args);
+    });
+    try {
+      let pending!: Promise<void>;
+      await act(async () => {
+        pending = harness.controller.importItem(harness.controller.items[0]!);
+        await vi.waitFor(() => expect(harness.download).toHaveBeenCalledOnce());
+      });
+      await act(async () => harness.controller.importItem(harness.controller.items[1]!));
+      release();
+      await act(async () => pending);
+      expect(await harness.sourceState.listLinks()).toHaveLength(1);
+      expect(harness.controller.tasks).toMatchObject([
+        { phase: 'failed', externalItemKey: 'fixture.source::fixture-account::work-2' },
+      ]);
+      failSecond = false;
+      await act(async () => harness.controller.importItem(harness.controller.items[1]!));
+      expect(await harness.sourceState.listLinks()).toHaveLength(2);
+      expect(harness.controller.tasks).toEqual([]);
+    } finally {
+      release();
+      await act(async () => harness.renderer.unmount());
+      await resetExternalSourceLocalStateForTests();
+    }
+  });
+
+  it('cancels a blocked body request without leaving a busy task or activating content', async () => {
+    const harness = await createDocumentHarness();
+    harness.download.mockImplementation(
+      async (_id, _context, _ref, signal) =>
+        new Promise((_resolve, reject) => {
+          signal!.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')), { once: true });
+        }),
+    );
+    try {
+      let pending!: Promise<void>;
+      await act(async () => {
+        pending = harness.controller.importItem(harness.controller.items[0]!);
+        await vi.waitFor(() => expect(harness.download).toHaveBeenCalledOnce());
+      });
+      await act(async () => {
+        harness.controller.cancel();
+        await pending;
+      });
+      expect(harness.controller.importBusy).toBe(false);
+      expect(harness.controller.tasks).toEqual([]);
+      expect(harness.importFile).not.toHaveBeenCalled();
+      expect(await harness.sourceState.listLinks()).toEqual([]);
+    } finally {
+      await act(async () => harness.renderer.unmount());
+      await resetExternalSourceLocalStateForTests();
+    }
+  });
+});
+
+describe('useExternalSourceController remote updates', () => {
+  it('prefetches installed text on the server and activates in order without batch navigation', async () => {
+    let imported: Novel | undefined;
+    let releaseFirst!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const requests: string[] = [];
+    const committed: string[] = [];
+    const port: import('../../services/import/hosted-document-import').HostedDocumentImportPort = {
+      download: vi.fn(async (ref) => {
+        requests.push(ref.key.remoteId);
+        if (ref.key.remoteId === 'work-1') await gate;
+        return { artifactId: ref.key.remoteId, sourceContentHash: integrityHash(ref.key.remoteId), byteLength: 100 };
+      }),
+      assemble: vi.fn(async (input) => ({
+        expectedBase: input.expectedBase,
+        configurationFingerprint: 'fixture',
+        change: 'content' as const,
+        sourceContentHash: integrityHash(input.item.key.remoteId),
+        prepared: {
+          uploadId: input.item.key.remoteId,
+          sourceContentHash: integrityHash(input.item.key.remoteId),
+          byteLength: 100,
+        },
+        releaseProjections: [
+          {
+            remoteId: input.item.key.remoteId,
+            sourceId: input.item.key.remoteId,
+            sourceContentHash: integrityHash(input.item.key.remoteId),
+            previousSourceContentHash: null,
+          },
+        ],
+      })),
+      discard: vi.fn(async () => {}),
+      cancelPrepared: vi.fn(async () => {}),
+    };
+    const state = new ExternalSourceLocalStateStore();
+    const h = await createHarness({
+      serial: true,
+      documentSerial: true,
+      serialCount: 3,
+      localBookMissing: true,
+      downloadedContent: '',
+      sourceState: state,
+      hostedDocumentImport: port,
+      getNovel: async () => imported,
+      importPrepared: (receipt) => {
+        committed.push(receipt.uploadId);
+        imported = novel({
+          id: externalDocumentCollectionId(ITEM_KEY, 'manga:1'),
+          format: 'txt',
+          activeContentRevisionId: `r-${committed.length}`,
+          sourceContentHash: receipt.sourceContentHash,
+        });
+        return { jobId: receipt.uploadId, cancel: vi.fn(), promise: Promise.resolve({ novel: imported }) };
+      },
+    });
+    let pending: Promise<void> | undefined;
+    try {
+      await act(async () => h.controller.selectAllSupported(true));
+      await act(async () => {
+        pending = h.controller.importSelected();
+        await vi.waitFor(() => expect(requests).toHaveLength(2));
+      });
+      expect(committed).toEqual([]);
+      releaseFirst();
+      await act(async () => pending);
+      expect(committed).toEqual(['work-1', 'work-2', 'work-3']);
+      expect(h.importFile).not.toHaveBeenCalled();
+      expect(h.registry.downloadExternalSource).not.toHaveBeenCalled();
+      expect(h.openNovel).not.toHaveBeenCalled();
+      expect(port.discard).toHaveBeenCalledTimes(3);
+    } finally {
+      releaseFirst();
+      await pending;
+      await act(async () => h.renderer.unmount());
+    }
+  });
+  it('keeps hosted image bytes on the server while using normal link activation and batch UX', async () => {
+    const rawHash = `sha256:${'a'.repeat(64)}`;
+    const aggregateHash = `sha256:${'b'.repeat(64)}`;
+    let imported: Novel | undefined;
+    const port: import('../../services/import/hosted-image-import').HostedImageImportPort = {
+      download: vi.fn(async () => ({ artifactId: 'artifact-one', sourceContentHash: rawHash, byteLength: 100 })),
+      assemble: vi.fn(async (input) => {
+        imported = novel({
+          id: input.clientBookId!,
+          sourceContentHash: aggregateHash,
+          activeContentRevisionId: 'new',
+          format: 'image_archive',
+        });
+        return { uploadId: 'upload-one', sourceContentHash: aggregateHash, byteLength: 120 };
+      }),
+      discard: vi.fn(async () => undefined),
+    };
+    const importPrepared = vi.fn<NonNullable<ImportService['importPrepared']>>(() => ({
+      jobId: 'job-one',
+      cancel: vi.fn(),
+      promise: Promise.resolve({ novel: imported! }),
+    }));
+    const harness = await createHarness({
+      serial: true,
+      localBookMissing: true,
+      downloadedContent: '',
+      hostedImageImport: port,
+      importPrepared,
+      supportsExpectedSourceContentHash: true,
+      getNovel: async () => imported,
+    });
+    try {
+      await act(async () => harness.controller.importSelected());
+      expect(port.download).toHaveBeenCalledOnce();
+      expect(port.assemble).toHaveBeenCalledOnce();
+      expect(importPrepared).toHaveBeenCalledOnce();
+      expect(harness.registry.downloadExternalSource).not.toHaveBeenCalled();
+      expect(harness.importFile).not.toHaveBeenCalled();
+      expect(harness.saveLink).toHaveBeenCalledWith(
+        expect.objectContaining({ importedSourceContentHash: rawHash, pendingImport: undefined }),
+      );
+      expect(harness.notify).toHaveBeenCalledWith(expect.stringContaining('1개 회차'), 'success');
+      expect(harness.openNovel).not.toHaveBeenCalled();
+    } finally {
+      await act(async () => harness.renderer.unmount());
+    }
+  });
+  it('restores catalog metadata without fetching again or rolling back a completed import', async () => {
+    const h = await createHarness({ downloadedContent: 'updated text' });
+    try {
+      const snapshot = h.controller.captureNavigation!();
+      const calls = vi.mocked(h.registry.listExternalSource).mock.calls.length;
+      await act(async () => h.controller.importSelected());
+      const committed = h.currentLink;
+      await act(async () => h.controller.close());
+      await act(async () => h.controller.restoreNavigation!(snapshot));
+      expect(h.controller.open).toBe(true);
+      expect(h.controller.items[0]?.title).toBe(snapshot.items[0]?.title);
+      expect(h.currentLink).toBe(committed);
+      expect(h.controller.items[0]?.importState).toBe('imported');
+      expect(h.registry.listExternalSource).toHaveBeenCalledTimes(calls);
+    } finally {
+      await act(async () => h.renderer.unmount());
+    }
+  });
+
+  it('does not restore another connection generation from navigation history', async () => {
+    const h = await createHarness({ downloadedContent: 'text' });
+    try {
+      const snapshot = h.controller.captureNavigation!();
+      await act(async () => h.controller.restoreNavigation!({ ...snapshot, generation: 'expired' }));
+      expect(h.controller.open).toBe(false);
+    } finally {
+      await act(async () => h.renderer.unmount());
+    }
+  });
+  it('opens the stored release even when a remote update is available', async () => {
+    const harness = await createHarness({ downloadedContent: '새 본문', serial: true });
+    try {
+      expect(harness.controller.items[0]!.importState).toBe('update_available');
+      await act(async () => harness.controller.openImported(harness.controller.items[0]!));
+      expect(harness.openNovel).toHaveBeenCalledWith(expect.objectContaining({ id: 'book-1' }), {
+        documentSectionId: 'work-1',
+        documentSectionTitle: '1화',
+      });
+      expect(harness.registry.downloadExternalSource).not.toHaveBeenCalled();
+    } finally {
+      await act(async () => harness.renderer.unmount());
+    }
+  });
+
+  it.each(['safe', 'untrusted'])('keeps actionable cached text source errors visible for %s failures', async (kind) => {
+    const harness = await createHarness({ downloadedContent: '본문' });
+    const cached = vi.mocked(harness.state.saveCachePage).mock.calls.at(-1)![0];
+    vi.mocked(harness.state.getCachePage).mockResolvedValue(cached);
+    const message = textServerErrorMessage(502, 'source_request_failed');
+    vi.mocked(harness.registry.listExternalSource).mockRejectedValueOnce(
+      kind === 'safe'
+        ? new TextServerRequestError(message, { status: 502, code: 'source_request_failed' })
+        : Object.assign(new Error('untrusted secret upstream body'), { status: 502 }),
+    );
+    try {
+      await act(async () => harness.controller.refresh());
+      expect(harness.controller.stale).toBe(true);
+      expect(harness.controller.items).toHaveLength(cached.items.length);
+      expect(harness.controller.listError?.message).toContain('마지막으로 받아 둔 목록');
+      expect(harness.controller.listError?.message).not.toContain('secret');
+      if (kind === 'safe') expect(harness.controller.listError?.message).toContain(message);
+      expect(harness.notify).toHaveBeenLastCalledWith(
+        kind === 'safe'
+          ? `${message} 마지막으로 받아 둔 목록을 표시합니다.`
+          : '외부 저장소를 새로고치지 못해 마지막 목록을 표시합니다.',
+        'warning',
+      );
+      await act(async () => harness.controller.listError!.retry());
+      expect(harness.controller.listError).toBeUndefined();
+      expect(harness.controller.stale).toBe(false);
+      expect(harness.controller.items).toHaveLength(cached.items.length);
+    } finally {
+      await act(async () => harness.renderer.unmount());
+    }
+  });
+
+  it.each(['access', 'unknown'])(
+    'does not serve cached results or expose upstream diagnostics after a %s failure',
+    async (kind) => {
+      const harness = await createHarness({ downloadedContent: '본문' });
+      const cached = vi.mocked(harness.state.saveCachePage).mock.calls.at(-1)![0];
+      vi.mocked(harness.state.getCachePage).mockResolvedValue(cached);
+      const message = textServerErrorMessage(403, 'source_access_required');
+      vi.mocked(harness.registry.listExternalSource).mockRejectedValueOnce(
+        kind === 'access'
+          ? new TextServerRequestError(message, { status: 403, code: 'source_access_required' })
+          : new Error('untrusted secret upstream body'),
+      );
+      try {
+        await act(async () => harness.controller.refresh());
+        expect(harness.controller.stale).toBe(false);
+        expect(harness.controller.items).toEqual([]);
+        expect(harness.controller.listError?.message).not.toContain('secret');
+        if (kind === 'access') expect(harness.controller.listError?.message).toBe(message);
+        expect(harness.notify).toHaveBeenLastCalledWith(harness.controller.listError?.message, 'danger');
+      } finally {
+        await act(async () => harness.renderer.unmount());
+      }
+    },
+  );
+
+  it('keeps a failed first page visible and retries its original browse request', async () => {
+    const harness = await createHarness({ downloadedContent: '본문' });
+    const message = textServerErrorMessage(502, 'source_request_failed');
+    vi.mocked(harness.registry.listExternalSource).mockRejectedValueOnce(new TextServerRequestError(message));
+    try {
+      await act(async () =>
+        harness.controller.openItem({
+          ...harness.controller.items[0]!,
+          kind: 'folder',
+          navigationRef: 'source:novels',
+        }),
+      );
+      expect(harness.controller.loading).toBe(false);
+      expect(harness.controller.items).toEqual([]);
+      expect(harness.controller.listError?.message).toBe(message);
+      const failedInput = vi.mocked(harness.registry.listExternalSource).mock.calls.at(-1)![2];
+      await act(async () => harness.controller.listError!.retry());
+      expect(harness.registry.listExternalSource).toHaveBeenLastCalledWith(
+        SOURCE_ID,
+        expect.anything(),
+        { ...failedInput, cacheMode: 'reload' },
+        expect.any(AbortSignal),
+      );
+      expect(harness.controller.listError).toBeUndefined();
+      expect(harness.controller.items).toHaveLength(1);
+    } finally {
+      await act(async () => harness.renderer.unmount());
+    }
+  });
+
+  it('preserves known capacity errors instead of reporting a connection failure', async () => {
+    const harness = await createHarness({ downloadedContent: '본문' });
+    vi.mocked(harness.registry.listExternalSource).mockRejectedValueOnce(
+      Object.assign(new Error('translated'), { cause: new Error('source_storage_limit') }),
+    );
+    try {
+      await act(async () =>
+        harness.controller.openItem({
+          ...harness.controller.items[0]!,
+          kind: 'folder',
+          navigationRef: 'source:novels',
+        }),
+      );
+      expect(harness.controller.listError?.message).toBe('소스의 저장 한도를 초과했습니다. 기존 데이터는 유지됩니다.');
+    } finally {
+      await act(async () => harness.renderer.unmount());
+    }
+  });
+
+  it.each(['request', 'cache', 'fallback-cache', 'closed'] as const)(
+    'ignores an older browse failure while waiting for %s',
+    async (phase) => {
+      const harness = await createHarness({ downloadedContent: '본문' });
+      const error = new TextServerRequestError(textServerErrorMessage(502, 'source_request_failed'));
+      let finishOld!: () => void;
+      if (phase === 'cache' || phase === 'fallback-cache') {
+        if (phase === 'fallback-cache') {
+          vi.mocked(harness.registry.listExternalSource).mockRejectedValueOnce(error);
+          vi.mocked(harness.state.getCachePage).mockResolvedValueOnce(undefined);
+        }
+        vi.mocked(harness.state.getCachePage).mockImplementationOnce(
+          () =>
+            new Promise((resolve) => {
+              finishOld = () => resolve(undefined);
+            }),
+        );
+      } else {
+        vi.mocked(harness.registry.listExternalSource).mockImplementationOnce(
+          () =>
+            new Promise((_, reject) => {
+              finishOld = () => reject(error);
+            }),
+        );
+      }
+      let oldRequest!: Promise<void>;
+      try {
+        await act(async () => {
+          oldRequest = harness.controller.search();
+          await vi.waitFor(() => expect(finishOld).toBeDefined());
+        });
+        if (phase === 'closed') await act(async () => harness.controller.close());
+        else {
+          await act(async () => harness.controller.setQuery('새 탐색'));
+          await act(async () => harness.controller.search());
+        }
+        harness.notify.mockClear();
+        const items = harness.controller.items;
+        const cacheReads = vi.mocked(harness.state.getCachePage).mock.calls.length;
+        const requests = vi.mocked(harness.registry.listExternalSource).mock.calls.length;
+        await act(async () => {
+          finishOld();
+          await oldRequest;
+        });
+        expect(harness.controller.listError).toBeUndefined();
+        expect(harness.controller.items).toEqual(items);
+        expect(harness.notify).not.toHaveBeenCalled();
+        expect(harness.state.getCachePage).toHaveBeenCalledTimes(cacheReads);
+        expect(harness.registry.listExternalSource).toHaveBeenCalledTimes(requests);
+      } finally {
+        await act(async () => harness.renderer.unmount());
+      }
+    },
+  );
+
+  it.each(['success', 'failure', 'cancel'] as const)(
+    'commits prefetched serial chapters sequentially with safe %s handling',
+    async (mode) => {
+      await resetExternalSourceLocalStateForTests();
+      const state = new ExternalSourceLocalStateStore();
+      let current: Novel | undefined;
+      const count = mode === 'success' ? 101 : 3;
+      const harness = await createHarness({
+        downloadedContent: '',
+        downloadedFile: await singlePageComicFile(),
+        serial: true,
+        serialCount: count,
+        localBookMissing: true,
+        supportsIncrementalImageSeriesAppend: true,
+        supportsExpectedSourceContentHash: true,
+        sourceState: state,
+        libraryBooks: async () => (current ? [current] : []),
+      });
+      let attempted = 0;
+      let saved = 0;
+      harness.importFile.mockImplementation((request) => ({
+        jobId: `job-${++attempted}`,
+        cancel: vi.fn(),
+        promise: (async () => {
+          expect((await readSeriesImageArchiveManifest(request.file))?.chapters).toHaveLength(1);
+          if (attempted === 2 && mode !== 'success') {
+            if (mode === 'cancel') {
+              harness.controller.cancel();
+              throw new DOMException('Cancelled', 'AbortError');
+            }
+            throw new Error('fixture second chapter failed');
+          }
+          expect(request.baseActiveContentRevisionId).toBe(current?.activeContentRevisionId);
+          expect(request.importMode).toBe(saved ? 'append_image_series' : undefined);
+          saved++;
+          current = novel({
+            id: request.clientBookId,
+            format: 'image_archive',
+            documentSectionCount: saved,
+            sourceAssetId: 'source',
+            sourceContentHash: await sha256(await request.file.arrayBuffer()),
+            activeContentRevisionId: `revision-${saved}`,
+          });
+          return { novel: current };
+        })(),
+      }));
+      const download = vi.mocked(harness.registry.downloadExternalSource);
+      download.mockImplementation(async () => {
+        return { file: await singlePageComicFile(), remoteRevision: 'remote-r2' };
+      });
+      try {
+        await act(async () => harness.controller.selectAllSupported(true));
+        await act(async () => harness.controller.importSelected());
+        if (mode !== 'success') {
+          expect(saved).toBe(1);
+          expect(await state.listLinks(SOURCE_ID)).toHaveLength(1);
+          expect(harness.notify).toHaveBeenCalledWith(expect.stringContaining('1개 회차는 저장되었습니다'), 'warning');
+          await act(async () => harness.controller.importSelected());
+        }
+        expect(saved).toBe(count);
+        expect(await state.listLinks(SOURCE_ID)).toHaveLength(count);
+        expect((await state.listLinks(SOURCE_ID)).every((link) => !link.pendingImport)).toBe(true);
+        expect(new Set(harness.importFile.mock.calls.map(([input]) => input.clientBookId)).size).toBe(1);
+      } finally {
+        await act(async () => harness.renderer.unmount());
+      }
+    },
+    30_000,
+  );
+  it('updates Library cards after purge without a reload, and does not clean up on a failed catalog read', async () => {
+    await resetExternalSourceLocalStateForTests();
+    const sourceState = new ExternalSourceLocalStateStore();
+    const book = novel();
+    let books = [book];
+    let unavailable = false;
+    const savedLink: ExternalSourceLink = {
+      id: 'persisted-link',
+      source: ITEM_KEY,
+      localBookId: book.id,
+      collectionRemoteId: 'manga:1',
+      linkedAt: new Date().toISOString(),
+    };
+    const subscription: ExternalSourceSubscriptionRecord = {
+      id: externalSourceSubscriptionId(SOURCE_ID, ITEM_KEY.accountConnectionId, 'manga:1'),
+      connectorId: SOURCE_ID,
+      accountConnectionId: ITEM_KEY.accountConnectionId,
+      collectionRemoteId: 'manga:1',
+      navigationRef: 'manga:1',
+      title: 'Fixture',
+      knownReleaseIds: ['work-1'],
+      newReleaseIds: [],
+      availableReleaseCount: 1,
+      lastCheckedAt: savedLink.linkedAt,
+      createdAt: savedLink.linkedAt,
+      updatedAt: savedLink.linkedAt,
+      schemaVersion: 1,
+    };
+    await sourceState.saveLink(savedLink);
+    await sourceState.saveSubscription(subscription);
+    const harness = await createHarness({
+      serial: true,
+      sourceState,
+      downloadedContent: '',
+      libraryBooks: async () => {
+        if (unavailable) throw new Error('fixture server offline');
+        return books;
+      },
+    });
+    expect(harness.controller.libraryWorks).toHaveLength(1);
+    books = [{ ...book, deletedAt: '2026-08-31' }];
+    await harness.refreshLibrary(1);
+    await vi.waitFor(() => expect(harness.controller.libraryWorks).toHaveLength(0));
+    expect(await sourceState.listLinks()).toEqual([savedLink]);
+    books = [book];
+    await harness.refreshLibrary(2);
+    await vi.waitFor(() => expect(harness.controller.libraryWorks).toHaveLength(1));
+    books = [];
+    unavailable = true;
+    await harness.refreshLibrary(3);
+    expect(await sourceState.listLinks()).toEqual([savedLink]);
+    expect(await sourceState.listSubscriptions()).toEqual([subscription]);
+    unavailable = false;
+    await harness.refreshLibrary(4);
+    await vi.waitFor(() => expect(harness.controller.libraryWorks).toHaveLength(0));
+    expect(harness.controller.items[0]?.importState).toBe('available');
+    expect(await sourceState.listLinks()).toEqual([]);
+    expect(await sourceState.listSubscriptions()).toEqual([]);
+    await act(async () => harness.renderer.unmount());
+  });
+
+  it('downloads the same comic bytes again when the old linked book was permanently deleted', async () => {
+    const file = await singlePageComicFile();
+    const harness = await createHarness({
+      serial: true,
+      localBookMissing: true,
+      downloadedContent: '',
+      downloadedFile: file,
+      initialLinkOverrides: {
+        collectionRemoteId: 'series-1',
+        importedSourceContentHash: await sha256(await file.arrayBuffer()),
+      },
+    });
+    expect(harness.controller.items[0]?.importState).toBe('available');
+    await act(async () => harness.controller.importSelected());
+    expect(harness.importFile).toHaveBeenCalledOnce();
+    const request = harness.importFile.mock.calls[0]![0];
+    expect(request.importMode).toBeUndefined();
+    expect((await readSeriesImageArchiveManifest(request.file))?.chapters).toHaveLength(1);
+    expect(harness.notify).toHaveBeenCalledWith(expect.stringContaining('1개 회차'), 'success');
+    await act(async () => harness.renderer.unmount());
+  });
+
+  it('keeps a trashed comic linked for restore without silently importing into it', async () => {
+    const harness = await createHarness({
+      serial: true,
+      downloadedContent: '',
+      downloadedFile: await singlePageComicFile(),
+      novelOverrides: { deletedAt: '2026-08-31T00:00:00.000Z' },
+    });
+    expect(harness.controller.items[0]?.importState).toBe('available');
+    await act(async () => harness.controller.importSelected());
+    expect(harness.importFile).not.toHaveBeenCalled();
+    expect(harness.registry.downloadExternalSource).not.toHaveBeenCalled();
+    expect(harness.notify).toHaveBeenCalledWith(expect.stringContaining('휴지통에 있는 작품'), 'warning');
+    expect(harness.saveLink).not.toHaveBeenCalled();
+    await act(async () => harness.renderer.unmount());
+  });
+
+  it('applies extension filters through SEARCH even when the search query is empty', async () => {
+    const harness = await createHarness({
+      downloadedContent: '기존 원격 원문',
+      browse: {
+        activeMode: 'popular',
+        availableModes: ['popular', 'latest', 'search'],
+        filters: [
+          { id: '0', position: 0, kind: 'select', label: '장르', options: ['전체', '판타지'], defaultValue: 0 },
+        ],
+      },
+    });
+    act(() => harness.controller.setFilterValue('0', 1));
+    await act(async () => harness.controller.applyFilters());
+
+    expect(harness.registry.listExternalSource).toHaveBeenLastCalledWith(
+      SOURCE_ID,
+      expect.anything(),
+      expect.objectContaining({
+        query: undefined,
+        browseMode: 'search',
+        filters: [{ position: 0, groupPosition: undefined, value: 1 }],
+      }),
+      expect.any(AbortSignal),
+    );
+    expect(harness.controller.browse?.activeMode).toBe('search');
+    await act(async () => harness.renderer.unmount());
+  });
+
+  it('does not persist session-only blob thumbnail URLs in the source cache', async () => {
+    const harness = await createHarness({ downloadedContent: '기존 원격 원문', thumbnailUrl: 'blob:work-cover' });
+
+    expect(harness.state.saveCachePage).toHaveBeenCalledWith(
+      expect.objectContaining({ items: [expect.objectContaining({ thumbnailUrl: undefined })] }),
+    );
+    expect(harness.controller.items[0]?.thumbnailUrl).toBe('blob:work-cover');
+    await act(async () => harness.renderer.unmount());
+  });
+
+  it('keeps the catalog usable during delayed artwork and fills the image after it arrives', async () => {
+    let finish!: (url: string) => void;
+    const pending = new Promise<string>((resolve) => {
+      finish = resolve;
+    });
+    const harness = await createHarness({ downloadedContent: 'fixture', coverRef: true, resolveCover: () => pending });
+    await act(async () => {
+      await harness.controller.show();
+    });
+    expect(harness.controller.items).toHaveLength(1);
+    expect(harness.controller.loading).toBe(false);
+    expect(harness.controller.items[0]?.thumbnailUrl).toBeUndefined();
+    await act(async () => {
+      finish('blob:delayed-cover');
+      await pending;
+    });
+    expect(harness.controller.items[0]?.thumbnailUrl).toBe('blob:delayed-cover');
+    await act(async () => harness.renderer.unmount());
+  });
+
+  it('opens a source at its persisted account-specific default folder', async () => {
+    const harness = await createHarness({
+      downloadedContent: '기존 원격 원문',
+      defaultFolder: {
+        id: 'external-source-default-folder::fixture.source::fixture-account',
+        connectorId: SOURCE_ID,
+        accountConnectionId: 'fixture-account',
+        parentRef: '/소설/완결',
+        breadcrumbs: [
+          { label: '소설', parentRef: '/소설' },
+          { label: '완결', parentRef: '/소설/완결' },
+        ],
+        updatedAt: '2026-08-24T00:00:00.000Z',
+        schemaVersion: 1,
+      },
+    });
+
+    expect(harness.registry.listExternalSource).toHaveBeenCalledWith(
+      SOURCE_ID,
+      expect.anything(),
+      expect.objectContaining({ parentRef: '/소설/완결', accountConnectionId: 'fixture-account' }),
+      expect.any(AbortSignal),
+    );
+    expect(harness.controller.breadcrumbs.at(-1)).toEqual({ label: '완결', parentRef: '/소설/완결' });
+    expect(harness.controller.currentFolderIsDefault).toBe(true);
+    await act(async () => harness.renderer.unmount());
+  });
+
+  it('clears an unavailable default folder and falls back to the source root', async () => {
+    const unavailableFolder: ExternalSourceDefaultFolder = {
+      id: 'external-source-default-folder::fixture.source::fixture-account',
+      connectorId: SOURCE_ID,
+      accountConnectionId: 'fixture-account',
+      parentRef: '/삭제된-폴더',
+      breadcrumbs: [{ label: '삭제된 폴더', parentRef: '/삭제된-폴더' }],
+      updatedAt: '2026-08-24T00:00:00.000Z',
+      schemaVersion: 1,
+    };
+    const harness = await createHarness({
+      downloadedContent: '기존 원격 원문',
+      defaultFolder: unavailableFolder,
+      failFolderRef: unavailableFolder.parentRef,
+    });
+
+    expect(harness.state.deleteDefaultFolder).toHaveBeenCalledWith(SOURCE_ID, 'fixture-account');
+    expect(harness.registry.listExternalSource).toHaveBeenLastCalledWith(
+      SOURCE_ID,
+      expect.anything(),
+      expect.objectContaining({ parentRef: undefined, accountConnectionId: 'fixture-account' }),
+      expect.any(AbortSignal),
+    );
+    expect(harness.controller.breadcrumbs).toEqual([{ label: '최상위 폴더' }]);
+    expect(harness.notify).toHaveBeenCalledWith('기본 폴더를 열 수 없어 최상위 폴더부터 표시합니다.', 'warning');
+    await act(async () => harness.renderer.unmount());
+  });
+
+  it('refreshes the same source after picker selection and removes only the remote selection', async () => {
+    const harness = await createHarness({ downloadedContent: '기존 원격 원문', pickable: true });
+
+    expect(harness.controller.canPickItems).toBe(true);
+    await act(async () => {
+      await harness.controller.pickItems();
+    });
+    expect(harness.registry.pickExternalSource).toHaveBeenCalledWith(SOURCE_ID, expect.anything());
+    expect(harness.notify).toHaveBeenCalledWith('1개 Google Drive 파일을 소스에 추가했습니다.', 'success');
+
+    await act(async () => {
+      await harness.controller.removeItem(harness.controller.items[0]!);
+    });
+    expect(harness.registry.removeExternalSourceItem).toHaveBeenCalledWith(SOURCE_ID, expect.anything(), ITEM_KEY);
+    expect(harness.confirm).toHaveBeenCalledWith(expect.stringContaining('이미 라이브러리에 가져온 작품은 유지됩니다'));
+    await act(async () => harness.renderer.unmount());
+  });
+
+  it('uses the same guarded import path for a single card action', async () => {
+    const nextNovel = novel({
+      id: 'book-1',
+      sourceContentHash: await sha256('카드에서 변경한 원문'),
+      activeContentRevisionId: 'content-card',
+    });
+    const harness = await createHarness({ downloadedContent: '카드에서 변경한 원문', importedContent: nextNovel });
+
+    await act(async () => {
+      await harness.controller.importItem(harness.controller.items[0]!);
+    });
+
+    expect(harness.confirm).toHaveBeenCalledOnce();
+    expect(harness.importFile).toHaveBeenCalledWith(
+      expect.objectContaining({ clientBookId: 'book-1' }),
+      expect.any(Function),
+    );
+    expect(harness.currentLink.activeContentRevisionId).toBe('content-card');
+    await act(async () => harness.renderer.unmount());
+  });
+
+  it('keeps an active download running when the source screen is closed', async () => {
+    let releaseDownload!: () => void;
+    const downloadGate = new Promise<void>((resolve) => {
+      releaseDownload = resolve;
+    });
+    const harness = await createHarness({ downloadedContent: '백그라운드 원문', downloadGate });
+    act(() => harness.controller.show(SOURCE_ID));
+    expect(harness.controller.open).toBe(true);
+
+    let importPromise!: Promise<void>;
+    await act(async () => {
+      importPromise = harness.controller.importItem(harness.controller.items[0]!);
+      await Promise.resolve();
+    });
+    expect(harness.controller.busy).toBe(true);
+
+    act(() => harness.controller.close());
+    expect(harness.controller.open).toBe(false);
+    expect(harness.notify).toHaveBeenCalledWith('다운로드는 백그라운드에서 계속됩니다.');
+    act(() => harness.controller.show(SOURCE_ID));
+    expect(harness.controller.open).toBe(true);
+    act(() => harness.controller.close());
+
+    releaseDownload();
+    await act(async () => {
+      await importPromise;
+    });
+    expect(harness.importFile).toHaveBeenCalledOnce();
+    expect(harness.controller.busy).toBe(false);
+    await act(async () => harness.renderer.unmount());
+  });
+
+  it('does not interrupt the current screen after a background chapter download finishes', async () => {
+    let releaseDownload!: () => void;
+    const downloadGate = new Promise<void>((resolve) => {
+      releaseDownload = resolve;
+    });
+    const harness = await createHarness({
+      downloadedContent: '',
+      downloadedFile: await singlePageComicFile(),
+      downloadGate,
+      localBookMissing: true,
+      serial: true,
+    });
+    act(() => harness.controller.show(SOURCE_ID));
+
+    let importPromise!: Promise<void>;
+    await act(async () => {
+      importPromise = harness.controller.importAndOpen(harness.controller.items[0]!);
+      await Promise.resolve();
+    });
+    expect(harness.controller.busy).toBe(true);
+    expect(harness.controller.tasks).toMatchObject([
+      { source: 'external_source', phase: 'downloading', externalItemKey: 'fixture.source::fixture-account::work-1' },
+    ]);
+    act(() => harness.controller.close());
+
+    releaseDownload();
+    await act(async () => {
+      await importPromise;
+    });
+    expect(harness.importFile).toHaveBeenCalledOnce();
+    expect(harness.openNovel).not.toHaveBeenCalled();
+    expect(harness.onLibraryItemCommitted).toHaveBeenCalledOnce();
+    expect(harness.controller.tasks).toEqual([]);
+    await act(async () => harness.renderer.unmount());
+  });
+
+  it('opens a committed chapter while later selected chapters keep downloading', async () => {
+    await resetExternalSourceLocalStateForTests();
+    const sourceState = new ExternalSourceLocalStateStore();
+    const chapterFile = await singlePageComicFile();
+    let current: Novel | undefined;
+    let saved = 0;
+    let releaseSecond!: () => void;
+    let markSecondStarted!: () => void;
+    let releaseLibraryProjection!: () => void;
+    const secondGate = new Promise<void>((resolve) => {
+      releaseSecond = resolve;
+    });
+    const secondStarted = new Promise<void>((resolve) => {
+      markSecondStarted = resolve;
+    });
+    const libraryProjectionGate = new Promise<void>((resolve) => {
+      releaseLibraryProjection = resolve;
+    });
+    const harness = await createHarness({
+      downloadedContent: '',
+      downloadedFile: chapterFile,
+      localBookMissing: true,
+      serial: true,
+      serialCount: 2,
+      supportsIncrementalImageSeriesAppend: true,
+      supportsExpectedSourceContentHash: true,
+      sourceState,
+      libraryBooks: async () => (current ? [current] : []),
+      getNovel: async (id) => (current?.id === id ? current : undefined),
+    });
+    harness.importFile.mockImplementation((request) => ({
+      jobId: `job-${saved + 1}`,
+      cancel: vi.fn(),
+      promise: (async () => {
+        saved++;
+        current = novel({
+          id: request.clientBookId ?? 'book-1',
+          format: 'image_archive',
+          documentSectionCount: saved,
+          sourceContentHash: await sha256(await request.file.arrayBuffer()),
+          activeContentRevisionId: `revision-${saved}`,
+        });
+        return { novel: current };
+      })(),
+    }));
+    vi.mocked(harness.registry.downloadExternalSource).mockImplementation(async (_sourceId, _context, ref) => {
+      if (ref.key.remoteId === 'work-2') {
+        markSecondStarted();
+        await secondGate;
+      }
+      return { file: chapterFile, remoteRevision: 'remote-r2' };
+    });
+    harness.onLibraryItemCommitted.mockImplementation(async () => {
+      await libraryProjectionGate;
+      return undefined;
+    });
+
+    await act(async () => harness.controller.selectAllSupported(true));
+    let importPromise!: Promise<void>;
+    await act(async () => {
+      importPromise = harness.controller.importSelected();
+      await vi.waitFor(() => expect(harness.onLibraryItemCommitted).toHaveBeenCalledOnce());
+    });
+
+    expect(harness.controller.selectedBatchActive).toBe(true);
+    const firstRelease = harness.controller.items[0]!;
+    expect(firstRelease.importState).toBe('imported');
+    expect(harness.controller.tasks).toMatchObject([
+      { externalItemKey: 'fixture.source::fixture-account::work-1', phase: 'complete' },
+      { externalItemKey: 'fixture.source::fixture-account::work-2', phase: 'downloading' },
+    ]);
+    await act(async () => harness.controller.openImported(firstRelease));
+    expect(harness.openNovel).toHaveBeenCalledWith(
+      expect.objectContaining({ id: current?.id }),
+      expect.objectContaining({ documentSectionId: 'work-1' }),
+    );
+
+    releaseLibraryProjection();
+    await act(async () => secondStarted);
+    expect(harness.controller.tasks).toMatchObject([
+      { externalItemKey: 'fixture.source::fixture-account::work-1', phase: 'complete' },
+      { externalItemKey: 'fixture.source::fixture-account::work-2', phase: 'downloading' },
+    ]);
+    releaseSecond();
+    await act(async () => importPromise);
+    expect(harness.controller.selectedBatchActive).toBe(false);
+    expect(harness.openNovel).toHaveBeenCalledTimes(1);
+    await act(async () => harness.renderer.unmount());
+  });
+
+  it('reports a missing saved neighbor to stream navigation without closing the source screen', async () => {
+    const h = await createHarness({ downloadedContent: 'fixture', getNovel: async () => undefined });
+    try {
+      await act(async () => h.controller.show());
+      const item = { ...h.controller.items[0]!, importState: 'imported' as const, localBookId: 'missing' };
+      await act(async () => {
+        await expect(h.controller.openImported(item, true)).rejects.toThrow('저장된 회차를 찾을 수 없습니다');
+      });
+      expect(h.openNovel).not.toHaveBeenCalled();
+      expect(h.controller.open).toBe(true);
+      await act(async () => {
+        await expect(h.controller.openImported(item)).resolves.toBeUndefined();
+      });
+    } finally {
+      await act(async () => h.renderer.unmount());
+    }
+  });
+
+  it('opens an imported source item through the injected book workspace boundary', async () => {
+    const harness = await createHarness({ downloadedContent: '기존 원격 원문' });
+
+    await act(async () => {
+      await harness.controller.openImported({
+        ...harness.controller.items[0]!,
+        importState: 'imported',
+        localBookId: 'book-1',
+        localBookTitle: '연결된 작품',
+      });
+    });
+
+    expect(harness.openNovel).toHaveBeenCalledWith(expect.objectContaining({ id: 'book-1' }));
+    await act(async () => harness.renderer.unmount());
+  });
+
+  it('opens a local serialized comic as a release list even without a remote collection link', async () => {
+    const chapters = [
+      testChapter(1, { documentSectionId: 'local:01', documentSectionTitle: '01화', documentSectionIndex: 1 }),
+      testChapter(2, { documentSectionId: 'local:02', documentSectionTitle: '02화', documentSectionIndex: 2 }),
+    ];
+    const harness = await createHarness({ downloadedContent: '기존 원격 원문', chapters });
+    const serialized = novel({ format: 'image_archive', documentSectionCount: 2, totalChapters: 2 });
+
+    await act(async () => {
+      await harness.controller.showLocalSeries(serialized);
+    });
+
+    expect(harness.controller.open).toBe(true);
+    expect(harness.controller.localSeriesNovel?.id).toBe(serialized.id);
+    expect(harness.controller.items).toMatchObject([
+      { title: '01화', importState: 'imported', localBookId: serialized.id },
+      { title: '02화', importState: 'imported', localBookId: serialized.id },
+    ]);
+    await act(async () => harness.renderer.unmount());
+  });
+
+  it.each([
+    {
+      label: 'local IndexedDB without exact markers',
+      expected: ['unread', 'current', 'unread'],
+    },
+    {
+      label: 'self-host with exact markers',
+      expected: ['unread', 'current', 'unread'],
+    },
+  ])('uses exact recorded reads: $label', async (input) => {
+    const chapters = [1, 2, 3].map((index) =>
+      testChapter(index, {
+        documentSectionId: `local:${index}`,
+        documentSectionTitle: `${index}화`,
+        documentSectionIndex: index,
+      }),
+    );
+    const novelOverrides: Partial<Novel> = {
+      format: 'image_archive',
+      documentSectionCount: 3,
+      totalChapters: 3,
+      lastReadChapterId: 'chapter-2',
+      lastReadChapterIndex: 2,
+      lastReadProgress: 0.5,
+    };
+    const harness = await createHarness({
+      downloadedContent: '기존 원격 원문',
+      chapters,
+      novelOverrides,
+    });
+
+    await act(async () => {
+      await harness.controller.showLocalSeries(novel(novelOverrides));
+    });
+
+    expect(harness.controller.items.map((item) => item.readingState)).toEqual(input.expected);
+    await act(async () => harness.renderer.unmount());
+  });
+
+  it('keeps the current release stable while a later append refreshes the local projection', async () => {
+    const chapters = [1, 2].map((index) =>
+      testChapter(index, {
+        documentSectionId: `work-${index}`,
+        documentSectionTitle: `${index}화`,
+        documentSectionIndex: index,
+        documentSectionReadAt: index === 2 ? '2026-09-04T01:00:00.000Z' : undefined,
+      }),
+    );
+    let libraryNovel = novel({
+      format: 'image_archive',
+      documentSectionCount: 2,
+      totalChapters: 2,
+      lastReadChapterId: 'chapter-2',
+      lastReadChapterIndex: 2,
+      lastReadProgress: 0.5,
+      lastReadAt: '2026-09-04T01:00:00.000Z',
+    });
+    const harness = await createHarness({
+      downloadedContent: '기존 원격 원문',
+      serial: true,
+      serialCount: 2,
+      chapters,
+      libraryBooks: async () => [libraryNovel],
+      getNovel: async (id) => (id === libraryNovel.id ? libraryNovel : undefined),
+    });
+
+    await act(async () => harness.controller.showLocalSeries(libraryNovel));
+    expect(harness.controller.items.map((item) => item.readingState)).toEqual(['unread', 'current']);
+
+    libraryNovel = {
+      ...libraryNovel,
+      lastReadChapterId: 'stale-chapter-id',
+      lastReadChapterIndex: undefined,
+      lastReadProgress: 0,
+      lastReadAt: undefined,
+      activeContentRevisionId: 'revision-after-append',
+    };
+    await harness.refreshLibrary(1);
+
+    expect(harness.controller.items.map((item) => item.readingState)).toEqual(['unread', 'current']);
+    await act(async () => harness.renderer.unmount());
+  });
+
+  it('ignores repeated folder activation while the first navigation is loading', async () => {
+    const harness = await createHarness({ downloadedContent: '기존 원격 원문' });
+    let finishNavigation!: () => void;
+    const navigationGate = new Promise<void>((resolve) => {
+      finishNavigation = resolve;
+    });
+    vi.mocked(harness.registry.listExternalSource).mockImplementation(async (_sourceId, _context, listInput) => {
+      if (listInput.parentRef === 'source:fixture-catalog') await navigationGate;
+      return { items: [] };
+    });
+    const folder = {
+      key: { ...ITEM_KEY, remoteId: 'folder:fixture-catalog' },
+      kind: 'folder' as const,
+      title: '테스트 만화 (KO)',
+      navigationRef: 'source:fixture-catalog',
+      importability: 'unsupported' as const,
+      selected: false,
+      importState: 'unsupported' as const,
+    };
+
+    let first!: Promise<void>;
+    let repeated!: Promise<void>;
+    act(() => {
+      first = harness.controller.openFolder(folder);
+      repeated = harness.controller.openFolder(folder);
+    });
+
+    expect(harness.controller.breadcrumbs.filter((item) => item.label === folder.title)).toHaveLength(1);
+    finishNavigation();
+    await act(async () => {
+      await Promise.all([first, repeated]);
+    });
+    expect(harness.registry.listExternalSource).toHaveBeenCalledTimes(2);
+    expect(harness.controller.breadcrumbs.filter((item) => item.label === folder.title)).toHaveLength(1);
+    await act(async () => harness.renderer.unmount());
+  });
+
+  it('queues another release button while the current release is downloading', async () => {
+    const chapterFile = await singlePageComicFile();
+    let current: Novel | undefined;
+    let saved = 0;
+    let finishFirstDownload!: () => void;
+    const firstDownloadGate = new Promise<void>((resolve) => {
+      finishFirstDownload = resolve;
+    });
+    const harness = await createHarness({
+      downloadedContent: '',
+      downloadedFile: chapterFile,
+      localBookMissing: true,
+      serial: true,
+      serialCount: 2,
+      supportsIncrementalImageSeriesAppend: true,
+      supportsExpectedSourceContentHash: true,
+      libraryBooks: async () => (current ? [current] : []),
+      getNovel: async (id) => (current?.id === id ? current : undefined),
+    });
+    harness.importFile.mockImplementation((request) => ({
+      jobId: `job-${saved + 1}`,
+      cancel: vi.fn(),
+      promise: (async () => {
+        saved += 1;
+        current = novel({
+          id: request.clientBookId ?? 'book-1',
+          format: 'image_archive',
+          documentSectionCount: saved,
+          sourceContentHash: await sha256(await request.file.arrayBuffer()),
+          activeContentRevisionId: `revision-${saved}`,
+        });
+        return { novel: current };
+      })(),
+    }));
+    vi.mocked(harness.registry.downloadExternalSource).mockImplementation(async (_sourceId, _context, ref) => {
+      if (ref.key.remoteId === 'work-1') await firstDownloadGate;
+      return { file: chapterFile, remoteRevision: 'remote-r2' };
+    });
+
+    let importPromise!: Promise<void>;
+    await act(async () => {
+      importPromise = harness.controller.importItem(harness.controller.items[0]!);
+      await vi.waitFor(() => expect(harness.registry.downloadExternalSource).toHaveBeenCalledOnce());
+    });
+    await act(async () => harness.controller.importItem(harness.controller.items[1]!));
+
+    expect(harness.controller.canQueueItem(harness.controller.items[1]!)).toBe(true);
+    expect(
+      harness.controller.canQueueItem({
+        ...harness.controller.items[1]!,
+        collection: { ...harness.controller.items[1]!.collection!, remoteId: 'manga:other' },
+      }),
+    ).toBe(false);
+    expect(harness.controller.tasks).toMatchObject([
+      { externalItemKey: 'fixture.source::fixture-account::work-1', phase: 'downloading', total: 2 },
+      { externalItemKey: 'fixture.source::fixture-account::work-2', phase: 'queued', total: 2 },
+    ]);
+    finishFirstDownload();
+    await act(async () => importPromise);
+    expect(harness.registry.downloadExternalSource).toHaveBeenCalledTimes(2);
+    expect(harness.controller.tasks).toEqual([]);
+    await act(async () => harness.renderer.unmount());
+  });
+
+  it('preserves the loaded page and retry cursor when loading more fails', async () => {
+    const harness = await createHarness({ downloadedContent: '기존 원격 원문' });
+    const page = {
+      detail: { title: '연동 작품', description: '작품 상세' },
+      browse: { activeMode: 'popular' as const, availableModes: ['popular' as const], filters: [] },
+      items: [
+        {
+          key: { ...ITEM_KEY, remoteId: 'chapter:11' },
+          kind: 'file' as const,
+          title: '1화',
+          mimeType: 'text/plain',
+          importability: 'supported' as const,
+        },
+      ],
+      nextCursor: 'second-page',
+    };
+    vi.mocked(harness.registry.listExternalSource).mockResolvedValueOnce(page);
+    await act(async () => harness.controller.refresh());
+    await act(async () => harness.controller.toggleItem('fixture.source::fixture-account::chapter:11'));
+    const previousItems = harness.controller.items;
+    const previousFilters = harness.controller.filterValues;
+    vi.mocked(harness.registry.listExternalSource).mockRejectedValueOnce(new Error('temporary page failure'));
+    await act(async () => harness.controller.loadMore());
+    expect(harness.controller.items).toEqual(previousItems);
+    expect(harness.controller.nextCursor).toBe('second-page');
+    expect(harness.controller.detail).toEqual(page.detail);
+    expect(harness.controller.browse).toEqual(page.browse);
+    expect(harness.controller.filterValues).toEqual(previousFilters);
+    expect(harness.controller.loading).toBe(false);
+    expect(harness.controller.listError?.message).toContain('목록을 불러오지 못했습니다');
+    expect(harness.notify).toHaveBeenLastCalledWith(harness.controller.listError?.message, 'danger');
+    expect(harness.notify.mock.calls.at(-1)?.[0]).not.toContain('temporary page failure');
+    vi.mocked(harness.registry.listExternalSource).mockResolvedValueOnce({
+      items: [{ ...page.items[0]!, key: { ...ITEM_KEY, remoteId: 'chapter:12' }, title: '2화' }],
+    });
+    await act(async () => harness.controller.listError!.retry());
+    expect(harness.registry.listExternalSource).toHaveBeenLastCalledWith(
+      SOURCE_ID,
+      expect.anything(),
+      expect.objectContaining({ cursor: 'second-page' }),
+      expect.any(AbortSignal),
+    );
+    expect(harness.controller.items.map((item) => item.title)).toEqual(['1화', '2화']);
+    expect(harness.controller.listError).toBeUndefined();
+    await act(async () => harness.renderer.unmount());
+  });
+
+  it('opens a catalog work as a detail and chapter page without enabling folder pinning', async () => {
+    const harness = await createHarness({ downloadedContent: '기존 원격 원문' });
+    vi.mocked(harness.registry.listExternalSource).mockResolvedValueOnce({
+      detail: { title: '연동 작품', author: '작가', description: '작품 상세' },
+      items: [
+        {
+          key: { ...ITEM_KEY, remoteId: 'chapter:11' },
+          kind: 'file',
+          title: '1화',
+          mimeType: 'application/vnd.comicbook+zip',
+          formatHint: 'CBZ',
+          importability: 'supported',
+        },
+      ],
+    });
+
+    await act(async () => {
+      await harness.controller.openItem({
+        ...harness.controller.items[0]!,
+        kind: 'work',
+        title: '연동 작품',
+        navigationRef: 'manga:1',
+        importability: 'unsupported',
+        importState: 'unsupported',
+      });
+    });
+
+    expect(harness.registry.listExternalSource).toHaveBeenLastCalledWith(
+      SOURCE_ID,
+      expect.anything(),
+      expect.objectContaining({ parentRef: 'manga:1' }),
+      expect.any(AbortSignal),
+    );
+    expect(harness.controller.detail).toEqual(expect.objectContaining({ title: '연동 작품', author: '작가' }));
+    expect(harness.controller.items[0]).toEqual(expect.objectContaining({ title: '1화', importState: 'available' }));
+    expect(harness.controller.currentLocationCanBeDefault).toBe(false);
+    await act(async () => harness.renderer.unmount());
+  });
+
+  it('keeps folder searches paginated, then clears the work search before fetching more releases', async () => {
+    const harness = await createHarness({ downloadedContent: '본문' });
+    const sourceRef = 'text:["novels"]';
+    const workRef = 'text:["novels","work"]';
+    const work = { ...harness.controller.items[0]!, title: '검색한 작품', navigationRef: workRef };
+    const requests: Array<{ parentRef?: string; query?: string; cursor?: string }> = [];
+    vi.mocked(harness.registry.listExternalSource).mockImplementation(async (_source, _host, input) => {
+      requests.push(input);
+      if (input.parentRef === sourceRef) {
+        return {
+          items: input.cursor ? [] : [work],
+          nextCursor: input.cursor ? undefined : 'next-works',
+          browse: { activeMode: 'search', availableModes: ['search'] },
+        };
+      }
+      if (input.query) throw new Error('invalid_query');
+      return {
+        detail: { title: work.title },
+        items: Array.from({ length: input.cursor ? 2 : 50 }, (_, index) => ({
+          key: { ...ITEM_KEY, remoteId: `release:${(input.cursor ? 50 : 0) + index}` },
+          kind: 'file' as const,
+          title: `${(input.cursor ? 50 : 0) + index + 1}화`,
+          mimeType: 'text/plain',
+          importability: 'supported' as const,
+        })),
+        nextCursor: input.cursor ? undefined : 'next-releases',
+      };
+    });
+    try {
+      await act(async () => harness.controller.openFolder({ ...work, kind: 'folder', navigationRef: sourceRef }));
+      await act(async () => harness.controller.setQuery('검색한 작품'));
+      await act(async () => harness.controller.search());
+      await act(async () => harness.controller.loadMore());
+      expect(requests.at(-1)).toMatchObject({ parentRef: sourceRef, query: '검색한 작품', cursor: 'next-works' });
+      expect(harness.controller.query).toBe('검색한 작품');
+
+      await act(async () => harness.controller.openItem(harness.controller.items[0]!));
+      expect(harness.controller.query).toBe('');
+      expect(harness.controller.items).toHaveLength(52);
+      await act(async () => harness.controller.loadMore());
+      expect(requests.at(-1)).toMatchObject({ parentRef: workRef, cursor: 'next-releases' });
+      expect(requests.at(-1)?.query).toBeUndefined();
+      expect(harness.controller.items).toHaveLength(52);
+      expect(harness.controller.listError).toBeUndefined();
+      await act(async () => harness.controller.refresh());
+      expect(requests.at(-1)).toMatchObject({ parentRef: workRef, query: undefined });
+      expect(harness.controller.listError).toBeUndefined();
+    } finally {
+      await act(async () => harness.renderer.unmount());
+    }
+  });
+
+  it('persists a catalog browse preference and restores it when reopening the source folder', async () => {
+    const preference: ExternalSourceCatalogPreference = {
+      id: 'external-source-catalog-preference::fixture.source::fixture-account::source:9',
+      connectorId: SOURCE_ID,
+      accountConnectionId: 'fixture-account',
+      parentRef: 'source:9',
+      browseMode: 'latest',
+      filterValues: { '0': 1 },
+      filters: [{ position: 0, value: 1 }],
+      updatedAt: '2026-08-26T00:00:00.000Z',
+      schemaVersion: 1,
+    };
+    const harness = await createHarness({ downloadedContent: '기존 원격 원문', catalogPreference: preference });
+    vi.mocked(harness.registry.listExternalSource).mockResolvedValueOnce({
+      items: [],
+      browse: { activeMode: 'latest', availableModes: ['popular', 'latest', 'search'] },
+    });
+
+    await act(async () => {
+      await harness.controller.openFolder({
+        ...harness.controller.items[0]!,
+        kind: 'folder',
+        navigationRef: 'source:9',
+        importability: 'unsupported',
+        importState: 'unsupported',
+      });
+    });
+
+    expect(harness.registry.listExternalSource).toHaveBeenLastCalledWith(
+      SOURCE_ID,
+      expect.anything(),
+      expect.objectContaining({ parentRef: 'source:9', browseMode: 'latest', filters: [{ position: 0, value: 1 }] }),
+      expect.any(AbortSignal),
+    );
+    expect(harness.controller.filterValues).toEqual({ '0': 1 });
+    await act(async () => harness.renderer.unmount());
+  });
+
+  it('retains catalog navigation while a work is open and returns directly to the selected mode', async () => {
+    const harness = await createHarness({
+      downloadedContent: '기존 원격 원문',
+      browse: { activeMode: 'popular', availableModes: ['popular', 'latest', 'search'] },
+    });
+    const work = { ...harness.controller.items[0]!, navigationRef: 'work-1' };
+    vi.mocked(harness.registry.listExternalSource).mockResolvedValueOnce({
+      detail: { title: '상세 작품' },
+      items: [],
+    });
+    await act(async () => harness.controller.openItem(work));
+
+    expect(harness.controller.browse).toBeUndefined();
+    expect(harness.controller.catalogBrowse?.availableModes).toContain('latest');
+
+    vi.mocked(harness.registry.listExternalSource).mockResolvedValueOnce({
+      items: [work],
+      browse: { activeMode: 'latest', availableModes: ['popular', 'latest', 'search'] },
+    });
+    await act(async () => harness.controller.openCatalogBrowse('latest'));
+
+    expect(harness.registry.listExternalSource).toHaveBeenLastCalledWith(
+      SOURCE_ID,
+      expect.anything(),
+      expect.objectContaining({ parentRef: undefined, browseMode: 'latest' }),
+      expect.any(AbortSignal),
+    );
+    expect(harness.controller.detail).toBeUndefined();
+    expect(harness.controller.catalogBrowse?.activeMode).toBe('latest');
+    await act(async () => harness.renderer.unmount());
+  });
+
+  it('offers library tracking for a complete v2 serial source without a legacy subscription marker', async () => {
+    const harness = await createHarness({
+      downloadedContent: '기존 원격 원문',
+      descriptor: {
+        id: SOURCE_ID,
+        schemaVersion: 2,
+        title: '설치형 텍스트 소스',
+        kind: 'catalog',
+        capabilities: ['browse', 'work-details', 'release-list', 'release-download', 'document-content'],
+        runtimes: ['self-host-gateway'],
+        seriesProfile: {
+          kind: 'document_series',
+          format: 'txt',
+          encoding: 'utf-8',
+          chapterSplitMode: 'single',
+        },
+      },
+    });
+
+    expect(harness.controller.sources[0]?.supportsSubscriptions).toBe(true);
+    await act(async () => harness.renderer.unmount());
+  });
+
+  it('adds a work to the library, detects later releases and selects only the new releases', async () => {
+    const harness = await createHarness({ downloadedContent: '기존 원격 원문', supportsSubscriptions: true });
+    const chapter = (id: number, title: string) => ({
+      key: { ...ITEM_KEY, remoteId: `chapter:${id}` },
+      kind: 'file' as const,
+      title,
+      mimeType: 'application/vnd.comicbook+zip',
+      formatHint: 'CBZ',
+      collection: { remoteId: 'manga:1', title: '연동 작품' },
+      release: { title, chapterNumber: id },
+      importability: 'supported' as const,
+    });
+    vi.mocked(harness.registry.listExternalSource).mockResolvedValueOnce({
+      detail: { title: '연동 작품', author: '작가', sourceLabel: '테스트 소스' },
+      items: [chapter(11, '11화')],
+    });
+    await act(async () => {
+      await harness.controller.openItem({
+        ...harness.controller.items[0]!,
+        kind: 'work',
+        title: '연동 작품',
+        navigationRef: 'manga:1',
+        importability: 'unsupported',
+        importState: 'unsupported',
+      });
+      await harness.controller.addCurrentWorkToLibrary();
+    });
+
+    expect(harness.controller.activeSubscription).toMatchObject({
+      title: '연동 작품',
+      knownReleaseIds: ['chapter:11'],
+      newReleaseIds: [],
+    });
+    expect(harness.controller.libraryWorks).toEqual([
+      expect.objectContaining({ title: '연동 작품', thumbnailUrl: undefined }),
+    ]);
+    vi.mocked(harness.registry.listExternalSource).mockResolvedValueOnce({
+      detail: { title: '연동 작품', author: '작가', sourceLabel: '테스트 소스' },
+      items: [chapter(11, '11화'), chapter(12, '12화')],
+    });
+    await act(async () => {
+      await harness.controller.refresh();
+    });
+
+    expect(harness.controller.activeSubscription?.newReleaseIds).toEqual(['chapter:12']);
+    expect(harness.controller.sources[0]?.newReleaseCount).toBe(1);
+    act(() => harness.controller.selectNewReleases());
+    expect(harness.controller.items).toMatchObject([
+      { key: { remoteId: 'chapter:11' }, selected: false },
+      { key: { remoteId: 'chapter:12' }, selected: true },
+    ]);
+    await act(async () => {
+      await harness.controller.acknowledgeNewReleases();
+    });
+    expect(harness.controller.activeSubscription?.newReleaseIds).toEqual([]);
+    await act(async () => harness.renderer.unmount());
+  });
+
+  it('adds a browsed Suwayomi work to the library without opening its detail screen', async () => {
+    const harness = await createHarness({ downloadedContent: '기존 원격 원문', supportsSubscriptions: true });
+    vi.mocked(harness.registry.listExternalSource).mockResolvedValueOnce({
+      detail: {
+        title: '원클릭 작품',
+        author: '작가',
+        thumbnailUrl: 'http://localhost:4567/cover.jpg',
+        sourceLabel: '테스트 소스',
+      },
+      items: [
+        {
+          key: { ...ITEM_KEY, remoteId: 'chapter:1' },
+          kind: 'file',
+          title: '1화',
+          collection: { remoteId: 'manga:quick', title: '원클릭 작품' },
+          release: { title: '1화', chapterNumber: 1 },
+          importability: 'supported',
+        },
+      ],
+    });
+
+    await act(async () => {
+      await harness.controller.addWorkToLibrary({
+        key: { ...ITEM_KEY, remoteId: 'manga:quick' },
+        kind: 'work',
+        title: '원클릭 작품',
+        navigationRef: 'manga:quick',
+        importability: 'unsupported',
+        selected: false,
+        importState: 'unsupported',
+      });
+    });
+
+    expect(harness.controller.detail).toBeUndefined();
+    expect(harness.controller.libraryWorks).toEqual([
+      expect.objectContaining({
+        title: '원클릭 작품',
+        thumbnailUrl: 'http://localhost:4567/cover.jpg',
+        knownReleaseIds: ['chapter:1'],
+      }),
+    ]);
+    expect(harness.notify).toHaveBeenCalledWith(expect.stringContaining('라이브러리에 추가했습니다'), 'success');
+    await act(async () => harness.renderer.unmount());
+  });
+
+  it('stores a session-only Suwayomi cover as persistent local image data when adding a work', async () => {
+    const harness = await createHarness({ downloadedContent: '기존 원격 원문', supportsSubscriptions: true });
+    const previousFetch = globalThis.fetch;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        async () =>
+          new Response(new Uint8Array([1, 2, 3]), {
+            status: 200,
+            headers: { 'Content-Type': 'image/png' },
+          }),
+      ),
+    );
+    vi.mocked(harness.registry.listExternalSource).mockResolvedValueOnce({
+      detail: {
+        title: '표지 저장 작품',
+        thumbnailUrl: 'blob:work-cover',
+        sourceLabel: '테스트 소스',
+      },
+      items: [],
+    });
+
+    try {
+      await act(async () => {
+        await harness.controller.addWorkToLibrary({
+          key: { ...ITEM_KEY, remoteId: 'manga:cover' },
+          kind: 'work',
+          title: '표지 저장 작품',
+          navigationRef: 'manga:cover',
+          importability: 'unsupported',
+          selected: false,
+          importState: 'unsupported',
+        });
+      });
+
+      expect(harness.controller.libraryWorks[0]?.thumbnailUrl).toBe('data:image/png;base64,AQID');
+      expect(harness.state.saveSubscription).toHaveBeenCalledWith(
+        expect.objectContaining({ thumbnailUrl: 'data:image/png;base64,AQID' }),
+      );
+    } finally {
+      vi.stubGlobal('fetch', previousFetch);
+      await act(async () => harness.renderer.unmount());
+    }
+  });
+
+  it.each(['browser-archive', 'server-receipt', 'unchanged-receipt', 'cover-reference'] as const)(
+    'persists or repairs a subscribed source cover with %s',
+    async (transport) => {
+      const coverBytes = Uint8Array.from(
+        Buffer.from(
+          'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9WlS8AAAAASUVORK5CYII=',
+          'base64',
+        ),
+      );
+      const coverUrl = `data:image/png;base64,${Buffer.from(coverBytes).toString('base64')}`;
+      const saveApprovedEnrichmentCover = vi.fn(async (_bookId, input) => ({
+        current: {
+          id: 'source-cover',
+          bookId: _bookId,
+          kind: 'cover',
+          provenance: 'approved_enrichment',
+          status: 'active',
+          storageKey: 'source-cover',
+          fileName: input.fileName,
+          contentType: input.contentType,
+          byteLength: input.blob.size,
+          contentHash: input.contentHash,
+          pixelWidth: input.pixelWidth,
+          pixelHeight: input.pixelHeight,
+          createdAt: '2026-08-30T00:00:00.000Z',
+          activatedAt: '2026-08-30T00:00:00.000Z',
+        } satisfies BookAssetMetadata,
+        metadataRevision: 1,
+      }));
+      const assets = {
+        getActiveCover: vi.fn(async () => ({ metadata: { provenance: 'archive_embedded' }, blob: new Blob() })),
+        saveApprovedEnrichmentCover,
+      } as unknown as BookAssetRepository;
+      const previousCreateImageBitmap = globalThis.createImageBitmap;
+      vi.stubGlobal(
+        'createImageBitmap',
+        vi.fn(async () => ({ width: 1, height: 1, close: vi.fn() }) as unknown as ImageBitmap),
+      );
+      const timestamp = '2026-08-30T00:00:00.000Z';
+      let preparedNovel: Novel | undefined;
+      const hosted = transport !== 'browser-archive';
+      const unchanged = transport === 'unchanged-receipt';
+      const resolveCover = vi.fn(async () => coverUrl);
+      const port: import('../../services/import/hosted-image-import').HostedImageImportPort = {
+        download: vi.fn(async () => ({
+          artifactId: 'cover-chapter',
+          sourceContentHash: await sha256(unchanged ? '기존 원격 원문' : 'new chapter'),
+          byteLength: 100,
+        })),
+        assemble: vi.fn(async (input) => {
+          preparedNovel = novel({
+            id: input.clientBookId!,
+            format: 'image_archive',
+            sourceContentHash: await sha256('aggregate'),
+            activeContentRevisionId: 'new',
+          });
+          return { uploadId: 'cover-upload', sourceContentHash: preparedNovel.sourceContentHash!, byteLength: 120 };
+        }),
+        discard: vi.fn(async () => {}),
+      };
+      const harness = await createHarness({
+        downloadedContent: '',
+        downloadedFile: await singlePageComicFile(),
+        localBookMissing: !unchanged,
+        novelOverrides: { format: 'image_archive', activeContentRevisionId: 'old', documentSectionCount: 1 },
+        initialLinkOverrides: { collectionRemoteId: 'manga:1' },
+        ...(hosted
+          ? {
+              hostedImageImport: port,
+              importPrepared: () => ({
+                jobId: 'cover-job',
+                cancel: vi.fn(),
+                promise: Promise.resolve({ novel: preparedNovel! }),
+              }),
+              ...(!unchanged ? { getNovel: async () => preparedNovel } : {}),
+            }
+          : {}),
+        serial: true,
+        supportsIncrementalImageSeriesAppend: true,
+        supportsExpectedSourceContentHash: true,
+        assets,
+        ...(transport === 'cover-reference'
+          ? {
+              detail: { title: '연동 작품', coverRef: { ...ITEM_KEY, remoteId: 'manga:1' } },
+              resolveCover,
+            }
+          : {}),
+        subscriptions: [
+          {
+            id: 'subscription-1',
+            connectorId: SOURCE_ID,
+            accountConnectionId: 'fixture-account',
+            collectionRemoteId: 'manga:1',
+            navigationRef: 'manga:1',
+            title: '연동 작품',
+            thumbnailUrl: transport === 'cover-reference' ? undefined : coverUrl,
+            knownReleaseIds: ['work-1'],
+            newReleaseIds: [],
+            availableReleaseCount: 1,
+            lastCheckedAt: timestamp,
+            createdAt: timestamp,
+            updatedAt: timestamp,
+            schemaVersion: 1,
+          },
+        ],
+      });
+
+      try {
+        await act(async () => {
+          await harness.controller.importSelected();
+        });
+
+        expect(saveApprovedEnrichmentCover).toHaveBeenCalledWith(
+          expect.any(String),
+          expect.objectContaining({
+            contentType: 'image/png',
+            contentHash: integrityHash(coverBytes),
+            expectedMetadataRevision: 0,
+            fit: 'crop',
+          }),
+        );
+        if (hosted) expect(harness.importFile).not.toHaveBeenCalled();
+        else expect(harness.importFile.mock.calls[0]![0]).not.toHaveProperty('importMode');
+        if (unchanged) expect(port.assemble).not.toHaveBeenCalled();
+        // The library resolves artwork independently of the downloaded book cover.
+        if (transport === 'cover-reference') expect(resolveCover).toHaveBeenCalledTimes(2);
+        expect(harness.notify).toHaveBeenCalledWith(expect.stringContaining('1개 회차'), 'success');
+      } finally {
+        vi.stubGlobal('createImageBitmap', previousCreateImageBitmap);
+        await act(async () => harness.renderer.unmount());
+      }
+    },
+  );
+
+  it('uploads only a Suwayomi chapter delta when the active importer supports series append', async () => {
+    const exportSource = vi.fn(async () => ({ metadata: {} as BookAssetMetadata, blob: new Blob(['old aggregate']) }));
+    const assets = {
+      exportSource,
+      getActiveCover: vi.fn(async () => undefined),
+    } as unknown as BookAssetRepository;
+    const finalAggregateHash = await sha256('server merged aggregate');
+    const harness = await createHarness({
+      downloadedContent: '',
+      downloadedFile: await singlePageComicFile(),
+      serial: true,
+      assets,
+      supportsIncrementalImageSeriesAppend: true,
+      supportsExpectedSourceContentHash: true,
+      novelOverrides: {
+        format: 'image_archive',
+        documentSectionCount: 1,
+        sourceFileName: '연동 작품.cbz',
+      },
+      initialLinkOverrides: { collectionRemoteId: 'manga:1' },
+      importedContent: novel({
+        format: 'image_archive',
+        documentSectionCount: 1,
+        sourceFileName: '연동 작품.cbz',
+        sourceContentHash: finalAggregateHash,
+        activeContentRevisionId: 'content-merged',
+      }),
+    });
+
+    await act(async () => {
+      await harness.controller.importSelected();
+    });
+
+    expect(exportSource).not.toHaveBeenCalled();
+    const request = harness.importFile.mock.calls[0]![0];
+    expect(request).toMatchObject({
+      clientBookId: 'book-1',
+      importMode: 'append_image_series',
+      baseActiveContentRevisionId: 'content-old',
+    });
+    expect(request.expectedSourceContentHash).toBe(`sha256:${await sha256(await request.file.arrayBuffer())}`);
+    const manifest = await readSeriesImageArchiveManifest(request.file);
+    expect(manifest).toMatchObject({
+      targetBookId: 'book-1',
+      chapters: [
+        {
+          remoteId: 'work-1',
+          title: '1화',
+          expectedPreviousSourceContentHash: harness.oldHash,
+        },
+      ],
+    });
+    expect(harness.currentLink).toMatchObject({
+      activeContentRevisionId: 'content-merged',
+      importedRemoteRevision: 'remote-r2',
+      pendingImport: undefined,
+    });
+    await act(async () => harness.renderer.unmount());
+  });
+
+  it('repairs an importer-resolved pending link from the active aggregate after a restart', async () => {
+    const releaseFile = await singlePageComicFile();
+    const releaseHash = await sha256(await releaseFile.arrayBuffer());
+    const aggregate = await buildSeriesImageArchive({
+      collection: { remoteId: 'manga:1', title: '연동 작품' },
+      targetBookId: 'book-1',
+      chapters: [
+        {
+          remoteId: 'work-1',
+          release: { title: '1화', chapterNumber: 1 },
+          remoteRevision: 'remote-r3',
+          sourceContentHash: releaseHash,
+          file: releaseFile,
+        },
+      ],
+      signal: new AbortController().signal,
+    });
+    const aggregateHash = await sha256(await aggregate.arrayBuffer());
+    const exportSource = vi.fn(async () => ({
+      metadata: { contentHash: aggregateHash } as BookAssetMetadata,
+      blob: aggregate,
+    }));
+    const harness = await createHarness({
+      downloadedContent: '',
+      serial: true,
+      assets: { exportSource, getActiveCover: vi.fn(async () => undefined) } as unknown as BookAssetRepository,
+      novelOverrides: {
+        format: 'image_archive',
+        sourceFileName: aggregate.name,
+        sourceContentHash: aggregateHash,
+        activeContentRevisionId: 'content-merged',
+      },
+      initialLinkOverrides: {
+        collectionRemoteId: 'manga:1',
+        pendingImport: {
+          operationId: 'interrupted-import',
+          stagedAt: '2026-08-30T00:00:00.000Z',
+          hadExistingLink: true,
+          previousActiveContentRevisionId: 'content-old',
+          expectedActiveSourceContentHash: 'uploaded-delta-hash',
+          sourceHashResolvedByImporter: true,
+          collectionRemoteId: 'manga:1',
+          importedRemoteRevision: 'remote-r2',
+          importedSourceContentHash: releaseHash,
+        },
+      },
+    });
+
+    expect(exportSource).toHaveBeenCalledWith('book-1');
+    expect(harness.currentLink).toMatchObject({
+      activeContentRevisionId: 'content-merged',
+      importedRemoteRevision: 'remote-r2',
+      importedSourceContentHash: releaseHash,
+      pendingImport: undefined,
+    });
+    await act(async () => harness.renderer.unmount());
+  });
+
+  it('keeps the full aggregate fallback when the importer cannot append image-series deltas', async () => {
+    const existingArchive = await singlePageComicFile();
+    const exportSource = vi.fn(async () => ({
+      metadata: {} as BookAssetMetadata,
+      blob: existingArchive,
+    }));
+    const harness = await createHarness({
+      downloadedContent: '',
+      downloadedFile: await singlePageComicFile(),
+      serial: true,
+      assets: { exportSource, getActiveCover: vi.fn(async () => undefined) } as unknown as BookAssetRepository,
+      novelOverrides: { format: 'image_archive', documentSectionCount: 1 },
+    });
+
+    await act(async () => {
+      await harness.controller.importSelected();
+    });
+
+    expect(exportSource).toHaveBeenCalledWith('book-1');
+    expect(harness.importFile.mock.calls[0]![0]).not.toHaveProperty('importMode');
+    await act(async () => harness.renderer.unmount());
+  });
+
+  it('advances only the checked link revision when exact source bytes did not change', async () => {
+    const harness = await createHarness({ downloadedContent: '기존 원격 원문' });
+
+    await act(async () => {
+      await harness.controller.importSelected();
+    });
+
+    expect(harness.confirm).toHaveBeenCalledOnce();
+    expect(harness.importFile).not.toHaveBeenCalled();
+    expect(harness.saveLink).toHaveBeenCalledOnce();
+    expect(harness.currentLink).toMatchObject({
+      localBookId: 'book-1',
+      importedRemoteRevision: 'remote-r2',
+      importedSourceContentHash: harness.oldHash,
+      activeContentRevisionId: 'content-old',
+    });
+    expect(harness.notify).toHaveBeenCalledWith(expect.stringContaining('연결 revision만 갱신했습니다'), 'success');
+    await act(async () => harness.renderer.unmount());
+  });
+
+  it('imports changed bytes into the existing local book identity', async () => {
+    const nextNovel = novel({
+      id: 'book-1',
+      sourceContentHash: await sha256('변경된 원격 원문'),
+      activeContentRevisionId: 'content-new',
+    });
+    const harness = await createHarness({ downloadedContent: '변경된 원격 원문', importedContent: nextNovel });
+
+    await act(async () => {
+      await harness.controller.importSelected();
+    });
+
+    expect(harness.importFile).toHaveBeenCalledWith(
+      expect.objectContaining({ clientBookId: 'book-1' }),
+      expect.any(Function),
+    );
+    expect(harness.currentLink).toMatchObject({
+      localBookId: 'book-1',
+      importedRemoteRevision: 'remote-r2',
+      activeContentRevisionId: 'content-new',
+    });
+    expect(harness.notify).toHaveBeenCalledWith(expect.stringContaining('본문을 업데이트했습니다'), 'success');
+    await act(async () => harness.renderer.unmount());
+  });
+
+  it('does not advance the old link revision when changed content import fails', async () => {
+    const harness = await createHarness({
+      downloadedContent: '가져오기에 실패할 원격 원문',
+      importError: new Error('fixture import failed'),
+    });
+
+    await act(async () => {
+      await harness.controller.importSelected();
+    });
+
+    expect(harness.importFile).toHaveBeenCalledWith(
+      expect.objectContaining({ clientBookId: 'book-1' }),
+      expect.any(Function),
+    );
+    expect(harness.saveLink).toHaveBeenCalled();
+    expect(harness.currentLink).toMatchObject({
+      importedRemoteRevision: 'remote-r1',
+      activeContentRevisionId: 'content-old',
+    });
+    expect(harness.currentLink.pendingImport).toBeUndefined();
+    expect(harness.notify).toHaveBeenCalledWith(expect.stringContaining('기존 본문과 연결을 유지했습니다'), 'warning');
+    await act(async () => harness.renderer.unmount());
+  });
+
+  it('keeps the activated content link when the post-import refresh read fails', async () => {
+    const sourceContentHash = await sha256('적용 뒤 조회가 실패할 원문');
+    const harness = await createHarness({
+      downloadedContent: '적용 뒤 조회가 실패할 원문',
+      importedContent: novel({ sourceContentHash, activeContentRevisionId: 'content-new' }),
+      getNovelErrorAfterImport: true,
+    });
+
+    await act(async () => {
+      await harness.controller.importSelected();
+    });
+
+    expect(harness.currentLink).toMatchObject({
+      importedRemoteRevision: 'remote-r2',
+      importedSourceContentHash: sourceContentHash,
+      activeContentRevisionId: 'content-new',
+    });
+    expect(harness.currentLink.pendingImport).toBeUndefined();
+    expect(harness.notify).toHaveBeenCalledWith(expect.stringContaining('본문을 업데이트했습니다'), 'success');
+    await act(async () => harness.renderer.unmount());
+  });
+
+  it('reports cancellation without emitting an empty success toast or advancing the link', async () => {
+    const harness = await createHarness({
+      downloadedContent: '취소할 원격 원문',
+      importError: new DOMException('Aborted', 'AbortError'),
+    });
+
+    await act(async () => {
+      await harness.controller.importSelected();
+    });
+
+    expect(harness.saveLink).toHaveBeenCalled();
+    expect(harness.currentLink.importedRemoteRevision).toBe('remote-r1');
+    expect(harness.currentLink.pendingImport).toBeUndefined();
+    expect(harness.notify).toHaveBeenCalledWith(
+      '가져오기를 취소했습니다. 취소된 작품은 기존 본문과 연결을 유지합니다.',
+      'warning',
+    );
+    await act(async () => harness.renderer.unmount());
+  });
+
+  it('offers re-import when a persisted link points to a deleted local book', async () => {
+    const harness = await createHarness({
+      downloadedContent: '복구할 원격 원문',
+      localBookMissing: true,
+    });
+
+    expect(harness.controller.items[0]?.importState).toBe('available');
+    await act(async () => {
+      await harness.controller.importSelected();
+    });
+
+    expect(harness.confirm).not.toHaveBeenCalled();
+    expect(harness.importFile).toHaveBeenCalledWith(
+      expect.objectContaining({ clientBookId: 'book-1' }),
+      expect.any(Function),
+    );
+    expect(harness.currentLink.localBookId).toBe('book-1');
+    await act(async () => harness.renderer.unmount());
+  });
+});
+
+describe('source streaming connection', () => {
+  beforeEach(() => {
+    streamingFixture = true;
+    const values = new Map([['boaa.source-reading.v1', JSON.stringify({ mode: 'stream', textMode: 'stream' })]]);
+    vi.stubGlobal('localStorage', {
+      getItem: (key: string) => values.get(key) ?? null,
+      setItem: (key: string, value: string) => values.set(key, value),
+    });
+  });
+  it.each([0, 1, 3])(
+    'honors %i automatic following downloads while streaming without changing the open episode',
+    async (count) => {
+      const h = await createHarness({
+        downloadedContent: '',
+        downloadedFile: await singlePageComicFile(),
+        serial: true,
+        serialCount: 5,
+        localBookMissing: true,
+        novelOverrides: { format: 'image_archive', documentSectionCount: 1 },
+        supportsIncrementalImageSeriesAppend: true,
+        supportsExpectedSourceContentHash: true,
+      });
+      h.registry.getSourceStream = () => ({ open: vi.fn() });
+      try {
+        await act(async () => h.controller.setAutoDownloadNext?.(false));
+        await act(async () => h.controller.importAndOpen(h.controller.items[0]!));
+        if (count) {
+          await act(async () => h.controller.setAutoDownloadNextCount?.(count as 1 | 3));
+          await act(async () => h.controller.setAutoDownloadNext?.(true));
+          await act(async () => {
+            await vi.waitFor(() => expect(h.registry.downloadExternalSource).toHaveBeenCalledTimes(count));
+          });
+          await act(async () => {
+            await vi.waitFor(() => expect(h.controller.importBusy).toBe(false));
+          });
+        }
+        expect(vi.mocked(h.registry.downloadExternalSource).mock.calls.map((call) => call[2].key.remoteId)).toEqual(
+          ['work-2', 'work-3', 'work-4'].slice(0, count),
+        );
+        expect(h.controller.tasks.filter((task) => task.phase !== 'complete')).toEqual([]);
+        expect(h.importFile).toHaveBeenCalledTimes(count);
+        expect(h.controller.streaming?.item.key.remoteId).toBe('work-1');
+        expect(h.openNovel).not.toHaveBeenCalled();
+      } finally {
+        await act(async () => h.renderer.unmount());
+      }
+    },
+  );
+
+  it('does not download an already saved neighbor when the streaming chapter itself is not saved', async () => {
+    const h = await createHarness({
+      downloadedContent: '',
+      serial: true,
+      serialCount: 3,
+      initialLinkOverrides: { source: { ...ITEM_KEY, remoteId: 'work-2' }, collectionRemoteId: 'manga:1' },
+      chapters: [testChapter(2, { documentSectionId: 'work-2' })],
+      novelOverrides: { format: 'image_archive', documentSectionCount: 1 },
+    });
+    h.registry.getSourceStream = () => ({ open: vi.fn() });
+    try {
+      await act(async () => h.controller.setAutoDownloadNext?.(false));
+      await act(async () => h.controller.importAndOpen(h.controller.items[0]!));
+      await act(async () => h.controller.setAutoDownloadNext?.(true));
+      expect(h.registry.downloadExternalSource).not.toHaveBeenCalled();
+      expect(h.controller.streaming?.item.key.remoteId).toBe('work-1');
+    } finally {
+      await act(async () => h.renderer.unmount());
+    }
+  });
+
+  it.each([false, true])(
+    'keeps accepted downloads during rapid navigation and follows the latest chapter (auto remains enabled: %s)',
+    async (keepAuto) => {
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const h = await createHarness({
+        downloadedContent: '',
+        downloadedFile: await singlePageComicFile(),
+        serial: true,
+        serialCount: 6,
+        localBookMissing: true,
+        downloadGate: gate,
+        novelOverrides: { format: 'image_archive', documentSectionCount: 1 },
+        assets: {} as BookAssetRepository,
+        getParagraphPage: vi.fn(),
+        supportsIncrementalImageSeriesAppend: true,
+        supportsExpectedSourceContentHash: true,
+      });
+      h.registry.getSourceStream = () => ({ open: vi.fn() });
+      try {
+        await act(async () => h.controller.setAutoDownloadNext?.(false));
+        await act(async () => h.controller.importAndOpen(h.controller.items[0]!));
+        await act(async () => h.controller.setAutoDownloadNextCount?.(1));
+        await act(async () => h.controller.setAutoDownloadNext?.(true));
+        await act(async () => {
+          await vi.waitFor(() => expect(h.registry.downloadExternalSource).toHaveBeenCalledTimes(1));
+        });
+        for (const index of [1, 2, 3]) {
+          const item = h.controller.items[index]!;
+          await act(async () => h.controller.openStreamItem!(item));
+          expect(h.controller.streaming?.item.key.remoteId).toBe(item.key.remoteId);
+          expect(h.controller.canQueueItem(item)).toBe(true);
+          await act(async () => h.controller.saveStream!(item));
+        }
+        if (!keepAuto) await act(async () => h.controller.setAutoDownloadNext?.(false));
+        await h.read('book-1', 'work-1'); // A stale normal-reader target must not displace the streaming episode.
+        await act(async () => {
+          release();
+          await vi.waitFor(() => expect(h.controller.importBusy).toBe(false));
+        });
+        // Flush the reading-target scheduler after the first batch releases its queue.
+        await act(async () => {
+          await vi.waitFor(() => {
+            expect(h.importFile).toHaveBeenCalledTimes(keepAuto ? 4 : 3);
+            expect(h.controller.importBusy).toBe(false);
+          });
+        });
+        expect(vi.mocked(h.registry.downloadExternalSource).mock.calls.map((call) => call[2].key.remoteId)).toEqual([
+          'work-2',
+          'work-3',
+          'work-4',
+          ...(keepAuto ? ['work-5'] : []),
+        ]);
+        expect(h.controller.tasks.filter((task) => task.phase !== 'complete')).toEqual([]);
+        expect(h.importFile).toHaveBeenCalledTimes(keepAuto ? 4 : 3);
+        expect(h.controller.streaming?.item.key.remoteId).toBe('work-4');
+        expect(h.openNovel).not.toHaveBeenCalled();
+      } finally {
+        release();
+        await act(async () => h.renderer.unmount());
+      }
+    },
+  );
+
+  it.each([false, true])(
+    'resets source reading history with and without a downloaded book (downloaded=%s)',
+    async (downloaded) => {
+      const clearReadingHistory = vi.fn(async () => undefined);
+      const h = await createHarness({
+        downloadedContent: '',
+        serial: true,
+        serialCount: 2,
+        localBookMissing: !downloaded,
+        initialLinkOverrides: { collectionRemoteId: 'manga:1' },
+        clearReadingHistory,
+      });
+      const preferences = new Map<string, import('../../external-sources/source-user-state').SourceReleasePreference>();
+      h.state.listReleasePreferences = async () => [...preferences.values()];
+      h.state.saveReleasePreferences = async (records) => {
+        records.forEach((record) => preferences.set(record.id, record));
+      };
+      try {
+        await act(async () => {
+          await h.controller.saveStreamPosition!(h.controller.items[1], 1, 3);
+        });
+        expect(h.controller.canResumeCurrentWork).toBe(true);
+        await act(async () => {
+          await h.controller.resetCurrentWorkHistory!();
+        });
+        expect(h.notify).toHaveBeenLastCalledWith('읽은 기록을 초기화했습니다.', 'success');
+        expect(clearReadingHistory).toHaveBeenCalledTimes(downloaded ? 1 : 0);
+        expect(h.controller.canResumeCurrentWork).toBe(false);
+        expect([...preferences.values()].every((p) => !p.read && !p.lastReadAt)).toBe(true);
+        await h.refreshLibrary(42);
+        expect(h.controller.canResumeCurrentWork).toBe(false);
+        const resetAt = [...preferences.values()].find(
+          (p) => p.source.remoteId === h.controller.items[1].key.remoteId,
+        )!.readChangedAt!;
+        await act(async () => {
+          await h.controller.setReleasesRead!([h.controller.items[1]], true);
+        });
+        const manual = [...preferences.values()].find((p) => p.source.remoteId === h.controller.items[1].key.remoteId)!;
+        expect(manual.read).toBe(true);
+        expect(manual.readChangedAt! > resetAt).toBe(true);
+        await act(async () => {
+          await h.controller.saveStreamPosition!(h.controller.items[1], 0, 3);
+        });
+        expect(h.controller.canResumeCurrentWork).toBe(true);
+      } finally {
+        await act(async () => h.renderer.unmount());
+      }
+    },
+  );
+
+  it.each([false, true])(
+    'resolves a streamed visit from storage even with the first unhydrated callback (text=%s)',
+    async (text) => {
+      let first: ExternalSourceController | undefined;
+      const h = await createHarness({
+        downloadedContent: '',
+        serial: true,
+        serialCount: 3,
+        documentSerial: text,
+        initialLinkOverrides: { collectionRemoteId: 'manga:1' },
+        onRender: (controller) => {
+          first ??= controller;
+        },
+      });
+      try {
+        expect(first!.linkedSeriesBookIds.size).toBe(0);
+        expect(await first!.resolveSourceSeriesBook!({ ...novel(), format: 'txt', documentSectionCount: 3 })).toBe(
+          true,
+        );
+        h.registry.getSourceStream = () => (text ? { kind: 'text', open: vi.fn() } : { open: vi.fn() });
+        h.state.listReleasePreferences = async () => [
+          {
+            id: 'saved-visit',
+            kind: 'releasePreference',
+            source: { ...ITEM_KEY, remoteId: 'work-3' },
+            collectionRemoteId: 'manga:1',
+            lastReadAt: '2026-09-28T00:00:00Z',
+            updatedAt: '2026-09-28T00:00:00Z',
+            read: true,
+            readingMode: 'stream',
+          },
+        ];
+        let handled;
+        await act(async () => {
+          handled = await first!.continueSourceReading!(novel());
+        });
+        expect(handled).toBe(true);
+        expect(h.controller.streaming?.item.key.remoteId).toBe('work-3');
+        expect(h.controller.streaming?.fromStart).toBe(false);
+        expect(h.openNovel).not.toHaveBeenCalled();
+      } finally {
+        await act(async () => h.renderer.unmount());
+      }
+    },
+  );
+
+  it.each(['continue', 'close', 'failure'] as const)(
+    'guards mixed-library resume while history hydrates: %s',
+    async (action) => {
+      let finish!: () => void;
+      let fail!: (error: Error) => void;
+      const gate = new Promise<void>((resolve, reject) => {
+        finish = resolve;
+        fail = reject;
+      });
+      const waitForReadingHistory = vi.fn(async (): Promise<void> => undefined);
+      const h = await createHarness({
+        downloadedContent: '',
+        serial: true,
+        serialCount: 3,
+        initialLinkOverrides: { collectionRemoteId: 'manga:1' },
+        waitForReadingHistory,
+      });
+      waitForReadingHistory.mockImplementation(() => gate);
+      h.registry.getSourceStream = () => ({ open: vi.fn() });
+      let continuing!: Promise<boolean>;
+      try {
+        await act(async () => {
+          continuing = h.controller.continueSourceReading!(novel());
+        });
+        expect(h.controller.streaming).toBeUndefined();
+        if (action === 'close') await act(async () => h.controller.close());
+        h.state.listReleasePreferences = async () => [
+          {
+            id: 'late-visit',
+            kind: 'releasePreference',
+            source: { ...ITEM_KEY, remoteId: 'work-3' },
+            collectionRemoteId: 'manga:1',
+            read: true,
+            readingMode: 'stream',
+            lastReadAt: '2026-09-28T00:00:00Z',
+            updatedAt: '2026-09-28T00:00:00Z',
+          },
+        ];
+        await act(async () => {
+          if (action === 'failure') fail(new Error('history unavailable'));
+          else finish();
+          expect(await continuing).toBe(true);
+        });
+        expect(h.controller.streaming?.item.key.remoteId).toBe(action === 'continue' ? 'work-3' : undefined);
+        expect(h.openNovel).not.toHaveBeenCalled();
+      } finally {
+        await act(async () => h.renderer.unmount());
+      }
+    },
+  );
+
+  it('keeps the returning chapter page pending until the final visit projection is refreshed', async () => {
+    const h = await createHarness({ downloadedContent: '', serial: true });
+    let finish!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      finish = resolve;
+    });
+    h.state.listReleasePreferences = async () => {
+      await gate;
+      return [];
+    };
+    try {
+      await act(async () => h.controller.closeStream!());
+      expect(h.controller.readingHistoryLoading).toBe(true);
+      await act(async () => {
+        finish();
+      });
+      expect(h.controller.readingHistoryLoading).toBe(false);
+    } finally {
+      await act(async () => h.renderer.unmount());
+    }
+  });
+
+  it('opens a stream without downloading or importing the entire episode first', async () => {
+    const h = await createHarness({ downloadedContent: '', serial: true, localBookMissing: true });
+    const port = { open: vi.fn() };
+    h.registry.getSourceStream = () => port;
+    try {
+      await act(async () => {
+        await h.controller.importAndOpen(h.controller.items[0]);
+      });
+      expect(h.controller.streaming?.port.open).toBeTypeOf('function');
+      expect(port.open).not.toHaveBeenCalled();
+      expect(h.controller.streamingBookId).toBeUndefined();
+      expect(h.registry.downloadExternalSource).not.toHaveBeenCalled();
+      expect(h.importFile).not.toHaveBeenCalled();
+      await act(async () => h.controller.closeStream?.());
+      expect(h.controller.streaming).toBeUndefined();
+    } finally {
+      await act(async () => h.renderer.unmount());
+    }
+  });
+  it('keeps the stream viewer for a saved episode and reads its committed local section', async () => {
+    const chapters: Chapter[] = [];
+    const blob = new Blob(['saved image'], { type: 'image/png' });
+    const getParagraphPage = vi.fn(
+      async () => ({ paragraphs: [{ assetId: 'saved-page' }] }) as import('../../domain/types').ParagraphPage,
+    );
+    const getEmbeddedResource = vi.fn(async () => ({ blob, metadata: {} as BookAssetMetadata }));
+    const h = await createHarness({
+      downloadedContent: '',
+      serial: true,
+      chapters,
+      getParagraphPage,
+      assets: { getEmbeddedResource } as unknown as BookAssetRepository,
+      novelOverrides: { format: 'image_archive', documentSectionCount: 1 },
+    });
+    const remote = { open: vi.fn() };
+    h.registry.getSourceStream = () => remote;
+    const item = h.controller.items[0];
+    chapters.push(testChapter(1, { documentSectionId: externalItemSectionId(item) }));
+    try {
+      await act(async () => {
+        await h.controller.openStreamItem!(item);
+      });
+      expect(h.controller.streaming?.fromStart).toBe(true);
+      expect(h.controller.streamingBookId).toBe('book-1');
+      await act(async () => h.controller.closeStream?.());
+      await act(async () => h.controller.openImported(item));
+      expect(h.controller.streaming?.fromStart).toBe(false);
+      expect(h.openNovel).not.toHaveBeenCalled();
+      const signal = new AbortController().signal;
+      const session = await h.controller.streaming!.port.open(item.key.remoteId, signal);
+      if ('text' in session) throw new Error('expected image stream');
+      expect(await session.loadPage(0, signal)).toBe(blob);
+      expect(remote.open).not.toHaveBeenCalled();
+      expect(h.importFile).not.toHaveBeenCalled();
+      session.close();
+    } finally {
+      await act(async () => h.renderer.unmount());
+    }
+  });
+  it('keeps streamed reading marks after refreshing the episode list without any downloaded book', async () => {
+    const h = await createHarness({ downloadedContent: '', serial: true, serialCount: 2, localBookMissing: true });
+    const preferences = new Map<string, import('../../external-sources/source-user-state').SourceReleasePreference>();
+    h.state.listReleasePreferences = async () => [...preferences.values()];
+    h.state.saveReleasePreferences = async (records) => {
+      records.forEach((record) => preferences.set(record.id, record));
+    };
+    try {
+      await act(async () => {
+        await h.controller.saveStreamPosition!(h.controller.items[0], 1, 3);
+      });
+      await act(async () => {
+        await h.controller.saveTextStreamPosition!(h.controller.items[1], {
+          paragraphIndex: 2,
+          offset: 0,
+          textHash: 'text',
+          count: 3,
+        });
+      });
+      expect(h.controller.items.map((item) => item.readingState)).toEqual(['read', 'current']);
+      await h.refreshLibrary(1);
+      expect(h.controller.items.map((item) => item.readingState)).toEqual(['read', 'current']);
+      await act(async () => {
+        await h.controller.setReleasesRead!([h.controller.items[0]], false);
+      });
+      await h.refreshLibrary(2);
+      expect(h.controller.items[0].readingState).toBe('unread');
+      await act(async () => {
+        await h.controller.saveStreamPosition!(h.controller.items[0], 0, 3);
+      });
+      expect(h.controller.items.map((item) => item.readingState)).toEqual(['current', 'read']);
+    } finally {
+      await act(async () => h.renderer.unmount());
+    }
+  });
+
+  it.each([false, true])('moves current and resume beyond the downloaded episode (text=%s)', async (text) => {
+    const storage = new Map<string, string>([
+      ['boaa.source-reading.v1', JSON.stringify({ mode: 'stream', textMode: 'stream' })],
+    ]);
+    vi.stubGlobal('localStorage', {
+      getItem: (key: string) => storage.get(key) ?? null,
+      setItem: (key: string, value: string) => storage.set(key, value),
+    });
+    const { externalItemKeyId } = await import('../../external-sources/contracts');
+    const { saveSourceStreamPosition, readSourceStreamPosition } =
+      await import('../../external-sources/source-stream-history');
+    const { sourceTextDocument } = await import('./source-text-document');
+    const { defaultSettings } = await import('../../repositories/reader-defaults');
+    const documentInput = {
+      text: Array.from({ length: 8 }, (_, i) => `본문 ${i} 문단의 이어 읽기 위치입니다.`).join('\n\n'),
+      title: '회차',
+      workId: 'work',
+      settings: defaultSettings,
+    };
+    const chapters = [testChapter(1, { documentSectionId: 'work-1', documentSectionTitle: '1화' })];
+    const book = novel({
+      format: text ? 'txt' : 'image_archive',
+      documentSectionCount: 1,
+      lastReadChapterId: chapters[0].id,
+      lastReadChapterIndex: 1,
+      lastReadAt: '2026-08-24T00:00:00.000Z',
+    });
+    const preferences = new Map<string, import('../../external-sources/source-user-state').SourceReleasePreference>();
+    const make = async () => {
+      const h = await createHarness({
+        downloadedContent: '',
+        serial: true,
+        documentSerial: text,
+        serialCount: 3,
+        chapters,
+        getNovel: async () => book,
+        libraryBooks: async () => [book],
+        initialLinkOverrides: { collectionRemoteId: 'manga:1' },
+      });
+      chapters[0] = { ...chapters[0], documentSectionId: externalItemSectionId(h.controller.items[0]) };
+      h.state.listReleasePreferences = async () => [...preferences.values()];
+      h.state.saveReleasePreferences = async (records) => {
+        records.forEach((record) => preferences.set(record.id, record));
+      };
+      h.registry.getSourceStream = () => (text ? { kind: 'text', open: vi.fn() } : { open: vi.fn() });
+      await h.refreshLibrary(1);
+      await act(async () => h.controller.showLocalSeries(book));
+      return h;
+    };
+    let h = await make();
+    const visit = async (index: number) =>
+      act(async () => {
+        const item = h.controller.items[index];
+        const historyKey = JSON.stringify([undefined, externalItemKeyId(item.key)]);
+        if (text) {
+          const document = await sourceTextDocument({
+            ...documentInput,
+            episodeId: item.key.remoteId,
+            historyKey,
+            onPosition: (position) => h.controller.saveTextStreamPosition!(item, position),
+          });
+          await document.repository.saveReadingPosition({
+            novelId: document.novel.id,
+            chapterId: document.chapter.id,
+            expectedContentRevisionId: document.novel.activeContentRevisionId,
+            paragraphIndex: 3,
+            offsetInParagraph: 7,
+            chapterProgress: 0.4,
+            scrollTop: 0,
+          });
+        } else {
+          saveSourceStreamPosition(historyKey, { page: 3, count: 8, fraction: 0.42, ratio: 5 });
+          await h.controller.saveStreamPosition!(item, 3, 8);
+        }
+      });
+    try {
+      expect(h.controller.items.map((item) => item.readingState)).toEqual(['current', 'unread', 'unread']);
+      await visit(1);
+      expect(h.controller.items.map((item) => item.readingState)).toEqual(['read', 'current', 'unread']);
+      await visit(2);
+      await visit(1); // Revisiting a read episode must move current back to it.
+      expect(h.controller.items.map((item) => item.readingState)).toEqual(['read', 'current', 'read']);
+      await h.refreshLibrary(2); // The downloaded book still points to episode 1.
+      expect(h.controller.items.map((item) => item.readingState)).toEqual(['read', 'current', 'read']);
+      await act(async () => h.renderer.unmount());
+      h = await make(); // Restore from durable preferences, not the open stream state.
+      expect(h.controller.items.map((item) => item.readingState)).toEqual(['read', 'current', 'read']);
+      await act(async () => h.controller.close()); // Resume from the library card, with SourceHub closed.
+      expect(h.controller.open).toBe(false);
+      await act(async () => {
+        expect(await h.controller.continueSourceReading!(book)).toBe(true);
+      });
+      expect(h.controller.streaming?.item.key.remoteId).toBe('work-2');
+      expect(h.controller.streaming?.fromStart).toBe(false);
+      expect(h.controller.streaming?.historyKey).toContain('work-2');
+      if (text) {
+        const restored = await sourceTextDocument({
+          ...documentInput,
+          episodeId: 'work-2',
+          historyKey: h.controller.streaming!.historyKey!,
+        });
+        expect(restored.position).toMatchObject({ paragraphIndex: 3, offsetInParagraph: 7 });
+      } else {
+        expect(readSourceStreamPosition(h.controller.streaming!.historyKey!)).toMatchObject({
+          page: 3,
+          fraction: 0.42,
+          count: 8,
+        });
+      }
+      expect(h.controller.open).toBe(true);
+      expect(h.openNovel).not.toHaveBeenCalled();
+      await act(async () => h.controller.closeStream!());
+      await act(async () => h.controller.showLocalSeries(book));
+      await h.read(book.id, externalItemSectionId(h.controller.items[0]));
+      await act(async () => {
+        await vi.waitFor(() => expect(h.controller.items[0].readingState).toBe('current'));
+      });
+      expect(h.controller.items[1].readingState).toBe('read');
+      expect(await h.controller.continueSourceReading!(book)).toBe(false); // Native position is now authoritative.
+    } finally {
+      await act(async () => h.renderer.unmount());
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('applies the latest streamed page after its background download becomes visible', async () => {
+    let ready = false;
+    let book = novel({ format: 'image_archive', documentSectionCount: 1 });
+    const save = vi.fn(async (_page: number, chapter: Chapter) => {
+      book = { ...book, lastReadChapterId: chapter.id };
+    });
+    const chapters = [
+      testChapter(1, { documentSectionId: 'work-1', documentSectionTitle: '1화' }),
+      testChapter(2, { documentSectionId: 'work-1' }),
+    ];
+    const h = await createHarness({
+      downloadedContent: '',
+      serial: true,
+      chapters,
+      getNovel: async () => (ready ? book : undefined),
+      libraryBooks: async () => (ready ? [book] : []),
+      saveStreamPosition: save,
+    });
+    h.state.listLinks = async () => (ready ? [h.currentLink] : []);
+    try {
+      await act(async () => {
+        await h.controller.saveStreamPosition!(h.controller.items[0], 1, 2);
+      });
+      expect(save).not.toHaveBeenCalled();
+      ready = true;
+      await h.refreshLibrary(1);
+      expect(save).toHaveBeenCalledExactlyOnceWith(1, chapters[1], expect.anything());
+      await h.refreshLibrary(2);
+      expect(save).toHaveBeenCalledTimes(1);
+    } finally {
+      await act(async () => h.renderer.unmount());
+    }
+  });
+
+  it('reads saved text first and writes matching paragraph positions without leaving streaming', async () => {
+    const chapters: Chapter[] = [];
+    const saveTextPosition = vi.fn(async () => undefined);
+    const getParagraphPage = vi.fn(
+      async () =>
+        ({
+          paragraphs: [
+            { id: 'p1', index: 1, text: '첫 문단', textHash: 'hash1' },
+            { id: 'p2', index: 2, text: '다음 문단', textHash: 'hash2' },
+          ],
+        }) as import('../../domain/types').ParagraphPage,
+    );
+    const h = await createHarness({
+      downloadedContent: '본문',
+      serial: true,
+      documentSerial: true,
+      chapters,
+      getParagraphPage,
+      saveTextPosition,
+      assets: {} as BookAssetRepository,
+    });
+    const remote = { kind: 'text' as const, open: vi.fn(async () => ({ text: 'remote' })) };
+    h.registry.getSourceStream = () => remote;
+    const item = h.controller.items[0];
+    chapters.push(testChapter(1, { documentSectionId: externalItemSectionId(item), paragraphCount: 2 }));
+    try {
+      await act(async () => h.controller.openStreamItem!(item));
+      expect(await h.controller.streaming!.port.open(item.key.remoteId, new AbortController().signal)).toEqual({
+        text: '첫 문단\n\n다음 문단',
+      });
+      expect(remote.open).not.toHaveBeenCalled();
+      await h.controller.saveTextStreamPosition!(item, { paragraphIndex: 2, offset: 2, textHash: 'hash2', count: 2 });
+      expect(saveTextPosition).toHaveBeenCalledWith(
+        expect.objectContaining({
+          chapterId: chapters[0].id,
+          paragraphId: 'p2',
+          paragraphIndex: 2,
+          offsetInParagraph: 2,
+        }),
+      );
+      await h.controller.saveTextStreamPosition!(item, { paragraphIndex: 2, offset: 2, textHash: 'changed', count: 2 });
+      expect(saveTextPosition).toHaveBeenCalledTimes(1);
+      expect(h.openNovel).not.toHaveBeenCalled();
+    } finally {
+      await act(async () => h.renderer.unmount());
+    }
+  });
+  it.each([0, 1, 3])('keeps %i whole following text downloads enabled during streaming', async (count) => {
+    const h = await createDocumentHarness(5);
+    h.registry.getSourceStream = () => ({ kind: 'text', open: vi.fn(async () => ({ text: '본문' })) });
+    try {
+      await act(async () => h.controller.setAutoDownloadNext?.(false));
+      await act(async () => h.controller.importAndOpen(h.controller.items[0]));
+      if (count) {
+        await act(async () => h.controller.setAutoDownloadNextCount?.(count as 1 | 3));
+        await act(async () => h.controller.setAutoDownloadNext?.(true));
+        await act(async () => {
+          await vi.waitFor(() => expect(h.importFile).toHaveBeenCalledTimes(count));
+        });
+        await act(async () => {
+          await vi.waitFor(() => expect(h.controller.importBusy).toBe(false));
+        });
+      }
+      expect(vi.mocked(h.registry.downloadExternalSource).mock.calls.map((call) => call[2].key.remoteId)).toEqual(
+        ['work-2', 'work-3', 'work-4'].slice(0, count),
+      );
+      expect(h.controller.streaming?.item.key.remoteId).toBe('work-1');
+      expect(h.openNovel).not.toHaveBeenCalled();
+    } finally {
+      await act(async () => h.renderer.unmount());
+    }
+  });
+  it('queues rapid streamed text saves behind automatic downloads without changing the visible episode', async () => {
+    const h = await createDocumentHarness(5);
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const download = h.download.getMockImplementation()!;
+    h.download.mockImplementation(async (...args) => {
+      if (args[2].key.remoteId === 'work-2') await gate;
+      return download(...args);
+    });
+    h.registry.getSourceStream = () => ({ kind: 'text', open: vi.fn(async () => ({ text: '본문' })) });
+    try {
+      await act(async () => h.controller.setAutoDownloadNext?.(false));
+      await act(async () => h.controller.importAndOpen(h.controller.items[0]));
+      await act(async () => h.controller.setAutoDownloadNextCount?.(1));
+      await act(async () => h.controller.setAutoDownloadNext?.(true));
+      await act(async () => {
+        await vi.waitFor(() => expect(h.download).toHaveBeenCalledTimes(1));
+      });
+      for (const index of [1, 2, 3]) {
+        await act(async () => h.controller.importAndOpen(h.controller.items[index]));
+        expect(h.controller.streaming?.item.key.remoteId).toBe(`work-${index + 1}`);
+        await act(async () => h.controller.saveStream!(h.controller.items[index]));
+      }
+      await act(async () => h.controller.setAutoDownloadNext?.(false));
+      await act(async () => {
+        release();
+        await vi.waitFor(() => expect(h.controller.importBusy).toBe(false));
+      });
+      expect(h.download.mock.calls.map((call) => call[2].key.remoteId)).toEqual(['work-2', 'work-3', 'work-4']);
+      expect(h.controller.streaming?.item.key.remoteId).toBe('work-4');
+      expect(h.openNovel).not.toHaveBeenCalled();
+    } finally {
+      release();
+      await act(async () => h.renderer.unmount());
+    }
+  });
+  it('serializes streamed saves from the same render while automatic downloading is off', async () => {
+    const h = await createDocumentHarness(4);
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const download = h.download.getMockImplementation()!;
+    h.download.mockImplementation(async (...args) => {
+      if (args[2].key.remoteId === 'work-1') await gate;
+      return download(...args);
+    });
+    const previous = globalThis.navigator;
+    let locked = false;
+    vi.stubGlobal('navigator', {
+      ...previous,
+      locks: {
+        request: async (_name: string, _options: unknown, run: (lock: object | null) => Promise<void>) => {
+          if (locked) return run(null);
+          locked = true;
+          try {
+            await run({});
+          } finally {
+            locked = false;
+          }
+        },
+      },
+    });
+    const results: Promise<unknown>[] = [];
+    try {
+      await act(async () => h.controller.setAutoDownloadNext?.(false));
+      await act(async () => {
+        for (const item of h.controller.items.slice(0, 3)) {
+          results.push(h.controller.saveStream!(item).catch((error) => error));
+        }
+      });
+      await act(async () => {
+        await vi.waitFor(() => expect(h.download).toHaveBeenCalledTimes(1));
+      });
+      await act(async () => {
+        release();
+      });
+      await act(async () => {
+        await vi.waitFor(() => expect(h.importFile).toHaveBeenCalledTimes(3));
+      });
+      expect(await Promise.all(results)).toEqual([undefined, undefined, undefined]);
+      expect(h.download.mock.calls.map((call) => call[2].key.remoteId)).toEqual(['work-1', 'work-2', 'work-3']);
+      expect(h.notify).not.toHaveBeenCalledWith(expect.stringContaining('다른 탭'), 'warning');
+    } finally {
+      release();
+      await act(async () => h.renderer.unmount());
+      await Promise.all(results);
+      vi.stubGlobal('navigator', previous);
+    }
+  });
+  it('reports a save rejected by another tab instead of claiming it was queued', async () => {
+    const h = await createHarness({ downloadedContent: '', serial: true, localBookMissing: true });
+    const previous = globalThis.navigator;
+    vi.stubGlobal('navigator', {
+      ...previous,
+      locks: {
+        request: async (_name: string, _options: unknown, callback: (lock: null) => Promise<void>) => callback(null),
+      },
+    });
+    try {
+      await expect(h.controller.saveStream?.(h.controller.items[0])).rejects.toThrow('다른 탭');
+      expect(h.registry.downloadExternalSource).not.toHaveBeenCalled();
+      expect(h.importFile).not.toHaveBeenCalled();
+    } finally {
+      vi.stubGlobal('navigator', previous);
+      await act(async () => h.renderer.unmount());
+    }
+  });
+  it('maps a viewed streaming page only onto an already committed matching section', async () => {
+    const chapters: Chapter[] = [];
+    const save = vi.fn(async () => {});
+    const h = await createHarness({
+      downloadedContent: '',
+      serial: true,
+      chapters,
+      saveStreamPosition: save,
+      novelOverrides: { format: 'image_archive', documentSectionCount: 1 },
+    });
+    const item = h.controller.items[0];
+    chapters.push(
+      testChapter(5, { id: 'page-1', index: 5, documentSectionId: externalItemSectionId(item) }),
+      testChapter(6, { id: 'page-2', index: 6, documentSectionId: externalItemSectionId(item) }),
+    );
+    try {
+      await h.controller.saveStreamPosition?.(item, 1, 3);
+      expect(save).not.toHaveBeenCalled();
+      await h.controller.saveStreamPosition?.(item, 1, 2);
+      expect(save).toHaveBeenCalledWith(
+        1,
+        chapters[1],
+        expect.objectContaining({ id: 'book-1', activeContentRevisionId: 'content-old' }),
+      );
+    } finally {
+      await act(async () => h.renderer.unmount());
+    }
+  });
+});
+
+describe('stream-only library works', () => {
+  const subscription: ExternalSourceSubscriptionRecord = {
+    id: 'stream-library',
+    connectorId: SOURCE_ID,
+    accountConnectionId: 'fixture-account',
+    collectionRemoteId: 'manga:1',
+    navigationRef: 'manga:1',
+    title: '스트리밍 작품',
+    knownReleaseIds: ['work-1', 'work-2', 'work-3'],
+    newReleaseIds: [],
+    availableReleaseCount: 3,
+    createdAt: '2026-09-01T00:00:00.000Z',
+    updatedAt: '2026-09-01T00:00:00.000Z',
+    lastCheckedAt: '2026-09-01T00:00:00.000Z',
+    schemaVersion: 1,
+  };
+  const make = (onRender?: (controller: ExternalSourceController) => void) =>
+    createHarness({
+      downloadedContent: '',
+      onRender,
+      serial: true,
+      serialCount: 3,
+      libraryBooks: async () => [],
+      subscriptions: [subscription],
+      detail: { title: subscription.title, coverRef: ITEM_KEY },
+      resolveCover: async () => 'data:image/png;base64,AQID',
+    });
+
+  it('opens ui-next continuation directly into the stream and closes back to the originating screen', async () => {
+    const renders: { open: boolean; streaming: boolean }[] = [];
+    const h = await make((controller) =>
+      renders.push({ open: controller.open, streaming: Boolean(controller.streaming) }),
+    );
+    try {
+      h.registry.getSourceStream = () => ({ open: vi.fn() });
+      await act(async () => h.controller.close());
+      renders.length = 0;
+      await act(async () => h.controller.continueLibraryWork(subscription.id));
+      expect(h.controller.streaming?.item.key.remoteId).toBe('work-1');
+      expect(h.controller.open).toBe(true);
+      expect(renders.some((state) => state.open && !state.streaming)).toBe(false);
+      await act(async () => h.controller.closeStream?.());
+      expect(h.controller.open).toBe(false);
+      expect(h.controller.streaming).toBeUndefined();
+    } finally {
+      await act(async () => h.renderer.unmount());
+    }
+  });
+
+  it('also bypasses detail for a saved comic with a durable streamed visit', async () => {
+    const renders: { open: boolean; streaming: boolean }[] = [];
+    const book = novel({ format: 'image_archive' });
+    const h = await createHarness({
+      downloadedContent: '',
+      serial: true,
+      serialCount: 3,
+      initialLinkOverrides: { collectionRemoteId: 'manga:1' },
+      getNovel: async () => book,
+      onRender: (controller) => renders.push({ open: controller.open, streaming: Boolean(controller.streaming) }),
+    });
+    try {
+      h.registry.getSourceStream = () => ({ open: vi.fn() });
+      h.state.listReleasePreferences = async () => [
+        {
+          id: 'last',
+          kind: 'releasePreference',
+          source: { ...ITEM_KEY, remoteId: 'work-2' },
+          collectionRemoteId: 'manga:1',
+          readingMode: 'stream',
+          lastReadAt: '2026-09-02T00:00:00.000Z',
+          updatedAt: '2026-09-02T00:00:00.000Z',
+        },
+      ];
+      await act(async () => h.controller.close());
+      renders.length = 0;
+      await act(async () => {
+        expect(await h.controller.continueSourceReading?.(book)).toBe(true);
+      });
+      expect(h.controller.streaming?.item.key.remoteId).toBe('work-2');
+      expect(renders.some((state) => state.open && !state.streaming)).toBe(false);
+    } finally {
+      await act(async () => h.renderer.unmount());
+    }
+  });
+
+  it('keeps personal title and shelf metadata through a source refresh', async () => {
+    const saved = { ...subscription, id: externalSourceSubscriptionId(SOURCE_ID, 'fixture-account', 'manga:1') };
+    const h = await createHarness({
+      downloadedContent: '',
+      serial: true,
+      serialCount: 3,
+      libraryBooks: async () => [],
+      subscriptions: [saved],
+      detail: { title: '원본 제목' },
+    });
+    try {
+      await act(async () => h.controller.updateLibraryMetadata!(saved.id, { title: '내 제목', shelfIds: ['normal'] }));
+      expect(h.controller.libraryWorks.find((work) => work.id === saved.id)).toMatchObject({
+        title: '내 제목',
+        shelfIds: ['normal'],
+      });
+      await act(async () =>
+        h.controller.openSubscription(h.controller.libraryWorks.find((work) => work.id === saved.id)!),
+      );
+      await act(async () => h.controller.refresh());
+      expect((await h.state.listSubscriptions()).find((work) => work.id === saved.id)).toMatchObject({
+        title: '내 제목',
+        titleOverride: '내 제목',
+        shelfIds: ['normal'],
+      });
+      expect(h.controller.detail?.title).toBe('내 제목');
+    } finally {
+      await act(async () => h.renderer.unmount());
+    }
+  });
+
+  it('reports initial source membership loading and retries an unavailable library', async () => {
+    const snapshots: { status?: string; count: number }[] = [];
+    let unavailable = true;
+    const h = await createHarness({
+      downloadedContent: '',
+      subscriptions: [subscription],
+      libraryBooks: async () => {
+        if (unavailable) throw new Error('offline');
+        return [];
+      },
+      onRender: (c) => snapshots.push({ status: c.libraryBootstrap?.status, count: c.libraryWorks.length }),
+    });
+    try {
+      expect(snapshots[0]?.status).toBe('loading');
+      expect(h.controller.libraryBootstrap?.status).toBe('failed');
+      unavailable = false;
+      await act(async () => h.controller.retryLibrary?.());
+      expect(h.controller.libraryBootstrap?.status).toBe('ready');
+      expect(h.controller.libraryWorks.map((work) => work.id)).toContain(subscription.id);
+      expect(snapshots.filter((s) => s.status === 'ready').every((s) => s.count === 1)).toBe(true);
+    } finally {
+      await act(async () => h.renderer.unmount());
+    }
+  });
+
+  it('ignores an older source snapshot that finishes after a successful retry', async () => {
+    const h = await make();
+    let resolveOld!: (works: ExternalSourceSubscriptionRecord[]) => void;
+    let oldRequest: Promise<void> | undefined;
+    try {
+      const old = new Promise<ExternalSourceSubscriptionRecord[]>((resolve) => {
+        resolveOld = resolve;
+      });
+      vi.mocked(h.state.listSubscriptions).mockImplementationOnce(() => old);
+      await act(async () => {
+        oldRequest = h.controller.retryLibrary?.();
+      });
+      await act(async () => h.controller.retryLibrary?.());
+      expect(h.controller.libraryWorks.map((work) => work.id)).toContain(subscription.id);
+      await act(async () => {
+        resolveOld([]);
+        await oldRequest;
+      });
+      expect(h.controller.libraryWorks.map((work) => work.id)).toContain(subscription.id);
+      expect(h.controller.libraryBootstrap?.status).toBe('ready');
+    } finally {
+      resolveOld?.([]);
+      await act(async () => h.renderer.unmount());
+    }
+  });
+
+  it('replaces the previous work before the new library projection or catalog resolves', async () => {
+    const h = await make();
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let opening: Promise<void> | undefined;
+    try {
+      await act(async () => h.controller.openSubscription(subscription));
+      const oldCover = h.controller.detail?.thumbnailUrl;
+      expect(oldCover).toBeTruthy();
+      const next = {
+        ...subscription,
+        id: 'other',
+        collectionRemoteId: 'manga:2',
+        navigationRef: 'manga:2',
+        title: '다른 작품',
+        thumbnailUrl: 'https://example.test/new.jpg',
+      };
+      const listLinks = h.state.listLinks;
+      h.state.listLinks = async () => {
+        await gate;
+        return listLinks();
+      };
+      vi.mocked(h.registry.listExternalSource).mockImplementation(async () => ({
+        items: [],
+        detail: { title: next.title, thumbnailUrl: next.thumbnailUrl },
+      }));
+      await act(async () => {
+        opening = h.controller.openSubscription(next);
+      });
+      expect(h.controller.loading).toBe(true);
+      expect(h.controller.detail).toMatchObject({ title: next.title, thumbnailUrl: next.thumbnailUrl });
+      expect(h.controller.detail?.thumbnailUrl).not.toBe(oldCover);
+      expect(h.controller.items).toEqual([]);
+      await act(async () => {
+        release();
+        await opening;
+      });
+      expect(h.controller.detail?.title).toBe(next.title);
+    } finally {
+      release();
+      await opening;
+      await act(async () => h.renderer.unmount());
+    }
+  });
+
+  it('moves a stream-only work to trash and restores its existing subscription', async () => {
+    const h = await make();
+    try {
+      await act(async () => h.controller.removeLibraryWork(subscription));
+      expect(h.subscriptions[0]?.deletedAt).toBeTruthy();
+      expect(h.state.deleteSubscription).not.toHaveBeenCalled();
+      expect(h.controller.open).toBe(false);
+      expect(h.controller.libraryWorks[0]?.deletedAt).toBeTruthy();
+      await act(async () => h.controller.restoreLibraryWork?.(subscription.id));
+      expect(h.subscriptions[0]?.deletedAt).toBeUndefined();
+      expect(h.subscriptions[0]?.knownReleaseIds).toEqual(subscription.knownReleaseIds);
+    } finally {
+      await act(async () => h.renderer.unmount());
+    }
+  });
+
+  it('restores artwork without downloading a book and starts the earliest release across pages', async () => {
+    const h = await make();
+    try {
+      expect(h.controller.libraryWorks[0]?.thumbnailUrl).toBe('data:image/png;base64,AQID');
+      expect(h.importFile).not.toHaveBeenCalled();
+      const episodes = h.controller.items;
+      h.registry.getSourceStream = () => ({ open: vi.fn() });
+      vi.mocked(h.registry.listExternalSource).mockImplementation(async (_id, _host, input) => ({
+        items: input.cursor ? [episodes[0]!] : [episodes[2]!, episodes[1]!],
+        nextCursor: input.cursor ? undefined : 'page-2',
+      }));
+      await act(async () => h.controller.close());
+      await act(async () => h.controller.continueLibraryWork(subscription.id));
+      expect(h.controller.streaming?.item.key.remoteId).toBe('work-1');
+      expect(h.registry.downloadExternalSource).not.toHaveBeenCalled();
+      expect(h.importFile).not.toHaveBeenCalled();
+    } finally {
+      await act(async () => h.renderer.unmount());
+    }
+  });
+
+  it('resumes a durable stream visit without a local book', async () => {
+    const h = await make();
+    try {
+      h.registry.getSourceStream = () => ({ open: vi.fn() });
+      h.state.listReleasePreferences = async () => [
+        {
+          id: 'visit-2',
+          kind: 'releasePreference',
+          source: { ...ITEM_KEY, remoteId: 'work-2' },
+          collectionRemoteId: 'manga:1',
+          lastReadAt: '2026-09-02T00:00:00.000Z',
+          updatedAt: '2026-09-02T00:00:00.000Z',
+          readingMode: 'stream',
+          read: true,
+        },
+      ];
+      await act(async () => h.controller.close());
+      await act(async () => h.controller.continueLibraryWork(subscription.id));
+      expect(h.controller.streaming?.item.key.remoteId).toBe('work-2');
+      expect(h.registry.downloadExternalSource).not.toHaveBeenCalled();
+    } finally {
+      await act(async () => h.renderer.unmount());
+    }
+  });
+
+  it.each(['continue', 'close', 'failure'] as const)(
+    'guards stream-only resume while history hydrates: %s',
+    async (action) => {
+      let finish!: () => void;
+      let fail!: (error: Error) => void;
+      const gate = new Promise<void>((resolve, reject) => {
+        finish = resolve;
+        fail = reject;
+      });
+      const waitForReadingHistory = vi.fn(async (): Promise<void> => undefined);
+      const h = await createHarness({
+        downloadedContent: '',
+        serial: true,
+        serialCount: 3,
+        libraryBooks: async () => [],
+        subscriptions: [subscription],
+        waitForReadingHistory,
+      });
+      waitForReadingHistory.mockImplementation(() => gate);
+      h.registry.getSourceStream = () => ({ open: vi.fn() });
+      let continuing!: Promise<void>;
+      try {
+        await act(async () => {
+          continuing = h.controller.continueLibraryWork(subscription.id);
+        });
+        expect(h.controller.streaming).toBeUndefined();
+        if (action === 'close') await act(async () => h.controller.close());
+        h.state.listReleasePreferences = async () => [
+          {
+            id: 'late-visit',
+            kind: 'releasePreference',
+            source: { ...ITEM_KEY, remoteId: 'work-3' },
+            collectionRemoteId: 'manga:1',
+            read: true,
+            readingMode: 'stream',
+            lastReadAt: '2026-09-28T00:00:00Z',
+            updatedAt: '2026-09-28T00:00:00Z',
+          },
+        ];
+        await act(async () => {
+          if (action === 'failure') fail(new Error('history unavailable'));
+          else finish();
+          await continuing;
+        });
+        expect(h.controller.streaming?.item.key.remoteId).toBe(action === 'continue' ? 'work-3' : undefined);
+        expect(h.openNovel).not.toHaveBeenCalled();
+      } finally {
+        await act(async () => h.renderer.unmount());
+      }
+    },
+  );
+
+  it('recovers an interrupted visit before continuing a stream-only library work', async () => {
+    const values = new Map<string, string>();
+    vi.stubGlobal('localStorage', {
+      getItem: (key: string) => values.get(key) ?? null,
+      setItem: (key: string, value: string) => values.set(key, value),
+    });
+    const { stageSourceStreamVisit } = await import('../../external-sources/source-stream-visit-journal');
+    stageSourceStreamVisit(undefined, { ...ITEM_KEY, remoteId: 'work-2' }, 'manga:1', '2026-09-28T00:00:00.000Z');
+    const h = await make();
+    try {
+      h.registry.getSourceStream = () => ({ open: vi.fn() });
+      await act(async () => h.controller.close());
+      await act(async () => h.controller.continueLibraryWork(subscription.id));
+      expect(h.controller.streaming?.item.key.remoteId).toBe('work-2');
+      expect(h.controller.sourceWorkProgress?.bySubscriptionId.get(subscription.id)?.readCount).toBe(1);
+      expect(h.registry.downloadExternalSource).not.toHaveBeenCalled();
+    } finally {
+      await act(async () => h.renderer.unmount());
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it.each(['close', 'source', 'back'] as const)(
+    'does not open a reader after leaving pending library navigation with %s',
+    async (navigation) => {
+      const h = await make();
+      try {
+        h.registry.getSourceStream = () => ({ open: vi.fn() });
+        let release!: () => void;
+        const gate = new Promise<void>((resolve) => {
+          release = resolve;
+        });
+        const items = h.controller.items;
+        vi.mocked(h.registry.listExternalSource).mockImplementation(async () => {
+          await gate;
+          return { items };
+        });
+        let pending!: Promise<void>;
+        await act(async () => {
+          pending = h.controller.continueLibraryWork(subscription.id);
+        });
+        let leaving: Promise<void> | undefined;
+        await act(async () => {
+          if (navigation === 'close') h.controller.close();
+          else if (navigation === 'source') leaving = h.controller.selectSource(SOURCE_ID);
+          else if (h.controller.breadcrumbs.length > 1) leaving = h.controller.goBack();
+          else h.controller.close();
+        });
+        await act(async () => {
+          release();
+          await Promise.all([pending, leaving]);
+        });
+        expect(h.controller.streaming).toBeUndefined();
+      } finally {
+        await act(async () => h.renderer.unmount());
+      }
+    },
+  );
+
+  it('does not resume a subscription with another connected account', async () => {
+    const h = await make();
+    try {
+      h.registry.getExternalSourceStatus = () => ({ state: 'connected', accountConnectionId: 'other-account' });
+      h.registry.getSourceStream = () => ({ open: vi.fn() });
+      await act(async () => h.controller.continueLibraryWork(subscription.id));
+      expect(h.controller.streaming).toBeUndefined();
+      expect(h.notify).toHaveBeenCalledWith(expect.stringContaining('다시 연결'), 'warning');
+    } finally {
+      await act(async () => h.renderer.unmount());
+    }
+  });
+});
+
+it.each(['connect', 'pick', 'remove'] as const)(
+  'refreshes the catalog after deferred %s while that command owns busy',
+  async (command) => {
+    const h = await createHarness({ downloadedContent: 'Synthetic', pickable: true });
+    let release!: () => void;
+    const pending = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    if (command === 'connect') vi.mocked(h.registry.connectExternalSource).mockReturnValueOnce(pending);
+    if (command === 'pick')
+      vi.mocked(h.registry.pickExternalSource!).mockImplementationOnce(async () => {
+        await pending;
+        return { selectedCount: 1, addedCount: 1 };
+      });
+    if (command === 'remove') vi.mocked(h.registry.removeExternalSourceItem!).mockReturnValueOnce(pending);
+    vi.mocked(h.registry.listExternalSource).mockClear();
+    let task!: Promise<void>;
+    await act(async () => {
+      task =
+        command === 'connect'
+          ? h.controller.connect()
+          : command === 'pick'
+            ? h.controller.pickItems()
+            : h.controller.removeItem(h.controller.items[0]!);
+    });
+    expect(h.controller.blockingBusy).toBe(true);
+    await act(async () => {
+      await h.controller.search();
+    });
+    expect(h.registry.listExternalSource).not.toHaveBeenCalled();
+    await act(async () => {
+      release();
+      await task;
+    });
+    expect(h.registry.listExternalSource).toHaveBeenCalledOnce();
+    expect(h.controller.loading).toBe(false);
+    expect(h.controller.blockingBusy).toBe(false);
+    expect(h.controller.items).not.toHaveLength(0);
+    act(() => h.renderer.unmount());
+  },
+);
+
+it('reloads a local series catalog after a deferred reading-history reset owns busy', async () => {
+  let release!: () => void;
+  const pending = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const h = await createHarness({
+    downloadedContent: '',
+    serial: true,
+    serialCount: 2,
+    initialLinkOverrides: { collectionRemoteId: 'manga:1' },
+    clearReadingHistory: () => pending,
+  });
+  h.state.listReleasePreferences = async () => [];
+  h.state.saveReleasePreferences = async () => {};
+  await act(async () => {
+    await h.controller.showLocalSeries(novel());
+  });
+  vi.mocked(h.registry.listExternalSource).mockClear();
+  let task!: Promise<void>;
+  await act(async () => {
+    task = h.controller.resetCurrentWorkHistory!();
+  });
+  expect(h.controller.blockingBusy).toBe(true);
+  await act(async () => {
+    release();
+    await task;
+  });
+  expect(h.notify).toHaveBeenLastCalledWith('읽은 기록을 초기화했습니다.', 'success');
+  expect(h.registry.listExternalSource).toHaveBeenCalledOnce();
+  expect(h.controller.loading).toBe(false);
+  expect(h.controller.catalogLoading).toBe(false);
+  expect(h.controller.blockingBusy).toBe(false);
+  act(() => h.renderer.unmount());
+});
+
+it.each(['connect', 'reset'] as const)(
+  'does not leave new-owner catalog loading when old %s finishes after storage replacement',
+  async (command) => {
+    let release!: () => void;
+    const pending = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const input: Parameters<typeof createHarness>[0] = {
+      downloadedContent: 'Synthetic',
+      serial: true,
+      serialCount: 2,
+      initialLinkOverrides: { collectionRemoteId: 'manga:1' },
+      clearReadingHistory: () => pending,
+    };
+    const h = await createHarness(input);
+    h.state.listReleasePreferences = async () => [];
+    h.state.saveReleasePreferences = async () => {};
+    if (command === 'reset')
+      await act(async () => {
+        await h.controller.showLocalSeries(novel());
+      });
+    vi.mocked(h.registry.connectExternalSource).mockReturnValueOnce(pending);
+    let task!: Promise<void>;
+    await act(async () => {
+      task = command === 'connect' ? h.controller.connect() : h.controller.resetCurrentWorkHistory!();
+    });
+    input.sourceState = { ...h.state };
+    await h.refreshLibrary(1);
+    expect(h.controller.loading).toBe(false);
+    vi.mocked(h.registry.listExternalSource).mockClear();
+    await act(async () => {
+      release();
+      await task;
+    });
+    expect(h.controller.loading).toBe(false);
+    expect(h.controller.catalogLoading).toBe(false);
+    expect(h.registry.listExternalSource).not.toHaveBeenCalled();
+    act(() => h.renderer.unmount());
+  },
+);
+
+describe('ui-next reading-only import notifications', () => {
+  it('prepares one next episode after a library entry with the source hub closed and automatic downloads off', async () => {
+    const chapters: Chapter[] = [];
+    const h = await createDocumentHarness(3, chapters);
+    h.registry.getSourceStream = () => ({ kind: 'text', open: vi.fn() });
+    try {
+      const first = h.controller.items[0]!;
+      const second = h.controller.items[1]!;
+      await act(async () => h.controller.importItem(first));
+      const bookId = (await h.libraryBooks())[0]!.id;
+      chapters.push(testChapter(1, { novelId: bookId, documentSectionId: externalItemSectionId(first) }));
+      const download = h.download.getMockImplementation()!;
+      h.download.mockImplementation(async (...args) => {
+        const result = await download(...args);
+        chapters.push(testChapter(2, { novelId: bookId, documentSectionId: externalItemSectionId(second) }));
+        return result;
+      });
+      h.download.mockClear();
+      await act(async () => {
+        h.controller.setAutoDownloadNext?.(false);
+        h.controller.close();
+      });
+      await h.read(bookId, externalItemSectionId(first));
+      await act(async () => {
+        await vi.waitFor(() => expect(h.download).toHaveBeenCalledOnce());
+        await vi.waitFor(() => expect(h.controller.importBusy).toBe(false));
+      });
+      expect(h.download.mock.calls[0]![2].key.remoteId).toBe(second.key.remoteId);
+      expect(h.openNovel).not.toHaveBeenCalled();
+      expect(h.controller.open).toBe(false);
+      await h.read(bookId, externalItemSectionId(first));
+      expect(h.download).toHaveBeenCalledOnce();
+    } finally {
+      await act(async () => h.renderer.unmount());
+    }
+  });
+
+  it.each(['read', 'batch', 'error'] as const)('preserves notification policy for %s', async (action) => {
+    const chapters: Chapter[] = [];
+    const h = await createDocumentHarness(3, chapters);
+    h.registry.getSourceStream = () => ({ kind: 'text', open: vi.fn(async () => ({ text: 'body' })) });
+    await act(async () => h.controller.show(SOURCE_ID));
+    await act(async () => h.controller.selectSource(SOURCE_ID));
+    chapters.push(testChapter(1, { documentSectionId: externalItemSectionId(h.controller.items[0]) }));
+    h.notify.mockClear();
+    if (action === 'error') h.download.mockRejectedValue(new Error('fixture download failed'));
+    try {
+      if (action === 'batch') await act(async () => h.controller.importItem(h.controller.items[0]));
+      else await act(async () => h.controller.importAndOpen(h.controller.items[0]));
+      if (action === 'read') {
+        expect(h.importFile).toHaveBeenCalled();
+        expect(h.openNovel).toHaveBeenCalled();
+        expect(h.notify.mock.calls.filter((call) => call[1] === 'success')).toEqual([]);
+      } else if (action === 'batch') {
+        expect(h.notify).toHaveBeenCalledWith(expect.any(String), 'success');
+      } else {
+        expect(h.notify).toHaveBeenCalledWith(expect.stringContaining('fixture download failed'), expect.any(String));
+        expect(h.openNovel).not.toHaveBeenCalled();
+      }
+    } finally {
+      await act(async () => h.renderer.unmount());
+    }
+  });
+});

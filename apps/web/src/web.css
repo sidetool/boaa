@@ -1,0 +1,169 @@
+.web-storage-panel {
+  display: grid;
+  gap: 0.9rem;
+  padding: 1.1rem;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  margin-block-end: 1rem;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.web-storage-panel h3 {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0;
+  font-size: 1rem;
+}
+.web-storage-panel p {
+  margin: 0;
+  line-height: 1.65;
+  font-size: 0.9rem;
+}
+.web-storage-panel dl {
+  display: grid;
+  gap: 0.6rem;
+  margin: 0;
+}
+.web-storage-panel dl > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+}
+.web-storage-panel dt {
+  color: var(--app-text-muted);
+  font-size: 0.875rem;
+}
+.web-storage-panel dd {
+  margin: 0;
+  font-size: 0.875rem;
+}
+.web-storage-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+.web-desktop-panel {
+  margin-block: 1rem;
+}
+.web-desktop-panel a {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  text-decoration: none;
+}
+.web-desktop-panel summary {
+  cursor: pointer;
+  padding-block: 0.4rem;
+}
+.web-desktop-panel ol {
+  padding-left: 1.4rem;
+  line-height: 1.7;
+  font-size: 0.9rem;
+}
+.web-update-notice {
+  position: fixed;
+  bottom: 1rem;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 2000;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.85rem 1rem;
+  max-width: calc(100vw - 2rem);
+  border-radius: 12px;
+  background: var(--app-panel-elevated);
+  color: var(--app-text);
+  border: 1px solid var(--app-line);
+  box-shadow: 0 6px 30px #0005;
+  font-size: 0.9rem;
+}
+.web-update-notice button {
+  white-space: nowrap;
+}
+
+.web-storage-panel progress {
+  width: 100%;
+  accent-color: var(--app-accent);
+}
+.web-settings-details summary {
+  cursor: pointer;
+  color: var(--app-text-muted);
+  font-size: 0.875rem;
+  padding-block: 0.2rem;
+}
+.web-settings-details[open] summary {
+  margin-block-end: 0.5rem;
+}
+.web-settings-details p + p {
+  margin-block-start: 0.5rem;
+}
+.web-library-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+  padding: 1rem;
+  margin-block-end: 1rem;
+  border: 1px solid var(--app-line);
+  border-radius: 12px;
+  background: var(--app-panel);
+}
+.web-library-notice-copy {
+  flex: 1;
+  min-width: 0;
+}
+.web-library-notice p {
+  font-size: 0.85rem;
+  line-height: 1.6;
+  color: var(--app-text-muted);
+  margin-block: 0.4rem 0.7rem;
+}
+.web-google-account-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+.web-google-account-row > span {
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+.web-google-setup {
+  display: grid;
+  gap: 0.75rem;
+}
+.web-google-signin {
+  min-height: 44px;
+}
+.web-google-files {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+}
+.web-google-files small,
+.web-google-setup small {
+  display: block;
+  color: var(--app-text-muted);
+  line-height: 1.6;
+}
+@media (max-width: 600px) {
+  .web-update-notice {
+    flex-wrap: wrap;
+    width: calc(100% - 2rem);
+    bottom: calc(0.5rem + env(safe-area-inset-bottom));
+  }
+  .web-update-notice > span {
+    flex-basis: 100%;
+  }
+  .web-storage-panel dl > div {
+    flex-wrap: wrap;
+  }
+  .web-storage-actions > button {
+    min-height: 40px;
+    white-space: normal;
+  }
+  .web-library-notice {
+    padding: 0.75rem;
+  }
+}

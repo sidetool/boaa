@@ -1,0 +1,178 @@
+import 'fake-indexeddb/auto';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { defaultSettings } from '../repositories/reader-defaults';
+import type { ReaderSettings } from '../domain/types';
+import { RemoteReaderRepository } from '../repositories/remote-reader-repository';
+import type { RemoteApiClient } from '../services/remote/remote-api-client';
+import { IndexedDbReaderRepository } from '../repositories/indexeddb-reader-repository';
+import { IndexedDbCloudVaultArtifactRepository } from '../cloud-vault/indexeddb-artifact-repository';
+import { DEFAULT_CLOUD_VAULT_SCOPE } from '../cloud-vault/contracts';
+import { mergeCloudVaultSnapshots } from '../cloud-vault/merge';
+import { getSettings, saveSettings, resetReaderDbForTests, listSyncOutbox, applyRemoteSyncEvents } from './db';
+import { putItem } from './indexeddb-transaction';
+
+beforeEach(() => resetReaderDbForTests());
+
+describe('device reader settings boundary', () => {
+  it('retains hidden format badges across local and self-host repository recreation without syncing', async () => {
+    await saveSettings({ ...(await getSettings()), showLibraryFormatBadge: false });
+    expect((await new IndexedDbReaderRepository().getSettings()).showLibraryFormatBadge).toBe(false);
+    expect(await listSyncOutbox()).toEqual([]);
+    const client = {
+      readerSettingsScope: 'format-badge-preference',
+      getSettings: vi.fn(async () => ({ settings: structuredClone(defaultSettings) })),
+      saveSettings: vi.fn(),
+    };
+    const remote = new RemoteReaderRepository(client as unknown as RemoteApiClient);
+    await remote.saveSettings({ ...(await remote.getSettings()), showLibraryFormatBadge: false });
+    expect(
+      (await new RemoteReaderRepository(client as unknown as RemoteApiClient).getSettings()).showLibraryFormatBadge,
+    ).toBe(false);
+    expect(client.saveSettings).not.toHaveBeenCalled();
+  });
+  it('persists library cover counts locally without synchronizing them', async () => {
+    await saveSettings({ ...(await getSettings()), showLibraryReadingCounts: true });
+    expect((await getSettings()).showLibraryReadingCounts).toBe(true);
+    expect(await listSyncOutbox()).toEqual([]);
+  });
+  it('preserves an unmigrated local profile before applying a legacy remote settings event', async () => {
+    await putItem('settings', { ...defaultSettings, fontSize: 26, applicationTheme: 'sepia' });
+    await applyRemoteSyncEvents([
+      {
+        id: 'remote-legacy-settings',
+        type: 'settings_updated',
+        deviceId: 'server',
+        entityId: 'reader-settings',
+        createdAt: '2099-01-01T00:00:00.000Z',
+        payload: { settings: { id: 'reader-settings', fontSize: 12, applicationTheme: 'light', ttsSpeed: 1.6 } },
+      },
+    ]);
+    expect(await getSettings()).toMatchObject({ fontSize: 26, applicationTheme: 'sepia', ttsSpeed: 1.6 });
+  });
+  it('persists startup destinations per device and keeps them out of sync payloads', async () => {
+    const startupScreen = { kind: 'library' as const, shelfId: 'normal' };
+    await saveSettings({ ...(await getSettings()), startupScreen });
+    expect((await new IndexedDbReaderRepository().getSettings()).startupScreen).toEqual(startupScreen);
+    expect(await listSyncOutbox()).toEqual([]);
+    const client = {
+      readerSettingsScope: 'startup-preference',
+      getSettings: vi.fn(async () => ({ settings: structuredClone(defaultSettings) })),
+      saveSettings: vi.fn(),
+    };
+    const remote = new RemoteReaderRepository(client as unknown as RemoteApiClient);
+    await remote.saveSettings({
+      ...(await remote.getSettings()),
+      startupScreen: { kind: 'discovery', tabId: 'browse' },
+    });
+    expect(
+      (await new RemoteReaderRepository(client as unknown as RemoteApiClient).getSettings()).startupScreen,
+    ).toEqual({ kind: 'discovery', tabId: 'browse' });
+    expect(client.saveSettings).not.toHaveBeenCalled();
+    await remote.saveSettings({ ...(await remote.getSettings()), startupScreen: undefined });
+    expect((await remote.getSettings()).startupScreen).toBeUndefined();
+  });
+  it('keeps the source progress basis on this device in local and self-hosted libraries', async () => {
+    expect((await getSettings()).sourceProgressBasis).toBeUndefined();
+    await saveSettings({ ...(await getSettings()), sourceProgressBasis: 'downloaded' });
+    expect(await listSyncOutbox()).toEqual([]);
+    expect((await new IndexedDbReaderRepository().getSettings()).sourceProgressBasis).toBe('downloaded');
+
+    const client = {
+      readerSettingsScope: 'device-progress',
+      getSettings: vi.fn(async () => ({ settings: structuredClone(defaultSettings) })),
+      saveSettings: vi.fn(async () => undefined),
+    };
+    const remote = new RemoteReaderRepository(client as unknown as RemoteApiClient);
+    await remote.saveSettings({ ...(await remote.getSettings()), sourceProgressBasis: 'downloaded' });
+    expect(client.saveSettings).not.toHaveBeenCalled();
+    expect(
+      (await new RemoteReaderRepository(client as unknown as RemoteApiClient).getSettings()).sourceProgressBasis,
+    ).toBe('downloaded');
+  });
+
+  it('seeds legacy local settings once and saves presentation without adding sync work', async () => {
+    await putItem('settings', { ...defaultSettings, fontSize: 23, applicationTheme: 'sepia' });
+    expect(await getSettings()).toMatchObject({ fontSize: 23, applicationTheme: 'sepia' });
+    await saveSettings({ ...(await getSettings()), fontSize: 29, readingBookOverrides: { book: { marginX: 12 } } });
+    expect(await listSyncOutbox()).toEqual([]);
+    // A legacy full-document write cannot replace the independent device record.
+    await putItem('settings', { ...defaultSettings, fontSize: 12, applicationTheme: 'light' });
+    expect(await new IndexedDbReaderRepository().getSettings()).toMatchObject({
+      fontSize: 29,
+      applicationTheme: 'sepia',
+      readingBookOverrides: { book: { marginX: 12 } },
+    });
+  });
+
+  it('keeps preferences across repository recreation and separates device scopes while sharing common settings', async () => {
+    let server = structuredClone(defaultSettings);
+    const makeClient = (scope: string) => ({
+      readerSettingsScope: scope,
+      getSettings: vi.fn(async () => ({ settings: structuredClone(server) })),
+      saveSettings: vi.fn(async (settings: Partial<ReaderSettings>) => {
+        server = { ...server, ...settings };
+      }),
+    });
+    const clientA = makeClient('device-a');
+    const clientB = makeClient('device-b');
+    const a = new RemoteReaderRepository(clientA as unknown as RemoteApiClient);
+    const b = new RemoteReaderRepository(clientB as unknown as RemoteApiClient);
+    const settingsA = await a.getSettings();
+    await b.getSettings();
+    await a.saveSettings({
+      ...settingsA,
+      fontSize: 31,
+      hideAppLogo: true,
+      flow: 'page',
+      gestureBindings: { ...settingsA.gestureBindings, tapLeft: 'none' },
+    });
+    expect(clientA.saveSettings).not.toHaveBeenCalled();
+    expect(clientA.getSettings).toHaveBeenCalledTimes(1);
+    expect(await b.getSettings()).toMatchObject({ fontSize: defaultSettings.fontSize });
+    expect((await b.getSettings()).hideAppLogo).not.toBe(true);
+    expect(await new RemoteReaderRepository(clientA as unknown as RemoteApiClient).getSettings()).toMatchObject({
+      fontSize: 31,
+      hideAppLogo: true,
+      flow: 'page',
+      gestureBindings: { tapLeft: 'none' },
+    });
+    const downloadPolicy = { autoNext: true, nextCount: 3, retentionEnabled: true, keepRead: 10 } as const;
+    await a.saveSettings({ ...(await a.getSettings()), ttsSpeed: 1.5, downloadPolicy });
+    expect(clientA.saveSettings).toHaveBeenCalledOnce();
+    expect(clientA.saveSettings.mock.calls[0][0]).not.toHaveProperty('fontSize');
+    expect(clientA.saveSettings.mock.calls[0][0]).not.toHaveProperty('readingProfile');
+    expect(await b.getSettings()).toMatchObject({ ttsSpeed: 1.5, fontSize: defaultSettings.fontSize, downloadPolicy });
+  });
+
+  it('exports common settings only and ignores presentation in legacy Cloud Vault snapshots', async () => {
+    await saveSettings({
+      ...defaultSettings,
+      fontSize: 27,
+      readingBookOverrides: { book: { fontSize: 30 } },
+      ttsSpeed: 1.4,
+    });
+    const event = (await listSyncOutbox()).find((item) => item.event.type === 'settings_updated')!;
+    expect(event.event.payload).toMatchObject({ settings: { ttsSpeed: 1.4 } });
+    expect((event.event.payload as { settings: object }).settings).not.toHaveProperty('fontSize');
+    const artifacts = new IndexedDbCloudVaultArtifactRepository(new IndexedDbReaderRepository());
+    const snapshot = await artifacts.capture({
+      deviceId: 'local',
+      scope: { ...DEFAULT_CLOUD_VAULT_SCOPE, readerSettings: true },
+      capturedAt: '2026-09-08T00:00:00.000Z',
+    });
+    expect(snapshot.settings).not.toHaveProperty('fontSize');
+    expect(snapshot.settings).not.toHaveProperty('readingBookOverrides');
+    const legacy = {
+      ...snapshot,
+      settings: { ...defaultSettings, fontSize: 10, ttsSpeed: 1.8 },
+      settingsUpdatedAt: '2099-01-01T00:00:00.000Z',
+    };
+    expect(mergeCloudVaultSnapshots(snapshot, legacy).settings).not.toHaveProperty('fontSize');
+    await artifacts.apply(legacy);
+    expect(await getSettings()).toMatchObject({
+      fontSize: 27,
+      readingBookOverrides: { book: { fontSize: 30 } },
+      ttsSpeed: 1.8,
+    });
+  });
+});

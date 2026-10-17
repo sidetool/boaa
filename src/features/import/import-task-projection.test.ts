@@ -1,0 +1,153 @@
+import { describe, expect, it } from 'vitest';
+import {
+  importTaskIsActive,
+  importTaskLabel,
+  importTaskStageLabel,
+  projectImportProgress,
+} from './import-task-projection';
+
+describe('import task projection', () => {
+  it('shows confirmed image saves and does not round unfinished work to 100%', () => {
+    const progress = {
+      jobId: 'images',
+      status: 'writing' as const,
+      subphase: 'server_processing' as const,
+      bytesRead: 100,
+      totalBytes: 100,
+      chaptersDetected: 0,
+      paragraphsWritten: 0,
+      progressUnit: 'images' as const,
+      completedUnits: 999,
+      totalUnits: 1000,
+    };
+    expect(projectImportProgress(progress)).toMatchObject({ phase: 'saving', percent: 99 });
+    expect(projectImportProgress({ ...progress, totalUnits: 0 }).percent).toBeUndefined();
+    expect(projectImportProgress({ ...progress, progressUnit: undefined }).percent).toBeUndefined();
+  });
+  it('does not treat completed upload bytes as whole-job progress', () => {
+    expect(
+      projectImportProgress({
+        jobId: 'upload',
+        status: 'reading',
+        subphase: 'uploading_chunks',
+        bytesRead: 25,
+        totalBytes: 100,
+        chaptersDetected: 0,
+        paragraphsWritten: 0,
+      }),
+    ).toMatchObject({ phase: 'uploading', percent: 25 });
+
+    expect(
+      projectImportProgress({
+        jobId: 'server',
+        status: 'writing',
+        subphase: 'server_processing',
+        bytesRead: 100,
+        totalBytes: 100,
+        chaptersDetected: 1,
+        paragraphsWritten: 10,
+      }),
+    ).toMatchObject({ phase: 'saving', finalizing: false });
+  });
+
+  it('keeps server completion in the final catalog-refresh phase', () => {
+    const projection = projectImportProgress({
+      jobId: 'done',
+      status: 'ready',
+      subphase: 'complete',
+      bytesRead: 100,
+      totalBytes: 100,
+      chaptersDetected: 1,
+      paragraphsWritten: 10,
+    });
+    expect(projection).toMatchObject({ phase: 'saving', finalizing: true });
+    expect(projection.percent).toBeUndefined();
+    expect(
+      importTaskLabel({
+        id: 'task',
+        batchId: 'batch',
+        source: 'local_file',
+        title: '작품',
+        phase: projection.phase,
+        percent: projection.percent,
+      }),
+    ).toBe('저장 중');
+  });
+
+  it('treats a committed external release as complete and immediately usable', () => {
+    const task = {
+      id: 'task',
+      batchId: 'batch',
+      source: 'external_source' as const,
+      title: '작품',
+      phase: 'complete' as const,
+    };
+    expect(importTaskLabel(task)).toBe('완료');
+    expect(importTaskIsActive(task)).toBe(false);
+  });
+});
+
+it('shows a short server activity in place and clears it for later client work', () => {
+  const progress = {
+    jobId: 'server',
+    status: 'writing' as const,
+    subphase: 'server_processing' as const,
+    bytesRead: 100,
+    totalBytes: 100,
+    chaptersDetected: 1,
+    paragraphsWritten: 0,
+    message: '이미지 저장 45개',
+  };
+  const task = {
+    id: 'task',
+    batchId: 'batch',
+    source: 'local_file' as const,
+    title: '작품',
+    ...projectImportProgress(progress),
+  };
+  expect(importTaskLabel(task)).toBe('저장 45개');
+  expect(task.percent).toBeUndefined();
+  expect(
+    importTaskLabel({
+      ...task,
+      ...projectImportProgress({ ...progress, status: 'reading', subphase: 'uploading_chunks', bytesRead: 25 }),
+    }),
+  ).toBe('업로드 25%');
+  expect(importTaskLabel({ ...task, phase: 'complete' })).toBe('완료');
+  expect(projectImportProgress({ ...progress, message: '긴 서버 설명'.repeat(20) }).activity).toBeUndefined();
+});
+
+it('does not label unmeasured saving as finalizing', () => {
+  const task = { id: 'x', batchId: 'x', source: 'local_file' as const, title: '책', phase: 'saving' as const };
+  expect(importTaskStageLabel(task)).toBe('저장 중');
+  expect(importTaskStageLabel({ ...task, finalizing: true })).toBe('마무리 중');
+});
+
+it('shows measured paragraph writes and clears stale measurements for finalization', () => {
+  const progress = {
+    jobId: 'text',
+    status: 'writing' as const,
+    subphase: 'writing_pages' as const,
+    bytesRead: 100,
+    totalBytes: 100,
+    chaptersDetected: 1,
+    paragraphsWritten: 25,
+    progressUnit: 'paragraphs' as const,
+    completedUnits: 25,
+    totalUnits: 100,
+  };
+  expect(projectImportProgress(progress)).toMatchObject({
+    phase: 'saving',
+    percent: 25,
+    measurement: { phase: 'saving', completed: 25, total: 100, unit: 'items' },
+  });
+  expect(projectImportProgress({ ...progress, completedUnits: undefined }).percent).toBeUndefined();
+  expect(projectImportProgress({ ...progress, totalUnits: 0 }).percent).toBeUndefined();
+  for (const change of [
+    { subphase: 'activating_revision' as const },
+    { subphase: 'server_processing' as const, message: '마무리 중' },
+  ]) {
+    expect(projectImportProgress({ ...progress, ...change })).toMatchObject({ finalizing: true });
+    expect(projectImportProgress({ ...progress, ...change }).percent).toBeUndefined();
+  }
+});

@@ -1,0 +1,648 @@
+/* ui-next settings building blocks (components/prefs.tsx): grouped rows on a soft surface, one control per row.
+   Settings, management and tool screens share these so they all read the same. */
+
+.un-pref-section {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 10px;
+  min-width: 0;
+}
+
+.un-pref-section + .un-pref-section {
+  margin-top: 18px;
+}
+
+.un-pref-section-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 0 4px;
+}
+
+.un-pref-section-head h3 {
+  margin: 0;
+  color: var(--un-text-2);
+  font-size: 13px;
+  font-weight: 650;
+  letter-spacing: 0.01em;
+}
+
+.un-pref-section-head p {
+  margin: 3px 0 0;
+  color: var(--un-text-3);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.un-pref-group {
+  display: grid;
+  overflow: hidden;
+  border-radius: 16px;
+  background: var(--un-pref-surface, rgb(255 255 255 / 4.5%));
+}
+
+.un-pref {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 16px;
+  min-height: 60px;
+  padding: 14px 16px;
+}
+
+.un-pref + .un-pref {
+  border-top: 1px solid var(--un-line);
+}
+
+.un-pref.is-stacked {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.un-pref-text {
+  display: grid;
+  flex: 1 1 140px;
+  gap: 3px;
+  min-width: 0;
+}
+
+.un-pref-text strong {
+  font-size: 15px;
+  font-weight: 650;
+}
+
+.un-pref-text small {
+  color: var(--un-text-3);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.un-pref-control {
+  display: flex;
+  flex: none;
+  justify-content: flex-end;
+}
+
+.un-pref .un-segmented {
+  background: rgb(255 255 255 / 6%);
+}
+
+.un-pref.is-stacked .un-segmented {
+  width: 100%;
+}
+
+.un-pref.is-stacked .un-segmented button {
+  flex: 1;
+}
+
+.un-pref-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.un-pref-chips .un-chip {
+  height: 34px;
+  background: rgb(255 255 255 / 6%);
+}
+
+.un-pref-chips .un-chip.is-active {
+  background: var(--un-text);
+  color: var(--un-bg);
+}
+
+/* Cache durations live behind a fold: they rarely change. */
+.un-pref-fold {
+  border-radius: 16px;
+  background: var(--un-pref-surface, rgb(255 255 255 / 4.5%));
+}
+
+.un-pref-fold > summary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 56px;
+  padding: 0 14px 0 16px;
+  font-size: 15px;
+  font-weight: 650;
+  list-style: none;
+  cursor: pointer;
+}
+
+.un-pref-fold > summary::-webkit-details-marker {
+  display: none;
+}
+
+.un-pref-fold > summary small {
+  flex: 1;
+  overflow: hidden;
+  color: var(--un-text-3);
+  font-size: 12.5px;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.un-pref-fold > summary svg {
+  flex: none;
+  color: var(--un-text-3);
+  transition: transform 0.2s var(--un-ease);
+}
+
+.un-pref-fold[open] > summary svg {
+  transform: rotate(180deg);
+}
+
+.un-pref-fold > .un-pref {
+  border-top: 1px solid var(--un-line);
+}
+
+.un-pref-error {
+  margin: 0;
+  padding: 10px 14px;
+  border-radius: 12px;
+  background: rgb(255 90 106 / 12%);
+  color: #ff98a2;
+  font-size: 13.5px;
+}
+
+.un-pref.is-disabled .un-pref-text {
+  opacity: 0.5;
+}
+
+/* ───────── option list ───────── */
+
+.un-pref-options {
+  display: grid;
+  gap: 8px;
+}
+
+.un-pref-option {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 56px;
+  padding: 10px 14px;
+  border: 1px solid var(--un-line);
+  border-radius: 14px;
+  background: rgb(255 255 255 / 3%);
+  color: var(--un-text);
+  font: inherit;
+  text-align: left;
+  transition:
+    border-color 0.15s,
+    background 0.15s;
+}
+
+.un-pref-option:hover:not(:disabled) {
+  background: rgb(255 255 255 / 6%);
+}
+
+.un-pref-option.is-active {
+  border-color: var(--un-accent);
+  background: var(--un-accent-soft);
+}
+
+.un-pref-option-leading {
+  display: grid;
+  flex: none;
+  place-items: center;
+}
+
+.un-pref-option-text {
+  display: grid;
+  flex: 1;
+  gap: 2px;
+  min-width: 0;
+}
+
+.un-pref-option-text b {
+  font-size: 14.5px;
+  font-weight: 650;
+}
+
+.un-pref-option-text small {
+  color: var(--un-text-3);
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+
+.un-pref-option-mark {
+  flex: none;
+  width: 20px;
+  height: 20px;
+  border: 2px solid var(--un-line-2);
+  border-radius: 50%;
+  transition:
+    border-color 0.15s,
+    border-width 0.15s;
+}
+
+.un-pref-option.is-active .un-pref-option-mark {
+  border-width: 6px;
+  border-color: var(--un-accent);
+}
+
+/* ───────── slider ───────── */
+
+.un-pref-slider {
+  gap: 8px;
+}
+
+.un-pref-slider-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.un-pref-slider-value {
+  min-width: 52px;
+  color: var(--un-text);
+  font-size: 15px;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.un-pref-slider-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.un-pref-slider-row .un-icon-btn {
+  flex: none;
+  background: rgb(255 255 255 / 6%);
+}
+
+.un-range {
+  flex: 1;
+  min-width: 0;
+  height: 28px;
+  margin: 0;
+  background: none;
+  cursor: pointer;
+  appearance: none;
+}
+
+.un-range::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: 2px;
+  background: linear-gradient(
+    to right,
+    var(--un-accent) var(--un-range-fill, 0%),
+    rgb(255 255 255 / 14%) var(--un-range-fill, 0%)
+  );
+}
+
+.un-range::-moz-range-track {
+  height: 4px;
+  border-radius: 2px;
+  background: rgb(255 255 255 / 14%);
+}
+
+.un-range::-moz-range-progress {
+  height: 4px;
+  border-radius: 2px;
+  background: var(--un-accent);
+}
+
+.un-range::-webkit-slider-thumb {
+  width: 22px;
+  height: 22px;
+  margin-top: -9px;
+  border: 0;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 4px rgb(0 0 0 / 40%);
+  appearance: none;
+}
+
+.un-range::-moz-range-thumb {
+  width: 22px;
+  height: 22px;
+  border: 0;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 4px rgb(0 0 0 / 40%);
+}
+
+.un-range:disabled {
+  cursor: default;
+  opacity: 0.4;
+}
+
+/* ───────── link rows ───────── */
+
+.un-pref-link {
+  flex-wrap: nowrap;
+  width: 100%;
+  border: 0;
+  background: none;
+  color: var(--un-text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.un-pref-link:hover:not(:disabled) {
+  background: rgb(255 255 255 / 3%);
+}
+
+.un-pref-link:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+.un-pref-link .un-pref-text {
+  flex: 1;
+}
+
+.un-pref-link.is-danger strong {
+  color: var(--un-danger);
+}
+
+.un-pref-link-icon {
+  display: grid;
+  flex: none;
+  width: 34px;
+  height: 34px;
+  place-items: center;
+  border-radius: 10px;
+  background: rgb(255 255 255 / 7%);
+  color: var(--un-text-2);
+}
+
+.un-pref-link-value {
+  flex: none;
+  max-width: 40%;
+  overflow: hidden;
+  color: var(--un-text-3);
+  font-size: 14px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.un-pref-link-chevron {
+  flex: none;
+  color: var(--un-text-3);
+}
+
+/* ───────── fields ───────── */
+
+.un-pref-field {
+  gap: 8px;
+}
+
+.un-input,
+.un-pref-field :is(input:not([type='checkbox'], [type='radio'], [type='range']), select, textarea) {
+  width: 100%;
+  min-height: 44px;
+  padding: 0 14px;
+  border: 1px solid var(--un-line);
+  border-radius: 12px;
+  outline: 0;
+  background: rgb(255 255 255 / 5%);
+  color: var(--un-text);
+  font: inherit;
+  /* 16px keeps iOS from zooming into the field. */
+  font-size: 16px;
+  transition: border-color 0.15s;
+}
+
+.un-pref-field textarea {
+  min-height: 96px;
+  padding: 12px 14px;
+  line-height: 1.5;
+  resize: vertical;
+}
+
+:is(.un-input, .un-pref-field :is(input, select, textarea)):focus {
+  border-color: var(--un-accent);
+}
+
+.un-pref-field.has-error :is(input, select, textarea) {
+  border-color: var(--un-danger);
+}
+
+.un-pref-field-help {
+  color: var(--un-text-3);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.un-pref-field-error {
+  color: #ff98a2;
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+/* ───────── notice, empty, loading ───────── */
+
+.un-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: rgb(255 255 255 / 5%);
+  color: var(--un-text-2);
+  font-size: 13.5px;
+  line-height: 1.5;
+}
+
+.un-notice > svg {
+  flex: none;
+  margin-top: 1px;
+}
+
+.un-notice-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.un-notice.is-info > svg {
+  color: var(--un-accent-2);
+}
+
+.un-notice.is-warning {
+  background: rgb(245 184 75 / 10%);
+}
+
+.un-notice.is-warning > svg {
+  color: #f5b84b;
+}
+
+.un-notice.is-danger {
+  background: rgb(255 90 106 / 12%);
+  color: #ff98a2;
+}
+
+.un-notice .un-btn {
+  flex: none;
+  margin: -6px -6px -6px 0;
+}
+
+.un-state {
+  display: grid;
+  justify-items: center;
+  gap: 6px;
+  padding: 36px 20px;
+  color: var(--un-text-3);
+  text-align: center;
+}
+
+.un-state-icon {
+  display: grid;
+  width: 48px;
+  height: 48px;
+  margin-bottom: 4px;
+  place-items: center;
+  border-radius: 16px;
+  background: rgb(255 255 255 / 6%);
+  color: var(--un-text-2);
+}
+
+.un-state b {
+  color: var(--un-text);
+  font-size: 15.5px;
+  font-weight: 700;
+}
+
+.un-state p {
+  max-width: 320px;
+  margin: 0;
+  font-size: 13.5px;
+  line-height: 1.55;
+}
+
+.un-state .un-btn {
+  margin-top: 8px;
+}
+
+.un-pref-skeleton .un-pref-text i {
+  display: block;
+  width: 46%;
+  height: 12px;
+  border-radius: 6px;
+  background: rgb(255 255 255 / 7%);
+  animation: un-pref-pulse 1.2s ease-in-out infinite alternate;
+}
+
+.un-pref-skeleton .un-pref-text i + i {
+  width: 72%;
+  height: 10px;
+  margin-top: 4px;
+}
+
+@keyframes un-pref-pulse {
+  to {
+    opacity: 0.45;
+  }
+}
+
+.un-switch:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
+@media (max-width: 699px) {
+  .un-pref-fold > summary small {
+    display: none;
+  }
+
+  .un-pref-fold > summary svg {
+    margin-left: auto;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .un-pref-skeleton .un-pref-text i {
+    animation: none;
+  }
+}
+
+/* On the row surface the page-level ghost button would vanish; lift it a step. */
+:is(.un-pref-group, .un-pref-fold, .un-access-card, .un-notice) .un-btn.is-ghost {
+  background: rgb(255 255 255 / 8%);
+}
+
+:is(.un-pref-group, .un-pref-fold, .un-access-card, .un-notice) .un-btn.is-ghost:hover {
+  background: rgb(255 255 255 / 12%);
+}
+
+/* ───────── dialogs (components/dialogs.tsx) ───────── */
+
+.un-dialog-body {
+  display: grid;
+  gap: 10px;
+}
+
+.un-dialog-body p {
+  margin: 0;
+  color: var(--un-text-2);
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+.un-dialog-error {
+  color: #ff98a2;
+  font-size: 12.5px;
+}
+
+.un-dialog-hint {
+  color: var(--un-text-3);
+  font-size: 12.5px;
+}
+
+.un-btn.is-danger {
+  background: rgb(255 90 106 / 16%);
+  color: #ff98a2;
+}
+
+.un-btn.is-danger:hover {
+  background: rgb(255 90 106 / 24%);
+}
+
+/* Busy icon inside buttons. */
+.un-spin {
+  animation: un-pref-spin 0.9s linear infinite;
+}
+
+@keyframes un-pref-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Compact native select inside a row. */
+:is(.ui-next, .un-kit) .un-pref-control select.un-select {
+  max-width: 168px;
+  min-height: 36px;
+  padding: 0 32px 0 12px;
+  border: 0;
+  border-radius: 10px;
+  outline: 0;
+  background:
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%23a1a1aa' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E")
+      no-repeat right 10px center,
+    rgb(255 255 255 / 7%);
+  color: var(--un-text);
+  font: inherit;
+  font-size: 14px;
+  font-weight: 550;
+  appearance: none;
+}
+
+:is(.ui-next, .un-kit) .un-pref-control select.un-select:focus-visible {
+  outline: 2px solid var(--un-accent);
+  outline-offset: 2px;
+}
+
+/* Fields show focus with their border; a second outline ring would sit right outside it. */
+:is(.ui-next, .un-kit) :is(input.un-input, .un-pref-field :is(input, select, textarea)):focus-visible {
+  border-color: var(--un-accent);
+  outline: none;
+}

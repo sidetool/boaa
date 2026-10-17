@@ -1,0 +1,135 @@
+/* ui-next design tokens. Scoped to `.ui-next` to keep shared reader and desktop surfaces independent.
+   `.un-kit` carries the same palette onto classic overlays opened outside that scope, e.g. over the reader. */
+
+.ui-next,
+.un-kit {
+  color-scheme: dark;
+
+  --un-bg: #09090b;
+  --un-bg-1: #121215;
+  --un-bg-2: #1a1a1f;
+  --un-bg-3: #24242a;
+  --un-line: rgb(255 255 255 / 8%);
+  --un-line-2: rgb(255 255 255 / 15%);
+  --un-text: #f5f5f7;
+  --un-text-2: rgb(245 245 247 / 68%);
+  --un-text-3: rgb(245 245 247 / 44%);
+  --un-accent: #5b8cff;
+  --un-accent-2: #86a9ff;
+  --un-accent-soft: rgb(91 140 255 / 16%);
+  --un-danger: #ff5a6a;
+  --un-success: #3fcf8e;
+  --un-pad: clamp(16px, 4vw, 56px);
+  --un-topbar: 68px;
+  --un-tabbar: 64px;
+  --un-safe-b: env(safe-area-inset-bottom, 0px);
+  --un-safe-t: env(safe-area-inset-top, 0px);
+  --un-ease: cubic-bezier(0.2, 0, 0, 1);
+  --un-font:
+    'Pretendard Variable', Pretendard, -apple-system, BlinkMacSystemFont, 'Apple SD Gothic Neo', 'Noto Sans KR',
+    system-ui, sans-serif;
+  --un-serif: 'Noto Serif KR', 'KoPub Batang', 'Batang', serif;
+
+  /* Classic screens that have not moved yet read the same palette through their own variables. */
+  --app-canvas: var(--un-bg);
+  --app-sidebar: var(--un-bg);
+  --app-surface: var(--un-bg-1);
+  --app-surface-strong: var(--un-bg-2);
+  --app-surface-muted: var(--un-bg-2);
+  --app-surface-hover: var(--un-bg-3);
+  --app-surface-selected: var(--un-accent-soft);
+  --app-panel: var(--un-bg-1);
+  --app-panel-elevated: var(--un-bg-2);
+  --app-panel-toolbar: var(--un-bg-1);
+  --app-field: var(--un-bg-2);
+  --app-field-muted: var(--un-bg-2);
+  --app-card: var(--un-bg-1);
+  --app-card-hover: var(--un-bg-2);
+  --app-card-selected: var(--un-accent-soft);
+  --app-track: rgb(255 255 255 / 14%);
+  --app-text: var(--un-text);
+  --app-text-strong: var(--un-text);
+  --app-text-muted: var(--un-text-2);
+  --app-text-faint: var(--un-text-3);
+  --app-line: var(--un-line);
+  --app-line-strong: var(--un-line-2);
+  --app-accent: var(--un-accent);
+  --app-accent-strong: var(--un-accent-2);
+  --app-accent-soft: var(--un-accent-soft);
+  --app-accent-contrast: #fff;
+  --app-success: var(--un-success);
+  --app-danger: var(--un-danger);
+  --app-warning: #f5b84b;
+  --app-tag-surface: var(--un-bg-2);
+  --app-tag-line: var(--un-line);
+  --app-tag-text: var(--un-text-2);
+  --app-row-read: transparent;
+  --app-row-current: var(--un-accent-soft);
+  --app-row-current-text: var(--un-accent-2);
+  --app-rail-background: var(--un-bg);
+  --app-rail-text: var(--un-text);
+  --app-rail-muted: var(--un-text-2);
+  --app-modal-backdrop: rgb(0 0 0 / 55%);
+  --app-menu-backdrop: rgb(0 0 0 / 40%);
+  --app-cover-shadow: none;
+  --bg: var(--app-canvas);
+  --surface: var(--app-surface);
+  --surface-2: var(--app-surface-muted);
+  --border: var(--app-line);
+  --border-strong: var(--app-line-strong);
+  --text: var(--app-text);
+  --text-2: var(--app-text-muted);
+  --muted: var(--app-text-faint);
+  --primary: var(--app-accent);
+  --primary-2: var(--app-accent-strong);
+  --accent: var(--app-accent);
+  --danger: var(--app-danger);
+  --warning: var(--app-warning);
+  --font-ui: var(--un-font);
+  --font-sans: var(--un-font);
+
+  /* Classic metrics, tuned to the ui-next type scale and rounder shapes. */
+  --radius: 10px;
+  --radius-control: 10px;
+  --radius-panel: 14px;
+  --radius-overlay: 20px;
+  --ui-title-md-size: 17px;
+  --ui-body-size: 14px;
+  --ui-meta-size: 12.5px;
+  --ui-label-size: 13px;
+  --shadow: 0 24px 64px rgb(0 0 0 / 55%);
+  --shadow-soft: 0 10px 30px rgb(0 0 0 / 40%);
+  --app-card-shadow: none;
+  --app-card-shadow-hover: none;
+
+  color: var(--un-text);
+  font-family: var(--un-font);
+  word-break: keep-all;
+  -webkit-font-smoothing: antialiased;
+}
+
+.ui-next {
+  background: var(--un-bg);
+}
+
+/* Classic screens rendered inside the new shell: clear the fixed bars and drop the old sidebar column. */
+.ui-next .library-screen,
+.ui-next .chapters-screen {
+  height: 100dvh;
+  padding-top: calc(var(--un-topbar) + 20px);
+}
+
+.ui-next .library-product-shell {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+@media (max-width: 899px) {
+  .ui-next {
+    --un-topbar: 56px;
+  }
+
+  .ui-next .library-screen,
+  .ui-next .chapters-screen {
+    padding-bottom: calc(var(--un-tabbar) + var(--un-safe-b) + 32px);
+  }
+}

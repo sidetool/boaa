@@ -1,0 +1,163 @@
+import { sourceEpisodeNumber } from './source-primary-read';
+import {
+  stageSourceStreamVisit,
+  acknowledgeSourceStreamVisit,
+} from '../../external-sources/source-stream-visit-journal';
+import { useCallback, useRef } from 'react';
+import { belongsToSourceWork } from './source-work-history';
+import { externalItemKeyId, type ExternalItemKey } from '../../external-sources/contracts';
+import type { Novel } from '../../domain/types';
+import type { SourceReleasePreference } from '../../external-sources/source-user-state';
+import type { ExternalSourceItemView, UseExternalSourceControllerOptions } from './external-source-controller-contract';
+
+export type StreamReadingPosition =
+  | { kind: 'image'; page: number; count: number; fraction?: number }
+  | { kind: 'text'; paragraphIndex: number; offset: number; textHash: string; count: number };
+
+/** Reading belongs to the episode even before its background download creates a book. */
+export function useSourceStreamProgress(options: {
+  current(): UseExternalSourceControllerOptions;
+  isRead?(item: ExternalSourceItemView): boolean;
+  lastReadAt?: string;
+  onRead(preference: SourceReleasePreference): void;
+  onSaved(novel: Novel): void;
+}) {
+  const latest = useRef(options);
+  latest.current = options;
+  const queue = useRef(Promise.resolve());
+  const unreadWrites = useRef(
+    new Map<
+      string,
+      {
+        item: ExternalSourceItemView;
+        readAt: string;
+        mode: 'stream' | 'download';
+        current: UseExternalSourceControllerOptions;
+      }
+    >(),
+  );
+  const markRead = useCallback(async (key: string) => {
+    const entry = unreadWrites.current.get(key);
+    if (!entry) return;
+    const { recordStreamReleaseRead } = await import('./source-stream-library');
+    const preference = await recordStreamReleaseRead(entry.current, entry.item, entry.readAt, entry.mode, {
+      title: (entry.item.release?.title ?? entry.item.title).slice(0, 200),
+      number: sourceEpisodeNumber(entry.item),
+    });
+    if (preference) {
+      acknowledgeSourceStreamVisit(entry.current.settingsScope, entry.item.key, entry.readAt);
+      if (
+        latest.current.current().state === entry.current.state &&
+        latest.current.current().settingsScope === entry.current.settingsScope
+      )
+        latest.current.onRead(preference);
+    }
+    if (unreadWrites.current.get(key) === entry) unreadWrites.current.delete(key);
+  }, []);
+  const positions = useRef(new Map<string, { item: ExternalSourceItemView; position: StreamReadingPosition }>());
+  const enqueue = useCallback((work: () => Promise<void>) => {
+    const pending = queue.current.then(work);
+    queue.current = pending.catch(() => latest.current.current().notify('읽던 위치를 저장하지 못했습니다.', 'warning'));
+    return queue.current;
+  }, []);
+  const persist = useCallback(async (entry: { item: ExternalSourceItemView; position: StreamReadingPosition }) => {
+    const current = latest.current.current();
+    const { saveImageStreamPosition, saveTextStreamPosition } = await import('./source-stream-library');
+    const novel =
+      entry.position.kind === 'image'
+        ? await saveImageStreamPosition(
+            current,
+            entry.item,
+            entry.position.page,
+            entry.position.count,
+            entry.position.fraction,
+          )
+        : await saveTextStreamPosition(current, entry.item, entry.position);
+    if (novel) latest.current.onSaved(novel);
+    return Boolean(novel);
+  }, []);
+  const visits = useRef(new Map<string, string>());
+  const visitClock = useRef(0);
+  const prepareVisit = useCallback((item: ExternalSourceItemView, mode: 'stream' | 'download') => {
+    const workKey = externalItemKeyId({ ...item.key, remoteId: item.collection?.remoteId ?? item.key.remoteId });
+    const itemKey = externalItemKeyId(item.key);
+    if (visits.current.get(workKey) !== `${mode}:${itemKey}` || latest.current.isRead?.(item) === false) {
+      visitClock.current = Math.max(
+        Date.now(),
+        visitClock.current + 1,
+        (Date.parse(latest.current.lastReadAt ?? '') || 0) + 1,
+      );
+      const readAt = new Date(visitClock.current).toISOString();
+      if (mode === 'stream' && item.collection && item.release)
+        stageSourceStreamVisit(
+          latest.current.current().settingsScope,
+          item.key,
+          item.collection.remoteId,
+          readAt,
+          { title: item.release.title.slice(0, 200), number: sourceEpisodeNumber(item) },
+          { title: item.collection.title.slice(0, 200), author: item.author?.slice(0, 200) },
+        );
+      unreadWrites.current.set(itemKey, { item, readAt, mode, current: latest.current.current() });
+      visits.current.set(workKey, `${mode}:${itemKey}`);
+    }
+    return { workKey, itemKey };
+  }, []);
+  const recordVisit = useCallback(
+    (item: ExternalSourceItemView) => {
+      const { workKey, itemKey } = prepareVisit(item, 'download');
+      // A normal downloaded reader now owns the position; do not replay an older stream later.
+      positions.current.delete(workKey);
+      return enqueue(() => markRead(itemKey));
+    },
+    [enqueue, markRead, prepareVisit],
+  );
+  const record = useCallback(
+    (item: ExternalSourceItemView, position: StreamReadingPosition) => {
+      if (
+        !Number.isSafeInteger(position.count) ||
+        position.count <= 0 ||
+        (position.kind === 'image'
+          ? !Number.isSafeInteger(position.page) || position.page < 0 || position.page >= position.count
+          : !Number.isSafeInteger(position.paragraphIndex) ||
+            position.paragraphIndex < 1 ||
+            position.paragraphIndex > position.count)
+      )
+        return Promise.resolve();
+      const { workKey, itemKey } = prepareVisit(item, 'stream');
+      const entry = { item, position };
+      positions.current.set(workKey, entry);
+      return enqueue(async () => {
+        await markRead(itemKey);
+        // A queued write for a previous episode must not move the work's resume position backwards.
+        if (
+          positions.current.get(workKey) === entry &&
+          (await persist(entry)) &&
+          positions.current.get(workKey) === entry
+        )
+          positions.current.delete(workKey);
+      });
+    },
+    [enqueue, markRead, persist, prepareVisit],
+  );
+  const reconcile = useCallback(
+    () =>
+      enqueue(async () => {
+        for (const key of unreadWrites.current.keys()) await markRead(key);
+        for (const [key, entry] of positions.current) {
+          if (positions.current.get(key) === entry && (await persist(entry)) && positions.current.get(key) === entry)
+            positions.current.delete(key);
+        }
+      }),
+    [enqueue, markRead, persist],
+  );
+  const clearWork = useCallback(async (work: ExternalItemKey) => {
+    // Drain already running writes before clearing persisted history, then discard retry entries.
+    await queue.current;
+    visits.current.delete(externalItemKeyId(work));
+    positions.current.delete(externalItemKeyId(work));
+    for (const [key, entry] of unreadWrites.current) {
+      if (belongsToSourceWork(entry.item.key, entry.item.collection?.remoteId, work)) unreadWrites.current.delete(key);
+    }
+  }, []);
+  return { record, recordVisit, reconcile, clearWork };
+}

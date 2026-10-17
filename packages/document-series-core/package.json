@@ -1,0 +1,23 @@
+{
+  "name": "@boaa/document-series-core",
+  "version": "0.1.0",
+  "private": true,
+  "license": "Apache-2.0",
+  "type": "module",
+  "exports": {
+    ".": "./index.ts",
+    "./local-archive-series": "./local-archive-series.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@boaa/epub-core": "workspace:*",
+    "@boaa/text-core": "workspace:*",
+    "@zip.js/zip.js": "2.8.26"
+  },
+  "devDependencies": {
+    "@boaa/contracts": "workspace:*",
+    "typescript": "^5.6.3"
+  }
+}

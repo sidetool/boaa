@@ -1,0 +1,198 @@
+/* ui-next 회차 준비 화면: same header and stage as the viewer; a soft column instead of a gray page box. */
+
+.fixed-doc-screen.un-kit.un-stream-wait {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: block;
+  overflow: hidden;
+  background: var(--fixed-doc-stage, #0b0b0d);
+}
+
+.un-stream-wait .fixed-doc-header {
+  position: absolute;
+  inset: 0 0 auto;
+  z-index: 2;
+  height: var(--fixed-doc-header-height);
+}
+
+.un-stream-wait .fixed-doc-title-group > div {
+  display: grid;
+  min-width: 0;
+}
+
+.un-stream-wait .fixed-doc-title-group strong,
+.un-stream-wait-episode {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.un-stream-wait-episode {
+  color: var(--un-text-3);
+  font-size: 12px;
+}
+
+/* Indeterminate line under the header: says "working" without a spinner in the middle of the page. */
+.un-stream-wait-bar {
+  position: absolute;
+  top: var(--fixed-doc-header-height);
+  left: 0;
+  z-index: 2;
+  width: 100%;
+  height: 2px;
+  overflow: hidden;
+}
+
+.un-stream-wait-bar::after {
+  content: '';
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 36%;
+  border-radius: 2px;
+  background: linear-gradient(90deg, transparent, var(--un-accent), transparent);
+  animation: un-stream-bar 1.2s var(--un-ease) infinite;
+}
+
+@keyframes un-stream-bar {
+  from {
+    transform: translateX(-100%);
+  }
+
+  to {
+    transform: translateX(290%);
+  }
+}
+
+.un-stream-wait-stage {
+  position: absolute;
+  inset: var(--fixed-doc-header-height) 0 0;
+  display: grid;
+  align-content: start;
+  justify-items: center;
+  gap: 6px;
+  padding-top: 6px;
+}
+
+.un-stream-wait-stage span {
+  width: min(720px, 100%);
+  height: 62vh;
+  background: linear-gradient(100deg, rgb(255 255 255 / 3%) 30%, rgb(255 255 255 / 6.5%) 50%, rgb(255 255 255 / 3%) 70%)
+    0 0 / 250% 100%;
+  animation: un-stream-shimmer 1.6s linear infinite;
+}
+
+.un-stream-wait.is-text {
+  background: var(--un-bg, #0b0b0d);
+}
+
+/* Novel episodes: three soft lines per paragraph at the reader's measure. */
+.un-stream-wait.is-text .un-stream-wait-stage {
+  gap: 26px;
+  padding: 40px 24px 0;
+}
+
+.un-stream-wait.is-text .un-stream-wait-stage p {
+  display: grid;
+  gap: 12px;
+  width: min(640px, 100%);
+  margin: 0;
+}
+
+.un-stream-wait.is-text .un-stream-wait-stage span {
+  height: 14px;
+  border-radius: 7px;
+}
+
+.un-stream-wait.is-text .un-stream-wait-stage span:last-child {
+  width: 62%;
+}
+
+@keyframes un-stream-shimmer {
+  to {
+    background-position: -250% 0;
+  }
+}
+
+.un-stream-wait-pill {
+  position: absolute;
+  bottom: calc(28px + var(--un-safe-b));
+  left: 50%;
+  z-index: 2;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  max-width: calc(100% - 32px);
+  margin: 0;
+  padding: 10px 16px;
+  border-radius: 999px;
+  background: rgb(22 22 26 / 88%);
+  box-shadow:
+    0 10px 30px rgb(0 0 0 / 45%),
+    inset 0 0 0 1px rgb(255 255 255 / 7%);
+  color: var(--un-text-2);
+  font-size: 13.5px;
+  font-weight: 600;
+  white-space: nowrap;
+  transform: translateX(-50%);
+  -webkit-backdrop-filter: blur(18px);
+  backdrop-filter: blur(18px);
+}
+
+.un-stream-wait-spinner {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  border: 2px solid rgb(255 255 255 / 22%);
+  border-top-color: var(--un-text);
+  border-radius: 50%;
+  animation: un-stream-spin 0.8s linear infinite;
+}
+
+@keyframes un-stream-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.un-stream-wait-problem {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  display: grid;
+  justify-items: center;
+  gap: 10px;
+  width: min(360px, calc(100% - 40px));
+  text-align: center;
+  transform: translate(-50%, -50%);
+}
+
+.un-stream-wait-problem > svg {
+  color: var(--un-text-3);
+}
+
+.un-stream-wait-problem strong {
+  font-size: 17px;
+  font-weight: 750;
+}
+
+.un-stream-wait-problem p {
+  margin: 0 0 8px;
+  color: var(--un-text-3);
+  font-size: 13.5px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.un-stream-wait-problem > div {
+  display: flex;
+  gap: 8px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .un-stream-wait-bar::after,
+  .un-stream-wait-stage span,
+  .un-stream-wait-spinner {
+    animation: none;
+  }
+}

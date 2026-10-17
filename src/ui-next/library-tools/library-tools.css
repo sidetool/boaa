@@ -1,0 +1,358 @@
+/* ui-next 서재 도구 시트(백업, 책장, 원본 파일 등). Rows and fields come from components/prefs. */
+
+.un-tools {
+  display: grid;
+  gap: 16px;
+}
+
+.un-tools-card {
+  display: grid;
+  gap: 8px;
+  padding: 14px 16px;
+  border-radius: 16px;
+  background: rgb(255 255 255 / 4.5%);
+}
+
+.un-tools-card small {
+  color: var(--un-text-3);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.un-tools-card.is-running {
+  border: 1px solid var(--un-line-2);
+}
+
+.un-tools-running-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+}
+
+.un-tools-running-head span {
+  color: var(--un-text-2);
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+}
+
+.un-tools-file {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.un-tools-file > svg {
+  flex: none;
+  color: var(--un-text-3);
+}
+
+.un-tools-file div {
+  display: grid;
+  gap: 2px;
+}
+
+.un-tools-file strong {
+  font-size: 16px;
+}
+
+.un-tools-wide {
+  width: 100%;
+}
+
+.un-tools .un-pref-control select.un-select,
+.un-sheet .un-pref-control select.un-select {
+  max-width: 150px;
+}
+
+.un-tools-note {
+  margin: 0;
+  padding: 0 4px;
+  color: var(--un-text-3);
+  font-size: 12.5px;
+}
+
+/* 책장 관리 */
+.un-shelf-create {
+  display: grid;
+  gap: 10px;
+}
+
+.un-shelf-create-row {
+  display: flex;
+  gap: 8px;
+}
+
+.ui-next .un-shelf-create-row .un-input {
+  flex: 1;
+  min-width: 0;
+  min-height: 44px;
+  padding: 0 14px;
+  border: 1px solid var(--un-line);
+  border-radius: 12px;
+  background: rgb(255 255 255 / 5%);
+  font-size: 16px;
+}
+
+.un-shelf-create-row .un-btn {
+  height: 44px;
+}
+
+.un-shelf-colors {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 0 2px;
+}
+
+.un-shelf-color {
+  position: relative;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  cursor: pointer;
+}
+
+.un-shelf-color.is-active {
+  box-shadow:
+    0 0 0 2px var(--un-bg-1),
+    0 0 0 4px var(--un-text);
+}
+
+.un-shelf-color.is-custom {
+  overflow: hidden;
+  background: conic-gradient(#ff6f91, #f5a524, #34c3b5, #5b8cff, #a970ff, #ff6f91);
+}
+
+.un-shelf-color.is-custom input {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.un-shelf-list {
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  border-radius: 16px;
+  background: rgb(255 255 255 / 4.5%);
+  list-style: none;
+}
+
+.un-shelf-list li {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 52px;
+  padding: 0 8px 0 16px;
+}
+
+.un-shelf-list li + li {
+  border-top: 1px solid var(--un-line);
+}
+
+.un-shelf-dot {
+  flex: none;
+  width: 10px;
+  height: 10px;
+  margin-right: 8px;
+  border-radius: 50%;
+}
+
+.un-shelf-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  font-size: 15px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ui-next form.un-tools > .un-input {
+  min-height: 46px;
+  padding: 0 14px;
+  border: 1px solid var(--un-line);
+  border-radius: 12px;
+  background: rgb(255 255 255 / 5%);
+  font-size: 16px;
+}
+
+.un-pref-option .un-shelf-dot {
+  margin: 0;
+}
+
+.un-shelf-name small {
+  display: block;
+  margin-top: 2px;
+  color: var(--un-text-3);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.un-tools-center {
+  justify-self: center;
+}
+
+/* 폴더 연결 */
+.un-folder-chips {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.un-folder-head {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.un-folder-head > div {
+  display: grid;
+  flex: 1;
+  gap: 2px;
+  min-width: 0;
+}
+
+.un-folder-head strong {
+  overflow: hidden;
+  font-size: 15px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.un-folder-size {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+}
+
+.un-folder-size .un-pref + .un-pref {
+  border-top: 0;
+  border-left: 1px solid var(--un-line);
+}
+
+.un-folder-list-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 4px;
+}
+
+.un-folder-list-head small {
+  color: var(--un-text-3);
+  font-size: 12.5px;
+}
+
+.un-folder-check {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 14px;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.un-folder-check input,
+.un-folder-files input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.un-folder-check.is-checked .un-storage-check,
+.un-folder-files label.is-checked .un-storage-check {
+  border-color: var(--un-accent);
+  background: var(--un-accent)
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='3.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M20 6 9 17l-5-5'/%3E%3C/svg%3E")
+    center no-repeat;
+}
+
+.un-folder-files {
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  border-radius: 16px;
+  background: rgb(255 255 255 / 4.5%);
+  list-style: none;
+}
+
+.un-folder-files li + li {
+  border-top: 1px solid var(--un-line);
+}
+
+.un-folder-files label {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 56px;
+  padding: 8px 14px;
+  cursor: pointer;
+}
+
+.un-folder-files label.is-checked {
+  background: var(--un-accent-soft);
+}
+
+.un-folder-files label.is-idle {
+  cursor: default;
+}
+
+.un-folder-files label.is-idle .un-storage-check {
+  opacity: 0.35;
+}
+
+.un-folder-icon {
+  flex: none;
+  color: var(--un-text-3);
+}
+
+.un-folder-name {
+  display: grid;
+  flex: 1;
+  gap: 2px;
+  min-width: 0;
+}
+
+.un-folder-name strong,
+.un-folder-name small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.un-folder-name strong {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.un-folder-name small,
+.un-folder-name em {
+  color: var(--un-text-3);
+  font-size: 12px;
+  font-style: normal;
+}
+
+.un-folder-status {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 3px;
+  color: var(--un-text-3);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.un-folder-status.is-new {
+  color: var(--un-success);
+}
+
+.un-folder-status.is-changed {
+  color: var(--un-accent-2);
+}
+
+.un-folder-status.is-missing {
+  color: #f5b84b;
+}

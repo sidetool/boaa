@@ -1,0 +1,1169 @@
+/* ui-next 확장: installed list, add flow and updates. The classic panels it hosts are restyled here
+   rather than through extension-management.css, which only targets `.installed-extension-panel`. */
+
+.un-ext {
+  display: grid;
+  gap: 16px;
+  min-width: 0;
+  margin-bottom: 28px;
+  color: var(--un-text);
+  /* Settings already sit on bg-1, so surfaces here are tinted rather than solid. */
+  --un-ext-surface: rgb(255 255 255 / 4.5%);
+  --un-ext-surface-2: rgb(255 255 255 / 7.5%);
+}
+
+.un-ext :is(h3, h4, p) {
+  margin: 0;
+}
+
+.un-ext code {
+  font-family: ui-monospace, 'SFMono-Regular', Menlo, monospace;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+/* ───────── header ───────── */
+
+.un-ext-target {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--un-text-2);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.un-ext-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.un-ext-head > div {
+  flex: 1;
+  min-width: 0;
+}
+
+.un-ext-head h3 {
+  font-size: 19px;
+  font-weight: 750;
+  letter-spacing: -0.01em;
+}
+
+.un-ext-head p {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+  color: var(--un-text-3);
+  font-size: 13px;
+}
+
+.un-ext-head p em,
+.un-ext-item-main small em {
+  color: var(--un-danger);
+  font-style: normal;
+}
+
+.un-ext > .un-segmented {
+  width: 100%;
+}
+
+.un-ext > .un-segmented button {
+  flex: 1;
+}
+
+.un-ext-spin {
+  animation: un-ext-spin 0.9s linear infinite;
+}
+
+@keyframes un-ext-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* ───────── status line ───────── */
+
+.un-ext-status {
+  display: grid;
+  gap: 6px;
+}
+
+.un-ext-status p {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  border-radius: 12px;
+  background: var(--un-ext-surface);
+  color: var(--un-text-2);
+  font-size: 13.5px;
+  line-height: 1.5;
+}
+
+.un-ext-status p.is-error {
+  background: rgb(255 90 106 / 12%);
+  color: #ff98a2;
+}
+
+/* ───────── installed list ───────── */
+
+.un-ext-list {
+  display: grid;
+  overflow: hidden;
+  border-radius: 16px;
+  background: var(--un-ext-surface);
+}
+
+.un-ext-item + .un-ext-item,
+.un-ext-list > .un-ext-link {
+  border-top: 1px solid var(--un-line);
+}
+
+.un-ext-item-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding-right: 14px;
+}
+
+.un-ext-item-main,
+.un-ext-link {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  min-height: 64px;
+  padding: 10px 8px 10px 14px;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+}
+
+.un-ext-link {
+  width: 100%;
+  padding-right: 14px;
+}
+
+.un-ext-item-main > span:not(.un-ext-avatar),
+.un-ext-link > span:not(.un-ext-kind-icon) {
+  display: grid;
+  flex: 1;
+  gap: 2px;
+  min-width: 0;
+}
+
+.un-ext-item-main strong,
+.un-ext-link strong {
+  overflow: hidden;
+  font-size: 15px;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.un-ext-item-main small,
+.un-ext-link small {
+  color: var(--un-text-3);
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+.un-ext-item.is-off .un-ext-item-main strong {
+  color: var(--un-text-3);
+}
+
+.un-ext-item.is-off .un-ext-avatar {
+  filter: grayscale(1);
+  opacity: 0.5;
+}
+
+.un-ext-avatar,
+.un-ext-kind-icon {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 12px;
+  font-size: 16px;
+  font-weight: 800;
+}
+
+.un-ext-avatar {
+  background: hsl(var(--un-ext-hue) 45% 26%);
+  color: hsl(var(--un-ext-hue) 80% 82%);
+}
+
+.un-ext-kind-icon {
+  background: var(--un-bg-3);
+  color: var(--un-text-2);
+  font-size: 11.5px;
+  letter-spacing: 0.02em;
+}
+
+.un-ext-kind-icon.is-js {
+  background: rgb(247 223 30 / 14%);
+  color: #f2dc5d;
+}
+
+.un-ext-kind-icon.is-apk {
+  background: rgb(61 220 132 / 13%);
+  color: #6be3a2;
+}
+
+.un-ext-chevron {
+  flex: none;
+  color: var(--un-text-3);
+  transition: transform 0.2s var(--un-ease);
+}
+
+.un-ext-item.is-open .un-ext-chevron,
+.un-ext-advanced[open] > summary .un-ext-chevron {
+  transform: rotate(180deg);
+}
+
+.un-ext-chevron.is-right {
+  transform: rotate(-90deg);
+}
+
+.un-ext-item > .un-ext-trust {
+  margin: 0 14px 12px;
+}
+
+.un-ext-item-body {
+  display: grid;
+  gap: 10px;
+  padding: 0 14px 14px 66px;
+}
+
+.un-ext-id {
+  color: var(--un-text-3);
+}
+
+.un-ext-item-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding-top: 4px;
+}
+
+.un-ext .un-ext-remove {
+  margin-left: auto;
+  color: var(--un-danger);
+}
+
+.un-ext-confirm {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px;
+  margin-left: auto;
+}
+
+.un-ext-confirm small {
+  margin-right: 4px;
+  color: var(--un-text-3);
+  font-size: 12.5px;
+}
+
+.un-ext .un-ext-danger {
+  background: var(--un-danger);
+  color: #fff;
+}
+
+/* Per-source options, logins and content connections inside an expanded row. */
+.un-ext-item-body > details {
+  border-radius: 12px;
+  background: var(--un-ext-surface-2);
+}
+
+.un-ext-item-body > details > summary {
+  padding: 11px 14px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.un-ext-item-body > details[open] {
+  padding-bottom: 12px;
+}
+
+.un-ext-item-body > details > :not(summary) {
+  margin-inline: 14px;
+}
+
+/* ───────── empty ───────── */
+
+.un-ext-empty {
+  display: grid;
+  justify-items: center;
+  gap: 8px;
+  padding: 36px 20px 32px;
+  border-radius: 16px;
+  background: var(--un-ext-surface);
+  text-align: center;
+}
+
+.un-ext-empty-icon {
+  display: grid;
+  place-items: center;
+  width: 56px;
+  height: 56px;
+  margin-bottom: 4px;
+  border-radius: 18px;
+  background: var(--un-ext-surface-2);
+  color: var(--un-text-2);
+}
+
+.un-ext-empty strong {
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.un-ext-empty p {
+  max-width: 34ch;
+  color: var(--un-text-3);
+  font-size: 13.5px;
+  line-height: 1.55;
+}
+
+.un-ext-empty .un-btn {
+  margin-top: 10px;
+}
+
+/* ───────── install review ───────── */
+
+.un-ext-review {
+  display: grid;
+  gap: 14px;
+  padding: 18px;
+  border-radius: 18px;
+  background: var(--un-ext-surface);
+  box-shadow: inset 0 0 0 1.5px var(--un-accent);
+  outline: none;
+}
+
+.un-ext-review > header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.un-ext-review > header > div {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.un-ext-review > header strong {
+  font-size: 17px;
+  font-weight: 750;
+}
+
+.un-ext-review > header small {
+  overflow: hidden;
+  color: var(--un-text-3);
+  font-size: 12.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.un-ext-trust {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgb(63 207 142 / 10%);
+  color: #8be0b8;
+  font-size: 13.5px;
+  line-height: 1.5;
+}
+
+.un-ext-trust.is-warn {
+  background: rgb(255 184 76 / 11%);
+  color: #ffc875;
+}
+
+.un-ext-trust svg {
+  flex: none;
+  margin-top: 2px;
+}
+
+.un-ext-access {
+  display: grid;
+  gap: 8px;
+}
+
+.un-ext-access > span {
+  color: var(--un-text-3);
+  font-size: 12.5px;
+  font-weight: 650;
+}
+
+.un-ext-access ul {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.un-ext-access li {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  color: var(--un-text-2);
+  font-size: 13.5px;
+  line-height: 1.5;
+}
+
+.un-ext-access li svg {
+  flex: none;
+  margin-top: 2px;
+  color: var(--un-text-3);
+}
+
+.un-ext-check {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.un-ext-check input {
+  width: 18px;
+  height: 18px;
+  accent-color: var(--un-accent);
+}
+
+.un-ext-review > footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.un-ext-review > footer .un-btn {
+  min-width: 96px;
+}
+
+/* ───────── add ───────── */
+
+.un-ext-add {
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+}
+
+.un-ext-kinds {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+/* The hosted catalogues: BOAA repositories, Mangayomi JS and APK. */
+.un-ext :is(.extension-repository-browser, .source-updates-panel) {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+}
+
+.un-ext .source-updates-panel {
+  padding: 16px;
+}
+
+.un-ext :is(.extension-repository-browser, .source-updates-panel) > :is(h3, h4) {
+  font-size: 15px;
+  font-weight: 700;
+}
+
+/* The kind chip already names the catalogue. */
+.un-ext .un-ext-add .apk-extension-manager > h4 {
+  display: none;
+}
+
+.un-ext :is(.field-help, .muted) {
+  color: var(--un-text-3);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.un-ext :is(.field-help.warning, .warning) {
+  color: #ffc875;
+}
+
+.un-ext :is(.extension-repository-browser, .source-updates-panel) > p[role='status'],
+.un-ext :is(.extension-repository-browser, .source-updates-panel) > p[role='alert'] {
+  padding: 10px 14px;
+  border-radius: 12px;
+  background: var(--un-ext-surface);
+  font-size: 13.5px;
+}
+
+.un-ext :is(.extension-repository-browser, .source-updates-panel) > p[role='alert'] {
+  background: rgb(255 90 106 / 12%);
+  color: #ff98a2;
+}
+
+/* Address field with its button on one line. */
+.un-ext form.extension-repository-add,
+.un-ext div.extension-repository-add {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  min-width: 0;
+}
+
+.un-ext .extension-repository-add > label {
+  display: grid;
+  flex: 1;
+  gap: 6px;
+  min-width: 0;
+  color: var(--un-text-2);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.un-ext .extension-repository-add > :is(input, select) {
+  flex: 1;
+  min-width: 0;
+}
+
+.un-ext .extension-repository-select {
+  display: grid;
+  gap: 6px;
+  color: var(--un-text-2);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+/* Bare buttons inside the hosted panels. */
+.un-ext
+  :is(.extension-repository-browser, .source-updates-panel, .source-network-settings, .un-ext-item-body)
+  button:not(.un-btn, .un-switch, .un-icon-btn, .un-chip) {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 40px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: 10px;
+  background: var(--un-ext-surface-2);
+  color: var(--un-text);
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  white-space: nowrap;
+  transition: background 0.15s;
+}
+
+.un-ext
+  :is(.extension-repository-browser, .source-updates-panel, .source-network-settings, .un-ext-item-body)
+  button:not(.un-btn, .un-switch, .un-icon-btn, .un-chip):hover:not(:disabled) {
+  background: var(--un-bg-3);
+}
+
+.un-ext
+  :is(.extension-repository-browser, .source-updates-panel, .source-network-settings, .un-ext-item-body)
+  button:not(.un-btn, .un-switch, .un-icon-btn, .un-chip):disabled {
+  opacity: 0.4;
+}
+
+.un-ext :is(.extension-repository-add, .source-updates-panel) button[type='submit'],
+.un-ext .source-updates-panel > button:first-of-type,
+.un-ext .extension-settings-card button:not([aria-pressed], [aria-expanded]):first-of-type:not(:disabled) {
+  background: #f5f5f7;
+  color: #0b0b0c;
+}
+
+.un-ext :is(.extension-repository-add, .source-updates-panel) button[type='submit']:hover:not(:disabled) {
+  background: #fff;
+}
+
+/* 저장소 / 설치됨 toggles inside a catalogue read as a segmented control. */
+.un-ext .extension-repository-browser > .installed-extension-actions:has(> [aria-pressed]) {
+  display: inline-flex;
+  justify-self: start;
+  gap: 2px;
+  padding: 3px;
+  border-radius: 12px;
+  background: var(--un-ext-surface);
+}
+
+.un-ext .extension-repository-browser > .installed-extension-actions > button[aria-pressed] {
+  height: 34px;
+  background: none;
+  color: var(--un-text-2);
+}
+
+.un-ext .extension-repository-browser > .installed-extension-actions > button[aria-pressed='true'] {
+  background: var(--un-bg-3);
+  color: var(--un-text);
+}
+
+.un-ext .installed-extension-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.un-ext .installed-extension-actions > span {
+  color: var(--un-text-3);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Repository address card. */
+.un-ext .repository-address {
+  display: grid;
+  gap: 6px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: var(--un-ext-surface);
+}
+
+.un-ext .repository-address > p {
+  color: var(--un-text-2);
+  font-family: ui-monospace, 'SFMono-Regular', Menlo, monospace;
+  font-size: 12px;
+}
+
+.un-ext .repository-address small {
+  color: var(--un-text-3);
+  font-size: 12px;
+}
+
+.un-ext .repository-address .installed-extension-actions :is(a, button) {
+  height: 30px;
+  padding: 0 10px;
+  border-radius: 8px;
+  font-size: 12.5px;
+}
+
+.un-ext .repository-address a {
+  display: inline-flex;
+  align-items: center;
+  background: var(--un-ext-surface-2);
+  color: var(--un-text);
+  font-weight: 600;
+  text-decoration: none;
+}
+
+/* Catalogue entries: one row each. */
+.un-ext :is(.extension-settings-list, .installed-extension-list) {
+  display: grid;
+  overflow: hidden;
+  border-radius: 16px;
+  background: var(--un-ext-surface);
+}
+
+.un-ext :is(.extension-settings-list, .installed-extension-list) > .extension-settings-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  column-gap: 12px;
+  row-gap: 2px;
+  margin: 0;
+  padding: 12px 14px;
+  border: 0;
+  border-radius: 0;
+  background: none;
+}
+
+.un-ext :is(.extension-settings-list, .installed-extension-list) > .extension-settings-card + .extension-settings-card {
+  border-top: 1px solid var(--un-line);
+}
+
+.un-ext .extension-settings-card > strong {
+  grid-column: 1;
+  overflow: hidden;
+  font-size: 15px;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.un-ext .extension-settings-card > :is(p, span, .muted) {
+  grid-column: 1;
+  font-size: 12.5px;
+}
+
+.un-ext .extension-settings-card > button,
+.un-ext .extension-settings-card > .installed-extension-actions {
+  grid-column: 2;
+  grid-row: 1 / span 3;
+  justify-content: flex-end;
+}
+
+.un-ext .extension-settings-card :is(button, .installed-extension-actions button) {
+  height: 34px;
+  padding: 0 14px;
+  border-radius: 999px;
+  font-size: 13.5px;
+}
+
+.un-ext .extension-settings-card > :is(.extension-install-confirmation, .un-ext-review, .compatibility-preferences),
+.un-ext .extension-settings-card > p[role] {
+  grid-column: 1 / -1;
+  margin-top: 10px;
+}
+
+/* Classic install confirmations still used by the Mangayomi / APK / updates panels. */
+.un-ext .extension-install-confirmation {
+  display: grid;
+  gap: 10px;
+  padding: 16px;
+  border-radius: 16px;
+  background: var(--un-ext-surface-2);
+  box-shadow: inset 0 0 0 1.5px var(--un-accent);
+  outline: none;
+}
+
+.un-ext .extension-install-confirmation > strong {
+  font-size: 15px;
+}
+
+.un-ext :is(.checkbox-field, .reader-settings-toggle, .source-update-row) {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.un-ext :is(.checkbox-field, .reader-settings-toggle, .source-update-row) input {
+  width: 18px;
+  height: 18px;
+  margin: 0;
+  accent-color: var(--un-accent);
+}
+
+.un-ext .source-update-row {
+  min-height: 48px;
+  padding: 0 14px;
+  border-radius: 12px;
+  background: var(--un-ext-surface-2);
+}
+
+/* "파일에서 설치" reads as a button, not a raw file input. */
+.un-ext .compatibility-preference-field {
+  display: grid;
+  gap: 6px;
+  color: var(--un-text-2);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.un-ext .compatibility-preference-field input[type='file'] {
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--un-text-3);
+  font-size: 13px;
+}
+
+.un-ext .compatibility-preference-field input[type='file']::file-selector-button {
+  height: 36px;
+  margin-right: 10px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: 10px;
+  background: var(--un-ext-surface-2);
+  color: var(--un-text);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.un-ext .compatibility-preferences {
+  display: grid;
+  gap: 12px;
+}
+
+/* ───────── advanced ───────── */
+
+.un-ext-advanced {
+  border-radius: 16px;
+  background: var(--un-ext-surface);
+}
+
+.un-ext-advanced > summary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 56px;
+  padding: 0 14px 0 16px;
+  font-size: 15px;
+  font-weight: 650;
+  list-style: none;
+  cursor: pointer;
+}
+
+.un-ext-advanced > summary::-webkit-details-marker {
+  display: none;
+}
+
+.un-ext-advanced > summary small {
+  flex: 1;
+  overflow: hidden;
+  color: var(--un-text-3);
+  font-size: 12.5px;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.un-ext-advanced[open] {
+  padding-bottom: 14px;
+}
+
+.un-ext-advanced > :not(summary) {
+  margin: 0 14px;
+}
+
+.un-ext-advanced > * + :not(summary) {
+  margin-top: 12px;
+}
+
+.un-ext .source-network-settings {
+  padding: 0;
+  border: 0;
+  background: none;
+}
+
+.un-ext .source-network-settings > summary {
+  padding: 4px 0;
+  color: var(--un-text-2);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+/* ───────── phones ───────── */
+
+@media (max-width: 699px) {
+  .un-ext-head .un-btn {
+    padding: 0 12px;
+  }
+
+  .un-ext-item-body {
+    padding-left: 14px;
+  }
+
+  .un-ext form.extension-repository-add,
+  .un-ext div.extension-repository-add {
+    flex-wrap: wrap;
+  }
+
+  .un-ext form.extension-repository-add > label {
+    flex-basis: 100%;
+  }
+
+  .un-ext form.extension-repository-add > button {
+    flex: 1;
+  }
+
+  .un-ext-advanced > summary small {
+    display: none;
+  }
+}
+
+/* ───────── hosted panel trims ───────── */
+
+/* The 업데이트 tab already names the panel. */
+.un-ext .source-updates-panel > h3 {
+  display: none;
+}
+
+.un-ext .source-updates-panel > p:first-of-type {
+  color: var(--un-text-3);
+  font-size: 13.5px;
+}
+
+.un-ext .source-updates-panel > button {
+  justify-self: start;
+}
+
+.un-ext :is(.installed-source-preferences, .installed-source-authentication) > summary::marker {
+  color: var(--un-text-3);
+}
+
+/* ───────── BOAA catalogue ───────── */
+
+.un-ext-catalog {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+}
+
+.un-ext-address,
+.un-ext-search {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  height: 48px;
+  padding: 0 5px 0 14px;
+  border-radius: 14px;
+  background: var(--un-ext-surface);
+  color: var(--un-text-3);
+}
+
+.un-ext-address:focus-within,
+.un-ext-search:focus-within {
+  box-shadow: inset 0 0 0 1.5px var(--un-accent);
+}
+
+.ui-next .un-ext :is(.un-ext-address, .un-ext-search) input {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  box-shadow: none;
+  color: var(--un-text);
+  font-size: 14.5px;
+  outline: 0;
+}
+
+.un-ext-address .un-btn {
+  height: 38px;
+  border-radius: 10px;
+}
+
+.un-ext-search {
+  flex: 1;
+  height: 40px;
+  padding-right: 12px;
+  border-radius: 999px;
+}
+
+.un-ext-note {
+  padding: 2px 2px;
+  color: var(--un-text-3);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.un-ext-note.is-error {
+  padding: 10px 14px;
+  border-radius: 12px;
+  background: rgb(255 90 106 / 12%);
+  color: #ff98a2;
+}
+
+.un-ext-repos {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.un-ext-repo {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  padding: 2px 0 2px 2px;
+}
+
+.un-ext-repo-info {
+  display: grid;
+  flex: 1;
+  gap: 2px;
+  min-width: 0;
+}
+
+.un-ext-repo-info code {
+  overflow: hidden;
+  color: var(--un-text-2);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.un-ext-repo-info small {
+  color: var(--un-text-3);
+  font-size: 12px;
+}
+
+.un-ext-repo-actions {
+  display: flex;
+  flex: none;
+  gap: 2px;
+  color: var(--un-text-2);
+}
+
+.un-ext-repo-actions .un-icon-btn.is-sm {
+  width: 34px;
+  height: 34px;
+}
+
+.un-ext-repo-actions .un-icon-btn:disabled {
+  opacity: 0.4;
+}
+
+.un-ext .un-ext-repo-actions .un-ext-remove {
+  margin: 0;
+}
+
+.un-ext-filter {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.un-ext-filter .un-chip {
+  height: 40px;
+}
+
+.un-ext-item-row.is-static .un-ext-item-main {
+  align-items: flex-start;
+  cursor: default;
+}
+
+.un-ext-item-row.is-static .un-ext-avatar {
+  margin-top: 2px;
+}
+
+.un-ext-desc {
+  display: -webkit-box;
+  overflow: hidden;
+  color: var(--un-text-2);
+  font-size: 13px;
+  line-height: 1.45;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.un-ext-get {
+  min-width: 72px;
+  border-radius: 999px;
+}
+
+.un-ext .un-ext-get.is-done {
+  background: none;
+  color: var(--un-text-3);
+  opacity: 1;
+}
+
+.un-ext-item-body.is-review {
+  padding-left: 14px;
+}
+
+.un-ext-more {
+  justify-self: center;
+}
+
+@media (max-width: 699px) {
+  .un-ext-item-body.is-review {
+    padding-inline: 8px;
+  }
+}
+
+/* Grid tracks default to their content's min width; inputs and chip rows would push past the screen. */
+:is(.un-ext, .un-ext-add, .un-ext-catalog) {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.un-ext .un-ext-address .un-btn:disabled {
+  background: var(--un-ext-surface-2);
+  color: var(--un-text-3);
+  opacity: 1;
+}
+
+.un-ext .un-btn.is-ghost {
+  background: var(--un-ext-surface-2);
+}
+
+.un-ext .un-btn.is-ghost:hover:not(:disabled) {
+  background: rgb(255 255 255 / 11%);
+}
+
+.un-ext-advanced > summary .un-ext-chevron {
+  margin-left: auto;
+}
+
+/* The nested network fold reads as a sub-row of 고급. */
+.un-ext-advanced .source-network-settings > summary {
+  display: flex;
+  align-items: center;
+  min-height: 44px;
+  padding: 0 12px;
+  border-radius: 12px;
+  background: var(--un-ext-surface);
+  list-style: none;
+}
+
+.un-ext-advanced .source-network-settings > summary::-webkit-details-marker {
+  display: none;
+}
+
+.un-ext-advanced .source-network-settings > summary::after {
+  content: '';
+  width: 7px;
+  height: 7px;
+  margin-left: auto;
+  border-right: 1.5px solid var(--un-text-3);
+  border-bottom: 1.5px solid var(--un-text-3);
+  transform: rotate(45deg) translateY(-2px);
+}
+
+.un-ext-advanced .source-network-settings[open] > summary::after {
+  transform: rotate(225deg) translateY(-2px);
+}
+
+/* Mangayomi / APK address row matches the BOAA address field. */
+.un-ext .apk-extension-manager form.extension-repository-add {
+  align-items: center;
+  height: 48px;
+  padding: 0 5px 0 14px;
+  border-radius: 14px;
+  background: var(--un-ext-surface);
+}
+
+.un-ext .apk-extension-manager form.extension-repository-add:focus-within {
+  box-shadow: inset 0 0 0 1.5px var(--un-accent);
+}
+
+.ui-next .un-ext .apk-extension-manager form.extension-repository-add > input {
+  height: 100%;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  box-shadow: none;
+  outline: 0;
+}
+
+.un-ext .apk-extension-manager form.extension-repository-add > button {
+  height: 38px;
+}
+
+@media (max-width: 699px) {
+  .un-ext .apk-extension-manager form.extension-repository-add {
+    flex-wrap: nowrap;
+  }
+
+  .un-ext .apk-extension-manager div.extension-repository-add > select {
+    flex-basis: 100%;
+  }
+
+  .un-ext .apk-extension-manager div.extension-repository-add > button {
+    flex: 1;
+  }
+}

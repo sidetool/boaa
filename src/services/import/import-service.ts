@@ -1,0 +1,104 @@
+import { ChapterSplitMode, EncodingMode, Novel } from '../../domain/types';
+import type { ImportExpectedBase } from '@boaa/contracts';
+export type { ImportExpectedBase } from '@boaa/contracts';
+
+export type ImportJobStatus =
+  'queued' | 'reading' | 'decoding' | 'splitting_chapters' | 'writing' | 'cancelling' | 'ready' | 'failed';
+
+export type ImportProgressSubphase =
+  | 'queued'
+  | 'reading_chunks'
+  | 'hashing_source'
+  | 'uploading_chunks'
+  | 'server_processing'
+  | 'decoding_text'
+  | 'normalizing_text'
+  | 'hashing_normalized_text'
+  | 'detecting_chapters'
+  | 'building_chapters'
+  | 'staging_chapters'
+  | 'writing_pages'
+  | 'activating_revision'
+  | 'cancelling_cleanup'
+  | 'complete';
+
+export interface ImportProgress {
+  jobId: string;
+  status: ImportJobStatus;
+  subphase?: ImportProgressSubphase;
+  bytesRead: number;
+  totalBytes: number;
+  chaptersDetected: number;
+  paragraphsWritten: number;
+  message?: string;
+  /** Confirmed completion within the current stage, not an overall weighted estimate. */
+  completedUnits?: number;
+  totalUnits?: number;
+  progressUnit?: 'images' | 'paragraphs';
+}
+
+export interface ImportFileInput {
+  file: File;
+  encoding: EncodingMode;
+  chapterSplitMode?: ChapterSplitMode;
+  clientBookId?: string;
+  /** Strict complete-package fence. Mutually exclusive with image delta rebase mode. */
+  expectedBase?: ImportExpectedBase;
+  /**
+   * The input contains only new or changed image-series sections. Supporting
+   * local and Hosted boundaries update a manifest of immutable comic originals
+   * before their normal atomic activation path. Text/EPUB imports do not use this mode.
+   */
+  importMode?: 'replace_book' | 'append_image_series' | 'append_local_archive';
+  /**
+   * Required with `append_image_series`. Supporting boundaries may merge new
+   * sections over a newer base, but reject stale replacements of an existing section.
+   */
+  baseActiveContentRevisionId?: string;
+  /** Exact source hash already computed by a trusted caller. Supporting boundaries still verify the supplied bytes. */
+  expectedSourceContentHash?: string;
+  /**
+   * Optional pre-activation fence used by trusted restore paths. Supporting
+   * implementations must reject before replacing canonical content when the
+   * parsed normalized body does not match this value.
+   */
+  expectedNormalizedTextHash?: string;
+  /** Request-scoped only. Implementations must not persist or log this value. */
+  archivePassword?: string;
+}
+
+export interface ImportResult {
+  novel: Novel;
+}
+
+export interface ImportController {
+  jobId: string;
+  promise: Promise<ImportResult>;
+  cancel(): void;
+}
+
+export interface ImportService {
+  importPrepared?(
+    source: import('./hosted-image-import').PreparedServerImport,
+    onProgress: (progress: ImportProgress) => void,
+  ): ImportController;
+  readonly supportsExpectedBase?: boolean;
+  readonly supportsArchivePassword?: boolean;
+  readonly supportsExpectedNormalizedTextHash?: boolean;
+  readonly supportsExpectedSourceContentHash?: boolean;
+  readonly supportsIncrementalImageSeriesAppend?: boolean;
+  readonly supportsLocalArchiveAppend?: boolean;
+  importFile(input: ImportFileInput, onProgress: (progress: ImportProgress) => void): ImportController;
+}
+
+export type ArchiveImportErrorCode = 'password_required' | 'wrong_password' | 'unsupported_archive';
+
+export class ArchiveImportError extends Error {
+  constructor(
+    message: string,
+    readonly code: ArchiveImportErrorCode,
+  ) {
+    super(message);
+    this.name = 'ArchiveImportError';
+  }
+}

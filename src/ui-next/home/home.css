@@ -1,0 +1,959 @@
+/* Home: continue-reading cards and editable rows, sized like a web novel store rather than a video banner. */
+
+.un-home {
+  position: relative;
+  height: 100dvh;
+  overflow-y: auto;
+  padding: calc(var(--un-topbar) + var(--un-safe-t) + 4px) 0 64px;
+  overscroll-behavior: contain;
+  animation: un-rise 0.3s var(--un-ease);
+}
+
+.un-visually-hidden {
+  position: absolute;
+  overflow: hidden;
+  width: 1px;
+  height: 1px;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* ───────── continue reading ───────── */
+
+.un-continue-track {
+  display: grid;
+  grid-auto-columns: min(440px, calc(100vw - 2 * var(--un-pad) - 40px));
+  grid-auto-flow: column;
+  gap: 12px;
+  overflow-x: auto;
+  padding: 2px var(--un-pad) 6px;
+  scroll-padding: 0 var(--un-pad);
+  scroll-snap-type: x mandatory;
+  scrollbar-width: none;
+  overscroll-behavior-x: contain;
+}
+
+.un-continue-track::-webkit-scrollbar {
+  display: none;
+}
+
+.un-continue-track:focus-visible {
+  outline: none;
+}
+
+.un-continue-card {
+  position: relative;
+  display: grid;
+  grid-template-columns: 104px minmax(0, 1fr);
+  gap: 16px;
+  overflow: hidden;
+  padding: 14px;
+  border-radius: 16px;
+  background: var(--un-bg-1);
+  scroll-snap-align: start;
+  isolation: isolate;
+}
+
+/* A faint wash of the cover's colors ties each card to its book. */
+.un-continue-bg {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  overflow: hidden;
+  opacity: 0.55;
+}
+
+.un-continue-bg .un-cover {
+  position: absolute;
+  inset: -30%;
+  width: auto;
+  aspect-ratio: auto;
+  border-radius: 0;
+  filter: blur(48px) saturate(1.2) brightness(0.55);
+}
+
+.un-continue-bg .un-cover::after,
+.un-continue-bg .un-cover-fallback > * {
+  display: none;
+}
+
+.un-continue-cover {
+  align-self: start;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+}
+
+.un-continue-cover .un-cover {
+  box-shadow: 0 8px 22px rgb(0 0 0 / 45%);
+}
+
+.un-continue-body {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.un-continue-eyebrow {
+  color: var(--un-accent-2);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.un-continue-eyebrow.is-new {
+  align-self: flex-start;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: var(--un-accent);
+  color: #fff;
+  font-size: 10.5px;
+  letter-spacing: 0.04em;
+}
+
+.un-continue-body h3 {
+  display: -webkit-box;
+  overflow: hidden;
+  margin: 4px 0 3px;
+  font-size: 17px;
+  font-weight: 750;
+  line-height: 1.3;
+  letter-spacing: -0.02em;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.un-continue-meta {
+  overflow: hidden;
+  margin: 0;
+  color: var(--un-text-3);
+  font-size: 12.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.un-continue-progress {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: auto;
+  padding-top: 10px;
+  color: var(--un-text-2);
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.un-continue-progress > span {
+  overflow: hidden;
+  flex: 0 1 auto;
+  max-width: 55%;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.un-continue-progress .un-progress {
+  flex: 1;
+  height: 3px;
+}
+
+.un-continue-progress small {
+  color: var(--un-text-3);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+.un-continue-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 10px;
+}
+
+.un-continue-actions .un-btn {
+  flex: 1;
+  height: 36px;
+  font-size: 14px;
+}
+
+.un-continue-info {
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  background: rgb(255 255 255 / 10%);
+}
+
+.un-continue .un-hero-dots {
+  display: none;
+  justify-content: center;
+  margin-top: 6px;
+}
+
+@media (max-width: 899px) {
+  .un-continue .un-hero-dots {
+    display: flex;
+  }
+}
+
+.un-hero-dots {
+  display: flex;
+  gap: 2px;
+}
+
+.un-hero-dots button {
+  display: grid;
+  place-items: center;
+  height: 24px;
+  padding: 0 3px;
+  border: 0;
+  background: none;
+}
+
+.un-hero-dots span {
+  display: block;
+  width: 8px;
+  height: 4px;
+  border-radius: 2px;
+  background: rgb(255 255 255 / 30%);
+  transition:
+    width 0.3s var(--un-ease),
+    background 0.3s;
+}
+
+.un-hero-dots .is-active span {
+  width: 26px;
+  background: #fff;
+}
+
+/* ───────── rows ───────── */
+
+.un-home-rows {
+  position: relative;
+}
+
+.un-row {
+  margin: 28px 0;
+}
+
+.un-home .un-row:first-of-type {
+  margin-top: 12px;
+}
+
+.un-row-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 12px;
+  padding: 0 var(--un-pad);
+}
+
+.un-row-eyebrow {
+  flex-basis: 100%;
+  margin-bottom: -12px;
+  color: var(--un-text-3);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.un-row-head h2 {
+  margin: 0;
+  font-size: 19px;
+  font-weight: 750;
+  letter-spacing: -0.02em;
+}
+
+.un-row-head h2 button {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  letter-spacing: inherit;
+}
+
+.un-row-head h2 svg {
+  color: var(--un-text-3);
+  opacity: 0;
+  transform: translateX(-4px);
+  transition:
+    opacity 0.2s,
+    transform 0.2s var(--un-ease);
+}
+
+.un-row-head h2 button:hover svg {
+  opacity: 1;
+  transform: none;
+}
+
+.un-row-more {
+  flex: none;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--un-text-3);
+  font: inherit;
+  font-size: 14px;
+  font-weight: 550;
+}
+
+.un-row-more:hover {
+  color: var(--un-text);
+}
+
+.un-row-viewport {
+  position: relative;
+}
+
+.un-row-track {
+  display: grid;
+  grid-auto-columns: clamp(104px, 8.6vw, 132px);
+  grid-auto-flow: column;
+  gap: 14px;
+  overflow-x: auto;
+  padding: 6px var(--un-pad) 6px;
+  scroll-padding: 0 var(--un-pad);
+  scroll-snap-type: x proximity;
+  scrollbar-width: none;
+}
+
+.un-row-track::-webkit-scrollbar {
+  display: none;
+}
+
+.un-row-track > * {
+  scroll-snap-align: start;
+}
+
+.un-row.is-ranked .un-row-track {
+  grid-auto-columns: clamp(150px, 13vw, 190px);
+}
+
+.un-row-note {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  color: var(--un-text-3);
+  font-size: 14px;
+  white-space: nowrap;
+}
+
+.un-row-arrow {
+  position: absolute;
+  top: 0;
+  bottom: 48px;
+  z-index: 2;
+  display: grid;
+  place-items: center;
+  width: max(var(--un-pad), 44px);
+  padding: 0;
+  border: 0;
+  color: #fff;
+  opacity: 0;
+  transition: opacity 0.2s;
+}
+
+.un-row-arrow.is-prev {
+  left: 0;
+  background: linear-gradient(to right, rgb(9 9 11 / 92%), transparent);
+}
+
+.un-row-arrow.is-next {
+  right: 0;
+  background: linear-gradient(to left, rgb(9 9 11 / 92%), transparent);
+}
+
+.un-row-viewport:hover .un-row-arrow {
+  opacity: 1;
+}
+
+.un-poster {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+}
+
+.un-poster:hover .un-tile-art {
+  box-shadow: 0 14px 32px rgb(0 0 0 / 45%);
+  transform: translateY(-3px);
+}
+
+.un-poster.has-rank {
+  display: grid;
+  /* minmax(0, …): a wide rank (10, 11…) must not steal width from the cover, so every cover keeps one size. */
+  grid-template-columns: minmax(0, 0.5fr) minmax(0, 1fr);
+  row-gap: 10px;
+}
+
+.un-poster-rank {
+  position: relative;
+  z-index: 0;
+  align-self: end;
+  justify-self: end;
+  margin-right: -14px;
+  white-space: nowrap;
+  color: var(--un-bg);
+  font-size: clamp(68px, 6.5vw, 100px);
+  font-weight: 900;
+  line-height: 0.78;
+  letter-spacing: -0.06em;
+  -webkit-text-stroke: 2px rgb(255 255 255 / 55%);
+}
+
+.un-poster.has-rank .un-tile-art {
+  z-index: 1;
+  grid-column: 2;
+}
+
+/* Two digits tuck slightly behind the cover instead of widening the slot. */
+.un-poster-rank.is-wide {
+  margin-right: -26px;
+  letter-spacing: -0.1em;
+}
+
+.un-poster.has-rank .un-tile-meta {
+  grid-column: 1 / -1;
+  padding-left: 20%;
+}
+
+.un-home-edit {
+  display: flex;
+  justify-content: center;
+  padding: 16px var(--un-pad) 8px;
+}
+
+/* ───────── empty and loading ───────── */
+
+.un-home-welcome {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  max-width: 480px;
+  margin: 0 auto;
+  padding: calc(var(--un-topbar) + var(--un-safe-t) + 10vh) 24px 0;
+  text-align: center;
+}
+
+.un-home-welcome-art {
+  position: relative;
+  width: 168px;
+  height: 128px;
+  margin-bottom: 28px;
+}
+
+.un-home-welcome-art i {
+  position: absolute;
+  bottom: 0;
+  width: 76px;
+  aspect-ratio: 2 / 3;
+  border-radius: 6px;
+  box-shadow: 0 16px 36px rgb(0 0 0 / 50%);
+}
+
+.un-home-welcome-art i:nth-child(1) {
+  left: 0;
+  background: linear-gradient(160deg, #0f1c3d, #3b2a6b);
+  transform: rotate(-10deg) translateY(4px);
+}
+
+.un-home-welcome-art i:nth-child(2) {
+  left: 46px;
+  z-index: 1;
+  background: linear-gradient(160deg, #0b2530, #1d5566);
+  transform: translateY(-6px);
+}
+
+.un-home-welcome-art i:nth-child(3) {
+  right: 0;
+  background: linear-gradient(160deg, #2a1338, #9c4466);
+  transform: rotate(10deg) translateY(4px);
+}
+
+.un-home-welcome h1 {
+  margin: 0;
+  font-size: 26px;
+  font-weight: 800;
+  letter-spacing: -0.03em;
+}
+
+.un-home-welcome p {
+  margin: 12px 0 28px;
+  color: var(--un-text-2);
+  font-size: 15px;
+  line-height: 1.6;
+}
+
+.un-home-welcome-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.un-hero-skeleton {
+  display: flex;
+  gap: 16px;
+  width: min(440px, calc(100vw - 2 * var(--un-pad) - 40px));
+  margin: 12px var(--un-pad) 0;
+  padding: 14px;
+  border-radius: 16px;
+  background: var(--un-bg-1);
+}
+
+.un-hero-skeleton > div {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.un-hero-skeleton :is(span, i),
+.un-skeleton-line {
+  display: block;
+  border-radius: 8px;
+  background: linear-gradient(100deg, var(--un-bg-2) 30%, var(--un-bg-3) 50%, var(--un-bg-2) 70%);
+  background-size: 300% 100%;
+  animation: un-shimmer 1.4s linear infinite;
+}
+
+.un-hero-skeleton span {
+  flex: none;
+  width: 92px;
+  aspect-ratio: 2 / 3;
+}
+
+.un-hero-skeleton i {
+  height: 14px;
+}
+
+.un-hero-skeleton i:first-child {
+  width: 70%;
+  height: 20px;
+}
+
+.un-hero-skeleton i:last-child {
+  height: 36px;
+  margin-top: auto;
+  border-radius: 10px;
+}
+
+.un-skeleton-line {
+  width: 140px;
+  height: 22px;
+}
+
+/* ───────── home editor ───────── */
+
+.un-home-editor-hint {
+  margin: 0 0 8px;
+  color: var(--un-text-3);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.un-home-editor-back {
+  margin: 0 0 6px -10px;
+}
+
+.un-home-editor-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.un-home-editor-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 64px;
+  padding: 0 4px;
+  border-bottom: 1px solid var(--un-line);
+  background: var(--un-bg-1);
+}
+
+.un-home-editor-row.is-dragging {
+  z-index: 2;
+  border-radius: 12px;
+  background: var(--un-bg-3);
+  box-shadow: 0 12px 30px rgb(0 0 0 / 45%);
+}
+
+.un-home-editor-row.is-hidden .un-home-editor-text {
+  opacity: 0.45;
+}
+
+.un-home-editor-row.is-fixed .un-home-editor-text b::after {
+  content: '고정';
+  margin-left: 8px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: var(--un-bg-3);
+  color: var(--un-text-3);
+  font-size: 11px;
+  font-weight: 700;
+  vertical-align: 2px;
+}
+
+.un-home-editor-handle {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 36px;
+  height: 48px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--un-text-3);
+  cursor: grab;
+  touch-action: none;
+}
+
+.un-home-editor-text {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.un-home-editor-text b {
+  overflow: hidden;
+  font-size: 15px;
+  font-weight: 620;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.un-home-editor-text small {
+  color: var(--un-text-3);
+  font-size: 12px;
+}
+
+.un-home-editor-actions {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+/* ───────── 새 줄 만들기 ───────── */
+
+.un-row-builder {
+  display: grid;
+  gap: 18px;
+}
+
+.un-row-builder > .un-home-editor-back {
+  justify-self: start;
+}
+
+.un-row-builder-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.un-row-builder-avatar {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  background: var(--un-accent-soft);
+  color: var(--un-accent-2);
+  font-size: 18px;
+  font-weight: 800;
+}
+
+.un-row-builder-head small {
+  color: var(--un-text-3);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.un-row-builder-head h3 {
+  margin: 1px 0 0;
+  font-size: 18px;
+  font-weight: 750;
+}
+
+.un-row-builder-block {
+  display: grid;
+  gap: 10px;
+}
+
+.un-row-builder-block h4 {
+  margin: 0;
+  color: var(--un-text-2);
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.un-row-builder-modes {
+  display: flex;
+  gap: 8px;
+}
+
+.un-row-builder-modes .un-chip.is-active {
+  background: var(--un-text);
+  color: var(--un-bg);
+}
+
+/* Filters fold so the preview stays on screen; open by default only when the row already has filters. */
+.un-row-builder-filters {
+  gap: 0;
+  border-radius: 14px;
+  background: var(--un-bg-2);
+}
+
+.un-row-builder-fold {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 50px;
+  padding: 0 14px;
+  border: 0;
+  background: none;
+  color: var(--un-text);
+  font: inherit;
+  font-size: 14.5px;
+  font-weight: 650;
+  text-align: left;
+}
+
+.un-row-builder-fold > span {
+  display: flex;
+  flex: 1;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+
+.un-row-builder-fold em {
+  overflow: hidden;
+  color: var(--un-accent-2);
+  font-size: 12.5px;
+  font-style: normal;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.un-row-builder-fold > svg:last-child {
+  flex: none;
+  color: var(--un-text-3);
+  transition: transform 0.2s var(--un-ease);
+}
+
+.un-row-builder-filters.is-open .un-row-builder-fold > svg:last-child {
+  transform: rotate(180deg);
+}
+
+.un-row-builder-filter-body {
+  display: grid;
+  gap: 12px;
+  padding: 4px 14px 14px;
+  border-top: 1px solid var(--un-line);
+}
+
+.un-row-builder-filter-actions {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.un-row-builder-preview {
+  display: grid;
+  grid-auto-columns: 84px;
+  grid-auto-flow: column;
+  gap: 10px;
+  overflow-x: auto;
+  min-height: 150px;
+  scrollbar-width: none;
+}
+
+.un-row-builder-preview::-webkit-scrollbar {
+  display: none;
+}
+
+.un-row-builder-poster {
+  display: grid;
+  align-content: start;
+  gap: 6px;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  pointer-events: none;
+}
+
+.un-row-builder-poster-title {
+  overflow: hidden;
+  color: var(--un-text-2);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.un-row-builder-poster.is-skeleton .un-cover {
+  background: linear-gradient(100deg, var(--un-bg-2) 30%, var(--un-bg-3) 50%, var(--un-bg-2) 70%) 0 0 / 250% 100%;
+  animation: un-shimmer 1.4s linear infinite;
+}
+
+.un-row-builder-name input {
+  width: 100%;
+  min-width: 0;
+  height: 46px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: 12px;
+  background: var(--un-bg-2);
+  box-shadow: inset 0 0 0 1px var(--un-line);
+  color: var(--un-text);
+  font: inherit;
+  font-size: 15px;
+  outline: 0;
+}
+
+.un-row-builder-name input:focus {
+  box-shadow: inset 0 0 0 1.5px var(--un-accent);
+}
+
+.un-row-builder-save {
+  position: sticky;
+  bottom: 0;
+  z-index: 1;
+  margin: 0 -4px;
+  padding: 10px 4px 4px;
+  /* Opaque under the button: filter chips scrolling behind must not show through. */
+  background: var(--un-bg-1);
+  box-shadow: 0 -12px 16px var(--un-bg-1);
+}
+
+.un-row-builder-save .un-btn {
+  width: 100%;
+}
+
+.un-row-builder-avatar.is-sm {
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  font-size: 15px;
+}
+
+/* A source in the add list is one big tap target that leads into 새 줄 만들기. */
+.un-home-editor-pick {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+}
+
+.un-home-editor-pick > svg {
+  flex: none;
+  color: var(--un-text-3);
+}
+
+/* Grouped "줄 추가" list: 내 서재 / 책장 / 소스 / 탐색 탭. */
+.un-home-editor-group {
+  margin: 14px 0 4px;
+  color: var(--un-text-3);
+  font-size: 12.5px;
+  font-weight: 650;
+}
+
+.un-home-editor-group:first-of-type {
+  margin-top: 0;
+}
+
+/* ───────── phones ───────── */
+
+@media (max-width: 899px) {
+  .un-home {
+    padding-bottom: calc(var(--un-tabbar) + var(--un-safe-b) + 24px);
+  }
+
+  .un-row {
+    margin: 26px 0;
+  }
+
+  .un-row-head {
+    margin-bottom: 10px;
+  }
+
+  .un-row-head h2 {
+    font-size: 18px;
+  }
+
+  .un-row-head h2 svg {
+    opacity: 1;
+    transform: none;
+  }
+
+  .un-row-more {
+    display: none;
+  }
+
+  .un-row-track {
+    grid-auto-columns: 25vw;
+    gap: 10px;
+  }
+
+  .un-row.is-ranked .un-row-track {
+    grid-auto-columns: 36vw;
+  }
+
+  .un-continue-card {
+    grid-template-columns: 84px minmax(0, 1fr);
+    gap: 14px;
+    padding: 12px;
+  }
+
+  .un-row-arrow {
+    display: none;
+  }
+
+  .un-row .un-tile-title {
+    font-size: 14px;
+  }
+
+  .un-row .un-tile-sub {
+    font-size: 12px;
+  }
+
+  .un-home-welcome {
+    padding-top: calc(var(--un-topbar) + var(--un-safe-t) + 6vh);
+  }
+}
+
+@media (hover: none) {
+  .un-hero-arrow,
+  .un-row-arrow {
+    display: none;
+  }
+}

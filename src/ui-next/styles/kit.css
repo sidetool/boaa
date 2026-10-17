@@ -1,0 +1,604 @@
+/* ui-next kit: restyles the classic building blocks (buttons, fields, dialogs, tool panels) that feature
+   screens still render, so they read as part of the new app. Applies inside `.ui-next` pages and on classic
+   overlays marked `.un-kit` (dialogs, drawers, reader tool panels, toasts). */
+
+/* ───────── buttons ───────── */
+
+:is(.ui-next, .un-kit) :is(.primary-btn, .ghost-btn) {
+  min-height: 40px;
+  padding: 0 16px;
+  border: 0;
+  border-radius: 10px;
+  font-size: 14px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+
+:is(.ui-next, .un-kit) :is(.primary-btn, .ghost-btn, .icon-btn, .mini-icon-btn):active:not(:disabled) {
+  transform: scale(0.97);
+}
+
+:is(.ui-next, .un-kit) .primary-btn {
+  background: #f5f5f7;
+  color: #0b0b0c;
+}
+
+:is(.ui-next, .un-kit) .primary-btn:hover:not(:disabled) {
+  background: #fff;
+}
+
+:is(.ui-next, .un-kit) .ghost-btn {
+  background: var(--un-bg-2);
+  color: var(--un-text);
+}
+
+:is(.ui-next, .un-kit) .ghost-btn:hover:not(:disabled) {
+  background: var(--un-bg-3);
+  color: var(--un-text);
+}
+
+:is(.ui-next, .un-kit) .ghost-btn.compact {
+  min-height: 34px;
+  padding: 0 12px;
+  font-size: 13.5px;
+}
+
+:is(.ui-next, .un-kit) .ghost-btn.danger {
+  background: rgb(255 90 106 / 12%);
+  color: var(--un-danger);
+}
+
+:is(.ui-next, .un-kit) .ghost-btn.danger:hover:not(:disabled) {
+  background: rgb(255 90 106 / 20%);
+}
+
+:is(.ui-next, .un-kit) :is(.primary-btn, .ghost-btn):disabled {
+  opacity: 0.4;
+}
+
+:is(.ui-next, .un-kit) :is(.icon-btn, .mini-icon-btn) {
+  width: 40px;
+  height: 40px;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--un-text-2);
+}
+
+:is(.ui-next, .un-kit) .mini-icon-btn {
+  width: 32px;
+  height: 32px;
+}
+
+:is(.ui-next, .un-kit) :is(.icon-btn, .mini-icon-btn):hover:not(:disabled) {
+  background: rgb(255 255 255 / 8%);
+  color: var(--un-text);
+}
+
+:is(.ui-next, .un-kit) :is(.icon-btn, .mini-icon-btn).active {
+  background: var(--un-accent-soft);
+  color: var(--un-accent-2);
+}
+
+:is(.ui-next, .un-kit) .icon-btn.danger {
+  color: var(--un-danger);
+}
+
+/* ───────── segmented choices ───────── */
+
+:is(.ui-next, .un-kit) :is(.segmented, .reader-mode-switch) {
+  gap: 2px;
+  padding: 3px;
+  border-radius: 12px;
+  background: var(--un-bg-2);
+}
+
+:is(.ui-next, .un-kit) :is(.segmented, .reader-mode-switch) button {
+  min-height: 34px;
+  padding: 0 12px;
+  border-radius: 9px;
+  color: var(--un-text-2);
+  font-size: 13.5px;
+  font-weight: 600;
+}
+
+:is(.ui-next, .un-kit) :is(.segmented, .reader-mode-switch) button:hover:not(.active, :disabled) {
+  color: var(--un-text);
+}
+
+:is(.ui-next, .un-kit) :is(.segmented, .reader-mode-switch) button.active {
+  background: var(--un-bg-3);
+  box-shadow: 0 1px 2px rgb(0 0 0 / 30%);
+  color: var(--un-text);
+}
+
+/* ───────── fields ───────── */
+
+/* Low specificity so the new screens' own search fields keep their look; those are listed out explicitly. */
+:is(.ui-next, .un-kit)
+  :where(
+    input:not([type='checkbox'], [type='radio'], [type='range'], [type='color'], [type='file'], [type='hidden']),
+    select,
+    textarea
+  ):where(
+    :not(
+      :is(
+          .un-inline-search,
+          .un-discover-search,
+          .un-reader-search,
+          .un-detail-title-editor,
+          .un-detail-rename,
+          .un-tag-form,
+          .reader-settings-slider-number,
+          .search-box
+        )
+        *
+    )
+  ) {
+  min-height: 42px;
+  padding: 0 12px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  outline: none;
+  background: var(--un-bg-2);
+  color: var(--un-text);
+  font-size: 14.5px;
+  transition:
+    border-color 0.15s,
+    background 0.15s,
+    box-shadow 0.15s;
+}
+
+:is(.ui-next, .un-kit) :is(input.text-input, select) {
+  height: auto;
+  min-height: 42px;
+  padding: 0 12px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: var(--un-bg-2);
+  color: var(--un-text);
+}
+
+:is(.ui-next, .un-kit) select {
+  padding-right: 34px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' fill='none' stroke='%23f5f5f7' stroke-opacity='.55' stroke-width='2' stroke-linecap='round' stroke-linejoin='round' viewBox='0 0 24 24'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  background-position: right 12px center;
+  background-repeat: no-repeat;
+  appearance: none;
+}
+
+:is(.ui-next, .un-kit) textarea {
+  min-height: 108px;
+  padding: 11px 12px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: var(--un-bg-2);
+  line-height: 1.6;
+}
+
+:is(.ui-next, .un-kit) :is(input.text-input, select, textarea):hover:not(:disabled, :focus),
+:is(.ui-next, .un-kit) .metadata-fields :is(input, textarea):hover:not(:disabled, :focus) {
+  background: var(--un-bg-3);
+}
+
+:is(.ui-next, .un-kit) :is(input.text-input, select, textarea):focus,
+:is(.ui-next, .un-kit) .metadata-fields :is(input, textarea):focus {
+  border-color: var(--un-accent);
+  box-shadow: 0 0 0 3px var(--un-accent-soft);
+}
+
+:is(.ui-next, .un-kit) :is(input, select, textarea):disabled {
+  opacity: 0.5;
+}
+
+:is(.ui-next, .un-kit) :is(input, textarea)::placeholder {
+  color: var(--un-text-3);
+}
+
+:is(.ui-next, .un-kit) :is(input[type='checkbox'], input[type='radio'], input[type='range']) {
+  accent-color: var(--un-accent);
+}
+
+:is(.ui-next, .un-kit) input[type='color'] {
+  width: 42px;
+  height: 42px;
+  padding: 7px;
+  border: 0;
+  border-radius: 10px;
+  background: var(--un-bg-2);
+  cursor: pointer;
+  appearance: none;
+}
+
+:is(.ui-next, .un-kit) input[type='color']::-webkit-color-swatch-wrapper {
+  padding: 0;
+}
+
+:is(.ui-next, .un-kit) input[type='color']::-webkit-color-swatch {
+  border: 0;
+  border-radius: 50%;
+}
+
+:is(.ui-next, .un-kit) input[type='color']::-moz-color-swatch {
+  border: 0;
+  border-radius: 50%;
+}
+
+:is(.ui-next, .un-kit) input[type='range'] {
+  min-height: 28px;
+}
+
+:is(.ui-next, .un-kit) :is(input.switch, .reader-settings-control-toggle > input[type='checkbox']) {
+  width: 44px;
+  height: 26px;
+  border-radius: 13px;
+}
+
+:is(.ui-next, .un-kit) :is(input.switch, .reader-settings-control-toggle > input[type='checkbox'])::before {
+  width: 22px;
+  height: 22px;
+}
+
+:is(.ui-next, .un-kit) :is(input.switch, .reader-settings-control-toggle > input[type='checkbox']):checked::before {
+  transform: translateX(18px);
+}
+
+:is(.ui-next, .un-kit)
+  :is(.field-label, .metadata-fields label > span, .metadata-cover-controls > label:not(.cover-file-button)) {
+  color: var(--un-text-2);
+  font-size: 13px;
+  font-weight: 650;
+}
+
+:is(.ui-next, .un-kit) .field-help {
+  color: var(--un-text-3);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+:is(.ui-next, .un-kit) .field-help.warning {
+  color: #f5b84b;
+}
+
+:is(.ui-next, .un-kit) .field-error {
+  border-left: 0;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: rgb(255 90 106 / 10%);
+  color: var(--un-danger);
+  font-size: 13.5px;
+}
+
+:is(.ui-next, .un-kit) .muted {
+  color: var(--un-text-3);
+}
+
+:is(.ui-next, .un-kit) .empty-panel {
+  padding: 28px 16px;
+  border: 0;
+  border-radius: 14px;
+  background: var(--un-bg-1);
+  color: var(--un-text-3);
+  font-size: 14px;
+  text-align: center;
+}
+
+:is(.ui-next, .un-kit) .search-box {
+  height: 42px;
+  border-color: transparent;
+  border-radius: 10px;
+  background: var(--un-bg-2);
+  color: var(--un-text-3);
+}
+
+:is(.ui-next, .un-kit) .search-box:focus-within {
+  border-color: var(--un-accent);
+  box-shadow: 0 0 0 3px var(--un-accent-soft);
+}
+
+/* Settings slider: round steppers and a quiet numeric chip. */
+:is(.ui-next, .un-kit) .reader-settings-slider-step {
+  border: 0;
+  border-radius: 50%;
+  background: var(--un-bg-2);
+  color: var(--un-text);
+}
+
+:is(.ui-next, .un-kit) .reader-settings-slider-step:hover:not(:disabled) {
+  background: var(--un-bg-3);
+}
+
+:is(.ui-next, .un-kit) .reader-settings-slider-track {
+  background: rgb(255 255 255 / 14%);
+}
+
+:is(.ui-next, .un-kit) .reader-settings-slider-thumb::after {
+  inset: 13px;
+  border: 0;
+  background: #fff;
+  box-shadow: 0 1px 4px rgb(0 0 0 / 45%);
+}
+
+:is(.ui-next, .un-kit) .reader-settings-slider-number {
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: var(--un-bg-2);
+  color: var(--un-text-3);
+}
+
+:is(.ui-next, .un-kit) .reader-settings-slider-number:focus-within {
+  border-color: var(--un-accent);
+}
+
+/* Classic cards inside settings and panels: one quiet surface, no hard outline. */
+:is(.ui-next, .un-kit)
+  :is(
+    .settings-section-card,
+    .extension-settings-card,
+    .external-source-settings-card,
+    .extension-detail-section,
+    .extension-batch-panel,
+    .cloud-account-card,
+    .cloud-vault-section,
+    .cloud-vault-scope,
+    .download-storage-estimate,
+    .application-info-runtime-summary,
+    .provider-settings-card,
+    .provider-job-card,
+    .stat-card
+  ) {
+  border-color: var(--un-line);
+  border-radius: 16px;
+  background: var(--un-bg-1);
+  box-shadow: none;
+}
+
+/* ───────── dialogs and drawers ───────── */
+
+.un-kit:is(.modal-backdrop, .modal-drawer-layer, .reader-footnote-backdrop) {
+  background: rgb(0 0 0 / 60%);
+  -webkit-backdrop-filter: blur(4px);
+  backdrop-filter: blur(4px);
+}
+
+.un-kit .modal {
+  padding: 22px;
+  border: 0;
+  border-radius: 20px;
+  background: var(--un-bg-1);
+  box-shadow: var(--shadow);
+}
+
+.un-kit .modal > header {
+  margin: -22px -22px 18px;
+  padding: 16px 14px 12px 22px;
+  border-bottom: 0;
+  background: transparent;
+}
+
+.un-kit .modal > header h2 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 750;
+  letter-spacing: -0.02em;
+}
+
+/* Fixed-height dialogs that manage their own header and body padding. */
+.un-kit .modal.library-management-dialog {
+  height: auto;
+  max-height: min(760px, calc(100dvh - 40px));
+  padding: 0;
+}
+
+.un-kit .modal.library-management-dialog > header {
+  margin: 0;
+  padding: 16px 14px 12px 24px;
+  border-bottom: 1px solid var(--un-line);
+}
+
+.un-kit .library-management-body {
+  padding: 22px 24px;
+}
+
+.un-kit .modal-drawer {
+  border: 0;
+  background: var(--un-bg-1);
+  box-shadow: var(--shadow);
+}
+
+.un-kit :is(.modal-drawer-header, .modal-drawer-footer) {
+  border-color: var(--un-line);
+  background: var(--un-bg-1);
+}
+
+.un-kit .modal-drawer-header h2 {
+  font-size: 17px;
+  font-weight: 750;
+}
+
+.un-kit :is(.dialog-actions, .modal-actions) {
+  border-top: 0;
+}
+
+/* Phones: dialogs become bottom sheets. */
+@media (max-width: 699px) {
+  .un-kit.modal-backdrop {
+    align-items: end;
+    padding: 0;
+  }
+
+  .un-kit .modal {
+    width: 100%;
+    max-height: calc(100dvh - 24px - var(--un-safe-t));
+    padding-bottom: calc(22px + var(--un-safe-b));
+    border-radius: 20px 20px 0 0;
+  }
+
+  .un-kit .modal.library-management-dialog {
+    max-height: calc(100dvh - 24px - var(--un-safe-t));
+    padding-bottom: 0;
+  }
+
+  .un-kit .library-management-body {
+    padding: 18px var(--un-pad);
+  }
+}
+
+/* ───────── metadata editor ───────── */
+
+.un-kit .metadata-cover-preview {
+  border: 0;
+  border-radius: 12px;
+  box-shadow: 0 10px 30px rgb(0 0 0 / 45%);
+}
+
+.un-kit :is(.metadata-fields, .metadata-cover-controls) {
+  gap: 14px;
+}
+
+.un-kit .metadata-fields label {
+  gap: 7px;
+}
+
+.un-kit .metadata-shelf-list {
+  border-top-color: var(--un-line);
+}
+
+/* ───────── reader tool panel content ───────── */
+
+.un-kit .panel-body {
+  gap: 16px;
+}
+
+.un-kit .panel-body :is(h3, h4) {
+  margin: 0;
+  font-weight: 750;
+  letter-spacing: -0.015em;
+}
+
+.un-kit .panel-section-title span {
+  color: var(--un-text-3);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+/* ───────── TTS mini player and toasts ───────── */
+
+.un-kit.tts-compact-bar {
+  border: 0;
+  border-radius: 16px;
+  background: rgb(26 26 31 / 92%);
+  box-shadow: 0 12px 34px rgb(0 0 0 / 45%);
+  -webkit-backdrop-filter: blur(22px) saturate(1.4);
+  backdrop-filter: blur(22px) saturate(1.4);
+}
+
+.un-kit.toast-region .toast {
+  border: 0;
+  border-radius: 14px;
+  background: rgb(36 36 42 / 96%);
+  box-shadow: 0 12px 34px rgb(0 0 0 / 45%);
+  color: var(--un-text);
+  font-size: 14px;
+}
+
+/* ───────── import ───────── */
+
+.un-kit .drop-zone {
+  border: 1.5px dashed var(--un-line-2);
+  border-radius: 16px;
+  background: rgb(255 255 255 / 2%);
+}
+
+.un-kit .drop-zone:hover:not(:disabled) {
+  border-color: var(--un-accent);
+  background: var(--un-accent-soft);
+}
+
+/* Once files are chosen, the picker shrinks to a one-line "change files" row so the list and start button lead. */
+.un-kit .drop-zone:has(~ .import-selection-panel) {
+  display: flex;
+  justify-content: flex-start;
+  gap: 10px;
+  padding: 12px 16px;
+  text-align: left;
+}
+
+.un-kit .drop-zone:has(~ .import-selection-panel) svg {
+  width: 20px;
+  height: 20px;
+}
+
+.un-kit .drop-zone:has(~ .import-selection-panel) .drop-zone-title {
+  font-size: 14.5px;
+}
+
+.un-kit .drop-zone:has(~ .import-selection-panel) > span {
+  display: none;
+}
+
+.un-kit :is(.import-selection-panel, .import-text-options, .import-series-panel) {
+  border: 0;
+  border-radius: 16px;
+  background: var(--un-bg-2);
+}
+
+/* ───────── chapter structure ───────── */
+
+.un-kit :is(.chapter-structure-list, .chapter-structure-editor) {
+  overflow: hidden;
+  border: 0;
+  border-radius: 16px;
+  background: var(--un-bg-2);
+}
+
+.un-kit .chapter-structure-list > header {
+  border-bottom-color: var(--un-line);
+  background: transparent;
+}
+
+.un-kit :is(.chapter-source-preview, .chapter-boundary-candidate-panel) {
+  border: 0;
+  border-radius: 12px;
+  background: var(--un-bg-1);
+}
+
+/* ───────── shelves ───────── */
+
+.un-kit .modal.library-management-dialog:has(.shelf-editor) {
+  min-height: min(520px, calc(100dvh - 40px));
+}
+
+.un-kit .shelf-editor {
+  display: grid;
+  align-content: start;
+  gap: 16px;
+}
+
+.un-kit .shelf-editor-list {
+  gap: 6px;
+}
+
+.un-kit .shelf-editor-row {
+  padding: 4px 4px 4px 14px;
+  border: 0;
+  border-radius: 14px;
+  background: var(--un-bg-2);
+}
+
+.un-kit .shelf-editor-row input:not([type='color']) {
+  min-height: 40px;
+  padding: 0 8px;
+  background: transparent;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.un-kit .shelf-editor-row input:not([type='color']):focus {
+  background: var(--un-bg-1);
+}
+
+.un-kit .shelf-editor-row .icon-btn {
+  width: 36px;
+  height: 36px;
+}

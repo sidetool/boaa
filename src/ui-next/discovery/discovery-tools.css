@@ -1,0 +1,268 @@
+/* ui-next 탐색 도구 시트(소스로 바로 가기, 목록 저장, 탐색 편집). Rows come from components/prefs. */
+
+.un-dtools {
+  display: grid;
+  gap: 14px;
+}
+
+.un-dtools-note {
+  margin: 0;
+  color: var(--un-text-3);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.un-dtools-wide {
+  width: 100%;
+}
+
+.un-dtools-search {
+  position: relative;
+}
+
+.un-dtools-search svg {
+  position: absolute;
+  top: 50%;
+  left: 12px;
+  color: var(--un-text-3);
+  transform: translateY(-50%);
+}
+
+.ui-next .un-dtools-search input.un-input {
+  width: 100%;
+  min-height: 46px;
+  padding: 0 12px 0 36px;
+  border: 1px solid var(--un-line);
+  border-radius: 12px;
+  background: rgb(255 255 255 / 5%);
+  font-size: 16px;
+}
+
+.un-dtools-list {
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  border-radius: 16px;
+  background: rgb(255 255 255 / 4.5%);
+  list-style: none;
+}
+
+.un-dtools-list li {
+  display: flex;
+  align-items: center;
+  padding-right: 8px;
+}
+
+.un-dtools-list li + li {
+  border-top: 1px solid var(--un-line);
+}
+
+.un-dtools-go {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  min-height: 54px;
+  padding: 8px 8px 8px 16px;
+  border: 0;
+  background: none;
+  color: var(--un-text);
+  font: inherit;
+  text-align: left;
+}
+
+.un-dtools-go:disabled {
+  cursor: default;
+}
+
+.un-dtools-go span {
+  display: grid;
+  flex: 1;
+  gap: 2px;
+  min-width: 0;
+}
+
+.un-dtools-go b {
+  overflow: hidden;
+  font-size: 15px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.un-dtools-go small {
+  color: var(--un-text-3);
+  font-size: 12px;
+}
+
+.un-dtools-go:disabled b {
+  color: var(--un-text-3);
+}
+
+.un-dtools-go svg {
+  flex: none;
+  color: var(--un-text-3);
+}
+
+.un-dtools-pin {
+  color: var(--un-text-3);
+}
+
+.un-dtools-pin.is-on {
+  color: var(--un-accent-2);
+}
+
+.ui-next .un-dtools-search input.un-input:focus-visible {
+  border-color: var(--un-accent);
+  outline: none;
+}
+
+/* 탐색 편집 */
+.un-dedit {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.un-dedit-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 4px;
+}
+
+.un-dedit-tab {
+  overflow: hidden;
+  border-radius: 16px;
+  background: rgb(255 255 255 / 4.5%);
+}
+
+.un-dedit-tab.is-hidden .un-dedit-tab-head b {
+  color: var(--un-text-3);
+}
+
+.un-dedit-tab-head {
+  display: flex;
+  align-items: center;
+  padding-right: 14px;
+}
+
+.un-dedit-toggle {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  min-height: 58px;
+  padding: 8px 10px 8px 16px;
+  border: 0;
+  background: none;
+  color: var(--un-text);
+  font: inherit;
+  text-align: left;
+}
+
+.un-dedit-toggle span {
+  display: grid;
+  flex: 1;
+  gap: 2px;
+  min-width: 0;
+}
+
+.un-dedit-toggle b {
+  overflow: hidden;
+  font-size: 15px;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.un-dedit-toggle small {
+  color: var(--un-text-3);
+  font-size: 12.5px;
+}
+
+.un-dedit-toggle > svg {
+  flex: none;
+  color: var(--un-text-3);
+  transition: transform 0.2s var(--un-ease);
+}
+
+[aria-expanded='true'] > svg {
+  transform: rotate(180deg);
+}
+
+.un-dedit-body {
+  display: grid;
+  gap: 10px;
+  padding: 0 14px 14px;
+  border-top: 1px solid var(--un-line);
+}
+
+.un-dedit-body > .un-pref-field {
+  padding: 12px 2px 0;
+}
+
+.un-dedit-tools {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.un-dedit-remove {
+  margin-left: auto;
+  color: #ff98a2;
+}
+
+.un-dedit-lists {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  border-radius: 12px;
+  background: rgb(0 0 0 / 22%);
+  list-style: none;
+}
+
+.un-dedit-lists li + li {
+  border-top: 1px solid var(--un-line);
+}
+
+.un-dedit-lists .un-dedit-toggle {
+  min-height: 50px;
+  padding-left: 14px;
+}
+
+.un-dedit-lists .un-dedit-toggle b {
+  font-size: 14px;
+}
+
+.un-dedit-list-body {
+  display: grid;
+  gap: 10px;
+  padding: 0 12px 12px;
+}
+
+.un-dedit-list-body .un-pref-field {
+  padding: 0;
+}
+
+.un-dedit-list-body .un-segmented {
+  width: 100%;
+}
+
+.un-dedit-list-body .un-segmented button {
+  flex: 1;
+}
+
+.un-dedit-add {
+  justify-self: start;
+}
+
+.un-dedit-template {
+  display: grid;
+  gap: 10px;
+  padding: 0 16px 16px;
+}

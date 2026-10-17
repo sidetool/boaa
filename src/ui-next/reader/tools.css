@@ -1,0 +1,486 @@
+/* ui-next reader tools: side panel beside the page on wide screens, bottom sheet on phones. */
+
+.ui-next.un-tools-layer {
+  display: contents;
+}
+
+.ui-next.un-tools-layer.is-sheet {
+  position: fixed;
+  inset: 0;
+  z-index: var(--layer-drawer);
+  display: flex;
+  align-items: flex-end;
+  background: rgb(0 0 0 / 50%);
+  animation: un-fade-in 0.2s;
+}
+
+.un-tools.addon-panel {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding: 0;
+  border: 0;
+  border-left: 1px solid var(--un-line);
+  background: var(--un-bg);
+  box-shadow: -24px 0 60px rgb(0 0 0 / 35%);
+  color: var(--un-text);
+  font-family: var(--un-font);
+  animation: un-slide-left 0.28s var(--un-ease);
+}
+
+.un-tools .un-sheet-grabber {
+  display: none;
+}
+
+.un-tools-head {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 8px;
+  min-height: 64px;
+  padding: calc(8px + var(--un-safe-t)) 10px 4px 22px;
+}
+
+.un-tools-head h2 {
+  flex: 1;
+  margin: 0;
+  font-size: 21px;
+  font-weight: 800;
+  letter-spacing: -0.025em;
+}
+
+.un-tools-tabs {
+  display: flex;
+  flex: none;
+  gap: 6px;
+  overflow-x: auto;
+  padding: 6px 18px 14px;
+  border-bottom: 1px solid var(--un-line);
+  scrollbar-width: none;
+}
+
+.un-tools-tabs::-webkit-scrollbar {
+  display: none;
+}
+
+.un-tools-tabs button {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+  height: 34px;
+  padding: 0 13px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--un-bg-2);
+  color: var(--un-text-2);
+  font: inherit;
+  font-size: 13.5px;
+  font-weight: 600;
+  transition:
+    background 0.15s,
+    color 0.15s;
+}
+
+.un-tools-tabs button:hover:not(.is-active) {
+  background: var(--un-bg-3);
+  color: var(--un-text);
+}
+
+.un-tools-tabs button.is-active {
+  background: var(--un-text);
+  color: var(--un-bg);
+}
+
+.un-tools .un-tools-body {
+  flex: 1;
+  height: auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 18px 22px calc(28px + var(--un-safe-b));
+  overscroll-behavior: contain;
+}
+
+/* Phones: a tall bottom sheet over the page. */
+@media (max-width: 699px) {
+  .un-tools.addon-panel {
+    position: relative;
+    inset: auto;
+    width: 100%;
+    max-width: none;
+    height: min(88dvh, calc(100dvh - 24px - var(--un-safe-t)));
+    border: 0;
+    border-radius: 22px 22px 0 0;
+    background: var(--un-bg-1);
+    box-shadow: 0 -16px 50px rgb(0 0 0 / 45%);
+    animation: un-slide-up 0.3s var(--un-ease);
+  }
+
+  .un-tools .un-sheet-grabber {
+    display: block;
+  }
+
+  .un-tools-head {
+    min-height: 52px;
+    padding: 2px 8px 0 20px;
+  }
+
+  .un-tools-head h2 {
+    font-size: 19px;
+  }
+
+  .un-tools-tabs {
+    padding: 4px 16px 12px;
+  }
+
+  .un-tools .un-tools-body {
+    padding: 16px var(--un-pad) calc(24px + var(--un-safe-b));
+  }
+}
+
+/* ───────── 목차 ───────── */
+
+.un-outline {
+  display: grid;
+  gap: 10px;
+}
+
+.un-outline-search {
+  position: sticky;
+  top: -18px;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 42px;
+  margin: -4px 0 4px;
+  padding: 0 14px;
+  border-radius: 999px;
+  background: var(--un-bg-2);
+  box-shadow: 0 0 0 6px var(--un-bg);
+  color: var(--un-text-3);
+}
+
+.un-outline-search:focus-within {
+  box-shadow:
+    0 0 0 2px var(--un-accent),
+    0 0 0 6px var(--un-bg);
+}
+
+.un-outline-search input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  background: none;
+  color: var(--un-text);
+  font: inherit;
+  font-size: 15px;
+}
+
+.un-outline-search input::-webkit-search-cancel-button {
+  display: none;
+}
+
+.un-outline-empty {
+  margin: 0;
+  padding: 32px 0;
+  color: var(--un-text-3);
+  text-align: center;
+}
+
+.un-outline-list {
+  margin: 0 -10px;
+  padding: 0;
+  list-style: none;
+}
+
+.un-outline-row button {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  min-height: 60px;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 12px;
+  background: none;
+  color: var(--un-text);
+  font: inherit;
+  text-align: left;
+}
+
+.un-outline-row button:hover {
+  background: rgb(255 255 255 / 5%);
+}
+
+.un-outline-index {
+  flex: none;
+  width: 34px;
+  color: var(--un-text-3);
+  font-size: 14px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+
+.un-outline-text {
+  display: grid;
+  flex: 1;
+  gap: 3px;
+  min-width: 0;
+}
+
+.un-outline-text b {
+  overflow: hidden;
+  font-size: 15px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.un-outline-text small {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px 10px;
+  color: var(--un-text-3);
+  font-size: 12.5px;
+}
+
+.un-outline-text small i {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-style: normal;
+}
+
+.un-outline-text .un-progress {
+  max-width: 160px;
+  height: 3px;
+  margin-top: 3px;
+}
+
+.un-outline-state {
+  flex: none;
+  color: var(--un-text-3);
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.un-outline-row.is-read .un-outline-text b {
+  color: var(--un-text-2);
+  font-weight: 500;
+}
+
+.un-outline-row.is-current button {
+  background: var(--un-accent-soft);
+}
+
+.un-outline-row.is-current :is(.un-outline-index, .un-outline-state) {
+  color: var(--un-accent-2);
+}
+
+@media (max-width: 699px) {
+  .un-outline-search {
+    top: -16px;
+    box-shadow: 0 0 0 6px var(--un-bg-1);
+  }
+
+  .un-outline-search:focus-within {
+    box-shadow:
+      0 0 0 2px var(--un-accent),
+      0 0 0 6px var(--un-bg-1);
+  }
+}
+
+/* ───────── 주석 ───────── */
+
+.un-notes.annotation-panel {
+  gap: 18px;
+}
+
+.un-tools .un-notes > h3 {
+  display: none;
+}
+
+.un-notes-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.un-notes-actions button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  height: 48px;
+  border: 0;
+  border-radius: 14px;
+  background: var(--un-bg-2);
+  color: var(--un-text);
+  font: inherit;
+  font-size: 14.5px;
+  font-weight: 650;
+  transition: background 0.15s;
+}
+
+.un-notes-actions button:hover {
+  background: var(--un-bg-3);
+}
+
+.un-notes-actions button.is-on {
+  background: var(--un-accent-soft);
+  color: var(--un-accent-2);
+}
+
+.un-notes-composer {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border-radius: 16px;
+  background: var(--un-bg-2);
+  animation: un-rise 0.2s var(--un-ease);
+}
+
+.ui-next .un-notes-composer textarea {
+  min-height: 96px;
+  background: var(--un-bg-1);
+}
+
+.un-notes-composer > div {
+  display: flex;
+  justify-content: flex-end;
+  gap: 4px;
+}
+
+.un-notes-filter {
+  display: grid;
+  gap: 10px;
+}
+
+.un-notes-filter .un-outline-search {
+  position: static;
+  margin: 0;
+  box-shadow: none;
+}
+
+.un-notes-chips {
+  display: flex;
+  gap: 6px;
+}
+
+.un-notes-chips button {
+  height: 32px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--un-bg-2);
+  color: var(--un-text-2);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.un-notes-chips button.is-active {
+  background: var(--un-accent-soft);
+  box-shadow: inset 0 0 0 1px var(--un-accent);
+  color: var(--un-accent-2);
+}
+
+.un-notes .annotation-section {
+  gap: 6px;
+}
+
+.un-notes .annotation-section h4 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 750;
+}
+
+.un-notes .empty-panel {
+  padding: 16px;
+  border-radius: 12px;
+  background: none;
+  box-shadow: inset 0 0 0 1px var(--un-line);
+  font-size: 13px;
+}
+
+.un-notes .annotation-row,
+.un-notes .note-list article {
+  border: 0;
+  border-radius: 12px;
+  background: var(--un-bg-2);
+}
+
+.un-notes .note-list article {
+  padding: 12px 14px;
+}
+
+.un-notes .note-list article.is-editing {
+  box-shadow: inset 0 0 0 1px var(--un-accent);
+}
+
+.un-notes .note-list blockquote {
+  border-left-color: var(--un-accent);
+  color: var(--un-text-2);
+}
+
+.un-notes .note-list footer button {
+  min-height: 30px;
+  border: 0;
+  border-radius: 999px;
+  background: rgb(255 255 255 / 6%);
+  color: var(--un-text-2);
+  font-size: 13px;
+}
+
+.un-notes .note-list footer button:hover {
+  background: rgb(255 255 255 / 12%);
+  color: var(--un-text);
+}
+
+.un-notes-export {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 6px;
+  padding-top: 14px;
+  border-top: 1px solid var(--un-line);
+  color: var(--un-text-3);
+  font-size: 13px;
+}
+
+.un-notes-export span {
+  margin-right: auto;
+}
+
+.un-notes-export button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 32px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 999px;
+  background: none;
+  color: var(--un-text-2);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.un-notes-export button:hover {
+  background: rgb(255 255 255 / 6%);
+  color: var(--un-text);
+}
+
+/* Episodes not yet saved from the source: same row, quieter meta and a cloud mark. */
+.un-outline-row.is-pending .un-outline-state {
+  color: var(--un-text-3);
+}
+
+.un-outline-row.is-pending .un-outline-text small {
+  color: var(--un-text-3);
+}

@@ -1,0 +1,593 @@
+/* Source catalog and external work detail. Detail hero and chapter rows reuse chapters.css. */
+
+.un-source {
+  position: relative;
+  height: 100dvh;
+  overflow-y: auto;
+  padding: calc(var(--un-topbar) + var(--un-safe-t)) 0 96px;
+  overscroll-behavior: contain;
+  animation: un-rise 0.3s var(--un-ease);
+}
+
+.un-source.is-work {
+  padding-top: 0;
+}
+
+.un-spin {
+  animation: un-spin 0.9s linear infinite;
+}
+
+@keyframes un-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.un-source-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 72px;
+  padding: 14px var(--un-pad) 4px calc(var(--un-pad) - 10px);
+}
+
+.un-source-head-title {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.un-source-head-title small {
+  color: var(--un-text-3);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.un-source-head-title h1 {
+  overflow: hidden;
+  margin: 0;
+  font-size: 28px;
+  font-weight: 800;
+  letter-spacing: -0.03em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.un-source-head-actions {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 4px;
+}
+
+.un-source-head-actions .un-btn {
+  margin-right: 6px;
+}
+
+/* The classic management disclosure sits under the hero on the dark palette. */
+.un-source-manage {
+  max-width: calc(980px + 2 * var(--un-pad));
+  padding: 0 var(--un-pad) 8px;
+}
+
+.un-source-manage details {
+  border: 0;
+  border-radius: 14px;
+  background: var(--un-bg-1);
+}
+
+.un-source-subscriptions .un-row-head h2 small {
+  margin-left: 6px;
+  color: var(--un-text-3);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.un-source-sub-track {
+  grid-auto-columns: clamp(220px, 22vw, 280px);
+}
+
+.un-source-sub {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  min-height: 112px;
+  padding: 14px 16px;
+  border: 0;
+  border-radius: 14px;
+  background: var(--un-bg-1);
+  color: var(--un-text);
+  font: inherit;
+  text-align: left;
+  transition: background 0.15s;
+}
+
+.un-source-sub:hover:not(:disabled) {
+  background: var(--un-bg-2);
+}
+
+.un-source-sub b {
+  display: -webkit-box;
+  overflow: hidden;
+  font-size: 15px;
+  font-weight: 650;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.un-source-sub small {
+  color: var(--un-text-3);
+  font-size: 12.5px;
+}
+
+.un-source-sub .un-tag {
+  margin-top: auto;
+}
+
+.un-source-crumbs {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  padding: 4px var(--un-pad) 10px;
+}
+
+.un-source-crumbs nav {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  color: var(--un-text-2);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.un-source-crumbs nav span {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.un-source-crumbs nav span:last-child {
+  color: var(--un-text);
+}
+
+.un-source-crumbs svg {
+  color: var(--un-text-3);
+}
+
+.un-source-modes {
+  padding-top: 6px;
+}
+
+.un-source-folders {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 8px;
+  padding: 6px var(--un-pad) 16px;
+}
+
+.un-source-folders button {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 56px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: 12px;
+  background: var(--un-bg-1);
+  color: var(--un-text);
+  font: inherit;
+  font-size: 15px;
+  font-weight: 600;
+  text-align: left;
+}
+
+.un-source-folders button:hover:not(:disabled) {
+  background: var(--un-bg-2);
+}
+
+.un-source-folders button span {
+  overflow: hidden;
+  flex: 1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.un-source-folders button svg {
+  flex: none;
+  color: var(--un-text-3);
+}
+
+.un-source-folders button svg:first-child {
+  color: #f5b84b;
+}
+
+.un-source-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 14px;
+  padding: 8px var(--un-pad) 4px;
+}
+
+.un-source-search {
+  flex: 1 1 260px;
+  max-width: 480px;
+}
+
+.un-release-page-select {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--un-text-2);
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.un-release-page-select input {
+  width: 18px;
+  height: 18px;
+  accent-color: var(--un-accent);
+}
+
+.un-source-status {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+  max-width: calc(980px + 2 * var(--un-pad));
+  margin: 0;
+  padding: 6px var(--un-pad);
+  color: var(--un-text-3);
+  font-size: 13.5px;
+}
+
+.un-source-error {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  max-width: 980px;
+  margin: 10px var(--un-pad);
+  padding: 14px 16px;
+  border-radius: 14px;
+  background: rgb(255 90 106 / 10%);
+  color: var(--un-text);
+}
+
+.un-source-error > svg {
+  flex: none;
+  color: var(--un-danger);
+}
+
+.un-source-error.is-warning {
+  background: rgb(245 184 75 / 10%);
+}
+
+.un-source-error.is-warning > svg {
+  color: #f5b84b;
+}
+
+.un-source-error > div {
+  flex: 1;
+  min-width: 200px;
+}
+
+.un-source-error b {
+  font-size: 15px;
+}
+
+.un-source-error p {
+  margin: 2px 0 0;
+  color: var(--un-text-2);
+  font-size: 13.5px;
+}
+
+/* Selection is a mode: checkboxes appear only after 선택, with 완료 to leave. */
+.un-release-select-start,
+.un-release-select-tools {
+  margin-left: auto;
+}
+
+.un-release-select-tools {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.un-detail-chapters.is-selecting .un-chapter-list .un-release {
+  animation: un-release-check-in 0.18s var(--un-ease);
+}
+
+@keyframes un-release-check-in {
+  from {
+    transform: translateX(-12px);
+  }
+}
+
+/* Rows: releases and files share a checkbox column. */
+.un-release {
+  gap: 2px;
+}
+
+.un-release-check {
+  position: relative;
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 36px;
+  height: 44px;
+  cursor: pointer;
+}
+
+.un-release-check input {
+  position: absolute;
+  opacity: 0;
+}
+
+.un-release-check span {
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border: 2px solid var(--un-line-2);
+  border-radius: 6px;
+  color: #fff;
+  transition:
+    background 0.15s,
+    border-color 0.15s;
+}
+
+.un-release-check input:checked + span {
+  border-color: var(--un-accent);
+  background: var(--un-accent);
+}
+
+.un-release-check input:focus-visible + span {
+  outline: 2px solid var(--un-accent-2);
+  outline-offset: 2px;
+}
+
+.un-release .un-chapter-open:disabled {
+  cursor: default;
+  opacity: 1;
+}
+
+.un-release .un-chapter-open:disabled:hover {
+  background: none;
+}
+
+.un-release-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--un-text-3);
+  font-size: 12.5px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.un-release-state.is-imported,
+.un-release-state.is-read {
+  color: var(--un-success);
+}
+
+.un-release-state.is-update_available {
+  color: #f5b84b;
+}
+
+.un-release-state.is-failed {
+  color: var(--un-danger);
+}
+
+.un-release-state.is-current {
+  color: var(--un-accent-2);
+}
+
+.un-chapter.is-selected .un-chapter-open {
+  background: rgb(255 255 255 / 4%);
+}
+
+.un-ring {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background:
+    radial-gradient(closest-side, var(--un-bg) 72%, transparent 74%),
+    conic-gradient(var(--un-accent) var(--un-ring, 0%), rgb(255 255 255 / 15%) 0);
+}
+
+.un-pager > small {
+  color: var(--un-text-3);
+  font-size: 13px;
+}
+
+.un-source-list.is-rows {
+  display: flex;
+  flex-direction: column;
+  max-width: calc(980px + 2 * var(--un-pad));
+  padding: 8px var(--un-pad) 0;
+}
+
+.un-source-list.un-grid {
+  padding-top: 16px;
+}
+
+.un-source-file {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 72px;
+  padding: 8px 4px;
+  border-bottom: 1px solid var(--un-line);
+}
+
+.un-source-file.is-selected {
+  background: rgb(255 255 255 / 4%);
+}
+
+.un-source-file-icon {
+  display: grid;
+  flex: none;
+  place-items: center;
+  overflow: hidden;
+  width: 40px;
+  height: 52px;
+  border-radius: 6px;
+  background: var(--un-bg-2);
+  color: var(--un-text-3);
+}
+
+.un-source-file-icon img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.un-source-file-text {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.un-source-file-text b {
+  overflow: hidden;
+  font-size: 15px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.un-source-file-text small {
+  overflow: hidden;
+  color: var(--un-text-3);
+  font-size: 12.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.un-source-work {
+  position: relative;
+}
+
+.un-source-add {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 2;
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: rgb(9 9 11 / 70%);
+  color: #fff;
+  -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(8px);
+  transition: background 0.15s;
+}
+
+.un-source-add:hover:not(:disabled) {
+  background: var(--un-accent);
+}
+
+.un-source-batch .un-source-batch-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 10px 0 6px;
+  font-size: 14px;
+}
+
+.un-source-batch .un-source-batch-label small {
+  color: var(--un-text-3);
+  font-variant-numeric: tabular-nums;
+}
+
+@media (max-width: 899px) {
+  .un-source {
+    padding-bottom: calc(var(--un-tabbar) + var(--un-safe-b) + 88px);
+  }
+
+  .un-source-head {
+    min-height: 60px;
+    padding-top: 8px;
+  }
+
+  .un-source-head-title h1 {
+    font-size: 22px;
+  }
+
+  .un-source-head-actions {
+    gap: 0;
+  }
+
+  .un-source-head-actions .un-btn {
+    width: 40px;
+    margin: 0;
+    padding: 0;
+  }
+
+  .un-source-head-actions .un-btn span {
+    display: none;
+  }
+
+  .un-source-sub-track {
+    grid-auto-columns: 70vw;
+  }
+
+  .un-source-search {
+    flex-basis: 100%;
+    max-width: none;
+  }
+
+  .un-release-state {
+    display: none;
+  }
+
+  .un-release.is-current .un-release-state {
+    display: inline-flex;
+  }
+
+  .un-source-file .un-release-state {
+    display: none;
+  }
+}
+
+.un-source-batch-label b {
+  white-space: nowrap;
+}
+
+/* The main read button names the episode; a continue button adds its title underneath. */
+.un-detail-read-label {
+  display: grid;
+  min-width: 0;
+  line-height: 1.15;
+  text-align: left;
+}
+
+.un-detail-read-label small {
+  overflow: hidden;
+  max-width: 220px;
+  font-size: 12px;
+  font-weight: 550;
+  opacity: 0.6;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.un-release.is-opening .un-release-state {
+  color: var(--un-accent-2);
+}

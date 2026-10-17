@@ -1,0 +1,180 @@
+import { describe, expect, it } from 'vitest';
+import { examplePackageManifest } from '../../../../src/test/extension-package-fixture';
+import type { VerifiedBoaaPackage } from '../../../../src/extensions/packages/package-archive';
+import { createSourcePreferences } from './source-preferences';
+import { validSourcePreferenceDefinitions } from '../../../../packages/extension-contracts/source-preferences';
+import { validateBoaaPackageManifest } from '../../../../packages/extension-contracts/package-manifest';
+
+describe('maker-defined source preferences', () => {
+  const sourceId = 'org.example.catalog.source';
+  const fields = [
+    { key: 'use_service', title: 'Use service', kind: 'boolean' as const, secret: false, defaultValue: false },
+    { key: 'endpoint', title: 'Service', kind: 'text' as const, secret: false, networkOrigin: true },
+    { key: 'token', title: 'Token', kind: 'text' as const, secret: true },
+  ];
+  const setup = () => {
+    const manifest = examplePackageManifest();
+    const pkg: VerifiedBoaaPackage = {
+      manifest: { ...manifest, preferences: [{ sourceId, fields }] } as VerifiedBoaaPackage['manifest'],
+      digest: 'fixture',
+      source: '',
+      archive: new Blob(),
+    };
+    const values = new Map<string, { secret: string }>();
+    const store = createSourcePreferences({
+      read: (key) => values.get(key),
+      write: (key, value) => {
+        if (value) values.set(key, value);
+      },
+    });
+    return { store, pkg, records: values };
+  };
+  it('does not invent a required service or token, and masks saved secrets', () => {
+    const { store, pkg } = setup();
+    const signal = AbortSignal.timeout(5000);
+    expect(validateBoaaPackageManifest(pkg.manifest).ok).toBe(true);
+    expect(store.values(pkg, sourceId, 'epoch').values).toEqual({ use_service: false });
+    const result = store.manage(
+      pkg,
+      sourceId,
+      'epoch',
+      {
+        action: 'save',
+        revision: 0,
+        changes: { endpoint: 'http://localhost:9870', token: 'private-value', use_service: true },
+        privateOrigins: [],
+      },
+      signal,
+    );
+    expect(JSON.stringify(result)).not.toContain('private-value');
+    expect(result.fields.find((row) => row.key === 'token')).toMatchObject({ configured: true });
+    expect(store.values(pkg, sourceId, 'epoch').privateOrigins).toEqual(['http://localhost:9870']);
+    expect(store.values(pkg, sourceId, 'other').values).toEqual({ use_service: false });
+    expect(() =>
+      store.manage(
+        pkg,
+        sourceId,
+        'epoch',
+        { action: 'save', revision: 0, changes: { use_service: false }, privateOrigins: [] },
+        signal,
+      ),
+    ).toThrow('source_preferences_conflict');
+  });
+  it('stores the host browser choice separately from maker preferences', () => {
+    const { store, pkg } = setup();
+    const browserPkg = {
+      ...pkg,
+      manifest: { ...pkg.manifest, requestedAccess: { ...pkg.manifest.requestedAccess, webview: true } },
+    };
+    store.manage(
+      browserPkg,
+      sourceId,
+      'epoch',
+      {
+        action: 'save',
+        revision: 0,
+        changes: {
+          __boaa_webview_mode: 'patchright',
+          __boaa_outbound_proxy: 'socks5://proxy:1080',
+          __boaa_proxy_dns: 'proxy',
+        },
+        privateOrigins: [],
+      },
+      AbortSignal.timeout(1000),
+    );
+    expect(store.values(browserPkg, sourceId, 'epoch').browserMode).toBe('patchright');
+    expect(store.values(browserPkg, sourceId, 'epoch')).toMatchObject({
+      outboundProxy: 'socks5://proxy:1080',
+    });
+    expect(store.values(browserPkg, sourceId, 'epoch')).not.toHaveProperty('proxyDns');
+    expect(
+      store
+        .manage(browserPkg, sourceId, 'epoch', { action: 'read' }, AbortSignal.timeout(1000))
+        .fields.some((field) => field.key === '__boaa_proxy_dns'),
+    ).toBe(false);
+    expect(store.values(browserPkg, sourceId, 'epoch').values).not.toHaveProperty('__boaa_proxy_dns');
+    expect(store.values(browserPkg, sourceId, 'epoch').values).not.toHaveProperty('__boaa_webview_mode');
+    expect(
+      store
+        .manage(browserPkg, sourceId, 'epoch', { action: 'read' }, AbortSignal.timeout(1000))
+        .fields.find((f) => f.key === '__boaa_webview_mode')?.value,
+    ).toBe('patchright');
+  });
+  it('offers host proxy exceptions even when the package declares no maker preferences', () => {
+    const { store, pkg } = setup();
+    const plain = { ...pkg, manifest: { ...pkg.manifest, preferences: undefined } };
+    const signal = AbortSignal.timeout(1000);
+    const saved = store.manage(
+      plain,
+      sourceId,
+      'epoch',
+      {
+        action: 'save',
+        revision: 0,
+        changes: { __boaa_proxy_mode: 'direct' },
+        privateOrigins: [],
+      },
+      signal,
+    );
+    expect(saved.fields.find((f) => f.key === '__boaa_proxy_mode')?.value).toBe('direct');
+    expect(store.values(plain, sourceId, 'epoch')).toMatchObject({ proxyMode: 'direct', values: {} });
+    expect(() => store.manage(plain, 'unknown', 'epoch', { action: 'read' }, signal)).toThrow(
+      'invalid_source_preferences',
+    );
+  });
+  it('discards previously persisted fixed DNS options while retaining the proxy and maker secrets', () => {
+    const { store, pkg, records } = setup();
+    const key = JSON.stringify([pkg.manifest.extension.id, `preferences:${sourceId}`, 'epoch']);
+    records.set(key, {
+      secret: JSON.stringify({
+        revision: 3,
+        outboundProxy: 'http://proxy:8080',
+        proxyDns: 'proxy',
+        values: { token: 'private', __boaa_proxy_dns: 'proxy' },
+        privateOrigins: [],
+      }),
+    });
+    const saved = store.values(pkg, sourceId, 'epoch');
+    expect(saved).not.toHaveProperty('proxyDns');
+    expect(saved.outboundProxy).toBe('http://proxy:8080');
+    expect(saved.values).toMatchObject({ token: 'private' });
+    store.manage(
+      pkg,
+      sourceId,
+      'epoch',
+      { action: 'save', revision: 3, changes: { __boaa_proxy_dns: 'proxy' }, privateOrigins: [] },
+      AbortSignal.timeout(1000),
+    );
+    const persisted = JSON.parse(records.get(key)!.secret);
+    expect(persisted).not.toHaveProperty('proxyDns');
+    expect(persisted.values).not.toHaveProperty('__boaa_proxy_dns');
+    expect(persisted.outboundProxy).toBe('http://proxy:8080');
+  });
+  it('rejects defaults containing credentials and invalid source settings', () => {
+    expect(
+      validSourcePreferenceDefinitions([{ sourceId, fields: [{ ...fields[2], defaultValue: 'secret' }] }], [sourceId]),
+    ).toBe(false);
+    expect(
+      validSourcePreferenceDefinitions([{ sourceId, fields: [{ ...fields[1], key: '__proto__' }] }], [sourceId]),
+    ).toBe(false);
+    const { store, pkg } = setup();
+    expect(() =>
+      store.manage(
+        pkg,
+        sourceId,
+        'epoch',
+        { action: 'save', revision: 0, changes: { unknown: true }, privateOrigins: [] },
+        AbortSignal.timeout(1000),
+      ),
+    ).toThrow('invalid_source_preferences');
+    expect(() =>
+      store.manage(
+        pkg,
+        sourceId,
+        'epoch',
+        { action: 'save', revision: 0, changes: { endpoint: 'file:///data' }, privateOrigins: [] },
+        AbortSignal.timeout(1000),
+      ),
+    ).toThrow('invalid_source_preferences');
+  });
+});

@@ -1,0 +1,220 @@
+import assert from 'node:assert/strict';
+import { spawn, spawnSync } from 'node:child_process';
+import { once } from 'node:events';
+import { createInterface } from 'node:readline';
+import { fileURLToPath } from 'node:url';
+import { resolve, join } from 'node:path';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { MangayomiExtensionHost } from '../../apps/server/src/extensions/mangayomi/host';
+import { EncryptedSourceCredentialVault } from '../../apps/server/src/extensions/source-credential-vault';
+import { fixtureRow, fixtureSource } from '../../apps/server/src/extensions/mangayomi/test-fixture';
+import { buildBoaaExtension } from '../../src/extensions/packages/package-builder';
+import { verifyBoaaExtension } from '../../src/extensions/packages/package-archive';
+import { examplePackageManifest } from '../../src/test/extension-package-fixture';
+import { NativePackageExecution } from '../../src/platform/tauri/native-package-execution';
+
+// Requires the real generated bundle. Never substitutes system Node or skips missing resources.
+const root = fileURLToPath(new URL('../../', import.meta.url));
+const configuredDirectory =
+  process.env.BOAA_PACKAGED_SIDECAR_DIR ??
+  process.env.MOYA_PACKAGED_SIDECAR_DIR ??
+  process.env.NOVELDESK_PACKAGED_SIDECAR_DIR ??
+  process.env.MOA_PACKAGED_SIDECAR_DIR;
+const directory = configuredDirectory ? resolve(configuredDirectory) : resolve(root, 'src-tauri/extension-sidecar');
+assert.equal(process.platform, 'win32', 'This packaged runtime gate currently targets Windows x64');
+// Match the desktop sidecar environment allowlist, including installed browser roots.
+const env = Object.fromEntries(
+  [
+    'SystemRoot',
+    'WINDIR',
+    'TMP',
+    'TEMP',
+    'LOCALAPPDATA',
+    'PROGRAMFILES',
+    'PROGRAMFILES(X86)',
+    'USERPROFILE',
+    'HOMEDRIVE',
+  ].flatMap((key) => (process.env[key] ? [[key, process.env[key]!]] : [])),
+);
+const browserCheck = spawnSync(
+  resolve(directory, 'node.exe'),
+  [
+    '-e',
+    `
+  (async () => {
+    for (const engine of ['playwright-core', 'patchright']) {
+      const { chromium } = require(engine);
+      let browser;
+      const errors = [];
+      for (const channel of ['msedge', 'chrome']) {
+        try { browser = await chromium.launch({ channel, headless: true }); break; }
+        catch (error) { errors.push(error); }
+      }
+      if (!browser) throw new AggregateError(errors, 'No installed source browser');
+      try {
+        const page = await browser.newPage();
+        await page.setContent('<main id="result"></main><script>document.querySelector("#result").textContent="browser ready"</script>');
+        if (await page.textContent('#result') !== 'browser ready') throw new Error('Site script did not execute');
+        console.log(engine + ': installed browser launch and page script passed');
+      } finally { await browser.close(); }
+    }
+  })().catch(error => { console.error(error); process.exitCode = 1; });
+`,
+  ],
+  { cwd: directory, env, encoding: 'utf8', timeout: 90000, windowsHide: true },
+);
+process.stdout.write(browserCheck.stdout ?? '');
+assert.equal(browserCheck.status, 0, `Packaged source browser failed: ${browserCheck.stderr}`);
+const codec = spawnSync(
+  resolve(directory, 'node.exe'),
+  [
+    '--input-type=module',
+    '-e',
+    "import sharp from 'sharp'; const bytes = await sharp({create:{width:8,height:8,channels:3,background:'#abc'}}).webp().toBuffer(); if (!bytes.length) process.exit(1);",
+  ],
+  { cwd: directory, encoding: 'utf8', timeout: 15000, windowsHide: true },
+);
+assert.equal(codec.status, 0, `Packaged cover codec failed: ${codec.stderr}`);
+const temporary = await mkdtemp(join(tmpdir(), 'boaa-native-mangayomi-'));
+const vaultDirectory = join(temporary, 'vault'),
+  vaultKey = '23'.repeat(32);
+const installed = await MangayomiExtensionHost.open(
+  join(temporary, 'mangayomi-extensions'),
+  new EncryptedSourceCredentialVault(vaultDirectory, Buffer.from(vaultKey, 'hex')),
+  async (input) => ({
+    bytes: Buffer.from(input.url.endsWith('.json') ? JSON.stringify([fixtureRow]) : fixtureSource),
+    statusCode: 200,
+    headers: {},
+    contentType: 'application/json',
+    url: input.url,
+  }),
+);
+await installed.refreshRepository('https://repo.example/index.min.json', new AbortController().signal);
+const entry = installed.snapshot().repositories[0].entries[0];
+const review = await installed.inspect(
+  'https://repo.example/index.min.json',
+  entry.pkg,
+  entry.code,
+  new AbortController().signal,
+);
+await installed.install(review.id, review.revision, new AbortController().signal);
+installed.close();
+
+const child = spawn(resolve(directory, 'node.exe'), [resolve(directory, 'native-entry.mjs')], {
+  cwd: directory,
+  env,
+  windowsHide: true,
+  stdio: ['pipe', 'pipe', 'pipe'],
+});
+child.stderr.on('data', (chunk) => process.stderr.write(chunk));
+const exited = once(child, 'exit');
+const deadline = setTimeout(() => child.kill(), 25000);
+const lines = createInterface({ input: child.stdout });
+async function nextLine() {
+  const [line] = await Promise.race([
+    once(lines, 'line'),
+    exited.then(([code, signal]) => {
+      throw new Error(`Packaged host exited before replying: ${code}, ${signal}`);
+    }),
+  ]);
+  return line as string;
+}
+let connection: Promise<{ endpoint: string }> | undefined;
+const execution = new NativePackageExecution(async <T>(_command: string, args?: Record<string, unknown>) => {
+  connection ??= (async () => {
+    const ready = nextLine();
+    console.log('Starting packaged native host');
+    child.stdin.write(
+      JSON.stringify({ token: args?.sessionToken, origin: 'http://tauri.localhost', vaultDirectory }) + '\n',
+    );
+    return JSON.parse(await ready) as { endpoint: string };
+  })();
+  return (await connection) as T;
+});
+async function changeVault(key: string | null) {
+  const response = nextLine();
+  child.stdin.write(JSON.stringify({ command: 'vault', key }) + '\n');
+  return JSON.parse(await response) as { ok?: boolean; error?: string };
+}
+const original = 'Original\r\n\r\n  Untouched bytes.\n';
+const pkg = await verifyBoaaExtension(
+  await buildBoaaExtension({
+    manifest: examplePackageManifest(),
+    license: 'Synthetic fixture',
+    source: `globalThis.boaaExtension=async(method,input,host)=>{
+    if(method==='describe')return{apiVersion:1,sources:[{id:'org.example.catalog.source',cover:false}]};
+    if(input.query==='loop'){while(true){}}
+    if(method==='source.listWorks')return{items:[{id:'one',title:'Packaged source'}]};
+    if(method==='source.getContent')return{kind:'text',asset:await host.request('asset.fromText',{text:${JSON.stringify(original)}})};
+  };`,
+  }),
+);
+const sourceId = 'org.example.catalog.source';
+try {
+  await execution.ready();
+  const settings = await execution.networkSettings();
+  const saved = await execution.networkSettings({ revision: settings.revision, defaultProxy: '' });
+  assert.deepEqual(await changeVault(vaultKey), { ok: true });
+  assert.deepEqual(await execution.networkSettings(), saved, 'Session network settings must survive unlock');
+  assert.deepEqual(await changeVault(null), { ok: true });
+  await assert.rejects(execution.networkSettings(), 'A locked profile must not silently fall back to direct');
+  assert.deepEqual(await changeVault(vaultKey), { ok: true });
+  assert.deepEqual(await execution.networkSettings(), saved);
+  console.log('Packaged vault transfer, lock and reopen passed');
+  const inventory = (await execution.mangayomi.request({ action: 'list' })) as {
+    available: boolean;
+    sources: { descriptor: { id: string } }[];
+  };
+  assert(inventory.available);
+  assert.equal(inventory.sources.length, 1);
+  const listing = await execution.mangayomi.invoke(
+    inventory.sources[0].descriptor.id,
+    'source.listWorks',
+    {},
+    new AbortController().signal,
+  );
+  assert.equal((listing.result as { items: { title: string }[] }).items[0].title, 'Novel image');
+  console.log('Packaged Mangayomi original JS and bundled DOM passed');
+  // Exercise cache-miss recovery used after a helper restart.
+  const value = await execution.invoke(
+    pkg,
+    'source.getContent',
+    { sourceId, workId: 'one', releaseId: 'one' },
+    new AbortController().signal,
+  );
+  assert.equal(value.assets.size, 1);
+  assert.equal(await [...value.assets.values()][0].text(), original);
+  const abort = new AbortController();
+  const loop = execution.invoke(pkg, 'source.listWorks', { sourceId, query: 'loop' }, abort.signal);
+  const rejected = assert.rejects(loop);
+  await new Promise((resolve) => setTimeout(resolve, 350));
+  assert.deepEqual(await changeVault(null), { error: 'source_vault_busy' });
+  const cancelledAt = Date.now();
+  abort.abort();
+  await rejected;
+  assert.ok(Date.now() - cancelledAt < 2000, 'Cancellation must not wait for the guest deadline');
+  const normal = await execution.invoke(pkg, 'source.listWorks', { sourceId }, new AbortController().signal);
+  assert.deepEqual(normal.result, { items: [{ id: 'one', title: 'Packaged source' }] });
+  const running = execution.invoke(pkg, 'source.listWorks', { sourceId, query: 'loop' }, new AbortController().signal);
+  const interrupted = assert.rejects(running);
+  await new Promise((resolve) => setTimeout(resolve, 350));
+  const stoppedAt = Date.now();
+  child.stdin.end();
+  const [code] = await exited;
+  await interrupted;
+  assert.equal(code, 0);
+  assert.ok(Date.now() - stoppedAt < 2000, 'Parent shutdown must abort and join the active guest');
+  console.log(
+    'Packaged native runtime passed: independent Node/QuickJS, cache recovery, raw bytes, cancellation, shutdown.',
+  );
+} finally {
+  clearTimeout(deadline);
+  lines.close();
+  child.stdin.destroy();
+  if (child.exitCode === null) {
+    child.kill();
+    await exited;
+  }
+  await rm(temporary, { recursive: true, force: true });
+}

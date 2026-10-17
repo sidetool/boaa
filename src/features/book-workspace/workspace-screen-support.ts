@@ -1,0 +1,72 @@
+import type { SourceWorkProgress } from '../external-sources/source-work-progress';
+import type {
+  ExternalSourceController,
+  ExternalSourceLibraryWork,
+} from '../external-sources/useExternalSourceController';
+import type { LibraryFilter, LibrarySort } from '../library/library-screen-model';
+import { useScreenMotion } from '../navigation/screen-motion';
+import type { BookWorkspaceState } from './book-workspace-contract';
+
+function remoteWorkStatus(progress?: SourceWorkProgress): 'unread' | 'reading' | 'finished' {
+  if (progress && progress.totalCount > 0 && progress.readCount >= progress.totalCount) return 'finished';
+  return progress && (progress.readCount > 0 || progress.lastReadAt) ? 'reading' : 'unread';
+}
+
+export function remoteLibraryReadCounts(
+  works: readonly ExternalSourceLibraryWork[],
+  progress?: ReadonlyMap<string, SourceWorkProgress>,
+) {
+  const counts = { unread: 0, reading: 0, finished: 0 };
+  for (const work of works) if (!work.deletedAt) counts[remoteWorkStatus(progress?.get(work.id))] += 1;
+  return counts;
+}
+
+/** Streamed works participate in read filters using the same release progress shown on their cards. */
+export function visibleRemoteLibraryWorks(
+  works: readonly ExternalSourceLibraryWork[],
+  view: { shelved: boolean; shelfId?: string; filter: LibraryFilter; query: string; sort: LibrarySort },
+  progress?: ReadonlyMap<string, SourceWorkProgress>,
+): ExternalSourceLibraryWork[] {
+  if ((view.shelved && !view.shelfId && view.filter !== 'trash') || view.filter === 'favorite') return [];
+  const query = view.query.trim().toLocaleLowerCase();
+  return works
+    .filter((work) => view.filter === 'trash' || !view.shelfId || work.shelfIds?.includes(view.shelfId))
+    .filter((work) =>
+      view.filter === 'trash'
+        ? Boolean(work.deletedAt)
+        : !work.deletedAt && (view.filter === 'all' || view.filter === remoteWorkStatus(progress?.get(work.id))),
+    )
+    .filter(
+      (work) =>
+        !query ||
+        [work.title, work.author, work.sourceLabel]
+          .filter((value): value is string => Boolean(value))
+          .some((value) => value.toLocaleLowerCase().includes(query)),
+    )
+    .sort((left, right) => {
+      if (view.sort === 'title') return left.title.localeCompare(right.title, 'ko');
+      if (view.sort === 'added') return right.createdAt.localeCompare(left.createdAt);
+      return (progress?.get(right.id)?.lastReadAt ?? right.updatedAt).localeCompare(
+        progress?.get(left.id)?.lastReadAt ?? left.updatedAt,
+      );
+    });
+}
+
+/** Library-level screens are siblings; a book is one level deeper and its reader one more. */
+export function useWorkspaceScreenMotion(
+  state: Pick<BookWorkspaceState, 'view' | 'selectedNovel'>,
+  sources: Pick<ExternalSourceController, 'open' | 'activeSourceId' | 'localSeriesNovel'>,
+  discoveryActive = false,
+): void {
+  const reading = state.view === 'reader' || state.view === 'document';
+  const key =
+    state.view !== 'library'
+      ? `${reading ? 'reader' : state.view}:${state.selectedNovel?.id ?? ''}`
+      : sources.open
+        ? `source:${sources.activeSourceId ?? ''}:${sources.localSeriesNovel?.id ?? ''}`
+        : discoveryActive
+          ? 'discovery'
+          : 'library';
+  const depth = reading ? 2 : state.view === 'chapters' || (sources.open && sources.localSeriesNovel) ? 1 : 0;
+  useScreenMotion(key, depth);
+}

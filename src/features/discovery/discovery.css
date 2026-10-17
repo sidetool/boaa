@@ -1,0 +1,284 @@
+.discovery-editor-heading {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.discovery-quick-jump-list {
+  display: grid;
+  gap: 8px;
+  max-height: 55dvh;
+  overflow-y: auto;
+}
+.discovery-quick-jump-list button {
+  justify-content: space-between;
+  text-align: left;
+  min-height: 48px;
+}
+.discovery-quick-jump-list small {
+  display: block;
+  color: var(--text-2);
+}
+.discovery-search {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+  padding: 12px;
+  background: var(--app-surface);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  margin-bottom: 28px;
+}
+.discovery-search > button {
+  flex-shrink: 0;
+  min-height: 44px;
+  white-space: nowrap;
+}
+.discovery-search input {
+  flex: 1;
+  min-width: 120px;
+  border: 0;
+  background: transparent;
+  min-height: 44px;
+}
+.discovery-search select {
+  max-width: 240px;
+  min-height: 44px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--app-surface);
+}
+.discovery-section {
+  margin-bottom: 30px;
+  min-width: 0;
+  min-height: 270px;
+}
+@keyframes discovery-refresh-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.discovery-footnote {
+  color: var(--text-2);
+}
+.discovery-editor button {
+  min-width: 44px;
+  min-height: 44px;
+  border-radius: 8px;
+  background: var(--app-surface-hover);
+}
+.modal-drawer.discovery-editor {
+  width: min(640px, 100%);
+  max-width: 100%;
+}
+.discovery-editor-tab {
+  margin: 12px 0;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  overflow: hidden;
+}
+.discovery-editor-toolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.discovery-editor-toolbar > strong {
+  margin-right: auto;
+}
+.discovery-editor-template {
+  margin: 16px 0;
+}
+.discovery-editor-template summary {
+  cursor: pointer;
+  padding: 10px 0;
+}
+.discovery-editor .discovery-editor-toggle {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px;
+  text-align: left;
+  border-radius: 0;
+  background: var(--app-surface);
+}
+.discovery-editor-toggle > span:first-child {
+  min-width: 0;
+}
+.discovery-editor-toggle strong,
+.discovery-editor-toggle small {
+  display: block;
+  overflow-wrap: anywhere;
+}
+.discovery-editor-toggle small {
+  margin-top: 4px;
+  color: var(--text-2);
+  font-size: 12px;
+}
+.discovery-editor-tab-body {
+  padding: 14px;
+}
+.discovery-editor-tab-body > .discovery-editor-heading {
+  margin-bottom: 14px;
+}
+.discovery-editor-tab-body > .discovery-editor-heading:first-child {
+  display: grid;
+  grid-template-columns: 44px 44px 44px minmax(0, 1fr);
+  gap: 8px;
+}
+.discovery-editor-tab-body > .discovery-editor-heading:first-child > label {
+  grid-column: 1 / -1;
+  grid-row: 1;
+  min-width: 0;
+}
+.discovery-editor-row-body {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+}
+.discovery-editor [hidden] {
+  display: none;
+}
+.discovery-editor .primary-btn {
+  background: var(--app-accent);
+  color: var(--app-accent-contrast, #fff);
+}
+.discovery-editor input:not([type='checkbox']),
+.discovery-editor select {
+  min-width: 0;
+  width: 100%;
+}
+.discovery-editor-heading > label:has(input:not([type='checkbox'])) {
+  flex: 1;
+  min-width: 140px;
+}
+.discovery-editor label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.discovery-editor input:not([type='checkbox']),
+.discovery-editor select {
+  min-height: 44px;
+  max-width: 100%;
+  background: var(--app-surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px;
+}
+.discovery-editor-section {
+  overflow: hidden;
+  margin: 12px 0;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+}
+.discovery-editor-section label {
+  display: grid;
+  grid-template-columns: 70px minmax(0, 1fr);
+}
+/* 홈 and 탐색 read as one primary group; section spacing only separates groups. */
+@media (max-width: 699px) {
+  .discovery-search {
+    display: grid;
+    grid-template-columns: 20px minmax(0, 1fr) auto;
+    gap: 8px;
+  }
+  .discovery-search input {
+    grid-column: 2 / 4;
+  }
+  .discovery-search select {
+    grid-column: 1 / 3;
+    width: 100%;
+  }
+  .discovery-search select {
+    max-width: 100%;
+    flex: 1;
+  }
+}
+
+.discovery-quick-jump-row {
+  display: flex;
+  gap: 8px;
+}
+.discovery-quick-jump-row > button:first-child {
+  flex: 1;
+  min-width: 0;
+}
+.discovery-quick-jump-row > button:first-child > span {
+  min-width: 0;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.discovery-quick-jump-row svg {
+  flex-shrink: 0;
+}
+.discovery-quick-jump-list .discovery-pin {
+  flex: 0 0 44px;
+  justify-content: center;
+  align-self: center;
+  min-height: 44px;
+  padding: 0;
+}
+.discovery-pin[aria-pressed='true'],
+.discovery-filter-choices button[aria-pressed='true'] {
+  color: var(--app-accent);
+  border-color: var(--app-accent);
+  background: var(--app-accent-soft);
+}
+.discovery-filter-choices {
+  border: 0;
+  padding: 0;
+  margin: 0;
+  min-width: 0;
+}
+.discovery-filter-choices legend {
+  margin-bottom: 10px;
+  font-weight: 600;
+}
+.discovery-filter-choices > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.discovery-filter-choices button {
+  border-radius: 24px;
+  min-height: 44px;
+  white-space: normal;
+}
+
+.discovery-edit-fields {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.discovery-rail:is([data-view='list'], [data-view='text']),
+.discovery-grid:is([data-view='list'], [data-view='text']) {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0;
+  overflow-x: visible;
+}
+:is(.discovery-rail, .discovery-grid):is([data-view='list'], [data-view='text']) .discovery-card {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  width: 100%;
+  min-height: 64px;
+  padding: 12px 4px;
+  border-bottom: 1px solid var(--border);
+  border-radius: 0;
+}
+:is(.discovery-rail, .discovery-grid)[data-view='list'] .discovery-cover {
+  width: 48px;
+  flex: 0 0 48px;
+  border-radius: 6px;
+}
+:is(.discovery-rail, .discovery-grid):is([data-view='list'], [data-view='text']) strong {
+  height: auto;
+  margin: 0 0 4px;
+}

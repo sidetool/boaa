@@ -1,0 +1,181 @@
+/* ui-next listening mini player. Floats above the reader bar while it shows, and drops to the edge when it hides. */
+
+.tts-compact-bar.un-mini {
+  left: 50%;
+  bottom: calc(152px + var(--un-safe-b));
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 4px;
+  width: min(560px, calc(100vw - 24px));
+  min-height: 0;
+  margin: 0;
+  padding: 6px 6px 6px 6px;
+  border: 0;
+  border-radius: 18px;
+  background: rgb(30 30 36 / 94%);
+  box-shadow:
+    0 0 0 1px rgb(255 255 255 / 7%),
+    0 16px 44px rgb(0 0 0 / 50%);
+  color: var(--un-text);
+  transform: translateX(-50%);
+  transition: bottom 0.28s var(--un-ease);
+  -webkit-backdrop-filter: blur(22px) saturate(1.4);
+  backdrop-filter: blur(22px) saturate(1.4);
+  animation: un-rise 0.25s var(--un-ease);
+}
+
+/* Keep the player while the reader bars are hidden: playback must stay reachable. */
+.reader-screen.immersive ~ .tts-compact-bar.un-mini {
+  display: flex;
+  bottom: calc(16px + var(--un-safe-b));
+}
+
+.reader-screen.addon-open ~ .tts-compact-bar.un-mini {
+  margin-left: calc(var(--reader-panel-width) / -2);
+  width: min(560px, calc(100vw - var(--reader-panel-width) - 40px));
+}
+
+.un-mini-info {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  padding: 2px 6px 2px 2px;
+  border: 0;
+  border-radius: 12px;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+}
+
+.un-mini-art {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 11px;
+  background: linear-gradient(140deg, var(--un-accent), #8b5cf6);
+  color: #fff;
+}
+
+.un-mini.is-playing .un-mini-art svg {
+  animation: un-mini-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes un-mini-pulse {
+  50% {
+    transform: scaleY(0.7);
+  }
+}
+
+.un-mini-text {
+  display: grid;
+  gap: 1px;
+  min-width: 0;
+}
+
+.un-mini-text b {
+  overflow: hidden;
+  font-size: 14px;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.un-mini-text small {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  overflow: hidden;
+  color: var(--un-text-3);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.un-mini-text em {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 3px;
+  color: var(--un-text-2);
+  font-style: normal;
+  font-variant-numeric: tabular-nums;
+}
+
+.un-mini-controls {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 2px;
+}
+
+.un-mini-controls button {
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: none;
+  color: var(--un-text);
+}
+
+.un-mini-controls button:hover {
+  background: rgb(255 255 255 / 8%);
+}
+
+.un-mini-controls button.is-main {
+  width: 44px;
+  height: 44px;
+  background: #f5f5f7;
+  color: #0b0b0c;
+}
+
+.un-mini-controls button.is-main:hover {
+  background: #fff;
+}
+
+.un-mini.is-busy .un-mini-controls button.is-main {
+  opacity: 0.7;
+}
+
+.un-mini-controls button.is-timer {
+  color: var(--un-text-3);
+}
+
+.un-mini-controls button.is-timer.is-on {
+  color: var(--un-accent-2);
+}
+
+.un-mini-controls button.is-close {
+  color: var(--un-text-3);
+}
+
+@media (max-width: 899px) {
+  .tts-compact-bar.un-mini,
+  .reader-screen.addon-open ~ .tts-compact-bar.un-mini {
+    left: 8px;
+    right: 8px;
+    bottom: calc(126px + var(--un-safe-b));
+    width: auto;
+    margin: 0;
+    transform: none;
+  }
+
+  .reader-screen.immersive ~ .tts-compact-bar.un-mini {
+    bottom: calc(8px + var(--un-safe-b));
+  }
+
+  .un-mini-controls button {
+    width: 36px;
+  }
+
+  .un-mini-controls button:is(.is-timer) {
+    display: none;
+  }
+}

@@ -1,0 +1,495 @@
+/* Shared ui-next primitives. Every class is prefixed `un-` to stay clear of classic styles. */
+
+.ui-next button {
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.ui-next :is(button, input):focus-visible {
+  outline: 2px solid var(--un-accent-2);
+  outline-offset: 2px;
+}
+
+.un-icon-btn {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: none;
+  color: inherit;
+  transition: background 0.15s;
+}
+
+.un-icon-btn:hover {
+  background: rgb(255 255 255 / 8%);
+}
+
+.un-icon-btn.is-active {
+  color: var(--un-accent-2);
+}
+
+.un-icon-btn.is-sm {
+  width: 28px;
+  height: 28px;
+}
+
+.un-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  height: 40px;
+  padding: 0 16px;
+  border: 0;
+  border-radius: 10px;
+  font: inherit;
+  font-size: 15px;
+  font-weight: 650;
+  white-space: nowrap;
+  transition:
+    background 0.15s,
+    transform 0.1s;
+}
+
+.un-btn:active {
+  transform: scale(0.98);
+}
+
+.un-btn:disabled {
+  opacity: 0.4;
+  pointer-events: none;
+}
+
+.un-btn.is-primary {
+  background: #f5f5f7;
+  color: #0b0b0c;
+}
+
+.un-btn.is-primary:hover {
+  background: #fff;
+}
+
+.un-btn.is-ghost {
+  background: var(--un-bg-2);
+  color: var(--un-text);
+}
+
+.un-btn.is-ghost:hover {
+  background: var(--un-bg-3);
+}
+
+.un-btn.is-text {
+  padding: 0 10px;
+  background: none;
+  color: var(--un-text-2);
+}
+
+.un-btn.is-text:hover {
+  color: var(--un-text);
+}
+
+.un-btn.is-sm {
+  height: 36px;
+  padding: 0 12px;
+  font-size: 14px;
+}
+
+.un-btn.is-lg {
+  height: 50px;
+  padding: 0 24px;
+  font-size: 16px;
+}
+
+.un-progress {
+  overflow: hidden;
+  height: 4px;
+  border-radius: 4px;
+  background: rgb(255 255 255 / 14%);
+}
+
+.un-progress > span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--un-accent);
+  transition: width 0.3s var(--un-ease);
+}
+
+.un-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+  height: 34px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--un-bg-2);
+  color: var(--un-text-2);
+  font: inherit;
+  font-size: 14px;
+  font-weight: 550;
+  white-space: nowrap;
+  transition: background 0.15s;
+}
+
+.un-chip:hover {
+  background: var(--un-bg-3);
+}
+
+.un-chip.is-active {
+  background: #f5f5f7;
+  color: #0b0b0c;
+  font-weight: 700;
+}
+
+.un-chip small {
+  color: inherit;
+  font-size: 12px;
+  font-weight: 550;
+  opacity: 0.6;
+}
+
+.un-chip.is-icon {
+  justify-content: center;
+  width: 34px;
+  padding: 0;
+}
+
+.un-chip-row {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding: 2px var(--un-pad) 16px;
+  scrollbar-width: none;
+}
+
+.un-chip-row::-webkit-scrollbar {
+  display: none;
+}
+
+.un-segmented {
+  display: flex;
+  gap: 2px;
+  padding: 3px;
+  border-radius: 11px;
+  background: rgb(255 255 255 / 7%);
+}
+
+.un-segmented button {
+  flex: 1;
+  height: 34px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 8px;
+  background: none;
+  color: var(--un-text-2);
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  transition: background 0.15s;
+}
+
+.un-segmented button.is-active {
+  background: rgb(255 255 255 / 16%);
+  color: var(--un-text);
+}
+
+.un-underline-tabs {
+  display: flex;
+  gap: 26px;
+  overflow-x: auto;
+  padding: 0 var(--un-pad);
+  border-bottom: 1px solid var(--un-line);
+  scrollbar-width: none;
+}
+
+.un-underline-tabs button {
+  flex: none;
+  height: 46px;
+  margin-bottom: -1px;
+  padding: 0;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: none;
+  color: var(--un-text-3);
+  font: inherit;
+  font-size: 16px;
+  font-weight: 650;
+  white-space: nowrap;
+  transition: color 0.15s;
+}
+
+.un-underline-tabs button small {
+  margin-left: 5px;
+  color: var(--un-text-3);
+  font-size: 13px;
+  font-weight: 550;
+}
+
+.un-underline-tabs button:hover {
+  color: var(--un-text-2);
+}
+
+.un-underline-tabs button.is-active {
+  border-bottom-color: var(--un-text);
+  color: var(--un-text);
+}
+
+.un-switch {
+  position: relative;
+  flex: none;
+  width: 46px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 14px;
+  background: rgb(255 255 255 / 18%);
+  transition: background 0.2s;
+}
+
+.un-switch > span {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 3px rgb(0 0 0 / 30%);
+  transition: transform 0.2s var(--un-ease);
+}
+
+.un-switch.is-on {
+  background: var(--un-accent);
+}
+
+.un-switch.is-on > span {
+  transform: translateX(18px);
+}
+
+/* Sheets: bottom sheet on phones, side sheet on wide screens. */
+
+.un-layer,
+.ui-next.un-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 140;
+  display: flex;
+  background: rgb(0 0 0 / 55%);
+  animation: un-fade-in 0.2s;
+}
+
+.un-layer.is-auto {
+  justify-content: flex-end;
+}
+
+.un-layer.is-dialog {
+  align-items: center;
+  justify-content: center;
+}
+
+.un-sheet {
+  display: flex;
+  flex-direction: column;
+  max-height: 88dvh;
+  background: var(--un-bg-1);
+  color: var(--un-text);
+  box-shadow: 0 -10px 40px rgb(0 0 0 / 40%);
+  outline: none;
+}
+
+.un-layer.is-auto .un-sheet {
+  width: min(440px, 100%);
+  height: 100%;
+  max-height: none;
+  border-left: 1px solid var(--un-line);
+  animation: un-slide-left 0.3s var(--un-ease);
+}
+
+.un-layer.is-dialog .un-sheet {
+  width: min(460px, calc(100% - 32px));
+  border-radius: 20px;
+  animation: un-pop-in 0.25s var(--un-ease);
+}
+
+.un-sheet-grabber {
+  display: none;
+  flex: none;
+  width: 38px;
+  height: 5px;
+  margin: 8px auto 0;
+  border-radius: 3px;
+  background: var(--un-line-2);
+}
+
+.un-sheet-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 16px 14px 6px 22px;
+}
+
+.un-sheet-head h2 {
+  overflow: hidden;
+  margin: 0;
+  font-size: 18px;
+  font-weight: 750;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.un-sheet-body {
+  flex: 1;
+  overflow: auto;
+  padding: 8px 22px 22px;
+  overscroll-behavior: contain;
+}
+
+.un-sheet-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 22px calc(12px + var(--un-safe-b));
+  border-top: 1px solid var(--un-line);
+}
+
+.un-action-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.un-action-list hr {
+  width: 100%;
+  margin: 6px 0;
+  border: 0;
+  border-top: 1px solid var(--un-line);
+}
+
+.un-action-list-title {
+  margin: 10px 10px 4px;
+  color: var(--un-text-3);
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.un-action {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-height: 52px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 12px;
+  background: none;
+  color: var(--un-text);
+  font: inherit;
+  font-size: 16px;
+  text-align: left;
+}
+
+.un-action > span {
+  flex: 1;
+}
+
+.un-action:hover:not(:disabled) {
+  background: var(--un-bg-2);
+}
+
+.un-action:disabled {
+  opacity: 0.38;
+  cursor: default;
+}
+
+.un-action.is-danger {
+  color: var(--un-danger);
+}
+
+.un-action > svg {
+  flex: none;
+  color: var(--un-text-2);
+}
+
+.un-action.is-danger > svg {
+  color: inherit;
+}
+
+.un-action .un-action-check {
+  color: var(--un-accent-2);
+}
+
+.un-action small {
+  color: var(--un-text-3);
+  font-size: 14px;
+}
+
+@keyframes un-fade-in {
+  from {
+    opacity: 0;
+  }
+}
+
+@keyframes un-slide-up {
+  from {
+    transform: translateY(100%);
+  }
+}
+
+@keyframes un-slide-left {
+  from {
+    transform: translateX(100%);
+  }
+}
+
+@keyframes un-pop-in {
+  from {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+}
+
+@keyframes un-rise {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+}
+
+@media (max-width: 899px) {
+  .un-layer.is-auto {
+    align-items: flex-end;
+    justify-content: center;
+  }
+
+  .un-layer.is-auto .un-sheet {
+    width: 100%;
+    height: auto;
+    max-height: 88dvh;
+    border-left: 0;
+    border-radius: 22px 22px 0 0;
+    animation: un-slide-up 0.3s var(--un-ease);
+  }
+
+  .un-layer.is-auto .un-sheet-grabber {
+    display: block;
+  }
+
+  .un-sheet-body {
+    padding-bottom: calc(22px + var(--un-safe-b));
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ui-next *,
+  .ui-next *::before,
+  .ui-next *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}

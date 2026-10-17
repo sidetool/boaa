@@ -1,0 +1,107 @@
+package com.sidetool.boaa
+
+import android.content.Context
+import android.security.keystore.KeyGenParameterSpec
+import android.security.keystore.KeyProperties
+import android.util.Base64
+import java.nio.charset.StandardCharsets
+import java.security.KeyStore
+import javax.crypto.Cipher
+import javax.crypto.KeyGenerator
+import javax.crypto.SecretKey
+import javax.crypto.spec.GCMParameterSpec
+
+internal object ProviderSecretStore {
+  private const val KEY_ALIAS = "NovelDeskProviderSecretStoreKey"
+  private const val PREFERENCES = "boaa_provider_secrets"
+
+  private const val LEGACY_PREFERENCES = "noveldesk_provider_secrets"
+
+  private fun aliases(account: String) = if (account.startsWith("boaa:"))
+    listOf(account, "noveldesk:" + account.removePrefix("boaa:"), "moya:" + account.removePrefix("boaa:"))
+    else listOf(account)
+
+  fun set(context: Context, account: String, secret: String) {
+    val key = validateAccount(account)
+    check(preferences(context).edit().putString(key, encrypt(secret)).commit()) { "provider secret could not be saved" }
+    val old = context.getSharedPreferences(LEGACY_PREFERENCES, Context.MODE_PRIVATE)
+    val edit = old.edit()
+    aliases(key).forEach { edit.remove(it) }
+    check(edit.commit()) { "legacy provider secret could not be removed" }
+  }
+
+  fun get(context: Context, account: String): String? {
+    val key = validateAccount(account)
+    val current = preferences(context).getString(key, null)
+    if (current != null) return decrypt(current).takeIf { it.isNotBlank() }
+    val old = context.getSharedPreferences(LEGACY_PREFERENCES, Context.MODE_PRIVATE)
+    for (alias in aliases(key)) {
+      val encrypted = old.getString(alias, null) ?: continue
+      val value = decrypt(encrypted).takeIf { it.isNotBlank() } ?: return null
+      if (preferences(context).edit().putString(key, encrypted).commit()) old.edit().remove(alias).commit()
+      return value
+    }
+    return null
+  }
+
+  fun delete(context: Context, account: String) {
+    val key = validateAccount(account)
+    val current = preferences(context).edit()
+    val old = context.getSharedPreferences(LEGACY_PREFERENCES, Context.MODE_PRIVATE).edit()
+    aliases(key).forEach { current.remove(it); old.remove(it) }
+    check(current.commit() && old.commit()) { "provider secret could not be removed" }
+  }
+
+  private fun preferences(context: Context) =
+    context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
+
+  private fun validateAccount(account: String): String {
+    val value = account.trim()
+    require(value.isNotEmpty()) { "provider secret target is invalid" }
+    require(value.length <= 256) { "provider secret target is too long" }
+    require(value.all { it.isLetterOrDigit() || it == ':' || it == '_' || it == '-' || it == '.' }) {
+      "provider secret target contains unsupported characters"
+    }
+    return value
+  }
+
+  private fun encrypt(secret: String): String {
+    val value = secret.trim()
+    require(value.isNotEmpty()) { "provider secret value is required" }
+    val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+    cipher.init(Cipher.ENCRYPT_MODE, getOrCreateSecretKey())
+    val ciphertext = cipher.doFinal(value.toByteArray(StandardCharsets.UTF_8))
+    return listOf(
+      Base64.encodeToString(cipher.iv, Base64.NO_WRAP),
+      Base64.encodeToString(ciphertext, Base64.NO_WRAP),
+    ).joinToString(":")
+  }
+
+  private fun decrypt(payload: String): String {
+    val parts = payload.split(":")
+    require(parts.size == 2) { "provider secret payload is invalid" }
+    val iv = Base64.decode(parts[0], Base64.NO_WRAP)
+    val ciphertext = Base64.decode(parts[1], Base64.NO_WRAP)
+    val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+    cipher.init(Cipher.DECRYPT_MODE, getOrCreateSecretKey(), GCMParameterSpec(128, iv))
+    return String(cipher.doFinal(ciphertext), StandardCharsets.UTF_8)
+  }
+
+  private fun getOrCreateSecretKey(): SecretKey {
+    val keyStore = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
+    val existing = keyStore.getEntry(KEY_ALIAS, null) as? KeyStore.SecretKeyEntry
+    if (existing != null) return existing.secretKey
+    val generator = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, "AndroidKeyStore")
+    val spec = KeyGenParameterSpec.Builder(
+      KEY_ALIAS,
+      KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT,
+    )
+      .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
+      .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
+      .setRandomizedEncryptionRequired(true)
+      .setKeySize(256)
+      .build()
+    generator.init(spec)
+    return generator.generateKey()
+  }
+}

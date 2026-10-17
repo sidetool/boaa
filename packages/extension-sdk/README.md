@@ -1,0 +1,76 @@
+# BOAA extension SDK
+
+Write text and image source extensions in ordinary JavaScript or TypeScript. This package contains the same
+`defineExtension`, `defineSource`, `providerText`, and source types used by BOAA's existing extension builder.
+It has no runtime dependencies and does not require a BOAA checkout in the consuming project.
+
+The archive includes local browse/filter declarations, so both TypeScript NodeNext and Bundler module resolution
+work without workspace aliases. `node --test packages/extension-sdk/build.test.mjs` checks a consumer outside the
+repository and executes its emitted JavaScript.
+
+The package is not published to npm yet. Maintainers build a distributable archive with:
+
+```sh
+corepack pnpm --filter @boaa/extension-sdk pack --pack-destination .tmp/extension-sdk
+```
+
+An extension author installs the resulting archive in their own project:
+
+```sh
+npm install --save-dev /path/to/boaa-extension-sdk-0.1.0.tgz
+```
+
+```ts
+import { defineExtension, defineSource } from '@boaa/extension-sdk';
+
+export default defineExtension({
+  sources: [
+    defineSource({
+      id: 'org.example.source',
+      async listWorks() {
+        return { items: [{ id: 'book', title: 'Example' }] };
+      },
+      async getWork({ workId }) {
+        return { id: workId, title: 'Example' };
+      },
+      async listReleases() {
+        return { items: [{ id: 'chapter', title: 'Chapter 1', order: 1 }] };
+      },
+      async getContent(_input, context) {
+        return { kind: 'text', asset: await context.textAsset('Example text\n') };
+      },
+    }),
+  ],
+});
+```
+
+The SDK supplies types and host-call wrappers. It does not grant network access, store credentials, or start an
+authentication server. Sources that need an external content service use the optional host contract; existing
+third-party APK/JS extensions retain their own protocol. No extra BOAA password or key is created by this SDK.
+The complete v1 method, context, limit, and public-error reference is shipped in the BOAA repository at
+`docs/extensions/sdk-v1-reference.md`.
+
+The installation archive remains `.boaaext` (ZIP with manifest, JS, and notices). The matching
+`@boaa/extension-cli` tarball provides `init/check/run/dev/preview/pack/keygen/index` without a BOAA checkout.
+Use matching SDK/tool versions when packaging. Runtime permissions and result validation remain host-owned.
+
+From the BOAA checkout, or with the standalone CLI installed, generate an offline starter (the target must not exist):
+
+```sh
+corepack pnpm extension:dev init /path/to/my-source --id org.example.my-source --kind text
+corepack pnpm extension:dev check /path/to/my-source
+```
+
+Use `--kind images` for an image source. The generated README includes fixture execution and packaging commands.
+Generation does not run project hooks, install dependencies, or modify an existing project.
+
+# Browser execution and source options
+
+Source-defined options are declared in the package manifest and read with `context.preferences.get(key)`.
+`context.webview.evaluate({url, script})` runs site JavaScript in a host browser when the package declares
+`requestedAccess.webview: true`. `context.http.request` returns HTTP status, headers and body for an extension's
+own optional service protocols; BOAA does not require a particular authentication server. `context.sleep(ms)`
+provides a cancellable polling delay.
+
+The browser uses the package's network grants and isolated persisted session. Browser execution is not a network
+filter bypass, and unsupported Android APIs remain a separate APK compatibility issue.

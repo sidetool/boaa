@@ -1,0 +1,128 @@
+# Dependencies
+node_modules/
+
+# Frontend build output
+dist/
+
+# Hosted server build output
+apps/server/dist/
+
+# Native build output
+src-tauri/target/
+src-tauri/portable-payload.zip
+src-tauri/webview2-fixed.cab
+release/Boaa.exe
+
+# Local runtime/cache files
+.DS_Store
+Thumbs.db
+*.log
+__pycache__/
+*.pyc
+
+# Local environment files
+.env
+.env.*
+!.env.example
+vertex env/
+vertex env/**
+secrets/**
+!secrets/
+!secrets/vertex/
+!secrets/vertex/.gitkeep
+*.pem
+*.key
+*service-account*.json
+credentials*.json
+google-services.json
+
+# Signing material and packaged release artifacts
+*.keystore
+*.jks
+*.p12
+*.pfx
+*.mobileprovision
+*.apk
+*.aab
+*.ipa
+*.exe
+*.msi
+*.msix
+*.dmg
+*.pkg
+*.AppImage
+*.deb
+*.rpm
+key.properties
+keystore.properties
+local.properties
+
+# Local hosted data and credentials
+.codex-provider-pg/
+.server-test-data/
+coverage/
+
+# Generated verification captures
+screenshots/
+fixtures/generated/
+.tmp/
+
+# Private corpora, generated evidence and internal review material
+AGENTS.md
+artifacts/
+handoff/
+test_novel/
+.boaa-lab/
+smart-novel-reader-codex-pack/
+speaker-review-studio/
+ui-reference/
+scripts/speaker-labeling-lab/
+scripts/speaker-pilot/
+scripts/test-novel-*.ts
+docs/0722_review/
+docs/pro_review/
+docs/pro_review0713/
+docs/project/
+docs/refactoring/
+docs/design/ui-redesign-reference/
+docs/design/ui-redesign-prototype/
+docs/design/ui-redesign-references/
+
+# Legacy local data stays excluded during the BOAA transition.
+release/Moya.exe
+.noveldesk-lab/
+
+.vite-dev.config.mjs
+
+.vite-srv.config.mjs
+
+# Private development records and experimental harnesses are kept outside this repository.
+docs/archive/
+docs/design/
+docs/decisions/
+docs/BOAA-MIGRATION.md
+docs/platforms/desktop-next-work.md
+docs/operations/2026-*
+docs/operations/reader-ux-verification.md
+docs/extensions/evidence/
+docs/extensions/proposals/
+docs/extensions/javascript-plugin-*-results.md
+docs/extensions/javascript-plugin-implementation-review.md
+docs/extensions/javascript-plugin-platform-plan.md
+docs/extensions/implementation-audit-*.md
+docs/extensions/platform-review-*.md
+docs/extensions/public-extension-roadmap-*.md
+docs/extensions/mangayomi-corpus-*.md
+docs/architecture/boaapatch-extension-packages.md
+docs/architecture/large-file-and-sync-architecture.md
+prototypes/ui-next/
+scripts/plugins/g[0-9]*/
+scripts/plugins/p[0-9]*/
+scripts/plugins/shell-document.mjs
+scripts/plugins/platform-shell-document.mjs
+services/webnovel-metadata-collector/docs/implementation-plan.md
+services/webnovel-metadata-collector/docs/adult-authentication.md
+services/webnovel-metadata-collector/docs/viewer-auth-integration.md
+
+# Retired optional APK probe; the maintained worker remains public.
+scripts/apk-compat/

@@ -1,0 +1,254 @@
+/* ui-next 책 가져오기 (UiNextImportSheet). Rows and fields come from components/prefs. */
+
+.un-import {
+  display: grid;
+  gap: 16px;
+}
+
+.un-import-muted {
+  margin: 0;
+  color: var(--un-text-3);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.un-import-drop {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  width: 100%;
+  min-height: 132px;
+  padding: 20px;
+  border: 1.5px dashed var(--un-line-2);
+  border-radius: 18px;
+  background: rgb(255 255 255 / 3%);
+  color: var(--un-text);
+  font: inherit;
+  text-align: left;
+  transition:
+    border-color 0.15s,
+    background 0.15s;
+}
+
+.un-import-drop:hover:not(:disabled),
+.un-import-drop.is-over {
+  border-color: var(--un-accent);
+  background: var(--un-accent-soft);
+}
+
+.un-import-drop.is-compact {
+  min-height: 0;
+  padding: 12px 14px;
+  border-style: solid;
+  border-width: 1px;
+  border-color: var(--un-line);
+}
+
+.un-import-drop-icon {
+  display: grid;
+  flex: none;
+  width: 52px;
+  height: 52px;
+  place-items: center;
+  border-radius: 16px;
+  background: var(--un-accent-soft);
+  color: var(--un-accent-2);
+}
+
+.un-import-drop.is-compact .un-import-drop-icon {
+  width: 36px;
+  height: 36px;
+  border-radius: 11px;
+}
+
+.un-import-drop-text {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.un-import-drop-text b {
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.un-import-drop.is-compact .un-import-drop-text b {
+  font-size: 14.5px;
+}
+
+.un-import-drop-text small {
+  color: var(--un-text-3);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.un-import-files,
+.un-import-rows {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  border-radius: 14px;
+  background: rgb(255 255 255 / 4.5%);
+  list-style: none;
+}
+
+.un-import-files li,
+.un-import-rows li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 44px;
+  padding: 0 14px;
+  font-size: 14px;
+}
+
+.un-import-files li + li,
+.un-import-rows li + li {
+  border-top: 1px solid var(--un-line);
+}
+
+.un-import-files svg {
+  flex: none;
+  color: var(--un-text-3);
+}
+
+.un-import-files span,
+.un-import-rows span {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.un-import-files small,
+.un-import-rows small {
+  flex: none;
+  color: var(--un-text-3);
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+.un-import-rows b {
+  margin-right: 6px;
+  color: var(--un-text-3);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.un-import-rows em {
+  flex: none;
+  min-width: 52px;
+  color: var(--un-text-3);
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 600;
+  text-align: right;
+}
+
+.un-import-rows li[data-state='add'] em {
+  color: var(--un-success);
+}
+
+.un-import-rows li[data-state='conflict'] em {
+  color: #f5b84b;
+}
+
+.un-import-series {
+  display: grid;
+  gap: 10px;
+}
+
+.un-import-series > strong {
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.un-import-series .un-pref-field {
+  padding: 0;
+}
+
+.un-import-counts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.un-import-counts span {
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: rgb(255 255 255 / 6%);
+  color: var(--un-text-2);
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.un-import-counts .is-add {
+  background: rgb(63 207 142 / 14%);
+  color: var(--un-success);
+}
+
+.un-import-counts .is-conflict {
+  background: rgb(245 184 75 / 14%);
+  color: #f5b84b;
+}
+
+.un-import-card {
+  display: grid;
+  gap: 8px;
+  padding: 14px 16px;
+  border-radius: 16px;
+  background: rgb(255 255 255 / 4.5%);
+}
+
+.un-import-running {
+  border: 1px solid var(--un-line-2);
+}
+
+.un-import-running.is-failed {
+  border-color: rgb(255 90 106 / 45%);
+}
+
+.un-import-running.is-ready {
+  border-color: rgb(63 207 142 / 45%);
+}
+
+.un-import-running-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+}
+
+.un-import-running-head strong {
+  font-size: 15px;
+}
+
+.un-import-running-head span {
+  color: var(--un-text-2);
+  font-size: 14px;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+}
+
+.un-import-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  color: var(--un-text-3);
+  font-size: 12px;
+}
+
+.un-import-running .un-btn {
+  justify-self: start;
+}
+
+.un-import-foot {
+  display: flex;
+  gap: 8px;
+  width: 100%;
+}
+
+.un-import-foot .un-btn {
+  flex: 1;
+}

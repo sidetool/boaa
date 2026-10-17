@@ -1,0 +1,465 @@
+/* Full-page settings frame. Section contents are the classic panels on the dark palette. */
+
+.ui-next.un-settings {
+  position: fixed;
+  inset: 0;
+  z-index: 130;
+  display: flex;
+  flex-direction: column;
+  background: var(--un-bg);
+  color: var(--un-text);
+  font-family: var(--un-font);
+  animation: un-fade-in 0.2s;
+}
+
+.un-settings-bar {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 12px;
+  height: calc(var(--un-topbar) + var(--un-safe-t));
+  padding: var(--un-safe-t) var(--un-pad) 0;
+  border-bottom: 1px solid var(--un-line);
+}
+
+.un-settings-heading {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+}
+
+.un-settings-status {
+  margin-left: auto;
+  color: var(--un-text-3);
+  font-size: 13px;
+}
+
+.un-settings-back {
+  display: none;
+}
+
+.un-settings-body {
+  display: grid;
+  flex: 1;
+  grid-template-columns: minmax(260px, 320px) minmax(0, 1fr);
+  min-height: 0;
+}
+
+.un-settings-nav {
+  overflow-y: auto;
+  padding: 18px 16px 40px var(--un-pad);
+  border-right: 1px solid var(--un-line);
+}
+
+.un-settings-group + .un-settings-group {
+  margin-top: 22px;
+}
+
+.un-settings-group h2 {
+  margin: 0 0 8px 12px;
+  color: var(--un-text-3);
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.un-settings-list {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border-radius: 14px;
+  background: var(--un-bg-1);
+}
+
+.un-settings-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 58px;
+  padding: 8px 12px;
+  border: 0;
+  background: none;
+  color: var(--un-text);
+  font: inherit;
+  text-align: left;
+  transition: background 0.15s;
+}
+
+.un-settings-item + .un-settings-item {
+  box-shadow: inset 52px 1px 0 -51px var(--un-line);
+}
+
+.un-settings-item:hover:not(:disabled) {
+  background: var(--un-bg-2);
+}
+
+.un-settings-item.is-active {
+  background: var(--un-bg-3);
+}
+
+.un-settings-item:disabled {
+  opacity: 0.5;
+}
+
+.un-settings-icon {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  background: #4a4a55;
+  color: #fff;
+}
+
+.un-settings-icon.is-appearance {
+  background: #6d5cff;
+}
+
+.un-settings-icon.is-layout {
+  background: #3b82f6;
+}
+
+.un-settings-icon.is-gesture {
+  background: #0ea5a4;
+}
+
+.un-settings-icon.is-sources {
+  background: #f59e0b;
+}
+
+.un-settings-icon.is-extensions {
+  background: #ec4899;
+}
+
+.un-settings-icon.is-storage {
+  background: #64748b;
+}
+
+.un-settings-icon.is-sync {
+  background: #22c55e;
+}
+
+.un-settings-icon.is-remote-access {
+  background: #0891b2;
+}
+
+.un-settings-item-text {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.un-settings-item-text b {
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.un-settings-item-text small {
+  overflow: hidden;
+  color: var(--un-text-3);
+  font-size: 12.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.un-settings-chevron {
+  flex: none;
+  color: var(--un-text-3);
+}
+
+.un-settings-main {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+.un-settings-content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 28px var(--un-pad) 48px;
+  overscroll-behavior: contain;
+}
+
+.un-settings-content > * {
+  max-width: 760px;
+}
+
+.un-settings-title {
+  margin: 0 0 20px;
+  font-size: 28px;
+  font-weight: 800;
+  letter-spacing: -0.03em;
+  outline: none;
+}
+
+.un-settings-foot {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px var(--un-pad) calc(12px + var(--un-safe-b));
+  border-top: 1px solid var(--un-line);
+  background: var(--un-bg-1);
+}
+
+.un-settings-override {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+/* Classic section content: group cards and calmer headings on the dark frame. */
+.un-settings-panel {
+  display: grid;
+  gap: 18px;
+}
+
+.un-settings-panel .reader-settings-group,
+.un-settings-panel > section:not(.un-pref-section, .un-source-reading) {
+  padding: 18px;
+  border-radius: 16px;
+  background: var(--un-bg-1);
+}
+
+.un-settings-panel h3:not(.un-pref-section-head h3, .un-source-reading-head h3) {
+  margin: 0 0 4px;
+  color: var(--un-text);
+  font-size: 16px;
+  font-weight: 750;
+}
+
+.un-settings-panel .muted {
+  color: var(--un-text-3);
+}
+
+.un-settings .un-inline-alert {
+  margin-top: 16px;
+}
+
+/* 콘텐츠 소스: one heading for every source, then a single compact filter row with small captions. */
+.un-settings-panel .external-source-settings-sections::before {
+  content: '소스';
+  font-size: 19px;
+  font-weight: 750;
+  letter-spacing: -0.01em;
+  text-decoration: none;
+}
+
+.un-settings-panel .source-settings-filters {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.un-settings-panel .source-settings-filters label {
+  gap: 4px;
+  padding-left: 4px;
+  color: var(--un-text-3);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.un-settings-panel .source-settings-filters :is(input, select) {
+  height: 40px;
+  min-height: 0;
+  border: 0;
+  border-radius: 999px;
+  background-color: rgb(255 255 255 / 5.5%);
+  font-size: 14px;
+}
+
+.un-settings-panel .source-settings-filters :is(input, select) {
+  margin-left: -4px;
+  color: var(--un-text);
+}
+
+.un-settings-panel .source-settings-filters input {
+  padding-inline: 16px;
+}
+
+.un-settings-panel .external-source-settings-sections > p[role='status'] {
+  margin-top: -4px;
+  color: var(--un-text-3);
+  font-size: 12.5px;
+}
+
+@media (max-width: 699px) {
+  .un-settings-panel .source-settings-filters {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .un-settings-panel .source-settings-filters label:first-child {
+    grid-column: 1 / -1;
+  }
+}
+
+/* 콘텐츠 소스: the favourite star shares the title row, and descriptions get two lines. */
+.un-settings-panel .external-source-settings-card {
+  grid-template-columns: minmax(0, 1fr) auto;
+  border-color: transparent;
+  border-radius: 16px;
+  background: var(--un-bg-1);
+}
+
+.un-settings-panel .external-source-settings-card.active {
+  border-color: transparent;
+  box-shadow: inset 0 0 0 1.5px var(--un-accent);
+}
+
+.un-settings-panel .external-source-settings-card-heading {
+  grid-column: 1;
+  grid-row: 1;
+  min-height: 0;
+  padding: 14px 4px 14px 14px;
+}
+
+.un-settings-panel .external-source-settings-card-heading:hover {
+  background: none;
+}
+
+.un-settings-panel .external-source-settings-card-heading strong {
+  font-size: 15px;
+}
+
+.un-settings-panel .external-source-settings-card-heading small {
+  display: -webkit-box;
+  font-size: 12.5px;
+  white-space: normal;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.un-settings-panel .external-source-settings-icon {
+  border: 0;
+  border-radius: 12px;
+  background: var(--un-bg-2);
+}
+
+.un-settings-panel .external-source-settings-status {
+  border: 0;
+  border-radius: 999px;
+  background: var(--un-bg-2);
+}
+
+.un-settings-panel .external-source-settings-actions {
+  grid-column: 2;
+  grid-row: 1;
+  align-self: center;
+  padding: 0 8px 0 0;
+  border: 0;
+}
+
+.un-settings-panel .external-source-settings-controls {
+  grid-column: 1 / -1;
+  border-top-color: var(--un-line);
+}
+
+/* 동기화: round icons and quiet status chips. */
+.un-settings-panel :is(.cloud-vault-heading-icon, .cloud-vault-state) {
+  border: 0;
+  background: var(--un-bg-2);
+}
+
+.un-settings-panel .cloud-vault-heading-icon {
+  border-radius: 10px;
+}
+
+.un-settings-panel .cloud-vault-state {
+  border-radius: 999px;
+}
+
+/* 리더 보기: the live sample leads the page and stays in view while the controls below change it. */
+.un-settings-panel > .reader-layout-preview {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  order: -1;
+  box-shadow: 0 12px 24px var(--un-bg);
+}
+
+.un-settings-panel .reader-layout-preview-canvas {
+  min-height: 0;
+  max-height: 210px;
+  padding-block: 18px;
+  border: 0;
+  border-radius: 12px;
+  -webkit-mask-image: linear-gradient(#000 75%, transparent);
+  mask-image: linear-gradient(#000 75%, transparent);
+}
+
+@media (max-width: 899px) {
+  .un-settings-back {
+    display: inline-grid;
+    margin-left: -10px;
+  }
+
+  .ui-next.un-settings:not(.is-detail) .un-settings-back {
+    visibility: hidden;
+    width: 0;
+    margin: 0;
+  }
+
+  .un-settings-body {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .un-settings-nav {
+    padding: 14px var(--un-pad) calc(32px + var(--un-safe-b));
+    border-right: 0;
+  }
+
+  .un-settings-item {
+    min-height: 60px;
+  }
+
+  .un-settings-item.is-active {
+    background: none;
+  }
+
+  .ui-next.un-settings.is-detail .un-settings-nav,
+  .ui-next.un-settings:not(.is-detail) .un-settings-main {
+    display: none;
+  }
+
+  .ui-next.un-settings.is-detail .un-settings-main {
+    animation: un-slide-left 0.28s var(--un-ease);
+  }
+
+  .un-settings-content {
+    padding-top: 18px;
+    padding-bottom: calc(40px + var(--un-safe-b));
+  }
+
+  .un-settings-title {
+    font-size: 24px;
+  }
+
+  .un-settings-panel .reader-settings-group,
+  .un-settings-panel > section:not(.un-pref-section, .un-source-reading) {
+    padding: 16px 14px;
+  }
+}
+
+@media (max-width: 899px) {
+  .un-settings-panel .reader-layout-preview-canvas {
+    max-height: 150px;
+  }
+}
+
+@media (max-width: 699px) {
+  .un-settings-panel .external-source-settings-card-heading {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .un-settings-panel .external-source-settings-status {
+    grid-column: 2;
+    justify-self: start;
+  }
+}

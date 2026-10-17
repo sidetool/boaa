@@ -1,0 +1,486 @@
+/* ui-next 회차 나누기 편집: full screen, list and editor side by side on wide screens, one at a time on phones. */
+
+.un-cs {
+  position: fixed;
+  inset: 0;
+  z-index: 120;
+  display: flex;
+  flex-direction: column;
+  background: var(--un-bg);
+  color: var(--un-text);
+  font-family: var(--un-font);
+}
+
+.un-cs-bar {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+  padding: calc(10px + var(--un-safe-t)) 12px 10px var(--un-pad);
+  border-bottom: 1px solid var(--un-line);
+}
+
+.un-cs-back {
+  margin-left: -10px;
+}
+
+.un-cs-bar h2 {
+  flex: 1;
+  margin: 0;
+  font-size: 18px;
+  font-weight: 750;
+}
+
+.un-cs-loading,
+.un-cs-muted {
+  margin: 0;
+  color: var(--un-text-3);
+  font-size: 13px;
+}
+
+.un-cs-loading {
+  padding: 24px var(--un-pad);
+}
+
+.un-cs-body {
+  display: grid;
+  flex: 1;
+  grid-template-columns: minmax(280px, 380px) minmax(0, 1fr);
+  min-height: 0;
+}
+
+.un-cs-list {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border-right: 1px solid var(--un-line);
+}
+
+.un-cs-list-head {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  color: var(--un-text-3);
+  font-size: 12.5px;
+}
+
+.un-cs-search {
+  position: relative;
+}
+
+.un-cs-search svg {
+  position: absolute;
+  top: 50%;
+  left: 12px;
+  color: var(--un-text-3);
+  transform: translateY(-50%);
+}
+
+.ui-next .un-cs-search input.un-input {
+  width: 100%;
+  min-height: 40px;
+  padding: 0 12px 0 34px;
+  border: 1px solid var(--un-line);
+  border-radius: 11px;
+  background: rgb(255 255 255 / 5%);
+  font-size: 16px;
+}
+
+.un-cs-scroll {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0 8px 12px;
+}
+
+.un-cs-chapter {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 54px;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 12px;
+  background: none;
+  color: var(--un-text);
+  font: inherit;
+  text-align: left;
+}
+
+.un-cs-chapter:hover {
+  background: rgb(255 255 255 / 4%);
+}
+
+.un-cs-chapter.is-active {
+  background: var(--un-accent-soft);
+}
+
+.un-cs-chapter > b {
+  flex: none;
+  min-width: 28px;
+  color: var(--un-text-3);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.un-cs-chapter span {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.un-cs-chapter strong {
+  overflow: hidden;
+  font-size: 14px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.un-cs-chapter small {
+  color: var(--un-text-3);
+  font-size: 12px;
+}
+
+.un-cs-seam {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  height: 22px;
+  padding: 0 10px 0 48px;
+  border: 0;
+  background: none;
+  color: var(--un-text-3);
+  font: inherit;
+  opacity: 0.55;
+  transition: opacity 0.15s;
+}
+
+.un-cs-seam:hover,
+.un-cs-seam:focus-visible,
+.un-cs-seam.is-joined {
+  opacity: 1;
+}
+
+.un-cs-seam i {
+  flex: 1;
+  height: 1px;
+  background: var(--un-line-2);
+}
+
+.un-cs-seam small {
+  font-size: 11.5px;
+  font-weight: 600;
+}
+
+.un-cs-seam.is-joined {
+  color: #f5b84b;
+}
+
+.un-cs-seam.is-joined i {
+  background: rgb(245 184 75 / 50%);
+}
+
+.un-cs-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 18px var(--un-pad) 0;
+}
+
+.un-cs-selected {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.un-cs-selected > b {
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: rgb(255 255 255 / 7%);
+  font-size: 13px;
+}
+
+.un-cs-selected div {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.un-cs-selected strong {
+  font-size: 17px;
+}
+
+.un-cs-selected small {
+  color: var(--un-text-3);
+  font-size: 12.5px;
+}
+
+.un-cs-source {
+  max-height: 160px;
+  overflow: hidden;
+  margin: 0;
+  padding: 14px 16px;
+  border-radius: 14px;
+  background: rgb(255 255 255 / 4%);
+  color: var(--un-text-2);
+  font-family: var(--un-serif);
+  font-size: 14px;
+  line-height: 1.75;
+  mask-image: linear-gradient(to bottom, #000 70%, transparent);
+  white-space: pre-wrap;
+}
+
+.un-cs-split {
+  display: grid;
+  gap: 10px;
+}
+
+.un-cs-split-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.un-cs-split-head div {
+  display: grid;
+  gap: 2px;
+}
+
+.un-cs-split-head strong {
+  font-size: 15px;
+}
+
+.un-cs-split-head small {
+  color: var(--un-text-3);
+  font-size: 12.5px;
+}
+
+.un-cs-lines {
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  border-radius: 14px;
+  background: rgb(255 255 255 / 4.5%);
+  list-style: none;
+}
+
+.un-cs-lines li + li {
+  border-top: 1px solid var(--un-line);
+}
+
+.un-cs-lines button {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  min-height: 50px;
+  padding: 8px 14px;
+  border: 0;
+  background: none;
+  color: var(--un-text);
+  font: inherit;
+  text-align: left;
+}
+
+.un-cs-lines button.is-on {
+  background: var(--un-accent-soft);
+}
+
+.un-cs-check {
+  display: grid;
+  flex: none;
+  width: 20px;
+  height: 20px;
+  place-items: center;
+  border: 2px solid var(--un-line-2);
+  border-radius: 6px;
+  color: #fff;
+}
+
+.un-cs-lines button.is-on .un-cs-check {
+  border-color: var(--un-accent);
+  background: var(--un-accent);
+}
+
+.un-cs-lines span:last-child {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.un-cs-lines strong {
+  overflow: hidden;
+  font-size: 14px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.un-cs-lines small {
+  color: var(--un-text-3);
+  font-size: 12px;
+}
+
+.un-cs-manual {
+  display: grid;
+  gap: 10px;
+  padding: 4px 16px 16px;
+}
+
+.un-cs-manual .un-pref-field {
+  padding: 0;
+}
+
+.un-cs-manual .un-btn {
+  justify-self: start;
+}
+
+.un-cs-history {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--un-text-3);
+  font-size: 12.5px;
+}
+
+.un-cs-dock {
+  position: sticky;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: auto;
+  padding: 12px 0 calc(12px + var(--un-safe-b));
+  border-top: 1px solid var(--un-line);
+  background: var(--un-bg);
+}
+
+.un-cs-list .un-cs-dock {
+  padding-inline: 14px;
+}
+
+.un-cs-dock > span {
+  flex: 1;
+  color: var(--un-text-2);
+  font-size: 13.5px;
+  font-weight: 600;
+}
+
+.un-cs-preview {
+  display: grid;
+  gap: 14px;
+  padding-bottom: 16px;
+}
+
+.un-cs-stats {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.un-cs-stats div {
+  display: grid;
+  gap: 4px;
+  padding: 12px;
+  border-radius: 14px;
+  background: rgb(255 255 255 / 4.5%);
+}
+
+.un-cs-stats small {
+  color: var(--un-text-3);
+  font-size: 12px;
+}
+
+.un-cs-stats b {
+  font-size: 17px;
+  font-variant-numeric: tabular-nums;
+}
+
+.un-cs-stats .is-warn b {
+  color: #f5b84b;
+}
+
+.un-cs-compare {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.un-cs-compare section {
+  display: grid;
+  align-content: start;
+  gap: 2px;
+  padding: 10px;
+  border-radius: 14px;
+  background: rgb(255 255 255 / 3%);
+}
+
+.un-cs-compare h4 {
+  margin: 0 0 6px;
+  color: var(--un-text-3);
+  font-size: 12px;
+}
+
+.un-cs-compare p {
+  display: flex;
+  gap: 8px;
+  margin: 0;
+  padding: 5px 6px;
+  border-radius: 8px;
+  font-size: 13px;
+}
+
+.un-cs-compare p b {
+  flex: none;
+  min-width: 22px;
+  color: var(--un-text-3);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.un-cs-compare p span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.un-cs-compare p.is-removed {
+  background: rgb(255 90 106 / 12%);
+  color: #ff98a2;
+  text-decoration: line-through;
+}
+
+.un-cs-compare p.is-added {
+  background: rgb(63 207 142 / 12%);
+  color: var(--un-success);
+}
+
+.un-cs-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+@media (max-width: 759px) {
+  .un-cs-body {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .un-cs-list {
+    border-right: 0;
+  }
+
+  .un-cs-body.is-editor .un-cs-list,
+  .un-cs-body.is-previewing .un-cs-list,
+  .un-cs-body.is-list:not(.is-previewing) .un-cs-editor {
+    display: none;
+  }
+}

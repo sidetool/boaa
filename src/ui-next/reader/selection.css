@@ -1,0 +1,234 @@
+/* ui-next text selection bar. Position comes from the classic `.selection-action-bar` rules. */
+
+.selection-action-bar.un-textsel {
+  flex-wrap: nowrap;
+  gap: 2px;
+  padding: 6px;
+  border: 0;
+  border-radius: 18px;
+  background: rgb(26 26 31 / 94%);
+  box-shadow: 0 14px 40px rgb(0 0 0 / 45%);
+  color: var(--un-text);
+  -webkit-backdrop-filter: blur(22px) saturate(1.4);
+  backdrop-filter: blur(22px) saturate(1.4);
+  animation: un-pop-in 0.18s var(--un-ease);
+}
+
+.un-textsel-swatches {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 4px;
+}
+
+.un-textsel-swatch {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: none;
+  color: var(--un-text-2);
+}
+
+.un-textsel-swatch::before {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 1px rgb(0 0 0 / 15%);
+  content: '';
+  transition: transform 0.12s;
+}
+
+.un-textsel-swatch:hover:not(:disabled)::before {
+  transform: scale(1.12);
+}
+
+.un-textsel-swatch.is-yellow::before {
+  background: #facc15;
+}
+
+.un-textsel-swatch.is-green::before {
+  background: #22c55e;
+}
+
+.un-textsel-swatch.is-blue::before {
+  background: #38bdf8;
+}
+
+.un-textsel-swatch.is-pink::before {
+  background: #f472b6;
+}
+
+.un-textsel-swatch.is-erase::before {
+  display: none;
+}
+
+.un-textsel-swatch.is-erase:hover:not(:disabled) {
+  background: rgb(255 255 255 / 8%);
+  color: var(--un-text);
+}
+
+.un-textsel-swatch:disabled {
+  opacity: 0.4;
+}
+
+.un-textsel-divider {
+  flex: none;
+  width: 1px;
+  height: 28px;
+  margin: 0 4px;
+  background: var(--un-line-2);
+}
+
+.un-textsel-action {
+  display: grid;
+  flex: none;
+  justify-items: center;
+  gap: 2px;
+  min-width: 48px;
+  height: 46px;
+  padding: 5px 6px 4px;
+  border: 0;
+  border-radius: 12px;
+  background: none;
+  color: var(--un-text);
+  font: inherit;
+  font-size: 11.5px;
+  font-weight: 600;
+}
+
+.un-textsel-action:hover {
+  background: rgb(255 255 255 / 8%);
+}
+
+.un-textsel-close {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  margin-left: 2px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: none;
+  color: var(--un-text-3);
+}
+
+.un-textsel-close:hover {
+  background: rgb(255 255 255 / 8%);
+  color: var(--un-text);
+}
+
+@media (max-width: 699px) {
+  .selection-action-bar.un-textsel {
+    justify-content: space-between;
+  }
+
+  .un-textsel-swatches {
+    padding: 0;
+  }
+
+  .un-textsel-swatch {
+    width: 30px;
+  }
+
+  .un-textsel-action {
+    min-width: 42px;
+  }
+}
+
+/* ───────── in-book search results ───────── */
+
+.search-result-strip.un-kit {
+  gap: 10px;
+  padding: 14px;
+  border: 0;
+  border-radius: 18px;
+  background: rgb(26 26 31 / 96%);
+  box-shadow: 0 16px 44px rgb(0 0 0 / 50%);
+  color: var(--un-text);
+  -webkit-backdrop-filter: blur(22px);
+  backdrop-filter: blur(22px);
+}
+
+.search-result-strip.un-kit .search-result-summary span {
+  color: var(--un-text-3);
+}
+
+/* Count sits next to the close button so the ✕ reads as closing the whole strip. */
+.search-result-strip.un-kit .search-result-summary strong {
+  margin-left: auto;
+}
+
+.search-result-strip.un-kit .search-result-summary .search-result-controls button {
+  background: transparent;
+  color: var(--un-text-2);
+}
+
+.search-result-strip.un-kit .search-scope-toggle {
+  padding: 3px;
+  border: 0;
+  border-radius: 999px;
+  background: rgb(255 255 255 / 7%);
+}
+
+.search-result-strip.un-kit .search-scope-toggle button {
+  min-height: 30px;
+  padding: 0 12px;
+  border-radius: 999px;
+  color: var(--un-text-2);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.search-result-strip.un-kit .search-scope-toggle button.active {
+  background: var(--un-text);
+  color: var(--un-bg);
+}
+
+.search-result-strip.un-kit .search-result-controls button {
+  width: 32px;
+  height: 32px;
+  border: 0;
+  border-radius: 50%;
+  background: rgb(255 255 255 / 7%);
+  color: var(--un-text);
+}
+
+.search-result-strip.un-kit .search-result-controls span {
+  color: var(--un-text-2);
+  font-variant-numeric: tabular-nums;
+}
+
+.search-result-strip.un-kit :is(.search-result-current, .search-result-list button) {
+  border: 0;
+  border-radius: 12px;
+  background: rgb(255 255 255 / 5%);
+  color: var(--un-text);
+}
+
+.search-result-strip.un-kit .search-result-list button {
+  padding: 10px 12px;
+}
+
+.search-result-strip.un-kit .search-result-current {
+  background: var(--un-accent-soft);
+}
+
+.search-result-strip.un-kit :is(.search-result-current, .search-result-list button) span {
+  color: var(--un-accent-2);
+}
+
+.search-result-strip.un-kit .search-result-list button.active {
+  box-shadow: inset 0 0 0 1px var(--un-accent);
+}
+
+.search-result-strip.un-kit .search-result-disclosure summary {
+  color: var(--un-text-2);
+  font-size: 13px;
+  font-weight: 600;
+}

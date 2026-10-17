@@ -1,0 +1,39 @@
+import { readBrandStorage, writeBrandStorage } from '@boaa/extension-contracts/brand-compat';
+import { isWorkView } from '../../components/work-view';
+import type { LibrarySort, LibraryViewMode } from './library-screen-model';
+
+const KEY = 'boaa.library-view.v1';
+interface LibraryViewPreferences {
+  activeShelfId?: string;
+  librarySort?: LibrarySort;
+  libraryViewMode?: LibraryViewMode;
+}
+
+export function readLibraryViewPreferences(): LibraryViewPreferences {
+  try {
+    const value: unknown = JSON.parse(readBrandStorage(localStorage, KEY) ?? '{}');
+    if (!value || typeof value !== 'object') return {};
+    const preferences = value as Record<string, unknown>;
+    return {
+      ...(typeof preferences.activeShelfId === 'string' && preferences.activeShelfId.trim()
+        ? { activeShelfId: preferences.activeShelfId }
+        : {}),
+      ...(preferences.librarySort === 'recent' ||
+      preferences.librarySort === 'title' ||
+      preferences.librarySort === 'added'
+        ? { librarySort: preferences.librarySort }
+        : {}),
+      ...(isWorkView(preferences.libraryViewMode) ? { libraryViewMode: preferences.libraryViewMode } : {}),
+    };
+  } catch {
+    return {};
+  }
+}
+
+export function saveLibraryViewPreferences(patch: LibraryViewPreferences): void {
+  try {
+    writeBrandStorage(localStorage, KEY, JSON.stringify({ ...readLibraryViewPreferences(), ...patch }));
+  } catch {
+    // A blocked/full device store must not prevent changing the current Library view.
+  }
+}

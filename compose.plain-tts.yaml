@@ -1,0 +1,35 @@
+# Optional CPU Korean narration; model weights live only in a persistent volume.
+services:
+  api:
+    environment:
+      TTS_PLAIN_ENABLED: 'true'
+      TTS_PLAIN_MODEL_REVISION: aafc6e32416a594460b32413efc49d7fe4ce6d46
+      TTS_PLAIN_MODEL_ID: supertonic-3-ko
+      TTS_PLAIN_ENDPOINT_URL: http://plain-tts:9010/synthesize
+      TTS_PLAIN_ALLOWED_HOSTS: plain-tts
+  plain-tts:
+    build:
+      context: .
+      dockerfile: deploy/plain-tts.Dockerfile
+    environment:
+      MODEL_AUTO_INSTALL: 'true'
+    volumes:
+      - plain-tts-models:/models
+    expose: ['9010']
+    mem_limit: 1536m
+    cpus: 4
+    init: true
+    restart: unless-stopped
+    security_opt: ['no-new-privileges:true']
+    cap_drop: [ALL]
+    healthcheck:
+      test: ['CMD', 'python', '-c', "import urllib.request; urllib.request.urlopen('http://127.0.0.1:9010/health', timeout=3)"]
+      interval: 15s
+      timeout: 5s
+      retries: 8
+      start_period: 10m
+    logging:
+      driver: json-file
+      options: {max-size: '10m', max-file: '3'}
+volumes:
+  plain-tts-models:
