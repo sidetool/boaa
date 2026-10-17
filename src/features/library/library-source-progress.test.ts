@@ -65,3 +65,62 @@ describe('withSourceProgress', () => {
     expect(withSourceProgress(book, undefined)).toBe(book);
   });
 });
+
+it.each([6, 40])(
+  'reselects effective source position %i/40 before tabs and counts without changing resume data',
+  (position) => {
+    const novel = testNovel({ id: 'partial', totalChapters: 3, lastReadChapterIndex: 3, lastReadProgress: 1 });
+    const selection = { query: '', filter: 'reading' as const, sort: 'recent' as const };
+    const base = buildLibraryCollectionModel({
+      novels: [novel],
+      ...selection,
+      readState: { hasReadActivity: () => true, isFinished: () => true },
+    });
+    expect(base.visibleBooks).toHaveLength(0);
+    expect(applySourceProgress(base, undefined, selection).filterCounts.finished).toBe(1);
+    const progress = new Map([
+      [
+        'partial',
+        {
+          readCount: position,
+          totalCount: 40,
+          progress: position / 40,
+          sourcePosition: { episodeNumber: position, position, total: 40, progress: position / 40 },
+        },
+      ],
+    ]);
+    const reading = applySourceProgress(base, progress, selection);
+    const finished = applySourceProgress(base, progress, { ...selection, filter: 'finished' });
+    expect(reading.visibleBooks).toHaveLength(position === 6 ? 1 : 0);
+    expect(finished.visibleBooks).toHaveLength(position === 40 ? 1 : 0);
+    expect(reading.filterCounts.reading).toBe(position === 6 ? 1 : 0);
+    expect(reading.filterCounts.finished).toBe(position === 40 ? 1 : 0);
+    const view = reading.booksByNovelId.get('partial')!;
+    expect(view.isFinished).toBe(position === 40);
+    expect(view.readingStatusLabel).toBe(position === 40 ? '완독' : '읽는 중');
+    expect(view.directActionLabel).toBe('이어 읽기');
+    expect(view.bookProgress).toBe(position / 40);
+    expect(withSourceProgress(base.booksByNovelId.get('partial')!, progress.get('partial'))).toEqual(view);
+    expect(view.novel).toBe(novel);
+    expect(novel.lastReadProgress).toBe(1);
+  },
+);
+
+it('preserves completion semantics for source formats without sourcePosition', () => {
+  const book = buildLibraryCollectionModel({
+    novels: [testNovel()],
+    query: '',
+    filter: 'all',
+    sort: 'recent',
+    readState: { hasReadActivity: () => true, isFinished: () => true },
+  }).visibleBooks[0]!;
+  expect(withSourceProgress(book, { readCount: 2, totalCount: 40, progress: 0.05 }).isFinished).toBe(true);
+});
+
+it('preserves known local progress when only a visit and no source denominator is available', () => {
+  const book = collection().visibleBooks[0]!;
+  const result = withSourceProgress(book, { readCount: 0, totalCount: 0, progress: 0, lastReadAt: '2026-09-20' });
+  expect(result.bookProgress).toBe(book.bookProgress);
+  expect(result.readingCounts).toEqual(book.readingCounts);
+  expect(result.activityAt).toBe('2026-09-20');
+});

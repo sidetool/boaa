@@ -4114,3 +4114,68 @@ describe('ui-next reading-only import notifications', () => {
     }
   });
 });
+
+it.each([
+  ['trash', 'effect'],
+  ['restore', 'effect'],
+  ['trash', 'retry'],
+  ['restore', 'retry'],
+] as const)('older snapshots cannot undo single-work %s via %s', async (action, loader) => {
+  const now = '2026-10-01T00:00:00.000Z';
+  const subscription: ExternalSourceSubscriptionRecord = {
+    id: externalSourceSubscriptionId(SOURCE_ID, 'fixture-account', 'manga:1'),
+    connectorId: SOURCE_ID,
+    accountConnectionId: 'fixture-account',
+    collectionRemoteId: 'manga:1',
+    ...(action === 'restore' ? { deletedAt: now } : {}),
+    navigationRef: 'manga:1',
+    title: 'Synthetic work',
+    knownReleaseIds: ['work-1'],
+    newReleaseIds: [],
+    availableReleaseCount: 1,
+    createdAt: now,
+    updatedAt: now,
+    lastCheckedAt: now,
+    schemaVersion: 1,
+  };
+  const h = await createHarness({
+    downloadedContent: '',
+    serial: true,
+    libraryBooks: async () => [],
+    subscriptions: [subscription],
+  });
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  h.state.listReleasePreferences = vi.fn(async () => {
+    await gate;
+    return [];
+  });
+  try {
+    let retry: Promise<void> | undefined;
+    if (loader === 'effect') await h.refreshLibrary(1);
+    else
+      await act(async () => {
+        retry = h.controller.retryLibrary!();
+      });
+    expect(h.state.listReleasePreferences).toHaveBeenCalledOnce();
+    await act(async () =>
+      action === 'trash'
+        ? h.controller.removeLibraryWork(subscription)
+        : h.controller.restoreLibraryWork!(subscription.id),
+    );
+    expect(Boolean(h.subscriptions[0].deletedAt)).toBe(action === 'trash');
+    expect(Boolean(h.controller.libraryWorks[0].deletedAt)).toBe(action === 'trash');
+    await act(async () => {
+      release();
+      await retry;
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(Boolean(h.subscriptions[0].deletedAt)).toBe(action === 'trash');
+    expect(Boolean(h.controller.libraryWorks[0].deletedAt)).toBe(action === 'trash');
+  } finally {
+    release();
+    await act(async () => h.renderer.unmount());
+  }
+});

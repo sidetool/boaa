@@ -146,8 +146,7 @@ export function UiNextLibraryScreen({ model, actions, notice, navigation, adapte
   const layout: TileLayout = model.viewMode;
   const isList = layout === 'list' || layout === 'text';
   const counts = adapter.filterCounts;
-  const total =
-    collection.totalBooks + (model.externalSources.libraryWorks?.filter((work) => !work.deletedAt).length ?? 0);
+  const total = collection.totalBooks;
   const activeShelf = management.shelves.find((shelf) => shelf.id === management.activeShelfId);
   const emptyLibrary =
     model.bootstrap.status === 'ready' &&

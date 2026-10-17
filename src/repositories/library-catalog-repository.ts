@@ -7,6 +7,11 @@ export interface CatalogMutationReceipt {
   readonly changedAt: string;
 }
 
+export interface ShelfOrderTarget {
+  readonly id: string;
+  readonly expectedRevision: number;
+}
+
 export interface ShelfMutationReceipt {
   readonly shelf: Shelf;
   readonly operation: 'created' | 'updated' | 'deleted';
@@ -56,6 +61,7 @@ export interface LibraryCatalogRepository {
     patch: { readonly name?: string; readonly color?: string | null; readonly sortOrder?: number },
     expectedRevision?: number,
   ): Promise<ShelfMutationReceipt>;
+  reorderShelves(order: readonly ShelfOrderTarget[]): Promise<Shelf[]>;
   deleteShelf(shelfId: string, expectedRevision?: number): Promise<ShelfMutationReceipt>;
   setShelfMembership(shelfId: string, bookId: string, included: boolean): Promise<void>;
   applyBatch(

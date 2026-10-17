@@ -3,7 +3,7 @@ import type {
   ExternalSourceController,
   ExternalSourceLibraryWork,
 } from '../external-sources/useExternalSourceController';
-import type { LibraryFilter, LibrarySort } from '../library/library-screen-model';
+import { libraryActivityAt, type LibraryFilter, type LibrarySort } from '../library/library-screen-model';
 import { useScreenMotion } from '../navigation/screen-motion';
 import type { BookWorkspaceState } from './book-workspace-contract';
 
@@ -46,8 +46,8 @@ export function visibleRemoteLibraryWorks(
     .sort((left, right) => {
       if (view.sort === 'title') return left.title.localeCompare(right.title, 'ko');
       if (view.sort === 'added') return right.createdAt.localeCompare(left.createdAt);
-      return (progress?.get(right.id)?.lastReadAt ?? right.updatedAt).localeCompare(
-        progress?.get(left.id)?.lastReadAt ?? left.updatedAt,
+      return libraryActivityAt(right.createdAt, progress?.get(right.id)?.lastReadAt).localeCompare(
+        libraryActivityAt(left.createdAt, progress?.get(left.id)?.lastReadAt),
       );
     });
 }

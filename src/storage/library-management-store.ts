@@ -8,6 +8,7 @@ import type {
   BatchLibraryTarget,
   CatalogMutationReceipt,
   ShelfMutationReceipt,
+  ShelfOrderTarget,
 } from '../repositories/library-catalog-repository';
 import { requestToPromise, transactionDone } from './indexeddb-transaction';
 import { LIBRARY_MANAGEMENT_STORES } from './library-management-schema';
@@ -177,6 +178,58 @@ export async function updateLibraryShelf(
   await queueSyncEventInTransaction(tx, 'shelf_updated', jsonValue({ shelf }), { entityId: shelf.id });
   await done;
   return { shelf, operation: 'updated' };
+}
+
+// The complete revision-fenced order also repairs ranks left tied by older clients.
+export async function reorderLibraryShelves(order: readonly ShelfOrderTarget[]): Promise<Shelf[]> {
+  const db = await openReaderDb();
+  const tx = db.transaction([LIBRARY_MANAGEMENT_STORES.shelves, 'devices', 'sync_outbox', 'sync_state'], 'readwrite');
+  const done = transactionDone(tx);
+  // Attach immediately: request failures can abort the transaction before the catch runs.
+  void done.catch(() => undefined);
+  try {
+    const store = tx.objectStore(LIBRARY_MANAGEMENT_STORES.shelves);
+    const rows = await requestToPromise<Shelf[]>(store.getAll());
+    const byId = new Map(rows.map((shelf) => [shelf.id, shelf]));
+    if (
+      order.length > 10_001 ||
+      order.length !== rows.length ||
+      new Set(order.map((item) => item.id)).size !== order.length ||
+      order.some(
+        (item) => !Number.isSafeInteger(item.expectedRevision) || byId.get(item.id)?.revision !== item.expectedRevision,
+      )
+    ) {
+      throw new Error('책장 목록이 변경되었습니다. 새로고침 후 다시 시도해 주세요.');
+    }
+    const now = new Date().toISOString();
+    const shelves: Shelf[] = [];
+    for (const [sortOrder, item] of order.entries()) {
+      const current = byId.get(item.id)!;
+      const shelf =
+        current.sortOrder === sortOrder
+          ? current
+          : {
+              ...current,
+              sortOrder,
+              revision: current.revision + 1,
+              updatedAt: now,
+            };
+      shelves.push(shelf);
+      if (shelf === current) continue;
+      await requestToPromise(store.put(shelf));
+      await queueSyncEventInTransaction(tx, 'shelf_updated', jsonValue({ shelf }), { entityId: shelf.id });
+    }
+    await done;
+    return shelves;
+  } catch (error) {
+    try {
+      tx.abort();
+    } catch {
+      /* A failed request may already have aborted. */
+    }
+    await done.catch(() => undefined);
+    throw error;
+  }
 }
 
 export async function deleteLibraryShelf(shelfId: string, expectedRevision?: number): Promise<ShelfMutationReceipt> {

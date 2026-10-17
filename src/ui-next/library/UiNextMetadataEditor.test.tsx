@@ -44,6 +44,7 @@ function controller(overrides: Partial<LibraryManagementController> = {}): Libra
     selectBooks: vi.fn(),
     clearSelection: vi.fn(),
     createShelf: vi.fn().mockResolvedValue(undefined),
+    reorderShelves: vi.fn().mockResolvedValue(undefined),
     updateShelf: vi.fn().mockResolvedValue(undefined),
     deleteShelf: vi.fn().mockResolvedValue(undefined),
     setMembership: vi.fn().mockResolvedValue(undefined),

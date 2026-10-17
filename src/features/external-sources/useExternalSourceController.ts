@@ -3492,6 +3492,7 @@ export function useExternalSourceController(options: UseExternalSourceController
       try {
         const next = await changeSourceLibraryTrash(optionsRef.current.state, id, action, clearTrashedWorkHistory);
         if (!mountedRef.current) return;
+        libraryLoadGeneration.current += 1;
         setSubscriptions((current) => [...current.filter((item) => item.id !== id), ...(next ? [next] : [])]);
         if (action === 'trash') setOpen(false);
         if (action === 'purge') await refreshLocalProjection();

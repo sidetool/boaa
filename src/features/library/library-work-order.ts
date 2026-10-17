@@ -1,5 +1,5 @@
 import type { LibraryExternalWorkView } from './library-screen-contract';
-import type { LibraryBookView, LibrarySort } from './library-screen-model';
+import { libraryActivityAt, type LibraryBookView, type LibrarySort } from './library-screen-model';
 
 export type LibraryWorkItem =
   | { kind: 'book'; key: string; book: LibraryBookView }
@@ -19,7 +19,7 @@ export function orderedLibraryWorks(
   const bookActivity = (book: LibraryBookView) => {
     const stream = sourceActivity?.get(book.novel.id)?.lastReadAt;
     const local = book.novel.lastReadAt;
-    return stream && local ? (stream > local ? stream : local) : (stream ?? local ?? book.novel.updatedAt);
+    return libraryActivityAt(book.novel.createdAt, stream, local, book.activityAt);
   };
   const fields = (item: LibraryWorkItem) =>
     item.kind === 'book'
@@ -28,7 +28,11 @@ export function orderedLibraryWorks(
           addedAt: item.book.novel.createdAt,
           activityAt: bookActivity(item.book),
         }
-      : { title: item.work.title, addedAt: item.work.addedAt, activityAt: item.work.lastReadAt ?? item.work.updatedAt };
+      : {
+          title: item.work.title,
+          addedAt: item.work.addedAt,
+          activityAt: libraryActivityAt(item.work.addedAt, item.work.lastReadAt),
+        };
   return items.sort((left, right) => {
     const a = fields(left),
       b = fields(right);

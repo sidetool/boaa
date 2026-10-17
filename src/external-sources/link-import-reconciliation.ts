@@ -1,6 +1,6 @@
 import type { Novel } from '../domain/types';
 import type { ExternalSourceLink } from './contracts';
-import type { ExternalSourceLocalState } from './local-state';
+import type { ExternalSourceLocalState, MissingBookHistoryContext } from './local-state';
 
 export const EXTERNAL_SOURCE_PENDING_INTENT_LEASE_MS = 30 * 60_000;
 const EXTERNAL_SOURCE_PENDING_CLOCK_SKEW_MS = 5 * 60_000;
@@ -8,6 +8,7 @@ const EXTERNAL_SOURCE_PENDING_CLOCK_SKEW_MS = 5 * 60_000;
 export interface PendingExternalSourceLinkReconciliationOptions {
   /** Only complete, authoritative catalogs may prove permanent deletion. */
   readonly catalogIncludesTrash?: boolean;
+  readonly history?: MissingBookHistoryContext;
   readonly resolveImporterApplied?: (
     staged: readonly ExternalSourceLink[],
     novel: Novel,
@@ -234,6 +235,7 @@ export async function reconcilePendingExternalSourceLinks(
   if (options.catalogIncludesTrash && state.removeMissingBookLinks) {
     await state.removeMissingBookLinks(
       reconciled.filter((link) => !link.pendingImport && !novelById.has(link.localBookId)),
+      options.history,
     );
     return state.listLinks();
   }

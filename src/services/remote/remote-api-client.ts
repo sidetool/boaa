@@ -891,6 +891,22 @@ export class RemoteApiClient {
     return this.request('/shelves', { method: 'POST', body: JSON.stringify(input) });
   }
 
+  async reorderShelves(
+    order: readonly { readonly id: string; readonly expectedRevision: number }[],
+  ): Promise<{ shelves: JsonRecord[] }> {
+    try {
+      return await this.request('/shelves/order', { method: 'PUT', body: JSON.stringify({ order }) });
+    } catch (error) {
+      if (error instanceof RemoteApiError && [404, 405, 501].includes(error.status)) {
+        throw new RemoteApiError(
+          '이 서버는 책장 순서 변경을 지원하지 않습니다. 서버를 업데이트해 주세요.',
+          error.status,
+        );
+      }
+      throw error;
+    }
+  }
+
   updateShelf(
     shelfId: string,
     patch: { name?: string; color?: string | null; sortOrder?: number; expectedRevision?: number },

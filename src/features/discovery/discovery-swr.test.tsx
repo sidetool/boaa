@@ -108,3 +108,37 @@ it('shows dedicated-list disk items before schema revalidation without changing 
   });
   expect(state.items).toEqual(page('new').items);
 });
+
+it('retains first-page items after a later-page failure and retries the requested depth without duplicates', async () => {
+  const first = { ...page('first'), nextCursor: 'next' };
+  const second = { items: [...first.items, ...page('second').items], nextCursor: 'third' };
+  let fail = true;
+  const session = {
+    key: () => 'pagination-retry-fixture',
+    peek: () => undefined,
+    restore: async () => undefined,
+    list: vi.fn(async (_source, input) => {
+      if (!input.cursor) return first;
+      if (fail) throw new Error('fixture offline');
+      return second;
+    }),
+  } as unknown as DiscoverySession;
+  let state!: ReturnType<typeof useDiscoveryPages>;
+  function Probe() {
+    state = useDiscoveryPages(session, section.sourceId, {}, 0, true);
+    return null;
+  }
+  await act(async () => {
+    renderer = create(<Probe />);
+  });
+  await act(async () => state.loadMore());
+  expect(state.items).toEqual(first.items);
+  expect(state.error).toBe('fixture offline');
+  expect(state.more).toBe(true);
+  fail = false;
+  await act(async () => state.retry());
+  expect(state.items.map((item) => item.title)).toEqual(['first', 'second']);
+  expect(state.error).toBe('');
+  expect(state.more).toBe(true);
+  expect(session.list).toHaveBeenLastCalledWith(section.sourceId, { cursor: 'next' }, true);
+});

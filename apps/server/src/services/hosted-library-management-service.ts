@@ -8,6 +8,7 @@ import type {
   BatchLibraryItemResult,
   BatchLibraryReceipt,
   BatchLibraryTarget,
+  ShelfOrderTarget,
 } from '../../../../src/repositories/library-catalog-repository.js';
 import { createServerRevision, insertServerSyncEvent } from '../routes/books/sync-event-repository.js';
 
@@ -101,6 +102,9 @@ export async function createHostedShelf(pool: pg.Pool, config: ServerConfig, inp
   const client = await pool.connect();
   try {
     await client.query('begin');
+    await client.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [
+      `shelf-order:${config.defaultUserId}`,
+    ]);
     const order = await client.query<{ next: number }>(
       'select coalesce(max(sort_order), -1) + 1 as next from shelves where user_id = $1',
       [config.defaultUserId],
@@ -135,6 +139,9 @@ export async function updateHostedShelf(
   const client = await pool.connect();
   try {
     await client.query('begin');
+    await client.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [
+      `shelf-order:${config.defaultUserId}`,
+    ]);
     const result = await client.query(
       `update shelves set name = coalesce($1, name),
          color = case when $2 then $3 else color end,
@@ -163,6 +170,52 @@ export async function updateHostedShelf(
   }
 }
 
+export async function reorderHostedShelves(pool: pg.Pool, config: ServerConfig, order: readonly ShelfOrderTarget[]) {
+  const client = await pool.connect();
+  try {
+    await client.query('begin');
+    await client.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [
+      `shelf-order:${config.defaultUserId}`,
+    ]);
+    const result = await client.query('select * from shelves where user_id = $1 order by id for update', [
+      config.defaultUserId,
+    ]);
+    const byId = new Map(result.rows.map((row) => [String(row.id), mapShelf(row)]));
+    if (
+      order.length > 10_001 ||
+      order.length !== byId.size ||
+      new Set(order.map((item) => item.id)).size !== order.length ||
+      order.some(
+        (item) => !Number.isSafeInteger(item.expectedRevision) || byId.get(item.id)?.revision !== item.expectedRevision,
+      )
+    ) {
+      throw new Error('Shelf list was changed; refresh and retry');
+    }
+    const shelves: Shelf[] = [];
+    for (const [sortOrder, item] of order.entries()) {
+      const current = byId.get(item.id)!;
+      if (current.sortOrder === sortOrder) {
+        shelves.push(current);
+        continue;
+      }
+      const updated = await client.query(
+        'update shelves set sort_order = $1, revision = revision + 1, updated_at = now() where id = $2 and user_id = $3 returning *',
+        [sortOrder, item.id, config.defaultUserId],
+      );
+      const shelf = mapShelf(updated.rows[0]);
+      shelves.push(shelf);
+      await emitShelfEvent(client, config.defaultUserId, 'shelf_updated', shelf.id, { shelf }, shelf.updatedAt);
+    }
+    await client.query('commit');
+    return shelves;
+  } catch (error) {
+    await client.query('rollback').catch(() => undefined);
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
 export async function deleteHostedShelf(
   pool: pg.Pool,
   config: ServerConfig,
@@ -172,6 +225,9 @@ export async function deleteHostedShelf(
   const client = await pool.connect();
   try {
     await client.query('begin');
+    await client.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [
+      `shelf-order:${config.defaultUserId}`,
+    ]);
     const result = await client.query(
       `delete from shelves where id = $1 and user_id = $2 and ($3::bigint is null or revision = $3) returning *`,
       [shelfId, config.defaultUserId, expectedRevision ?? null],

@@ -181,14 +181,6 @@ function SourceView({
         </div>
       )}
 
-      {view.data.error && !view.data.hasPage && (
-        <p className="un-discover-note" role="status">
-          {view.data.error}
-          <button type="button" className="un-btn is-text is-sm" onClick={view.data.retry}>
-            다시 시도
-          </button>
-        </p>
-      )}
       <div className={cx('un-grid', `is-${density}`, 'un-discover-grid')} aria-busy={view.data.busy}>
         {view.data.items.map((item) => (
           <Poster
@@ -201,6 +193,14 @@ function SourceView({
         ))}
         {!view.data.hasPage && view.data.busy && <SkeletonPosters count={12} />}
       </div>
+      {view.data.error && (
+        <p className="un-discover-note" role="status">
+          {view.data.error}
+          <button type="button" className="un-btn is-text is-sm" onClick={view.data.retry}>
+            다시 시도
+          </button>
+        </p>
+      )}
       {view.data.hasPage && !view.data.items.length && <p className="un-discover-note">조건에 맞는 작품이 없어요.</p>}
       {view.data.more && !view.data.error && (
         <div className="un-discover-more">

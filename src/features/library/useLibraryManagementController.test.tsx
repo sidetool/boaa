@@ -1,6 +1,7 @@
 import { act, create, type ReactTestRenderer } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Novel, Shelf } from '../../domain/types';
+import { useShelfEditorModel, type ShelfEditorModel } from './use-shelf-editor-model';
 import { readLibraryViewPreferences, saveLibraryViewPreferences } from './library-view-preferences';
 import type { BookAssetRepository } from '../../repositories/book-asset-repository';
 import type { LibraryCatalogRepository } from '../../repositories/library-catalog-repository';
@@ -29,14 +30,18 @@ async function harness(input: {
   getNovel?: () => Promise<Novel | undefined>;
   patchMetadata?: LibraryCatalogRepository['patchMetadata'];
   listShelves?: LibraryCatalogRepository['listShelves'];
+  reorderShelves?: LibraryCatalogRepository['reorderShelves'];
 }) {
   let controller!: LibraryManagementController;
+  let editor!: ShelfEditorModel;
   let renderer!: ReactTestRenderer;
   const notify = vi.fn();
   const refreshNovels = vi.fn(async () => undefined);
   const catalog = {
     listShelves: input.listShelves ?? vi.fn(async () => []),
     listShelfMemberships: vi.fn(async () => []),
+    reorderShelves: input.reorderShelves ?? vi.fn(async () => []),
+    updateShelf: vi.fn(),
     patchMetadata:
       input.patchMetadata ??
       vi.fn(async (bookId: string, _patch: unknown, expectedRevision?: number) => ({
@@ -57,12 +62,16 @@ async function harness(input: {
       notify,
       confirm: vi.fn(() => true),
     });
+    editor = useShelfEditorModel(controller);
     return null;
   }
   await act(async () => {
     renderer = create(<Harness />);
   });
   return {
+    get editor() {
+      return editor;
+    },
     get controller() {
       return controller;
     },
@@ -457,5 +466,37 @@ it('renames only the title using the latest metadata revision and rejects a comp
   });
   expect(mounted.catalog.patchMetadata).toHaveBeenCalledTimes(1);
   expect(mounted.controller.busy).toBe(false);
+  await act(async () => mounted.renderer.unmount());
+});
+
+it.each([false, true])('reports one atomic reorder outcome (failure=%s) through the actual editor', async (fail) => {
+  const shelves: Shelf[] = ['a', 'b'].map((id, sortOrder) => ({
+    id,
+    name: id,
+    sortOrder,
+    revision: 1,
+    createdAt: '2026-10-01',
+    updatedAt: '2026-10-01',
+  }));
+  const listShelves = vi.fn(async () => shelves);
+  const reorderShelves = vi.fn(async () => {
+    if (fail) throw new Error('atomic reorder failed');
+    return [...shelves].reverse();
+  });
+  const mounted = await harness({ current: novel(), listShelves, reorderShelves });
+  listShelves.mockClear();
+  await act(async () => mounted.editor.moveShelf(1, -1));
+  expect(reorderShelves).toHaveBeenCalledExactlyOnceWith([
+    { id: 'b', expectedRevision: 1 },
+    { id: 'a', expectedRevision: 1 },
+  ]);
+  expect(mounted.catalog.updateShelf).not.toHaveBeenCalled();
+  expect(mounted.notify).toHaveBeenCalledTimes(1);
+  expect(mounted.notify).toHaveBeenCalledWith(
+    fail ? 'atomic reorder failed' : '책장 순서를 변경했습니다.',
+    fail ? 'danger' : 'success',
+  );
+  expect(listShelves).toHaveBeenCalledTimes(fail ? 0 : 1);
+  if (fail) expect(mounted.controller.error).toBe('atomic reorder failed');
   await act(async () => mounted.renderer.unmount());
 });

@@ -75,6 +75,10 @@ export class RemoteLibraryCatalogRepository implements LibraryCatalogRepository 
     return { shelf: shelf((await this.client.createShelf(input)).shelf), operation: 'created' as const };
   }
 
+  async reorderShelves(order: Parameters<LibraryCatalogRepository['reorderShelves']>[0]) {
+    return (await this.client.reorderShelves(order)).shelves.map(shelf);
+  }
+
   async updateShelf(
     shelfId: string,
     patch: Parameters<LibraryCatalogRepository['updateShelf']>[1],

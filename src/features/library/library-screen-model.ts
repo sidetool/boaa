@@ -18,6 +18,7 @@ export interface LibraryBookView {
   requestMetadata?(): Promise<void>;
   sourcePosition?: import('../external-sources/source-library-position').SourceLibraryPosition;
   novel: Novel;
+  activityAt?: string;
   coverClass: string;
   isFinished: boolean;
   isUnread: boolean;
@@ -58,8 +59,18 @@ export function formatReadingDuration(totalSeconds: number): string {
   return `${remainingSeconds}초`;
 }
 
+/** Metadata writes never become reading activity; unread works retain their added position. */
+export function libraryActivityAt(addedAt: string, ...visits: (string | undefined)[]): string {
+  return (
+    visits
+      .filter((visit): visit is string => Boolean(visit))
+      .sort()
+      .at(-1) ?? addedAt
+  );
+}
+
 function activityAt(book: LibraryBookView): string {
-  return book.novel.lastReadAt ?? book.novel.updatedAt;
+  return libraryActivityAt(book.novel.createdAt, book.novel.lastReadAt, book.activityAt);
 }
 
 function readingPositionLabel(novel: Novel, isUnread: boolean): string {
@@ -121,7 +132,11 @@ export function buildLibraryCatalogProjection(
   novels: readonly Novel[],
   readState: NovelReadStateSelectors,
 ): LibraryCatalogProjection {
-  const books = novels.map((novel) => buildLibraryBookView(novel, readState));
+  return buildLibraryViewCatalog(novels.map((novel) => buildLibraryBookView(novel, readState)));
+}
+
+/** Aggregate effective display states before applying search and status selection. */
+export function buildLibraryViewCatalog(books: readonly LibraryBookView[]): LibraryCatalogProjection {
   const activeBooks = books.filter((book) => !book.novel.deletedAt);
   const booksByNovelId = new Map(books.map((book) => [book.novel.id, book]));
   const recentBooks = activeBooks

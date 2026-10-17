@@ -204,24 +204,39 @@ export class DiscoverySession {
     return this.registry.peekExternalSourceCover?.(key.connectorId as ExtensionContributionId, this.context, key);
   }
   async cover(key: ExternalItemKey, signal: AbortSignal) {
-    // Memory hits need ownership, but must not wait behind unrelated network downloads.
-    if (this.peekCover(key))
-      return this.registry.resolveExternalSourceCover?.(
+    const cached = this.peekCover(key);
+    const consumer = AbortSignal.any([signal, this.lifetime.signal, ...(cached ? [] : [AbortSignal.timeout(30_000)])]);
+    consumer.throwIfAborted();
+    const resolve = () =>
+      this.registry.resolveExternalSourceCover?.(
         key.connectorId as ExtensionContributionId,
         this.context,
         key,
-        AbortSignal.any([signal, this.lifetime.signal]),
+        consumer,
       );
-    if (this.coverRunning >= 4) await new Promise<void>((resolve) => this.coverQueue.push(resolve));
-    else this.coverRunning++;
+    // Cached display stays immediate. SessionCoverCache separately bounds actual
+    // fills/revalidation across sessions, including loaders that ignore abort.
+    if (cached) return resolve();
+    // Keep admission bounded for registry implementations without a shared cache.
+    if (this.coverRunning >= 4) {
+      await new Promise<void>((resolve, reject) => {
+        const start = () => {
+          consumer.removeEventListener('abort', cancel);
+          resolve();
+        };
+        const cancel = () => {
+          const index = this.coverQueue.indexOf(start);
+          if (index >= 0) this.coverQueue.splice(index, 1);
+          reject(consumer.reason);
+        };
+        this.coverQueue.push(start);
+        consumer.addEventListener('abort', cancel, { once: true });
+        if (consumer.aborted) cancel();
+      });
+    } else this.coverRunning++;
     try {
-      signal.throwIfAborted();
-      return await this.registry.resolveExternalSourceCover?.(
-        key.connectorId as ExtensionContributionId,
-        this.context,
-        key,
-        AbortSignal.any([signal, this.lifetime.signal, AbortSignal.timeout(30_000)]),
-      );
+      consumer.throwIfAborted();
+      return await resolve();
     } finally {
       const next = this.coverQueue.shift();
       if (next) next();

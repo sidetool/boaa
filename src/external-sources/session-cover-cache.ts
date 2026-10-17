@@ -34,6 +34,8 @@ export class SessionCoverCache {
   private pending = new Map<string, Promise<string | undefined>>();
   private missing = new Map<string, number>();
   private lifetime = new AbortController();
+  private running = 0;
+  private queue: Array<() => void> = [];
   private waiters = new Map<string, Set<AbortSignal>>();
   private pins = new Map<string, Map<AbortSignal, () => void>>();
   constructor(
@@ -41,6 +43,33 @@ export class SessionCoverCache {
     private maxEntries = 400,
     private storage?: CoverStorage,
   ) {}
+  /** A permit belongs to actual I/O, even if a loader ignores cancellation. */
+  private async run<T>(signal: AbortSignal, task: () => Promise<T>): Promise<T> {
+    if (this.running >= 4) {
+      await new Promise<void>((resolve, reject) => {
+        const start = () => {
+          signal.removeEventListener('abort', cancel);
+          resolve();
+        };
+        const cancel = () => {
+          const index = this.queue.indexOf(start);
+          if (index >= 0) this.queue.splice(index, 1);
+          reject(signal.reason);
+        };
+        this.queue.push(start);
+        signal.addEventListener('abort', cancel, { once: true });
+        if (signal.aborted) cancel();
+      });
+    } else this.running++;
+    try {
+      signal.throwIfAborted();
+      return await task();
+    } finally {
+      const next = this.queue.shift();
+      if (next) next();
+      else this.running--;
+    }
+  }
   /** Synchronous render path; resolve() acquires ownership and refreshes stale entries. */
   peek(key: string): string | undefined {
     const entry = this.entries.get(key);
@@ -136,8 +165,17 @@ export class SessionCoverCache {
       const local = new AbortController();
       this.operations.set(key, local);
       const operation = AbortSignal.any([generation.signal, local.signal, AbortSignal.timeout(30_000)]);
+      const abort = () => {
+        local.abort(operation.reason);
+        if (this.operations.get(key) === local) {
+          this.operations.delete(key);
+          this.pending.delete(key);
+          this.waiters.delete(key);
+        }
+      };
+      operation.addEventListener('abort', abort, { once: true });
       request = (async () => {
-        const blob = await load(operation);
+        const blob = await this.run(operation, () => load(operation));
         operation.throwIfAborted();
         if (!blob || blob.size === 0) {
           this.storeMissing(key);
@@ -184,6 +222,7 @@ export class SessionCoverCache {
       this.pending.set(key, request);
       void request
         .finally(() => {
+          operation.removeEventListener('abort', abort);
           if (this.pending.get(key) === request) {
             this.pending.delete(key);
             this.operations.delete(key);
@@ -192,23 +231,51 @@ export class SessionCoverCache {
         })
         .catch(() => undefined);
     }
+    // Retained URLs return immediately, but their consumer owns the refresh until
+    // completion or abort. The last owner cancels queued work and the loader signal.
+    const local = this.operations.get(key)!;
+    const release = () => {
+      waiters.delete(signal);
+      if (!waiters.size && this.operations.get(key) === local) {
+        this.operations.delete(key);
+        this.pending.delete(key);
+        this.waiters.delete(key);
+        local.abort();
+      }
+    };
+    signal.addEventListener('abort', release, { once: true });
+    const cleanupOwner = () => {
+      signal.removeEventListener('abort', release);
+      waiters.delete(signal);
+    };
+    // Invalidation/clear also release ownership listeners if the loader ignores abort.
+    const ownership = AbortSignal.any([local.signal, lifetime.signal]);
+    ownership.addEventListener('abort', cleanupOwner, { once: true });
+    void request
+      .finally(() => {
+        cleanupOwner();
+        ownership.removeEventListener('abort', cleanupOwner);
+      })
+      .catch(() => undefined);
     if (retained) {
       void request.catch(() => undefined);
       this.pin(retained.url, signal);
       return retained.url;
     }
-    // Each consumer may leave independently; the shared bounded request can finish for other consumers.
+    // Reject consumers promptly, without freeing the actual operation's permit.
+    const delivery = AbortSignal.any([signal, ownership]);
     return new Promise((resolve, reject) => {
       const cancel = () => {
         cleanup();
-        reject(signal.reason);
+        reject(delivery.reason);
       };
-      const cleanup = () => signal.removeEventListener('abort', cancel);
-      signal.addEventListener('abort', cancel, { once: true });
+      const cleanup = () => delivery.removeEventListener('abort', cancel);
+      delivery.addEventListener('abort', cancel, { once: true });
+      if (delivery.aborted) cancel();
       request.then(
         (url) => {
           cleanup();
-          if (signal.aborted) reject(signal.reason);
+          if (delivery.aborted) reject(delivery.reason);
           else {
             if (url) this.pin(url, signal);
             resolve(url);

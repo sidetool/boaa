@@ -9,8 +9,9 @@ export function useShelfEditorModel(controller: LibraryManagementController) {
     const shelf = controller.shelves[index];
     const adjacent = controller.shelves[index + direction];
     if (!shelf || !adjacent) return;
-    await controller.updateShelf(shelf, { sortOrder: adjacent.sortOrder });
-    await controller.updateShelf(adjacent, { sortOrder: shelf.sortOrder });
+    const ordered = [...controller.shelves];
+    [ordered[index], ordered[index + direction]] = [adjacent, shelf];
+    await controller.reorderShelves(ordered);
   };
   const create = () => controller.createShelf(newName, newColor).then(() => setNewName(''));
   const setDraft = (id: string, value: string) => setDrafts((old) => ({ ...old, [id]: value }));

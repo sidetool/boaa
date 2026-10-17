@@ -32,7 +32,7 @@ import type {
 } from '../../external-sources/local-state';
 import type { ImportProgress, ImportService } from '../../services/import/import-service';
 import type { BookAssetRepository } from '../../repositories/book-asset-repository';
-import type { ToastTone } from '../../shared/ui/ToastHost';
+import type { ToastTone } from '../../shared/ui/toast-controller';
 import type { SerialReleaseReadingState } from './serial-work-projection';
 import type { ImportTaskView } from '../import/import-task-projection';
 

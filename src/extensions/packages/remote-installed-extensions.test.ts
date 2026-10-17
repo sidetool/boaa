@@ -228,11 +228,50 @@ describe('remote package inventory and source client', () => {
       { connectorId: 'org.example.catalog.source', remoteId: 'work' },
       controller.signal,
     );
-    expect(requestBlob.mock.calls[0]?.[1]).toMatchObject({ signal: controller.signal });
+    const shared = requestBlob.mock.calls[0]?.[1]?.signal;
+    expect(shared?.aborted).toBe(false);
+    const rejected = expect(cover).rejects.toMatchObject({ name: 'AbortError' });
     request.mockResolvedValueOnce(inventory(2));
     await client.refresh();
     complete({ blob: new Blob(['image'], { type: 'image/png' }), headers: new Headers(), status: 200 });
-    await expect(cover).rejects.toThrow('package_generation_changed');
+    await rejected;
+    expect(shared?.aborted).toBe(true);
+    expect(
+      client.peekExternalSourceCover('org.example.catalog.source', context, {
+        connectorId: 'org.example.catalog.source',
+        remoteId: 'work',
+      }),
+    ).toBeUndefined();
+  });
+  it('aborts the hosted cover POST only after its last shared consumer leaves', async () => {
+    let complete!: (value: { blob: Blob }) => void;
+    const requestBlob = vi.fn(
+      (_path: string, _init?: RequestInit) =>
+        new Promise((resolve) => {
+          complete = resolve;
+        }),
+    );
+    const client = new RemoteInstalledExtensions({
+      request: async () => inventory(),
+      requestBlob,
+    } as unknown as RemoteApiClient);
+    await client.refresh();
+    const a = new AbortController(),
+      b = new AbortController();
+    const key = { connectorId: 'org.example.catalog.source', remoteId: 'shared-work' } as const;
+    const first = client.resolveExternalSourceCover(key.connectorId, context, key, a.signal).catch((error) => error);
+    const second = client.resolveExternalSourceCover(key.connectorId, context, key, b.signal).catch((error) => error);
+    const shared = requestBlob.mock.calls[0][1]!.signal!;
+    expect(requestBlob).toHaveBeenCalledOnce();
+    a.abort();
+    expect(await first).toBe(a.signal.reason);
+    expect(shared.aborted).toBe(false);
+    b.abort();
+    expect(await second).toBe(b.signal.reason);
+    expect(shared.aborted).toBe(true);
+    complete({ blob: new Blob(['image'], { type: 'image/png' }) });
+    await Promise.resolve();
+    expect(client.peekExternalSourceCover(key.connectorId, context, key)).toBeUndefined();
   });
   it('rejects raw JS as an installation file while preserving the JS authoring workflow', async () => {
     const request = vi.fn();

@@ -3,6 +3,7 @@ import type { ExternalSourceLocalState } from '../../external-sources/local-stat
 import {
   recoverSourceStreamVisits,
   acknowledgeSourceStreamVisit,
+  pendingSourceStreamPreferences,
 } from '../../external-sources/source-stream-visit-journal';
 import { clearSourceStreamPositions } from '../../external-sources/source-stream-history';
 import { releasePreferenceId, type SourceReleasePreference } from '../../external-sources/source-user-state';
@@ -81,4 +82,27 @@ export async function clearSourceWorkHistory(input: {
     ...(input.releaseIds ?? []).map((remoteId) => JSON.stringify([scope, externalItemKeyId({ ...work, remoteId })])),
   ]);
   await clearSourceWorkReadingTime(sourceWorkSessionId(scope, work));
+}
+
+/** Retry only device-history cleanup for atomically retired associations. Never reset newer visits. */
+export async function finishSourceAssociationPurges(
+  state: ExternalSourceLocalState,
+  settingsScope?: string,
+): Promise<void> {
+  for (const intent of (await state.listAssociationPurgeIntents?.()) ?? []) {
+    const { work, scope, resetAt, releaseIds } = intent;
+    if ((scope ?? 'local') !== (settingsScope ?? 'local')) continue;
+    // Cleanup is device-only: never replay another account's journal through the
+    // currently hydrated shared-state store, even after a crash/account switch.
+    for (const visit of pendingSourceStreamPreferences(scope)) {
+      if (belongsToSourceWork(visit.source, visit.collectionRemoteId, work) && visit.lastReadAt! <= resetAt)
+        acknowledgeSourceStreamVisit(scope, visit.source, visit.lastReadAt!);
+    }
+    clearSourceStreamPositions(
+      releaseIds.map((remoteId) => JSON.stringify([scope, externalItemKeyId({ ...work, remoteId })])),
+      Date.parse(resetAt),
+    );
+    await clearSourceWorkReadingTime(sourceWorkSessionId(scope, work), resetAt);
+    await state.acknowledgeAssociationPurgeIntent?.(intent);
+  }
 }

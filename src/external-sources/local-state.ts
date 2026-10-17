@@ -9,7 +9,8 @@ import type {
   ExternalSourceSelectionRecord,
 } from './contracts';
 import { createExternalSourceCredentialKey } from './device-credential-crypto';
-import { externalItemKeyId } from './contracts';
+import { externalItemKeyId, type ExternalItemKey } from './contracts';
+import { releasePreferenceId } from './source-user-state';
 import type { SourceDownloadQueue, SourceReleasePreference } from './source-user-state';
 import type {
   ExternalSourceSharedConnectionV1,
@@ -186,9 +187,24 @@ export function externalSourceSubscriptionId(
   return ['external-source-subscription', connectorId, accountConnectionId ?? '', collectionRemoteId].join('::');
 }
 
+export interface SourceAssociationPurgeIntent {
+  readonly id: string;
+  readonly work: ExternalItemKey;
+  readonly scope?: string;
+  readonly releaseIds: readonly string[];
+  readonly resetAt: string;
+}
+
+export interface MissingBookHistoryContext {
+  readonly scope?: string;
+  readonly preferences?: readonly SourceReleasePreference[];
+}
+
 export interface ExternalSourceLocalState {
   listReleasePreferences?(): Promise<SourceReleasePreference[]>;
   saveReleasePreferences?(records: readonly SourceReleasePreference[]): Promise<void>;
+  /** Atomically compare a journal visit with the current reset/visit timestamp and return the authoritative record. */
+  replaySourceStreamVisit?(visit: SourceReleasePreference): Promise<SourceReleasePreference>;
   listDownloadQueues?(): Promise<SourceDownloadQueue[]>;
   saveDownloadQueue?(queue: SourceDownloadQueue): Promise<void>;
   deleteDownloadQueue?(id: string): Promise<void>;
@@ -205,7 +221,9 @@ export interface ExternalSourceLocalState {
   saveLinks?(links: readonly ExternalSourceLink[]): Promise<void>;
   deleteLinks?(ids: readonly string[]): Promise<void>;
   /** Delete only unchanged links whose books were absent from a successful, trash-inclusive catalog read. */
-  removeMissingBookLinks?(expected: readonly ExternalSourceLink[]): Promise<void>;
+  removeMissingBookLinks?(expected: readonly ExternalSourceLink[], history?: MissingBookHistoryContext): Promise<void>;
+  listAssociationPurgeIntents?(): Promise<SourceAssociationPurgeIntent[]>;
+  acknowledgeAssociationPurgeIntent?(intent: SourceAssociationPurgeIntent): Promise<void>;
   replaceLinks?(links: readonly ExternalSourceLink[], deleteIds: readonly string[]): Promise<void>;
   acquirePendingLinks?(links: readonly ExternalSourceLink[]): Promise<boolean>;
   compareAndSwapPendingLinks?(
@@ -249,6 +267,30 @@ export class ExternalSourceLocalStateStore implements ExternalSourceLocalState {
     records.forEach((record) => tx.objectStore('browsePreferences').put(record));
     await transactionDone(tx);
     this.publishSharedChange();
+  }
+
+  async replaySourceStreamVisit(visit: SourceReleasePreference): Promise<SourceReleasePreference> {
+    if (
+      visit.id !== releasePreferenceId(visit.source) ||
+      !visit.lastReadAt ||
+      !Number.isFinite(Date.parse(visit.lastReadAt)) ||
+      visit.read !== true ||
+      visit.readingMode !== 'stream'
+    ) {
+      throw new Error('Invalid source stream visit');
+    }
+    const db = await openExternalSourceDb();
+    const tx = db.transaction('browsePreferences', 'readwrite');
+    const done = transactionDone(tx);
+    const store = tx.objectStore('browsePreferences');
+    const current = await requestToPromise<SourceReleasePreference | undefined>(store.get(visit.id));
+    const superseded =
+      current && ((current.readChangedAt ?? '') >= visit.lastReadAt || (current.lastReadAt ?? '') >= visit.lastReadAt);
+    const next = superseded ? current : { ...current, ...visit };
+    if (!superseded) store.put(next);
+    await done;
+    if (!superseded) this.publishSharedChange();
+    return next;
   }
 
   async listDownloadQueues(): Promise<SourceDownloadQueue[]> {
@@ -491,10 +533,28 @@ export class ExternalSourceLocalStateStore implements ExternalSourceLocalState {
     if (deleteIds.length > 0 || links.some((link) => !link.pendingImport)) this.publishSharedChange();
   }
 
-  async removeMissingBookLinks(expected: readonly ExternalSourceLink[]): Promise<void> {
+  async listAssociationPurgeIntents(): Promise<SourceAssociationPurgeIntent[]> {
+    const db = await openExternalSourceDb();
+    return requestToPromise(db.transaction('associationPurgeIntents').objectStore('associationPurgeIntents').getAll());
+  }
+
+  async acknowledgeAssociationPurgeIntent(intent: SourceAssociationPurgeIntent): Promise<void> {
+    const db = await openExternalSourceDb();
+    const tx = db.transaction('associationPurgeIntents', 'readwrite');
+    const done = transactionDone(tx);
+    const store = tx.objectStore('associationPurgeIntents');
+    const current = await requestToPromise<SourceAssociationPurgeIntent | undefined>(store.get(intent.id));
+    if (JSON.stringify(current) === JSON.stringify(intent)) store.delete(intent.id);
+    await done;
+  }
+
+  async removeMissingBookLinks(
+    expected: readonly ExternalSourceLink[],
+    history: MissingBookHistoryContext = {},
+  ): Promise<void> {
     if (expected.length === 0) return;
     const db = await openExternalSourceDb();
-    const tx = db.transaction(['links', 'subscriptions'], 'readwrite');
+    const tx = db.transaction(['links', 'subscriptions', 'browsePreferences', 'associationPurgeIntents'], 'readwrite');
     const done = transactionDone(tx);
     const store = tx.objectStore('links');
     const current = await Promise.all(
@@ -518,7 +578,85 @@ export class ExternalSourceLocalStateStore implements ExternalSourceLocalState {
     if (affected.size > 0) {
       const remaining = await requestToPromise<ExternalSourceLink[]>(store.getAll());
       remaining.forEach((link) => affected.delete(collectionKey(link) ?? ''));
-      affected.forEach((id) => tx.objectStore('subscriptions').delete(id));
+      const preferencesStore = tx.objectStore('browsePreferences');
+      const preferences = (await requestToPromise<SourceReleasePreference[]>(preferencesStore.getAll())).filter(
+        (p) => p.kind === 'releasePreference',
+      );
+      for (const id of affected) {
+        const association = removed.find((link) => collectionKey(link) === id)!;
+        const work = { ...association.source, remoteId: association.collectionRemoteId! };
+        const belongs = (p: SourceReleasePreference) =>
+          p.source.connectorId === work.connectorId &&
+          (p.source.accountConnectionId ?? '') === (work.accountConnectionId ?? '') &&
+          p.collectionRemoteId === work.remoteId;
+        const subscription = await requestToPromise<ExternalSourceSubscriptionRecord | undefined>(
+          tx.objectStore('subscriptions').get(id),
+        );
+        const receiptId = JSON.stringify([history.scope ?? 'local', id]);
+        const previousIntent = await requestToPromise<SourceAssociationPurgeIntent | undefined>(
+          tx.objectStore('associationPurgeIntents').get(receiptId),
+        );
+        const previousById = new Map(preferences.map((p) => [p.id, p]));
+        const targets = new Map<string, SourceReleasePreference>();
+        for (const p of [...(history.preferences ?? []), ...preferences].filter(belongs)) targets.set(p.id, p);
+        for (const link of removed.filter((link) => collectionKey(link) === id)) {
+          const key = releasePreferenceId(link.source);
+          if (!targets.has(key))
+            targets.set(key, {
+              ...previousById.get(key),
+              id: key,
+              kind: 'releasePreference',
+              source: link.source,
+              collectionRemoteId: work.remoteId,
+              updatedAt: link.linkedAt,
+            });
+        }
+        for (const remoteId of [...(subscription?.knownReleaseIds ?? []), ...(previousIntent?.releaseIds ?? [])]) {
+          const source = { ...work, remoteId };
+          const key = releasePreferenceId(source);
+          if (!targets.has(key))
+            targets.set(key, {
+              ...previousById.get(key),
+              id: key,
+              kind: 'releasePreference',
+              source,
+              collectionRemoteId: work.remoteId,
+              updatedAt: association.linkedAt,
+            });
+        }
+        const resetAt = new Date(
+          [...(history.preferences ?? []), ...targets.values()]
+            .filter(belongs)
+            .reduce(
+              (latest, p) =>
+                Math.max(
+                  latest,
+                  (Date.parse(p.readChangedAt ?? '') || 0) + 1,
+                  (Date.parse(p.lastReadAt ?? '') || 0) + 1,
+                ),
+              Date.now(),
+            ),
+        ).toISOString();
+        // Suppression and membership removal commit together. A failed device-history
+        // cleanup can retry without restoring the work or touching a later visit.
+        for (const p of targets.values())
+          preferencesStore.put({
+            ...p,
+            read: false,
+            readChangedAt: resetAt,
+            lastReadAt: undefined,
+            readingMode: undefined,
+            updatedAt: resetAt,
+          });
+        tx.objectStore('associationPurgeIntents').put({
+          id: receiptId,
+          work,
+          scope: history.scope,
+          releaseIds: [...targets.values()].map((p) => p.source.remoteId),
+          resetAt,
+        } satisfies SourceAssociationPurgeIntent);
+        tx.objectStore('subscriptions').delete(id);
+      }
     }
     await done;
     if (removed.length > 0) this.publishSharedChange();

@@ -124,6 +124,7 @@ export interface LibraryManagementController {
   selectBooks(bookIds: readonly string[]): void;
   clearSelection(): void;
   createShelf(name: string, color?: string): Promise<void>;
+  reorderShelves(shelves: readonly Shelf[]): Promise<void>;
   updateShelf(shelf: Shelf, patch: { name?: string; color?: string | null; sortOrder?: number }): Promise<void>;
   deleteShelf(shelf: Shelf): Promise<void>;
   setMembership(shelfId: string, bookId: string, included: boolean): Promise<void>;
@@ -281,6 +282,15 @@ export function useLibraryManagementController(
           await input.catalog!.createShelf({ name, color });
           await refresh();
         }, '책장을 만들었습니다.');
+      },
+      reorderShelves: async (orderedShelves) => {
+        if (!input.catalog) return;
+        await run(async () => {
+          await input.catalog!.reorderShelves(
+            orderedShelves.map((shelf) => ({ id: shelf.id, expectedRevision: shelf.revision })),
+          );
+          await refresh();
+        }, '책장 순서를 변경했습니다.');
       },
       updateShelf: async (shelf, patch) => {
         if (!input.catalog) return;

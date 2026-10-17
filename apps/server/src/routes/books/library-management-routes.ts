@@ -12,6 +12,7 @@ import {
   listHostedShelves,
   setHostedShelfMembership,
   updateHostedShelf,
+  reorderHostedShelves,
 } from '../../services/hosted-library-management-service.js';
 
 function record(value: unknown): Record<string, unknown> | undefined {
@@ -69,6 +70,32 @@ export async function registerLibraryManagementRoutes(
       return { shelf: await createHostedShelf(pool, config, { name: request.body.name, color: request.body.color }) };
     } catch (error) {
       return reply.code(409).send({ error: error instanceof Error ? error.message : 'shelf create failed' });
+    }
+  });
+
+  app.put<{ Body: { order?: unknown } }>('/api/shelves/order', async (request, reply) => {
+    const order = request.body?.order;
+    if (
+      !Array.isArray(order) ||
+      order.length > 10_001 ||
+      order.some((item) => {
+        const row = record(item);
+        return (
+          !row ||
+          typeof row.id !== 'string' ||
+          !row.id ||
+          !Number.isSafeInteger(row.expectedRevision) ||
+          Number(row.expectedRevision) < 0
+        );
+      }) ||
+      new Set(order.map((item) => item.id)).size !== order.length
+    ) {
+      return reply.code(400).send({ error: 'invalid shelf order' });
+    }
+    try {
+      return { shelves: await reorderHostedShelves(pool, config, order) };
+    } catch (error) {
+      return reply.code(409).send({ error: error instanceof Error ? error.message : 'shelf reorder failed' });
     }
   });
 

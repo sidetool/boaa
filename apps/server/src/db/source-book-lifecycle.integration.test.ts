@@ -17,7 +17,8 @@ import {
   externalSourceSubscriptionId,
   resetExternalSourceLocalStateForTests,
 } from '../../../../src/external-sources/local-state';
-import { reconcilePendingExternalSourceLinks } from '../../../../src/external-sources/link-import-reconciliation';
+import { loadSourceLibrary } from '../../../../src/features/external-sources/source-library-snapshot';
+import { releasePreferenceId } from '../../../../src/external-sources/source-user-state';
 import type { ExternalSourceLink } from '../../../../src/external-sources/contracts';
 
 const harness = await startPostgresIntegrationHarness();
@@ -95,19 +96,25 @@ describeWithPostgres('hosted source book trash and re-add lifecycle', () => {
           updatedAt: link.linkedAt,
           schemaVersion: 1 as const,
         };
-        const reconcile = async () => {
-          const links = await state.listLinks();
-          return reconcilePendingExternalSourceLinks(
-            state,
-            links,
-            await repository.listNovels({ includeTrash: true }),
-            Date.now(),
-            { catalogIncludesTrash: true },
-          );
-        };
+        const snapshot = () => loadSourceLibrary({ state, listNovels: (options) => repository.listNovels(options) });
+        const reconcile = async () => (await snapshot()).links;
         try {
           await state.saveLink(link);
           await state.saveSubscription(subscription);
+          await state.saveReleasePreferences([
+            {
+              id: releasePreferenceId(link.source),
+              kind: 'releasePreference',
+              source: link.source,
+              collectionRemoteId: 'series',
+              read: true,
+              readingMode: 'stream',
+              lastReadAt: link.linkedAt,
+              readChangedAt: link.linkedAt,
+              updatedAt: link.linkedAt,
+              lastReadWork: { title: 'Fixture' },
+            },
+          ]);
           expect((await repository.listNovels()).map((book) => book.id)).toEqual(['book']);
           await client.deleteBook('book');
           expect(await repository.listNovels()).toEqual([]);
@@ -126,6 +133,8 @@ describeWithPostgres('hosted source book trash and re-add lifecycle', () => {
           else expect((await client.emptyTrash()).purged).toBe(1);
           expect(await client.listTrashBooks()).toEqual({ books: [] });
           expect(await reconcile()).toEqual([]);
+          expect((await snapshot()).subscriptions).toEqual([]);
+          expect((await state.listReleasePreferences())[0].lastReadAt).toBeUndefined();
           expect(await new ExternalSourceLocalStateStore().listSubscriptions()).toEqual([]);
           expect((await pool.query('select book_id from chapters')).rows).toEqual([]);
           expect((await pool.query("select id from library_books where user_id = 'other'")).rows).toHaveLength(1);

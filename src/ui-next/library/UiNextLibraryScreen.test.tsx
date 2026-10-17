@@ -191,6 +191,7 @@ describe('library gestures and trash', () => {
           updatedAt: '2026-07-02',
         },
       ];
+    if (kind === 'external') screenModel.collection.totalBooks = 1;
     const toggleExternal = vi.fn();
     const { root, actions } = mount(screenModel, { toggleSelectedExternal: toggleExternal });
     const tile = byRole(root, 'button', `${chosen.title} 열기`);
@@ -282,4 +283,23 @@ describe('library gestures and trash', () => {
     expect(actions.books.open).not.toHaveBeenCalled();
     expect(actions.books.openExternal).not.toHaveBeenCalled();
   });
+});
+
+it.each([0, 1])('uses the controller total once with %i currently visible streaming works', (visible) => {
+  const screenModel = model([novel()]);
+  screenModel.collection.totalBooks = 3;
+  screenModel.externalSources.libraryWorks = visible
+    ? [
+        {
+          id: 'stream',
+          title: '스트림',
+          addedAt: '2026-09-01',
+          updatedAt: '2026-09-30',
+          availableReleaseCount: 10,
+          newReleaseCount: 0,
+        },
+      ]
+    : [];
+  const { root } = mount(screenModel);
+  expect(text(root.findByProps({ className: 'un-library-title' }))).toBe('서재 3');
 });

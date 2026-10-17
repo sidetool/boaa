@@ -15,6 +15,7 @@ import {
   patchLibraryBookMetadata,
   setLibraryShelfMembership,
   updateLibraryShelf,
+  reorderLibraryShelves,
 } from '../storage/library-management-store';
 
 export class IndexedDbLibraryCatalogRepository implements LibraryCatalogRepository {
@@ -56,6 +57,10 @@ export class IndexedDbLibraryCatalogRepository implements LibraryCatalogReposito
 
   updateShelf(...args: Parameters<LibraryCatalogRepository['updateShelf']>) {
     return updateLibraryShelf(...args);
+  }
+
+  reorderShelves(...args: Parameters<LibraryCatalogRepository['reorderShelves']>) {
+    return reorderLibraryShelves(...args);
   }
 
   deleteShelf(...args: Parameters<LibraryCatalogRepository['deleteShelf']>) {

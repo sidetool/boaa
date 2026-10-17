@@ -191,6 +191,7 @@ export function BookWorkspaceScreens({
     const progressed = applySourceProgress(
       applySourceMetadata(projection.libraryCollection, externalSources.libraryWorks),
       sourceProgress?.byNovelId,
+      { query: state.libraryQuery, filter: state.libraryFilter, sort: state.librarySort },
     );
     const base = activeShelfBookIds
       ? {
@@ -217,6 +218,9 @@ export function BookWorkspaceScreens({
   }, [
     activeShelfBookIds,
     projection.libraryCollection,
+    state.libraryQuery,
+    state.libraryFilter,
+    state.librarySort,
     externalSources.libraryWorks,
     remoteLibraryWorks,
     sourceProgress,

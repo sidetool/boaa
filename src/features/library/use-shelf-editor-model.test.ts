@@ -10,6 +10,7 @@ it('creates, renames and swaps adjacent shelf orders while ignoring boundaries',
   ];
   const controller = {
     shelves,
+    reorderShelves: vi.fn().mockResolvedValue(undefined),
     createShelf: vi.fn().mockResolvedValue(undefined),
     updateShelf: vi.fn().mockResolvedValue(undefined),
   } as unknown as LibraryManagementController;
@@ -41,7 +42,7 @@ it('creates, renames and swaps adjacent shelf orders while ignoring boundaries',
   await act(async () => {
     await model.moveShelf(0, 1);
   });
-  expect(controller.updateShelf).toHaveBeenNthCalledWith(2, shelves[0], { sortOrder: 2 });
-  expect(controller.updateShelf).toHaveBeenNthCalledWith(3, shelves[1], { sortOrder: 1 });
+  expect(controller.reorderShelves).toHaveBeenCalledExactlyOnceWith([shelves[1], shelves[0]]);
+  expect(controller.updateShelf).toHaveBeenCalledTimes(1);
   act(() => app.unmount());
 });

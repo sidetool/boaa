@@ -13,9 +13,9 @@ export async function sourceWorkReadingSeconds(id: string): Promise<number> {
   await pending.get(id);
   return (await sessions.listReadingSessions({ bookId: id })).reduce((sum, event) => sum + event.activeSeconds, 0);
 }
-export async function clearSourceWorkReadingTime(id: string): Promise<void> {
+export async function clearSourceWorkReadingTime(id: string, before?: string): Promise<void> {
   await pending.get(id);
-  await sessions.deleteReadingSessions({ bookId: id });
+  await sessions.deleteReadingSessions({ bookId: id, before });
 }
 
 /** Stream-only works have no server book row. Keep their timed sessions scoped to this device/account. */

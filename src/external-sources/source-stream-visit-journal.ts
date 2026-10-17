@@ -91,7 +91,10 @@ export function acknowledgeSourceStreamVisit(scope: string | undefined, source: 
 /** Recover interrupted writes on reload; newer manual unread choices and later visits remain authoritative. */
 export async function recoverSourceStreamVisits(
   scope: string | undefined,
-  state: Pick<ExternalSourceLocalState, 'listReleasePreferences' | 'saveReleasePreferences'>,
+  state: Pick<
+    ExternalSourceLocalState,
+    'listReleasePreferences' | 'saveReleasePreferences' | 'replaySourceStreamVisit'
+  >,
 ): Promise<SourceReleasePreference[]> {
   const preferences = new Map(((await state.listReleasePreferences?.()) ?? []).map((p) => [p.id, p]));
   for (const { preference: pending } of entries().filter((entry) => entry.scope === (scope ?? 'local'))) {
@@ -102,14 +105,28 @@ export async function recoverSourceStreamVisits(
     const next = superseded ? current : { ...current, ...pending };
     preferences.set(next.id, next);
     try {
-      if (!superseded) {
+      if (state.replaySourceStreamVisit) {
+        // The snapshot may predate a concurrent purge/reset. Use the result of the
+        // repository's atomic comparison for both persistence and projection.
+        preferences.set(pending.id, await state.replaySourceStreamVisit(pending));
+      } else if (!superseded) {
         if (!state.saveReleasePreferences) continue;
         await state.saveReleasePreferences([next]);
       }
       acknowledgeSourceStreamVisit(scope, pending.source, pending.lastReadAt!);
-    } catch {
-      /* Keep the device checkpoint and use it until the repository becomes writable. */
+    } catch (error) {
+      // An atomic comparison failure cannot establish whether a concurrent reset
+      // superseded the checkpoint. Keep it for retry without publishing stale history.
+      if (state.replaySourceStreamVisit) throw error;
+      /* Legacy ports retain the device checkpoint until the repository becomes writable. */
     }
   }
   return [...preferences.values()];
+}
+
+/** Snapshot interrupted visits for atomic last-association history retirement. */
+export function pendingSourceStreamPreferences(scope: string | undefined): SourceReleasePreference[] {
+  return entries()
+    .filter((entry) => entry.scope === (scope ?? 'local'))
+    .map((entry) => entry.preference);
 }

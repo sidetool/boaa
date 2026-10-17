@@ -196,3 +196,72 @@ describe('localSectionReadTimes', () => {
     expect([...times]).toEqual([['s1', '2026-09-03T00:00:00.000Z']]);
   });
 });
+
+it.each([0, 10])(
+  'preserves visits outside a partial catalogue with total %i and keeps library/home activity consistent',
+  (total) => {
+    const visit = {
+      ...preference('missing-release', true, '2026-09-15T00:00:00.000Z'),
+      collectionRemoteId,
+      lastReadAt: '2026-09-15T00:00:00.000Z',
+    };
+    const project = (preferences: SourceReleasePreference[]) =>
+      projectSourceWorkProgress({
+        subscriptions: [subscription({ availableReleaseCount: total, knownReleaseIds: ['r1'] })],
+        preferences,
+        links: [],
+        novels: [],
+        localSections: new Map(),
+      }).bySubscriptionId.get('subscription-1');
+    const progress = project([visit]);
+    expect(progress).toEqual({ readCount: 0, totalCount: total, progress: 0, lastReadAt: visit.lastReadAt });
+    const reset = { ...visit, read: false, readChangedAt: '2026-09-16T00:00:00.000Z' };
+    expect(project([reset])?.lastReadAt).toBeUndefined();
+    const foreignSource = { ...visit.source, accountConnectionId: 'other-account' };
+    expect(
+      project([{ ...visit, source: foreignSource, id: releasePreferenceId(foreignSource) }])?.lastReadAt,
+    ).toBeUndefined();
+    expect(project([{ ...visit, collectionRemoteId: 'other-work' }])?.lastReadAt).toBeUndefined();
+  },
+);
+
+it('carries unknown-total visits through library filters, recency and continue action', async () => {
+  const { visibleRemoteLibraryWorks, remoteLibraryReadCounts } =
+    await import('../book-workspace/workspace-screen-support');
+  const { externalMenuActions } = await import('../../ui-next/library/actions');
+  const { actions, model } = await import('../../ui-next/test-fixtures');
+  const visit = {
+    ...preference('missing', true, '2026-09-15T00:00:00.000Z'),
+    collectionRemoteId,
+    lastReadAt: '2026-09-15T00:00:00.000Z',
+  };
+  const sub = subscription({ availableReleaseCount: 0, knownReleaseIds: [] });
+  const result = projectSourceWorkProgress({
+    subscriptions: [sub],
+    preferences: [visit],
+    links: [],
+    novels: [],
+    localSections: new Map(),
+  });
+  const work = { ...sub, sourceLabel: 'test' };
+  expect(remoteLibraryReadCounts([work], result.bySubscriptionId)).toEqual({ reading: 1, unread: 0, finished: 0 });
+  expect(
+    visibleRemoteLibraryWorks(
+      [work],
+      { shelved: false, filter: 'reading', query: '', sort: 'recent' },
+      result.bySubscriptionId,
+    ),
+  ).toEqual([work]);
+  const screenActions = actions();
+  screenActions.books.continueExternal = () => {};
+  const menu = externalMenuActions(
+    { model: model([]), actions: screenActions },
+    {
+      ...work,
+      addedAt: work.createdAt,
+      newReleaseCount: 0,
+      lastReadAt: result.bySubscriptionId.get(sub.id)?.lastReadAt,
+    },
+  );
+  expect(menu.find((action) => action.id === 'continue')?.label).toBe('이어 보기');
+});

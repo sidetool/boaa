@@ -1,3 +1,4 @@
+import { finishSourceAssociationPurges } from './source-work-history';
 import { recoverLinkedWorkMetadata } from './recover-linked-work-metadata';
 
 import { recoverStreamLibrary } from './recover-stream-library';
@@ -7,7 +8,10 @@ import type { Novel } from '../../domain/types';
 import type { ExternalSourceLink } from '../../external-sources/contracts';
 import type { ExternalSourceLocalState } from '../../external-sources/local-state';
 import { reconcilePendingExternalSourceLinks } from '../../external-sources/link-import-reconciliation';
-import { recoverSourceStreamVisits } from '../../external-sources/source-stream-visit-journal';
+import {
+  pendingSourceStreamPreferences,
+  recoverSourceStreamVisits,
+} from '../../external-sources/source-stream-visit-journal';
 
 export interface SourceLibrarySnapshotPort {
   readonly registry?: Pick<UseExternalSourceControllerOptions['registry'], 'getExternalSourceStatus'> &
@@ -61,8 +65,10 @@ export async function loadSourceLibrary(options: SourceLibrarySnapshotPort) {
   const novels = await options.listNovels({ includeTrash: true });
   const reconciled = await reconcilePendingExternalSourceLinks(options.state, links, novels, Date.now(), {
     catalogIncludesTrash: true,
+    history: { scope: options.settingsScope, preferences: pendingSourceStreamPreferences(options.settingsScope) },
     resolveImporterApplied: (staged, novel) => importerResolvedSeriesIsActive(options.assets, staged, novel),
   });
+  await finishSourceAssociationPurges(options.state, options.settingsScope);
   const [subscriptions, preferences] = await Promise.all([
     options.state.listSubscriptions(),
     recoverSourceStreamVisits(options.settingsScope, options.state),

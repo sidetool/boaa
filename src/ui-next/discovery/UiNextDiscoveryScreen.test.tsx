@@ -545,6 +545,23 @@ describe('dedicated source view', () => {
     expect(view.data.retry).toHaveBeenCalledExactlyOnceWith();
   });
 
+  it.each(['다음 페이지 연결 실패', '저장된 목록입니다. 다시 시도해 주세요.'])(
+    'keeps results and exposes recovery when a retained page reports %s',
+    (error) => {
+      view.data.error = error;
+      view.data.more = true;
+      const root = dedicated();
+      const status = root.findByProps({ role: 'status' });
+      expect(text(status)).toContain(error);
+      expect(text(root)).toContain(view.data.items[0].title);
+      click(button(status, '다시 시도'));
+      expect(view.data.retry).toHaveBeenCalledExactlyOnceWith();
+      view.data.error = '';
+      update();
+      expect(button(root, '더 불러오기')).toBeDefined();
+    },
+  );
+
   it('loads more results through data.loadMore', () => {
     view.data.more = true;
     click(button(dedicated(), '더 불러오기'));

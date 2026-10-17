@@ -1,5 +1,5 @@
 import type { Chapter, Novel } from '../../domain/types';
-import type { ExternalSourceLink } from '../../external-sources/contracts';
+import { externalItemKeyId, type ExternalSourceLink } from '../../external-sources/contracts';
 import type { ExternalSourceSubscriptionRecord } from '../../external-sources/local-state';
 import { releasePreferenceId, type SourceReleasePreference } from '../../external-sources/source-user-state';
 import { externalDocumentReleaseSourceId } from '../../external-sources/series/document-series-identity';
@@ -60,14 +60,37 @@ export function projectSourceWorkProgress(input: {
   const byNovelId = new Map<string, SourceWorkProgress>();
   const bySubscriptionId = new Map<string, SourceWorkProgress>();
 
+  // Visit identity is independent of a possibly missing or partial catalogue.
+  const visitsByWork = new Map<string, string>();
+  for (const preference of input.preferences) {
+    if (
+      !preference.lastReadAt ||
+      !preference.collectionRemoteId ||
+      (preference.read === false && (preference.readChangedAt ?? preference.updatedAt) >= preference.lastReadAt)
+    )
+      continue;
+    const key = externalItemKeyId({ ...preference.source, remoteId: preference.collectionRemoteId });
+    const previous = visitsByWork.get(key);
+    if (!previous || preference.lastReadAt > previous) visitsByWork.set(key, preference.lastReadAt);
+  }
+
   for (const subscription of input.subscriptions) {
-    const totalCount = subscription.availableReleaseCount;
-    if (!Number.isSafeInteger(totalCount) || totalCount <= 0) continue;
+    const totalCount =
+      Number.isSafeInteger(subscription.availableReleaseCount) && subscription.availableReleaseCount > 0
+        ? subscription.availableReleaseCount
+        : 0;
     const links = input.links.filter((link) => sameWork(link, subscription) && liveNovelIds.has(link.localBookId));
     const linkedBookIds = [...new Set(links.map((link) => link.localBookId))];
     const downloaded = new Set(links.map((link) => link.source.remoteId));
     let readCount = 0;
-    let lastReadAt: string | undefined;
+    const lastReadAt = visitsByWork.get(
+      externalItemKeyId({
+        connectorId: subscription.connectorId,
+        accountConnectionId: subscription.accountConnectionId,
+        remoteId: subscription.collectionRemoteId,
+      }),
+    );
+    if (!totalCount && !lastReadAt) continue;
     for (const remoteId of new Set(subscription.knownReleaseIds)) {
       const key = {
         connectorId: subscription.connectorId,
@@ -89,9 +112,6 @@ export function projectSourceWorkProgress(input: {
         }
       }
       const preference = preferenceById.get(releasePreferenceId(key));
-      if (preference?.lastReadAt && (!lastReadAt || preference.lastReadAt > lastReadAt)) {
-        lastReadAt = preference.lastReadAt;
-      }
       const explicit =
         preference?.read !== undefined &&
         (!localReadAt || (preference.readChangedAt ?? preference.updatedAt) >= localReadAt);
@@ -100,7 +120,7 @@ export function projectSourceWorkProgress(input: {
     const progress: SourceWorkProgress = {
       readCount: Math.min(readCount, totalCount),
       totalCount,
-      progress: Math.min(1, readCount / totalCount),
+      progress: totalCount > 0 ? Math.min(1, readCount / totalCount) : 0,
       ...(lastReadAt ? { lastReadAt } : {}),
     };
     bySubscriptionId.set(subscription.id, progress);

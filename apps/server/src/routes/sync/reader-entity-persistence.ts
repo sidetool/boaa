@@ -206,6 +206,10 @@ export async function persistReaderSyncEvent(
     return true;
   }
 
+  if (event.type === 'shelf_updated' || event.type === 'shelf_deleted') {
+    await client.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [`shelf-order:${userId}`]);
+  }
+
   if (event.type === 'shelf_updated') {
     const shelf = record(payload.shelf);
     const id = stringValue(shelf.id) ?? event.entityId;

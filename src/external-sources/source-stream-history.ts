@@ -51,10 +51,11 @@ export function saveSourceStreamPosition(identity: string, position: Omit<Source
 }
 
 /** Remove both image offsets and every text-revision offset for the selected episodes. */
-export function clearSourceStreamPositions(identities: readonly string[]): void {
+export function clearSourceStreamPositions(identities: readonly string[], cutoff = Infinity): void {
   const selected = new Set(identities);
   const before = entries();
-  const remaining = before.filter(([id]) => {
+  const remaining = before.filter(([id, position]) => {
+    if (position.updatedAt > cutoff) return true;
     if (selected.has(id)) return false;
     const textSuffix = id.lastIndexOf(':text:');
     return textSuffix < 0 || !selected.has(id.slice(0, textSuffix));

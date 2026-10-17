@@ -61,3 +61,24 @@ it('uses the latest streamed or downloaded visit for a work that also has a loca
     'book:local-b',
   );
 });
+
+it('keeps unread, reset and linked works at their added position through metadata writes', () => {
+  const local = book('unread', '미독', 1);
+  local.novel.lastReadAt = undefined;
+  const stream = { ...remote('unread-stream', '스트림', 2), lastReadAt: undefined };
+  const recent = book('read', '독서', 15);
+  const keys = () => orderedLibraryWorks([local, recent], [stream], 'recent').map((item) => item.key);
+  const before = keys();
+  // Shelf/title/tag/favorite/restore/background updates all advance metadata time only.
+  local.novel.updatedAt = date(30);
+  stream.updatedAt = date(29);
+  expect(keys()).toEqual(before);
+  expect(before).toEqual(['book:read', 'external:unread-stream', 'book:unread']);
+  expect(
+    orderedLibraryWorks([local, recent], [stream], 'recent', new Map([['unread', { lastReadAt: date(28) }]]))[0].key,
+  ).toBe('book:unread');
+  // Newly added unread works still intermix with previously read works.
+  expect(orderedLibraryWorks([recent], [{ ...stream, addedAt: date(20) }], 'recent')[0].key).toBe(
+    'external:unread-stream',
+  );
+});
