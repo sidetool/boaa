@@ -7,7 +7,8 @@
       "licenses": ["GPL-2.0-or-later"],
       "decision": "Debian base files state GPL version 2 or later; the distributed common license texts retain their individual copyright/permission notices.",
       "noticePathExample": "usr/share/doc/base-files/copyright",
-      "licenseRefDefinition": "Each LicenseRef identifies the additional terms in this exact retained copyright text, not an unknown/ignored component. The final evidence maps the actual notice path and hash; corresponding source is mandatory."
+      "licenseRefDefinition": "Each LicenseRef identifies the additional terms in this exact retained copyright text, not an unknown/ignored component. The final evidence maps the actual notice path and hash; corresponding source is mandatory.",
+      "sourcePackages": ["base-files"]
     },
     {
       "packages": ["debian-archive-keyring"],
@@ -15,7 +16,8 @@
       "licenses": ["GPL-2.0-or-later", "LicenseRef-Debian-archive-public-domain-keys"],
       "decision": "Support files are GPL version 2 or later; the notice explicitly states the archive key data are not copyrighted.",
       "noticePathExample": "usr/share/doc/debian-archive-keyring/copyright",
-      "licenseRefDefinition": "Each LicenseRef identifies the additional terms in this exact retained copyright text, not an unknown/ignored component. The final evidence maps the actual notice path and hash; corresponding source is mandatory."
+      "licenseRefDefinition": "Each LicenseRef identifies the additional terms in this exact retained copyright text, not an unknown/ignored component. The final evidence maps the actual notice path and hash; corresponding source is mandatory.",
+      "sourcePackages": ["debian-archive-keyring"]
     },
     {
       "packages": ["gcc-12-base"],
@@ -39,7 +41,8 @@
       "licenses": ["LGPL-2.1-or-later", "LicenseRef-Debian-glibc-additional-terms"],
       "decision": "The exact glibc copyright document identifies LGPL 2.1 or later for most of the library and enumerates additional historical per-file terms; all text and exact patched source are retained.",
       "noticePathExample": "usr/share/doc/libc6/copyright",
-      "licenseRefDefinition": "Each LicenseRef identifies the additional terms in this exact retained copyright text, not an unknown/ignored component. The final evidence maps the actual notice path and hash; corresponding source is mandatory."
+      "licenseRefDefinition": "Each LicenseRef identifies the additional terms in this exact retained copyright text, not an unknown/ignored component. The final evidence maps the actual notice path and hash; corresponding source is mandatory.",
+      "sourcePackages": ["glibc"]
     },
     {
       "packages": ["libcrypt1"],
@@ -47,7 +50,8 @@
       "licenses": ["LGPL-2.1-or-later", "LicenseRef-Debian-libxcrypt-additional-terms"],
       "decision": "The notice states LGPL 2.1 or later overall and inventories additional licenses of individual implementation files. Its complete text and exact source are retained.",
       "noticePathExample": "usr/share/doc/libcrypt1/copyright",
-      "licenseRefDefinition": "Each LicenseRef identifies the additional terms in this exact retained copyright text, not an unknown/ignored component. The final evidence maps the actual notice path and hash; corresponding source is mandatory."
+      "licenseRefDefinition": "Each LicenseRef identifies the additional terms in this exact retained copyright text, not an unknown/ignored component. The final evidence maps the actual notice path and hash; corresponding source is mandatory.",
+      "sourcePackages": ["libxcrypt"]
     },
     {
       "packages": ["libgcrypt20"],
@@ -55,7 +59,8 @@
       "licenses": ["LGPL-2.1-or-later", "LicenseRef-Debian-libgcrypt-additional-terms"],
       "decision": "The notice distinguishes the LGPL 2.1 or later library from GPL manual/tools; final binary packages and complete source are separately inventoried.",
       "noticePathExample": "usr/share/doc/libgcrypt20/copyright",
-      "licenseRefDefinition": "Each LicenseRef identifies the additional terms in this exact retained copyright text, not an unknown/ignored component. The final evidence maps the actual notice path and hash; corresponding source is mandatory."
+      "licenseRefDefinition": "Each LicenseRef identifies the additional terms in this exact retained copyright text, not an unknown/ignored component. The final evidence maps the actual notice path and hash; corresponding source is mandatory.",
+      "sourcePackages": ["libgcrypt20"]
     },
     {
       "packages": ["libgnutls30"],
@@ -63,7 +68,8 @@
       "licenses": ["LGPL-2.1-or-later", "LicenseRef-Debian-GnuTLS-additional-terms"],
       "decision": "Retain the exact library copyright document, additional per-file terms and corresponding patched source. No permissive-license assumption is made.",
       "noticePathExample": "usr/share/doc/libgnutls30/copyright",
-      "licenseRefDefinition": "Each LicenseRef identifies the additional terms in this exact retained copyright text, not an unknown/ignored component. The final evidence maps the actual notice path and hash; corresponding source is mandatory."
+      "licenseRefDefinition": "Each LicenseRef identifies the additional terms in this exact retained copyright text, not an unknown/ignored component. The final evidence maps the actual notice path and hash; corresponding source is mandatory.",
+      "sourcePackages": ["gnutls28"]
     },
     {
       "packages": ["libselinux1"],
@@ -71,7 +77,8 @@
       "licenses": ["LicenseRef-Debian-SELinux-public-domain-and-notices"],
       "decision": "The exact document identifies the library as public domain software and includes warranty/liability and additional notices, preserved in full.",
       "noticePathExample": "usr/share/doc/libselinux1/copyright",
-      "licenseRefDefinition": "Each LicenseRef identifies the additional terms in this exact retained copyright text, not an unknown/ignored component. The final evidence maps the actual notice path and hash; corresponding source is mandatory."
+      "licenseRefDefinition": "Each LicenseRef identifies the additional terms in this exact retained copyright text, not an unknown/ignored component. The final evidence maps the actual notice path and hash; corresponding source is mandatory.",
+      "sourcePackages": ["libselinux"]
     },
     {
       "packages": ["libsemanage-common", "libsemanage2"],
@@ -79,7 +86,8 @@
       "licenses": ["LGPL-2.1-or-later"],
       "decision": "The retained document explicitly states LGPL version 2.1 or later for this library.",
       "noticePathExample": "usr/share/doc/libsemanage2/copyright",
-      "licenseRefDefinition": "Each LicenseRef identifies the additional terms in this exact retained copyright text, not an unknown/ignored component. The final evidence maps the actual notice path and hash; corresponding source is mandatory."
+      "licenseRefDefinition": "Each LicenseRef identifies the additional terms in this exact retained copyright text, not an unknown/ignored component. The final evidence maps the actual notice path and hash; corresponding source is mandatory.",
+      "sourcePackages": ["libsemanage"]
     },
     {
       "packages": ["libtasn1-6"],
@@ -87,7 +95,245 @@
       "licenses": ["LGPL-2.1-or-later"],
       "decision": "The document explicitly distinguishes LGPL 2.1 or later library from GPL 3 or later build/test/command-line programs; only installed binary package scope is asserted.",
       "noticePathExample": "usr/share/doc/libtasn1-6/copyright",
-      "licenseRefDefinition": "Each LicenseRef identifies the additional terms in this exact retained copyright text, not an unknown/ignored component. The final evidence maps the actual notice path and hash; corresponding source is mandatory."
+      "licenseRefDefinition": "Each LicenseRef identifies the additional terms in this exact retained copyright text, not an unknown/ignored component. The final evidence maps the actual notice path and hash; corresponding source is mandatory.",
+      "sourcePackages": ["libtasn1-6"]
+    },
+    {
+      "packages": ["libavahi-client3", "libavahi-common-data", "libavahi-common3"],
+      "copyrightSha256": "66849d0ab7cbf0d770e40e00276ed8d264ed8974c0e064fb12814c0f80430c5d",
+      "licenses": ["LGPL-2.0-or-later", "LicenseRef-Debian-Avahi-additional-terms"],
+      "decision": "Avahi library notice states LGPL version 2 or later and retains additional component/build/packaging notices. Exact text and source are supplied; the runtime scope is distinct from GPL command-line tools.",
+      "noticePathExample": "usr/share/doc/libavahi-client3/copyright",
+      "licenseRefDefinition": "Defined by the complete original copyright text at this SHA-256 and actual final-image path. This resolves an opaque scanner hash with primary text and source coverage; final legal review remains necessary.",
+      "sourcePackages": ["avahi"]
+    },
+    {
+      "packages": ["libcairo-gobject2", "libcairo2"],
+      "copyrightSha256": "408fb9e704e875cd42d432e7c9b3b378f568e3c89db2b5c5ef3d11c025319574",
+      "licenses": ["(LGPL-2.1-only OR MPL-1.1)", "LicenseRef-Debian-Cairo-per-file-terms"],
+      "decision": "Cairo 1.16 copyright explicitly offers LGPL 2.1 or MPL 1.1 and includes additional per-file grants. Preserve the complete dual-license and per-file texts and exact source.",
+      "noticePathExample": "usr/share/doc/libcairo-gobject2/copyright",
+      "licenseRefDefinition": "Defined by the complete original copyright text at this SHA-256 and actual final-image path. This resolves an opaque scanner hash with primary text and source coverage; final legal review remains necessary.",
+      "sourcePackages": ["cairo"]
+    },
+    {
+      "packages": ["libdrm-amdgpu1", "libdrm-common", "libdrm-intel1", "libdrm-nouveau2", "libdrm-radeon1", "libdrm2"],
+      "copyrightSha256": "512c9a57fd8b449aa157351da9df07bf8e19f767e496a72205a4020268ddb2e0",
+      "licenses": ["LicenseRef-Debian-X11-512c9a57fd8b449a"],
+      "decision": "This exact X11/graphics copyright compilation contains the original named authors and permission/non-endorsement/warranty clauses, including the retained per-file variations. Its complete text defines this LicenseRef; it is not an unknown or an assumed generic MIT grant. Exact package source is also retained.",
+      "noticePathExample": "usr/share/doc/libdrm-amdgpu1/copyright",
+      "licenseRefDefinition": "Defined by the complete original copyright text at this SHA-256 and actual final-image path. This resolves an opaque scanner hash with primary text and source coverage; final legal review remains necessary.",
+      "sourcePackages": ["libdrm"]
+    },
+    {
+      "packages": ["libgssapi-krb5-2", "libk5crypto3", "libkrb5-3", "libkrb5support0"],
+      "copyrightSha256": "936728f4181718f42951b881c1e8f1386bf6b2723c4fbc533c374d6f42c71816",
+      "licenses": ["MIT", "BSD-3-Clause", "LicenseRef-Debian-Kerberos-additional-terms"],
+      "decision": "Kerberos copyright compilation contains MIT/BSD permission grants, historical export notices and separate documentation terms. Every original notice remains mapped; exact source is retained. No all-permissive summary replaces those terms.",
+      "noticePathExample": "usr/share/doc/libgssapi-krb5-2/copyright",
+      "licenseRefDefinition": "Defined by the complete original copyright text at this SHA-256 and actual final-image path. This resolves an opaque scanner hash with primary text and source coverage; final legal review remains necessary.",
+      "sourcePackages": ["krb5"]
+    },
+    {
+      "packages": ["libice6"],
+      "copyrightSha256": "fc16500a74acc2d0a7bb2fa1005956a52551abdce2afe0642a9a8dc2b6af53c6",
+      "licenses": ["LicenseRef-Debian-X11-fc16500a74acc2d0"],
+      "decision": "This exact X11/graphics copyright compilation contains the original named authors and permission/non-endorsement/warranty clauses, including the retained per-file variations. Its complete text defines this LicenseRef; it is not an unknown or an assumed generic MIT grant. Exact package source is also retained.",
+      "noticePathExample": "usr/share/doc/libice6/copyright",
+      "licenseRefDefinition": "Defined by the complete original copyright text at this SHA-256 and actual final-image path. This resolves an opaque scanner hash with primary text and source coverage; final legal review remains necessary.",
+      "sourcePackages": ["libice"]
+    },
+    {
+      "packages": ["libpciaccess0"],
+      "copyrightSha256": "59f90c1ad1face5bd0a516feb8a71e005075d532c522b64ff06b2bfeebde8fe8",
+      "licenses": ["LicenseRef-Debian-X11-59f90c1ad1face5b"],
+      "decision": "This exact X11/graphics copyright compilation contains the original named authors and permission/non-endorsement/warranty clauses, including the retained per-file variations. Its complete text defines this LicenseRef; it is not an unknown or an assumed generic MIT grant. Exact package source is also retained.",
+      "noticePathExample": "usr/share/doc/libpciaccess0/copyright",
+      "licenseRefDefinition": "Defined by the complete original copyright text at this SHA-256 and actual final-image path. This resolves an opaque scanner hash with primary text and source coverage; final legal review remains necessary.",
+      "sourcePackages": ["libpciaccess"]
+    },
+    {
+      "packages": ["libpixman-1-0"],
+      "copyrightSha256": "1b3fb5690861e15ca4fd6640fd4def4b2576617942eec04b6fcb7d8bc6c4c9da",
+      "licenses": ["LicenseRef-Debian-X11-1b3fb5690861e15c"],
+      "decision": "This exact X11/graphics copyright compilation contains the original named authors and permission/non-endorsement/warranty clauses, including the retained per-file variations. Its complete text defines this LicenseRef; it is not an unknown or an assumed generic MIT grant. Exact package source is also retained.",
+      "noticePathExample": "usr/share/doc/libpixman-1-0/copyright",
+      "licenseRefDefinition": "Defined by the complete original copyright text at this SHA-256 and actual final-image path. This resolves an opaque scanner hash with primary text and source coverage; final legal review remains necessary.",
+      "sourcePackages": ["pixman"]
+    },
+    {
+      "packages": ["libsensors-config", "libsensors5"],
+      "copyrightSha256": "36df1f6d732ef306eba85489352b2afe329f7b54c6850c3e2094f7c5df1bc46b",
+      "licenses": ["LGPL-2.1-or-later", "LicenseRef-Debian-lm-sensors-per-file-terms"],
+      "decision": "The notice explicitly distinguishes LGPL 2.1 or later sensor libraries/configuration from GPL tools; preserve all per-file and packaging notices and exact source.",
+      "noticePathExample": "usr/share/doc/libsensors-config/copyright",
+      "licenseRefDefinition": "Defined by the complete original copyright text at this SHA-256 and actual final-image path. This resolves an opaque scanner hash with primary text and source coverage; final legal review remains necessary.",
+      "sourcePackages": ["lm-sensors"]
+    },
+    {
+      "packages": ["libsm6"],
+      "copyrightSha256": "333d829128c80619625f7e43a0ff0e79f36812b2b7ba12696eec9b4b42ce729b",
+      "licenses": ["LicenseRef-Debian-X11-333d829128c80619"],
+      "decision": "This exact X11/graphics copyright compilation contains the original named authors and permission/non-endorsement/warranty clauses, including the retained per-file variations. Its complete text defines this LicenseRef; it is not an unknown or an assumed generic MIT grant. Exact package source is also retained.",
+      "noticePathExample": "usr/share/doc/libsm6/copyright",
+      "licenseRefDefinition": "Defined by the complete original copyright text at this SHA-256 and actual final-image path. This resolves an opaque scanner hash with primary text and source coverage; final legal review remains necessary.",
+      "sourcePackages": ["libsm"]
+    },
+    {
+      "packages": ["libxau6"],
+      "copyrightSha256": "118dd263a7b91c8f21c489f949bf13281dff9e766deea92b829dac4dce66601a",
+      "licenses": ["LicenseRef-Debian-X11-118dd263a7b91c8f"],
+      "decision": "This exact X11/graphics copyright compilation contains the original named authors and permission/non-endorsement/warranty clauses, including the retained per-file variations. Its complete text defines this LicenseRef; it is not an unknown or an assumed generic MIT grant. Exact package source is also retained.",
+      "noticePathExample": "usr/share/doc/libxau6/copyright",
+      "licenseRefDefinition": "Defined by the complete original copyright text at this SHA-256 and actual final-image path. This resolves an opaque scanner hash with primary text and source coverage; final legal review remains necessary.",
+      "sourcePackages": ["libxau"]
+    },
+    {
+      "packages": [
+        "libxcb-dri2-0",
+        "libxcb-dri3-0",
+        "libxcb-glx0",
+        "libxcb-present0",
+        "libxcb-randr0",
+        "libxcb-render0",
+        "libxcb-shape0",
+        "libxcb-shm0",
+        "libxcb-sync1",
+        "libxcb-xfixes0",
+        "libxcb1"
+      ],
+      "copyrightSha256": "4f7cb9db6bf6542f5417e3d674c780d3a5fd12291a54d63054fb576ee0cfae80",
+      "licenses": ["LicenseRef-Debian-X11-4f7cb9db6bf6542f"],
+      "decision": "This exact X11/graphics copyright compilation contains the original named authors and permission/non-endorsement/warranty clauses, including the retained per-file variations. Its complete text defines this LicenseRef; it is not an unknown or an assumed generic MIT grant. Exact package source is also retained.",
+      "noticePathExample": "usr/share/doc/libxcb-dri2-0/copyright",
+      "licenseRefDefinition": "Defined by the complete original copyright text at this SHA-256 and actual final-image path. This resolves an opaque scanner hash with primary text and source coverage; final legal review remains necessary.",
+      "sourcePackages": ["libxcb"]
+    },
+    {
+      "packages": ["libxdmcp6"],
+      "copyrightSha256": "1bcbb50f8603fe8b86d330bfa460b772ea04fbd3c70e4499f0768b5340b9fd6e",
+      "licenses": ["LicenseRef-Debian-X11-1bcbb50f8603fe8b"],
+      "decision": "This exact X11/graphics copyright compilation contains the original named authors and permission/non-endorsement/warranty clauses, including the retained per-file variations. Its complete text defines this LicenseRef; it is not an unknown or an assumed generic MIT grant. Exact package source is also retained.",
+      "noticePathExample": "usr/share/doc/libxdmcp6/copyright",
+      "licenseRefDefinition": "Defined by the complete original copyright text at this SHA-256 and actual final-image path. This resolves an opaque scanner hash with primary text and source coverage; final legal review remains necessary.",
+      "sourcePackages": ["libxdmcp"]
+    },
+    {
+      "packages": ["libxext6"],
+      "copyrightSha256": "bc57e445ca1d9fe082c8d54189dd411ff26caa8552c9c63d44ea06a982f32124",
+      "licenses": ["LicenseRef-Debian-X11-bc57e445ca1d9fe0"],
+      "decision": "This exact X11/graphics copyright compilation contains the original named authors and permission/non-endorsement/warranty clauses, including the retained per-file variations. Its complete text defines this LicenseRef; it is not an unknown or an assumed generic MIT grant. Exact package source is also retained.",
+      "noticePathExample": "usr/share/doc/libxext6/copyright",
+      "licenseRefDefinition": "Defined by the complete original copyright text at this SHA-256 and actual final-image path. This resolves an opaque scanner hash with primary text and source coverage; final legal review remains necessary.",
+      "sourcePackages": ["libxext"]
+    },
+    {
+      "packages": ["libxi6"],
+      "copyrightSha256": "c812f9c54513ae593aab9580b54a4b18219648df7068d49ca1daa47f522ba3fa",
+      "licenses": ["LicenseRef-Debian-X11-c812f9c54513ae59"],
+      "decision": "This exact X11/graphics copyright compilation contains the original named authors and permission/non-endorsement/warranty clauses, including the retained per-file variations. Its complete text defines this LicenseRef; it is not an unknown or an assumed generic MIT grant. Exact package source is also retained.",
+      "noticePathExample": "usr/share/doc/libxi6/copyright",
+      "licenseRefDefinition": "Defined by the complete original copyright text at this SHA-256 and actual final-image path. This resolves an opaque scanner hash with primary text and source coverage; final legal review remains necessary.",
+      "sourcePackages": ["libxi"]
+    },
+    {
+      "packages": ["libxinerama1"],
+      "copyrightSha256": "e49d9732f261b3ffcb50c40914bd9d144de5557dad9b2ae20dbe8e3c5b3d17fb",
+      "licenses": ["LicenseRef-Debian-X11-e49d9732f261b3ff"],
+      "decision": "This exact X11/graphics copyright compilation contains the original named authors and permission/non-endorsement/warranty clauses, including the retained per-file variations. Its complete text defines this LicenseRef; it is not an unknown or an assumed generic MIT grant. Exact package source is also retained.",
+      "noticePathExample": "usr/share/doc/libxinerama1/copyright",
+      "licenseRefDefinition": "Defined by the complete original copyright text at this SHA-256 and actual final-image path. This resolves an opaque scanner hash with primary text and source coverage; final legal review remains necessary.",
+      "sourcePackages": ["libxinerama"]
+    },
+    {
+      "packages": ["libxkbcommon0"],
+      "copyrightSha256": "5eeaeb1b6e029a0274e1573765bb0bae2926ef96a3679203faa4fd00fdaeaa88",
+      "licenses": ["LicenseRef-Debian-X11-5eeaeb1b6e029a02"],
+      "decision": "This exact X11/graphics copyright compilation contains the original named authors and permission/non-endorsement/warranty clauses, including the retained per-file variations. Its complete text defines this LicenseRef; it is not an unknown or an assumed generic MIT grant. Exact package source is also retained.",
+      "noticePathExample": "usr/share/doc/libxkbcommon0/copyright",
+      "licenseRefDefinition": "Defined by the complete original copyright text at this SHA-256 and actual final-image path. This resolves an opaque scanner hash with primary text and source coverage; final legal review remains necessary.",
+      "sourcePackages": ["libxkbcommon"]
+    },
+    {
+      "packages": ["libxkbfile1"],
+      "copyrightSha256": "41044d815bd99a5d1267fdabc79b5041fa83c7134639bb81e84f367cefe68316",
+      "licenses": ["LicenseRef-Debian-X11-41044d815bd99a5d"],
+      "decision": "This exact X11/graphics copyright compilation contains the original named authors and permission/non-endorsement/warranty clauses, including the retained per-file variations. Its complete text defines this LicenseRef; it is not an unknown or an assumed generic MIT grant. Exact package source is also retained.",
+      "noticePathExample": "usr/share/doc/libxkbfile1/copyright",
+      "licenseRefDefinition": "Defined by the complete original copyright text at this SHA-256 and actual final-image path. This resolves an opaque scanner hash with primary text and source coverage; final legal review remains necessary.",
+      "sourcePackages": ["libxkbfile"]
+    },
+    {
+      "packages": ["libxmu6", "libxmuu1"],
+      "copyrightSha256": "15a3a4d6627af76c0649067260debca0eb66248b96e5fda4f564aac38593e06f",
+      "licenses": ["LicenseRef-Debian-X11-15a3a4d6627af76c"],
+      "decision": "This exact X11/graphics copyright compilation contains the original named authors and permission/non-endorsement/warranty clauses, including the retained per-file variations. Its complete text defines this LicenseRef; it is not an unknown or an assumed generic MIT grant. Exact package source is also retained.",
+      "noticePathExample": "usr/share/doc/libxmu6/copyright",
+      "licenseRefDefinition": "Defined by the complete original copyright text at this SHA-256 and actual final-image path. This resolves an opaque scanner hash with primary text and source coverage; final legal review remains necessary.",
+      "sourcePackages": ["libxmu"]
+    },
+    {
+      "packages": ["libxt6"],
+      "copyrightSha256": "294382fd73d07b7b086c4829366bad834fc25cdf094400ec6ca4ff3b9ab73665",
+      "licenses": ["LicenseRef-Debian-X11-294382fd73d07b7b"],
+      "decision": "This exact X11/graphics copyright compilation contains the original named authors and permission/non-endorsement/warranty clauses, including the retained per-file variations. Its complete text defines this LicenseRef; it is not an unknown or an assumed generic MIT grant. Exact package source is also retained.",
+      "noticePathExample": "usr/share/doc/libxt6/copyright",
+      "licenseRefDefinition": "Defined by the complete original copyright text at this SHA-256 and actual final-image path. This resolves an opaque scanner hash with primary text and source coverage; final legal review remains necessary.",
+      "sourcePackages": ["libxt"]
+    },
+    {
+      "packages": ["libxtst6"],
+      "copyrightSha256": "304f78731e1e0e78132fbba4e1909c8642878a3b8c4837b36cb2d38891bf2204",
+      "licenses": ["LicenseRef-Debian-X11-304f78731e1e0e78"],
+      "decision": "This exact X11/graphics copyright compilation contains the original named authors and permission/non-endorsement/warranty clauses, including the retained per-file variations. Its complete text defines this LicenseRef; it is not an unknown or an assumed generic MIT grant. Exact package source is also retained.",
+      "noticePathExample": "usr/share/doc/libxtst6/copyright",
+      "licenseRefDefinition": "Defined by the complete original copyright text at this SHA-256 and actual final-image path. This resolves an opaque scanner hash with primary text and source coverage; final legal review remains necessary.",
+      "sourcePackages": ["libxtst"]
+    },
+    {
+      "packages": ["shared-mime-info"],
+      "copyrightSha256": "5145b47d997486e5327091374e807046a32216168b6f2bbf6d1816f60927686c",
+      "licenses": ["GPL-2.0-or-later"],
+      "decision": "The retained shared-mime-info copyright explicitly grants GPL version 2 or later. Exact installed-version source and complete license texts accompany the image.",
+      "noticePathExample": "usr/share/doc/shared-mime-info/copyright",
+      "licenseRefDefinition": "Defined by the complete original copyright text at this SHA-256 and actual final-image path. This resolves an opaque scanner hash with primary text and source coverage; final legal review remains necessary.",
+      "sourcePackages": ["shared-mime-info"]
+    },
+    {
+      "packages": ["x11-common"],
+      "copyrightSha256": "2badb73e6e70d0bd2e0b85d39ce18d3c66cfebc3e301720374fa20e6539c947d",
+      "licenses": ["LicenseRef-Debian-X11-2badb73e6e70d0bd"],
+      "decision": "This exact X11/graphics copyright compilation contains the original named authors and permission/non-endorsement/warranty clauses, including the retained per-file variations. Its complete text defines this LicenseRef; it is not an unknown or an assumed generic MIT grant. Exact package source is also retained.",
+      "noticePathExample": "usr/share/doc/x11-common/copyright",
+      "licenseRefDefinition": "Defined by the complete original copyright text at this SHA-256 and actual final-image path. This resolves an opaque scanner hash with primary text and source coverage; final legal review remains necessary.",
+      "sourcePackages": ["xorg"]
+    },
+    {
+      "packages": ["x11-utils"],
+      "copyrightSha256": "d0317ec182f7c587643808dd95cb358087154a8c0119e865b651dce49975cafc",
+      "licenses": ["LicenseRef-Debian-X11-d0317ec182f7c587"],
+      "decision": "This exact X11/graphics copyright compilation contains the original named authors and permission/non-endorsement/warranty clauses, including the retained per-file variations. Its complete text defines this LicenseRef; it is not an unknown or an assumed generic MIT grant. Exact package source is also retained.",
+      "noticePathExample": "usr/share/doc/x11-utils/copyright",
+      "licenseRefDefinition": "Defined by the complete original copyright text at this SHA-256 and actual final-image path. This resolves an opaque scanner hash with primary text and source coverage; final legal review remains necessary.",
+      "sourcePackages": ["x11-utils"]
+    },
+    {
+      "packages": ["xkb-data"],
+      "copyrightSha256": "648621d1a2180678818eb393565849bbc8b332cc521c21e009d948ea5541b3c3",
+      "licenses": ["LicenseRef-Debian-X11-648621d1a2180678"],
+      "decision": "This exact X11/graphics copyright compilation contains the original named authors and permission/non-endorsement/warranty clauses, including the retained per-file variations. Its complete text defines this LicenseRef; it is not an unknown or an assumed generic MIT grant. Exact package source is also retained.",
+      "noticePathExample": "usr/share/doc/xkb-data/copyright",
+      "licenseRefDefinition": "Defined by the complete original copyright text at this SHA-256 and actual final-image path. This resolves an opaque scanner hash with primary text and source coverage; final legal review remains necessary.",
+      "sourcePackages": ["xkeyboard-config"]
+    },
+    {
+      "packages": ["wget"],
+      "copyrightSha256": "c58cb5a2d94f35f0e9b0f1a038d48b73477aa12782ff17328c21d8a86f5f99d5",
+      "licenses": ["GPL-3.0-only", "GFDL-1.2-only", "LicenseRef-Debian-Wget-OpenSSL-linking-exception"],
+      "decision": "The retained notice points to GPL-3 and GFDL-1.2 and includes the explicit FSF OpenSSL linking exception. All these terms and exact installed-version source are supplied.",
+      "noticePathExample": "usr/share/doc/wget/copyright",
+      "licenseRefDefinition": "Any additional terms are defined by this exact retained copyright text, not ignored.",
+      "sourcePackages": ["wget"]
     }
   ]
 }

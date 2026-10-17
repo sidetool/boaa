@@ -91,6 +91,13 @@ def capture(image, component, output, syft):
                     metadata[name] = fs.extractfile(member).read().decode('utf-8')
                 if name.endswith('/README.md') and 'sharp-libvips' in name:
                     retain(name, fs.extractfile(member).read())
+                if name.endswith('/package.json') and member.size < 4 * 1024 * 1024:
+                    try:
+                        package = json.loads(fs.extractfile(member).read())
+                        if package.get('name'):
+                            packages[posixpath.dirname(name)] = {k: package.get(k) for k in ('name', 'version', 'license', 'repository')}
+                    except (ValueError, UnicodeDecodeError):
+                        pass
                 if is_notice(name) and member.size < 64 * 1024 * 1024:
                     retain(name, fs.extractfile(member).read())
                 elif name.endswith('.jar') and member.size < 128 * 1024 * 1024:
@@ -102,13 +109,6 @@ def capture(image, component, output, syft):
                         for part in jar.infolist():
                             if not part.is_dir() and part.file_size < 4 * 1024 * 1024 and is_notice(part.filename):
                                 retain(name + '.contents/' + part.filename, jar.read(part))
-                elif name.endswith('/package.json') and member.size < 4 * 1024 * 1024:
-                    try:
-                        data = json.loads(fs.extractfile(member).read())
-                        if data.get('name'):
-                            packages[posixpath.dirname(name)] = {k: data.get(k) for k in ('name', 'version', 'license', 'repository')}
-                    except (ValueError, UnicodeDecodeError):
-                        pass
                 elif name.endswith(('build-inventory.json', 'inventory.json', 'build-packages.txt', '/release', '.dist-info/METADATA')) and member.size < 8 * 1024 * 1024:
                     metadata[name] = fs.extractfile(member).read().decode('utf-8', errors='replace')
                 if (member.mode & 0o111 and member.size > 100000 and
@@ -177,6 +177,9 @@ def capture(image, component, output, syft):
                     licenses = declared
                 else:
                     adjudication = next((r for r in debian_decisions if name in r['packages'] and any(notices[p]['sha256'] == r['copyrightSha256'] for p in refs)), None)
+                    if adjudication is None:
+                        source_name = artifact.get('metadata', {}).get('source', '').split(' ')[0] or name
+                        adjudication = next((r for r in debian_decisions if source_name in r.get('sourcePackages', []) and any(notices[p]['sha256'] == r['copyrightSha256'] for p in refs)), None)
                     if adjudication:
                         licenses = adjudication['licenses']
                         reason = adjudication['decision']
