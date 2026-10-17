@@ -1,4 +1,4 @@
-const CACHE_NAME = 'boaa-app-shell-v5';
+const CACHE_NAME = 'boaa-app-shell-v6';
 const APP_SHELL = [
   '/',
   '/manifest.webmanifest',
@@ -28,7 +28,9 @@ if (IS_TAURI_SHELL) {
     event.waitUntil(
       caches
         .open(CACHE_NAME)
-        .then((cache) => cache.addAll(APP_SHELL))
+        // Replacing CacheStorage alone does not invalidate a fresh HTTP cache entry.
+        // In particular, a cached manifest can retain the previous install name/icon.
+        .then((cache) => cache.addAll(APP_SHELL.map((url) => new Request(url, { cache: 'reload' }))))
         .then(() => self.skipWaiting()),
     );
   });
@@ -55,7 +57,7 @@ if (IS_TAURI_SHELL) {
 
   async function networkFirst(request, fallbackUrl) {
     try {
-      const response = await fetch(request);
+      const response = await fetch(request, { cache: 'no-cache' });
       if (response.ok) {
         const cache = await caches.open(CACHE_NAME);
         await cache.put(request, response.clone());
