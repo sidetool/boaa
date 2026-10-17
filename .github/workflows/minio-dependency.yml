@@ -2,6 +2,7 @@ name: Fixed MinIO dependency
 
 on:
   workflow_dispatch:
+  workflow_call:
 
 permissions:
   contents: read

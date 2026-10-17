@@ -7,6 +7,10 @@ on:
         description: Version label (candidate mode does not require or create a Git tag)
         required: true
         type: string
+      minio_dependency_only:
+        description: Build the fixed storage dependency only (initial bootstrap)
+        type: boolean
+        default: false
       mode:
         description: Candidate validates this dispatch commit; release requires an existing reviewed version tag
         type: choice
@@ -21,7 +25,15 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  minio-dependency:
+    if: ${{ inputs.minio_dependency_only }}
+    permissions:
+      contents: write
+      packages: write
+    uses: ./.github/workflows/minio-dependency.yml
+
   validate:
+    if: ${{ !inputs.minio_dependency_only }}
     permissions:
       contents: write
     runs-on: ubuntu-24.04
