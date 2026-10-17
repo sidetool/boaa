@@ -1,0 +1,105 @@
+name: Fixed MinIO dependency
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: minio-dependency-boaa1
+  cancel-in-progress: false
+
+jobs:
+  build:
+    permissions:
+      contents: write
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        architecture: [amd64, arm64]
+    runs-on: ${{ matrix.architecture == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v7
+      - name: Build native image and export corresponding source
+        env:
+          ARCHITECTURE: ${{ matrix.architecture }}
+        run: |
+          set -euo pipefail
+          docker buildx create --use
+          docker buildx build --load --platform "linux/$ARCHITECTURE" --provenance=false --sbom=false \
+            --label "org.opencontainers.image.revision=$GITHUB_SHA" \
+            -f deploy/minio.Dockerfile -t boaa-minio:tested .
+          docker buildx build --target sources --output type=local,dest=dependency \
+            --platform "linux/$ARCHITECTURE" -f deploy/minio.Dockerfile .
+          mv dependency/minio-corresponding-sources.tar.gz "dependency/minio-corresponding-sources-$ARCHITECTURE.tar.gz"
+          python3 scripts/minio/smoke.py --image boaa-minio:tested --output "dependency/smoke-$ARCHITECTURE.json"
+      - name: Retain sources before registry publication
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          tag=minio-2025-10-15-boaa1
+          if ! gh release view "$tag" >/dev/null 2>&1; then
+            gh release create "$tag" --target "$GITHUB_SHA" --prerelease --latest=false \
+              --title 'Pinned MinIO storage dependency: source materials' \
+              --notes 'Unmodified official MinIO 2025-10-15 source and vendored dependencies. Independent storage dependency, not a BOAA application update. Image digests are added after both native S3 persistence tests pass.' \
+              || gh release view "$tag" >/dev/null
+          fi
+          gh release upload "$tag" dependency/* --clobber
+      - name: Push tested native child
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ARCHITECTURE: ${{ matrix.architecture }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          image="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/boaa-minio"
+          tag="build-${GITHUB_SHA:0:12}-$ARCHITECTURE"
+          docker tag boaa-minio:tested "$image:$tag"
+          docker push "$image:$tag"
+          digest=$(docker buildx imagetools inspect "$image:$tag" --format '{{json .Manifest}}' | jq -r .digest)
+          [[ "$digest" =~ ^sha256:[a-f0-9]{64}$ ]]
+          jq -n --arg image "$image@$digest" --arg commit "$GITHUB_SHA" \
+            --arg architecture "$ARCHITECTURE" '{image:$image, commit:$commit, architecture:$architecture}' > "dependency/image-$ARCHITECTURE.json"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: minio-${{ matrix.architecture }}
+          path: |
+            dependency/image-*.json
+            dependency/smoke-*.json
+          if-no-files-found: error
+
+  index:
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      packages: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: minio-*
+          merge-multiple: true
+          path: dependency
+      - name: Assemble fixed dependency index
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          image="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/boaa-minio"
+          amd64=$(jq -r .image dependency/image-amd64.json)
+          arm64=$(jq -r .image dependency/image-arm64.json)
+          for arch in amd64 arm64; do
+            jq -e --arg arch "$arch" '.passed == true and .architecture == $arch' "dependency/smoke-$arch.json"
+            jq -e --arg commit "$GITHUB_SHA" '.commit == $commit' "dependency/image-$arch.json"
+          done
+          docker buildx imagetools create -t "$image:2025-10-15-boaa1" "$amd64" "$arm64"
+          docker buildx imagetools inspect "$image:2025-10-15-boaa1" --raw > dependency/index.json
+          digest="sha256:$(sha256sum dependency/index.json | cut -d' ' -f1)"
+          printf '%s@%s\n' "$image" "$digest" > dependency/image.txt
+          sha256sum dependency/*.json dependency/image.txt > dependency/SHA256SUMS
+          gh release upload minio-2025-10-15-boaa1 --repo "$GITHUB_REPOSITORY" dependency/* --clobber
