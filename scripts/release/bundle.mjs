@@ -12,6 +12,7 @@ const files = [
   'deploy/release-public.pub',
   'deploy/release-management.md',
   'deploy/byedpi-integration.md',
+  'deploy/minio/README.md',
   'services/runtime-components/README.md',
   'scripts/init-env.mjs',
   'scripts/release/install.mjs',

@@ -1,6 +1,6 @@
 # Docker Compose deployment
 
-2026-09-12: MinIO uses `quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z`.
+MinIO uses a digest-pinned `ghcr.io/sidetool/boaa-minio` image built from official source. Upstream image downloads are unavailable. This fixed storage dependency is separate from app updates; see [`deploy/minio/README.md`](../../deploy/minio/README.md) for source access and build details.
 PR #40 CI repeatedly failed while pulling the same release from Docker Hub, before import tests started.
 The release version, S3 endpoint and volume layout are unchanged; only the registry address changed.
 

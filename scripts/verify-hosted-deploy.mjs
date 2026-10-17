@@ -242,10 +242,10 @@ check('redis has ping healthcheck', matches(redis, /['"]redis-cli['"],\s*['"]pin
 check('redis enables AOF persistence', includes(redis, "'--appendonly', 'yes'"));
 check('redis mounts its durable data volume', includes(redis, 'redis-data:/data'));
 check('redis restarts unless stopped', includes(redis, 'restart: unless-stopped'));
-check('minio has live healthcheck', includes(minio, 'http://127.0.0.1:9000/minio/health/live'));
+check('minio has live healthcheck', includes(minio, '/usr/local/bin/minio-health'));
 check(
-  'minio uses the pinned release from the official Quay registry',
-  includes(minio, 'image: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z'),
+  'minio uses the digest-pinned BOAA build of official source',
+  matches(minio, /image: ghcr\.io\/sidetool\/boaa-minio@sha256:[a-f0-9]{64}/),
 );
 check(
   'minio console defaults to loopback',

@@ -232,7 +232,7 @@ jobs:
           done
           docker pull postgres:16-alpine
           docker pull redis:7-alpine
-          docker pull quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z
+          docker pull ghcr.io/sidetool/boaa-minio@sha256:93435cecd3567b2f834a6a5d1e664575dd0d707ab058de2431f5944c5c183d7b
           docker run --name boaa-release-integration \
             -v /var/run/docker.sock:/var/run/docker.sock -v /tmp:/tmp \
             -e BOAA_SMOKE_SERVER_IMAGE=boaa-server:final -e BOAA_SMOKE_WEB_IMAGE=boaa-web:final \

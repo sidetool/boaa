@@ -20,6 +20,7 @@ test('release bundle is allowlisted, signed and rejects modified archive bytes',
     'deploy/release-policy.json',
     'deploy/release-management.md',
     'deploy/byedpi-integration.md',
+    'deploy/minio/README.md',
     'services/runtime-components/README.md',
     'scripts/init-env.mjs',
     'scripts/release',
@@ -37,6 +38,7 @@ test('release bundle is allowlisted, signed and rejects modified archive bytes',
   assert.ok(listing.includes('compose.release.yaml'));
   assert.ok(listing.includes('scripts/release/install.mjs'));
   assert.ok(listing.includes('services/runtime-components/README.md'));
+  assert.ok(listing.includes('deploy/minio/README.md'));
   assert.ok(!listing.includes('.env'));
   assert.ok(!listing.some((name) => /\.test\.|private|provider|node_modules/.test(name)));
   const images = Object.fromEntries(

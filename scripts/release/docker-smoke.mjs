@@ -83,7 +83,7 @@ try {
     ...Object.values(images),
     'postgres:16-alpine',
     'redis:7-alpine',
-    'quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z',
+    'ghcr.io/sidetool/boaa-minio@sha256:93435cecd3567b2f834a6a5d1e664575dd0d707ab058de2431f5944c5c183d7b',
   ])
     await dockerRun(['image', 'inspect', image]);
   await dockerRun(['network', 'create', network]);
@@ -147,14 +147,14 @@ try {
         healthcheck: health(['CMD', 'redis-cli', 'ping']),
       },
       minio: {
-        image: 'quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z',
+        image: 'ghcr.io/sidetool/boaa-minio@sha256:93435cecd3567b2f834a6a5d1e664575dd0d707ab058de2431f5944c5c183d7b',
         command: ['server', '/data'],
         environment: {
           MINIO_ROOT_USER: environment.S3_ACCESS_KEY_ID,
           MINIO_ROOT_PASSWORD: environment.S3_SECRET_ACCESS_KEY,
         },
         volumes: [volumes('minio', '/data')],
-        healthcheck: health(['CMD', 'curl', '-f', 'http://127.0.0.1:9000/minio/health/live']),
+        healthcheck: health(['CMD', '/usr/local/bin/minio-health']),
       },
       api: {
         image: images.server,
