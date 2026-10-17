@@ -68,6 +68,8 @@ try:
     except urllib.error.HTTPError as error:
         assert error.code == 403, error.code
     docker('restart', name)
+    # Docker may allocate a different ephemeral host port when restarting.
+    host = docker('port', name, '9000/tcp').splitlines()[0]
     ready()
     assert request('GET', '/boaa-smoke/object') == payload
     info = json.loads(docker('image', 'inspect', args.image))[0]
