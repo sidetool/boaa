@@ -38,7 +38,14 @@ binary gate is unchanged and remains closed.
    retaining its standalone JavaScript geometry polyfill. Final-image tests must
    prove PDF inspection/text still works. Desktop is excluded.
 
-A changed commit requires a new candidate run and new evidence. A signature or an
+A changed application commit requires a new candidate run and new evidence.
+For a CI-fixture-only correction, `resume_from_run` may reuse a completed native
+matrix. The workflow rejects changes outside its own file, `docker-smoke.mjs`
+and this review document. It checks out the original image commit for packaging
+and signing, mounts only the corrected disposable test harness, and records
+`testCommit` separately in integration receipts. The version tag must still point
+to the original verified **image commit**, not the later fixture commit. This
+avoids rebuilding unchanged applications while preserving truthful provenance. A signature or an
 inventory alone is not permission or legal approval to publish.
 
 ## Parent/operator publication after independent review

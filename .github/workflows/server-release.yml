@@ -7,6 +7,10 @@ on:
         description: Version label (candidate mode does not require or create a Git tag)
         required: true
         type: string
+      resume_from_run:
+        description: Reuse a completed native image matrix; only test harness/workflow changes are allowed
+        type: string
+        default: ''
       minio_dependency_only:
         description: Build the fixed storage dependency only (initial bootstrap)
         type: boolean
@@ -32,8 +36,47 @@ jobs:
       packages: write
     uses: ./.github/workflows/minio-dependency.yml
 
+  reuse:
+    if: ${{ inputs.resume_from_run != '' && !inputs.minio_dependency_only }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      commit: ${{ steps.verify.outputs.commit }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - id: verify
+        name: Verify unchanged application source and complete native matrix
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SOURCE_RUN: ${{ inputs.resume_from_run }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PYCODE'
+          import json,os,re,subprocess
+          run=os.environ['SOURCE_RUN']; repo=os.environ['GITHUB_REPOSITORY']
+          if not re.fullmatch(r'[0-9]+',run): raise SystemExit('invalid_source_run')
+          def api(path): return json.loads(subprocess.check_output(['gh','api',path],text=True))
+          info=api(f'repos/{repo}/actions/runs/{run}')
+          if info['repository']['full_name']!=repo or info['head_repository']['full_name']!=repo or info['path']!='.github/workflows/server-release.yml' or info['status']!='completed': raise SystemExit('invalid_source_workflow')
+          commit=info['head_sha']
+          subprocess.run(['git','merge-base','--is-ancestor',commit,'HEAD'],check=True)
+          changed=set(subprocess.check_output(['git','diff','--name-only',commit,'HEAD'],text=True).splitlines())
+          allowed={'.github/workflows/server-release.yml','scripts/release/docker-smoke.mjs','deploy/server-release-review.md'}
+          if changed-allowed: raise SystemExit('application_changed_rebuild_required: '+str(sorted(changed-allowed)))
+          jobs=api(f'repos/{repo}/actions/runs/{run}/jobs?per_page=100')['jobs']
+          passed={j['name'] for j in jobs if j['conclusion']=='success'}
+          expected={'validate'}|{f'build ({c}, {a})' for c in ['server','web','updater','apk','browser','metadata'] for a in ['amd64','arm64']}
+          if not expected<=passed: raise SystemExit('native_matrix_incomplete')
+          with open(os.environ['GITHUB_OUTPUT'],'a') as out: out.write('commit='+commit+'\n')
+          print('Reusing verified application commit',commit,'with fixture commit',os.environ['GITHUB_SHA'])
+          PYCODE
+
   validate:
-    if: ${{ !inputs.minio_dependency_only }}
+    if: ${{ !inputs.minio_dependency_only && inputs.resume_from_run == '' }}
     permissions:
       contents: write
     runs-on: ubuntu-24.04
@@ -198,9 +241,11 @@ jobs:
           retention-days: 30
 
   integration:
-    needs: build
+    needs: [build, reuse]
+    if: ${{ !cancelled() && (needs.build.result == 'success' || needs.reuse.result == 'success') }}
     permissions:
       contents: read
+      actions: read
       packages: read
     strategy:
       fail-fast: false
@@ -211,9 +256,12 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: ${{ inputs.mode == 'release' && inputs.tag || github.sha }}
+          ref: ${{ needs.reuse.outputs.commit || (inputs.mode == 'release' && inputs.tag || github.sha) }}
+          fetch-depth: 0
       - uses: actions/download-artifact@v8
         with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: ${{ inputs.resume_from_run || github.run_id }}
           pattern: image-*-${{ matrix.architecture }}
           merge-multiple: true
           path: evidence
@@ -233,19 +281,20 @@ jobs:
           docker pull postgres:16-alpine
           docker pull redis:7-alpine
           docker pull ghcr.io/sidetool/boaa-minio@sha256:93435cecd3567b2f834a6a5d1e664575dd0d707ab058de2431f5944c5c183d7b
+          git show "$GITHUB_SHA:scripts/release/docker-smoke.mjs" > /tmp/boaa-integration-fixture.mjs
           docker run --name boaa-release-integration \
             -v /var/run/docker.sock:/var/run/docker.sock -v /tmp:/tmp \
+            -v /tmp/boaa-integration-fixture.mjs:/app/scripts/release/docker-smoke.mjs:ro \
             -e BOAA_SMOKE_SERVER_IMAGE=boaa-server:final -e BOAA_SMOKE_WEB_IMAGE=boaa-web:final \
             -e BOAA_SMOKE_APK_IMAGE=boaa-apk:final -e BOAA_SMOKE_BROWSER_IMAGE=boaa-browser:final \
             -e BOAA_SMOKE_METADATA_IMAGE=boaa-metadata:final \
-            --entrypoint node boaa-updater:final scripts/release/docker-smoke.mjs | tee evidence/integration.log
+            --entrypoint node boaa-updater:final scripts/release/docker-smoke.mjs 2>&1 | tee "evidence/integration-$ARCHITECTURE.log"
           docker rm boaa-release-integration
           python3 - <<'PY'
           import json,os,subprocess
           from pathlib import Path
-          Path('evidence/integration-'+os.environ['ARCHITECTURE']+'.json').write_text(json.dumps({'commit':subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip(),'architecture':os.environ['ARCHITECTURE'],'passed':True}))
+          Path('evidence/integration-'+os.environ['ARCHITECTURE']+'.json').write_text(json.dumps({'commit':subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip(),'architecture':os.environ['ARCHITECTURE'],'testCommit':os.environ['GITHUB_SHA'],'passed':True}))
           PY
-          mv evidence/integration.log "evidence/integration-$ARCHITECTURE.log"
       - uses: actions/upload-artifact@v7
         if: always()
         with:
@@ -254,20 +303,30 @@ jobs:
           retention-days: 30
 
   draft:
-    needs: integration
+    needs: [integration, reuse]
+    if: ${{ !cancelled() && needs.integration.result == 'success' }}
     runs-on: ubuntu-24.04
     permissions:
       contents: write
+      actions: read
       packages: write
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: ${{ inputs.mode == 'release' && inputs.tag || github.sha }}
+          ref: ${{ needs.reuse.outputs.commit || (inputs.mode == 'release' && inputs.tag || github.sha) }}
       - uses: actions/setup-node@v7
         with:
           node-version: 22
       - uses: actions/download-artifact@v8
         with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: ${{ inputs.resume_from_run || github.run_id }}
+          merge-multiple: true
+          path: release
+      - uses: actions/download-artifact@v8
+        if: inputs.resume_from_run != ''
+        with:
+          pattern: integration-*
           merge-multiple: true
           path: release
       - name: Assemble digest-bound, signed draft assets (never publish)
@@ -278,7 +337,7 @@ jobs:
         run: |
           set -euo pipefail
           printf '%s' "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
-          gh release download "$RELEASE_VERSION" --dir release --clobber
+          gh release download "$RELEASE_VERSION" --dir release --skip-existing
           mkdir image-metadata
           cp release/{server,web,updater,apk,browser,metadata}-{amd64,arm64}.json image-metadata/
           export BOAA_IMAGE_TAG="candidate-$(git rev-parse HEAD)"

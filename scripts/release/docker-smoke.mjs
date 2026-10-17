@@ -2,6 +2,8 @@
 // isolated volumes/network, final images and a fixture release feed. No registry publication.
 // Run inside the final updater image with /var/run/docker.sock and /tmp mounted at the same paths.
 import assert from 'node:assert/strict';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { chmod, chown, mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -40,7 +42,18 @@ class LocalDeployment extends DockerDeployment {
     return super.stage(next, state, id);
   }
 }
-const deployment = new LocalDeployment({ directory: path.join(root, 'state') });
+// This fixture only owns disposable resources and generated credentials. Keep production
+// command errors redacted, but retain Docker's diagnostic here when CI setup fails.
+const executeFixture = promisify(execFile);
+const fixtureRun = async (args, timeout = 120000) => {
+  try {
+    return (await executeFixture('docker', args, { timeout, maxBuffer: 8 * 1024 * 1024 })).stdout.trim();
+  } catch (error) {
+    console.error('Isolated fixture Docker error:', String(error.stderr ?? '').slice(-12000));
+    throw new Error('fixture_docker_command_failed', { cause: error });
+  }
+};
+const deployment = new LocalDeployment({ directory: path.join(root, 'state'), run: fixtureRun });
 deployment.project = project;
 async function apiRequest(method, route, body) {
   // Exercise the actual nginx ingress as well as auth and routes. Maintenance is sampled by the API
@@ -88,7 +101,13 @@ try {
     await dockerRun(['image', 'inspect', image]);
   await dockerRun(['network', 'create', network]);
   const [net] = JSON.parse(await dockerRun(['network', 'inspect', network]));
-  const prefix = net.IPAM.Config[0].Subnet.split('/')[0].split('.').slice(0, 3).join('.');
+  // Docker 28 requires an explicitly configured subnet for static test addresses.
+  // Let Docker select a free subnet first, then recreate only our empty network
+  // with that exact subnet. No existing application network is changed.
+  const subnet = net.IPAM.Config.find((entry) => !entry.Subnet.includes(':')).Subnet;
+  await dockerRun(['network', 'rm', network]);
+  await dockerRun(['network', 'create', '--subnet', subnet, network]);
+  const prefix = subnet.split('/')[0].split('.').slice(0, 3).join('.');
   const mailbox = path.join(root, 'mailbox');
   await prepareMailbox(mailbox);
   const token = path.join(root, 'runtime-token');
