@@ -267,7 +267,19 @@ jobs:
           gh release upload "$RELEASE_VERSION" --clobber \
             release/images.json release/children.json release/release.json release/release.json.sig \
             release/boaa-install.tar.gz release/boaa-install.tar.gz.sig \
+            release/integration-{amd64,arm64}.{json,log} \
             release/server-evidence.json release/server-evidence.json.sig
+          # Every signed companion must survive independently of Actions retention.
+          gh release view "$RELEASE_VERSION" --json assets > /tmp/draft-assets.json
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          evidence=json.loads(Path('release/server-evidence.json').read_text())
+          uploaded={row['name'] for row in json.loads(Path('/tmp/draft-assets.json').read_text())['assets']}
+          missing=set(evidence['artifacts'])|{'server-evidence.json','server-evidence.json.sig'}
+          missing-=uploaded
+          if missing: raise SystemExit('draft_companion_assets_missing: '+', '.join(sorted(missing)))
+          PY
       - uses: actions/upload-artifact@v7
         if: always()
         with:
