@@ -12,6 +12,9 @@ import unittest
 spec = importlib.util.spec_from_file_location('server_evidence', Path(__file__).with_name('verify-server-evidence.py'))
 gate = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(gate)
+collector_spec = importlib.util.spec_from_file_location('image_collector', Path(__file__).with_name('image-evidence.py'))
+collector = importlib.util.module_from_spec(collector_spec)
+collector_spec.loader.exec_module(collector)
 
 
 class EvidenceGateTests(unittest.TestCase):
@@ -58,6 +61,11 @@ class EvidenceGateTests(unittest.TestCase):
     def verify(self):
         return gate.verify(self.prefix, self.root, self.commit)
 
+    def test_real_upstream_notice_names_are_retained(self):
+        for path in ['payload/runtime/UPSTREAM-LICENSE', 'payload/runtime/build-recipe/MPL-NOTICE.md', 'node_modules/patchright/ThirdPartyNotices.txt']:
+            with self.subTest(path=path):
+                self.assertTrue(collector.is_notice(path))
+
     def test_valid_bound_fixture(self):
         self.assertEqual(self.verify()['packages'], 1)
 
@@ -97,6 +105,14 @@ class EvidenceGateTests(unittest.TestCase):
         self.evidence['noticesArchive']['sha256'] = gate.sha(self.root / 'updater-amd64-notices.tar.gz')
         self.save()
         with self.assertRaisesRegex(ValueError, 'notice_content_mismatch'):
+            self.verify()
+
+    def test_embedded_source_substitution_rejected(self):
+        self.archive('updater-amd64-embedded-sources.tar.gz', {'source.c': b'altered source'})
+        self.evidence['embeddedSourcesArchive']['sha256'] = gate.sha(self.root / 'updater-amd64-embedded-sources.tar.gz')
+        self.evidence['embeddedSources'] = {'source.c': {'sha256': hashlib.sha256(b'original source').hexdigest()}}
+        self.save()
+        with self.assertRaisesRegex(ValueError, 'embedded_source_content_mismatch'):
             self.verify()
 
     def test_source_version_and_bytes_rejected(self):

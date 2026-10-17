@@ -3,7 +3,7 @@
 // Run inside the final updater image with /var/run/docker.sock and /tmp mounted at the same paths.
 import assert from 'node:assert/strict';
 import { randomBytes, randomUUID } from 'node:crypto';
-import { chmod, mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
+import { chmod, chown, mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { DockerDeployment, dockerRun, imageFor, prepareMailbox } from './deployment.mjs';
@@ -93,6 +93,8 @@ try {
   await prepareMailbox(mailbox);
   const token = path.join(root, 'runtime-token');
   await writeFile(token, randomBytes(32).toString('hex'), { mode: 0o600 });
+  // The final updater runs as root; all receiving runtime images use UID 1000.
+  if (process.getuid?.() === 0) await chown(token, 1000, 1000);
   const environment = {
     NODE_ENV: 'production',
     HOST: '0.0.0.0',
@@ -249,6 +251,15 @@ try {
     180000,
   );
   console.log('PASS isolated application stack started');
+  await deployment.compose(current.compose, [
+    'exec',
+    '-T',
+    'api',
+    'node',
+    '-e',
+    "(async()=>{for(const p of ['/licenses/LICENSE','/licenses/server-sources.md','/licenses/debian/packages.tsv','/runtime-config.js']){const r=await fetch('http://web'+p);if(!r.ok||(await r.text()).length<20)throw Error('web_asset_missing:'+p)}})().catch(e=>{console.error(e);process.exit(1)})",
+  ]);
+  console.log('PASS final web serves license/source/package notices and runtime configuration');
   let latest = '1.1.0';
   const feed = {
     repository: 'fixture/boaa',

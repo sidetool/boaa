@@ -34,3 +34,14 @@ COPY LICENSE THIRD_PARTY_NOTICES.md third_party/server-sources.md /usr/share/ngi
 COPY third_party/server-source-manifest.json third_party/server-component-evidence.json third_party/server-compiled-libraries.json third_party/server-shaded-components.json third_party/server-debian-license-decisions.json /usr/share/nginx/html/licenses/
 COPY third_party/licenses /usr/share/nginx/html/licenses/third_party
 CMD ["sh", "-c", "/docker-entrypoint.d/40-boaa-runtime-config.sh && exec nginx -g 'daemon off;'"]
+# Publish the OS/nginx terms beside the browser bundle terms as well.
+RUN mkdir -p /usr/share/nginx/html/licenses/debian/common \
+    && dpkg-query -W -f='${binary:Package}\t${Version}\t${source:Package}\t${source:Version}\n' \
+      > /usr/share/nginx/html/licenses/debian/packages.tsv \
+    && for document in /usr/share/doc/*/copyright; do \
+         test -f "$document" || continue; \
+         package=$(basename "$(dirname "$document")"); \
+         mkdir -p "/usr/share/nginx/html/licenses/debian/$package"; \
+         cp -L "$document" "/usr/share/nginx/html/licenses/debian/$package/copyright"; \
+       done \
+    && cp -RL /usr/share/common-licenses/. /usr/share/nginx/html/licenses/debian/common/

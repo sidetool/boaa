@@ -132,6 +132,8 @@ def capture(image, component, output, syft):
         refs = []
         for n in row['notices']:
             candidates = [p for p, v in notices.items() if v['sha256'] == n['sha256']]
+            if not candidates:
+                return []
             refs.extend(candidates)
         return sorted(set(refs))
     def resolved_notice_path(path):

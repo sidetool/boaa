@@ -68,8 +68,12 @@ def main():
         for source in sources:
             archive.add(source, arcname='sources/' + source.name)
         for name in ['LICENSE', 'THIRD_PARTY_NOTICES.md', 'third_party/server-source-manifest.json',
-                     'third_party/server-sources.md', 'third_party/licenses']:
+                     'third_party/server-sources.md']:
             archive.add(ROOT / name, arcname=name)
+        # Package committed notices only; ignored working-directory files are never release inputs.
+        tracked = subprocess.check_output(['git', 'ls-files', '-z', 'third_party/licenses'], cwd=ROOT).decode().split('\0')
+        for name in filter(None, tracked):
+            archive.add(ROOT / name, arcname=name, recursive=False)
     project.unlink()
     Path(str(bundle) + '.sha256').write_text(f'{digest(bundle)}  {bundle.name}\n')
     print(f'Captured {len(sources)} pinned source inputs for BOAA {commit}; {bundle.stat().st_size} bytes')

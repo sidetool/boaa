@@ -63,6 +63,14 @@ def verify(prefix, directory, commit):
                     captured[member.name] = hashlib.file_digest(stream, 'sha256').hexdigest()
         if captured != {p: row['sha256'] for p, row in evidence['notices'].items()}:
             raise ValueError('notice_content_mismatch')
+    with tarfile.open(directory / evidence['embeddedSourcesArchive']['file']) as archive:
+        embedded = {}
+        for member in archive:
+            if member.isfile():
+                with archive.extractfile(member) as stream:
+                    embedded[member.name] = hashlib.file_digest(stream, 'sha256').hexdigest()
+        if embedded != {p: row['sha256'] for p, row in evidence['embeddedSources'].items()}:
+            raise ValueError('embedded_source_content_mismatch')
     sources = load(directory / (prefix + '-debian-sources.json'))
     if sources['imageId'] != evidence['imageId']:
         raise ValueError('source_image_mismatch')
