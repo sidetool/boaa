@@ -1499,6 +1499,24 @@ export function useExternalSourceController(options: UseExternalSourceController
       if (background && automaticDownloadBlockedRef.current) return true;
       const sourceDetail = background || detached ? undefined : detail;
       let sourceThumbnailUrl = sourceDetail?.thumbnailUrl ?? currentSubscription?.thumbnailUrl;
+      // Reader/background downloads have no mounted detail page. Resolve the work's
+      // artwork by its stable source identity instead of keeping the chapter preview.
+      const canResolveSourceCover = Boolean(
+        sourceThumbnailUrl ||
+        sourceDetail?.coverRef ||
+        (optionsRef.current.assets?.saveApprovedEnrichmentCover &&
+          optionsRef.current.registry.resolveExternalSourceCover),
+      );
+      const resolveSourceThumbnail = async (signal: AbortSignal) => {
+        if (sourceThumbnailUrl) return sourceThumbnailUrl;
+        if (sourceDetail?.coverRef) sourceThumbnailUrl = await resolveDetailThumbnail(sourceDetail, signal);
+        return (sourceThumbnailUrl ??= await optionsRef.current.registry.resolveExternalSourceCover?.(
+          sourceId,
+          optionsRef.current.hostContext,
+          { connectorId: sourceId, accountConnectionId, remoteId: collection.remoteId },
+          signal,
+        ));
+      };
       const selectedUpdateCount = importable.filter((item) => item.importState === 'update_available').length;
       if (
         selectedUpdateCount > 0 &&
@@ -1689,7 +1707,7 @@ export function useExternalSourceController(options: UseExternalSourceController
                 if (mountedRef.current)
                   setSelectedKeys((current) => new Set([...current].filter((key) => !keys.has(key))));
                 await Promise.all([publishCommittedNovel(novel), optionsRef.current.onLibraryItemCommitted?.(novel)]);
-                if (!coverAttempted && (sourceThumbnailUrl || sourceDetail?.coverRef)) {
+                if (!coverAttempted && canResolveSourceCover) {
                   coverAttempted = true;
                   try {
                     await (
@@ -1697,7 +1715,7 @@ export function useExternalSourceController(options: UseExternalSourceController
                     ).persistSourceCover(
                       optionsRef.current.assets,
                       novel,
-                      async () => (sourceThumbnailUrl ??= await resolveDetailThumbnail(sourceDetail!, abort.signal)),
+                      () => resolveSourceThumbnail(abort.signal),
                       abort.signal,
                     );
                   } catch (error) {
@@ -2261,7 +2279,7 @@ export function useExternalSourceController(options: UseExternalSourceController
           // completed release visually blocked while optional cover persistence runs.
           // Hosted receipts carry no browser files. Also repair an embedded preview
           // when the selected release was already downloaded with identical bytes.
-          if (!coverAttempted && (sourceThumbnailUrl || sourceDetail?.coverRef)) {
+          if (!coverAttempted && canResolveSourceCover) {
             coverAttempted = true;
             try {
               await (
@@ -2269,7 +2287,7 @@ export function useExternalSourceController(options: UseExternalSourceController
               ).persistSourceCover(
                 optionsRef.current.assets,
                 importedNovel,
-                async () => (sourceThumbnailUrl ??= await resolveDetailThumbnail(sourceDetail!, abort.signal)),
+                () => resolveSourceThumbnail(abort.signal),
                 abort.signal,
               );
             } catch (error) {

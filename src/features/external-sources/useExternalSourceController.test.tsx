@@ -2344,139 +2344,148 @@ describe('useExternalSourceController remote updates', () => {
     }
   });
 
-  it.each(['browser-archive', 'server-receipt', 'unchanged-receipt', 'cover-reference'] as const)(
-    'persists or repairs a subscribed source cover with %s',
-    async (transport) => {
-      const coverBytes = Uint8Array.from(
-        Buffer.from(
-          'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9WlS8AAAAASUVORK5CYII=',
-          'base64',
-        ),
-      );
-      const coverUrl = `data:image/png;base64,${Buffer.from(coverBytes).toString('base64')}`;
-      const saveApprovedEnrichmentCover = vi.fn(async (_bookId, input) => ({
-        current: {
-          id: 'source-cover',
-          bookId: _bookId,
-          kind: 'cover',
-          provenance: 'approved_enrichment',
-          status: 'active',
-          storageKey: 'source-cover',
-          fileName: input.fileName,
-          contentType: input.contentType,
-          byteLength: input.blob.size,
-          contentHash: input.contentHash,
-          pixelWidth: input.pixelWidth,
-          pixelHeight: input.pixelHeight,
-          createdAt: '2026-08-30T00:00:00.000Z',
-          activatedAt: '2026-08-30T00:00:00.000Z',
-        } satisfies BookAssetMetadata,
-        metadataRevision: 1,
-      }));
-      const assets = {
-        getActiveCover: vi.fn(async () => ({ metadata: { provenance: 'archive_embedded' }, blob: new Blob() })),
-        saveApprovedEnrichmentCover,
-      } as unknown as BookAssetRepository;
-      const previousCreateImageBitmap = globalThis.createImageBitmap;
-      vi.stubGlobal(
-        'createImageBitmap',
-        vi.fn(async () => ({ width: 1, height: 1, close: vi.fn() }) as unknown as ImageBitmap),
-      );
-      const timestamp = '2026-08-30T00:00:00.000Z';
-      let preparedNovel: Novel | undefined;
-      const hosted = transport !== 'browser-archive';
-      const unchanged = transport === 'unchanged-receipt';
-      const resolveCover = vi.fn(async () => coverUrl);
-      const port: import('../../services/import/hosted-image-import').HostedImageImportPort = {
-        download: vi.fn(async () => ({
-          artifactId: 'cover-chapter',
-          sourceContentHash: await sha256(unchanged ? '기존 원격 원문' : 'new chapter'),
-          byteLength: 100,
-        })),
-        assemble: vi.fn(async (input) => {
-          preparedNovel = novel({
-            id: input.clientBookId!,
-            format: 'image_archive',
-            sourceContentHash: await sha256('aggregate'),
-            activeContentRevisionId: 'new',
-          });
-          return { uploadId: 'cover-upload', sourceContentHash: preparedNovel.sourceContentHash!, byteLength: 120 };
-        }),
-        discard: vi.fn(async () => {}),
-      };
-      const harness = await createHarness({
-        downloadedContent: '',
-        downloadedFile: await singlePageComicFile(),
-        localBookMissing: !unchanged,
-        novelOverrides: { format: 'image_archive', activeContentRevisionId: 'old', documentSectionCount: 1 },
-        initialLinkOverrides: { collectionRemoteId: 'manga:1' },
-        ...(hosted
-          ? {
-              hostedImageImport: port,
-              importPrepared: () => ({
-                jobId: 'cover-job',
-                cancel: vi.fn(),
-                promise: Promise.resolve({ novel: preparedNovel! }),
-              }),
-              ...(!unchanged ? { getNovel: async () => preparedNovel } : {}),
-            }
-          : {}),
-        serial: true,
-        supportsIncrementalImageSeriesAppend: true,
-        supportsExpectedSourceContentHash: true,
-        assets,
-        ...(transport === 'cover-reference'
-          ? {
-              detail: { title: '연동 작품', coverRef: { ...ITEM_KEY, remoteId: 'manga:1' } },
-              resolveCover,
-            }
-          : {}),
-        subscriptions: [
-          {
-            id: 'subscription-1',
-            connectorId: SOURCE_ID,
-            accountConnectionId: 'fixture-account',
-            collectionRemoteId: 'manga:1',
-            navigationRef: 'manga:1',
-            title: '연동 작품',
-            thumbnailUrl: transport === 'cover-reference' ? undefined : coverUrl,
-            knownReleaseIds: ['work-1'],
-            newReleaseIds: [],
-            availableReleaseCount: 1,
-            lastCheckedAt: timestamp,
-            createdAt: timestamp,
-            updatedAt: timestamp,
-            schemaVersion: 1,
-          },
-        ],
+  it.each([
+    'browser-archive',
+    'server-receipt',
+    'unchanged-receipt',
+    'cover-reference',
+    'work-reference',
+    'reader-cover-reference',
+  ] as const)('persists or repairs a subscribed source cover with %s', async (transport) => {
+    const coverBytes = Uint8Array.from(
+      Buffer.from(
+        'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9WlS8AAAAASUVORK5CYII=',
+        'base64',
+      ),
+    );
+    const coverUrl = `data:image/png;base64,${Buffer.from(coverBytes).toString('base64')}`;
+    const saveApprovedEnrichmentCover = vi.fn(async (_bookId, input) => ({
+      current: {
+        id: 'source-cover',
+        bookId: _bookId,
+        kind: 'cover',
+        provenance: 'approved_enrichment',
+        status: 'active',
+        storageKey: 'source-cover',
+        fileName: input.fileName,
+        contentType: input.contentType,
+        byteLength: input.blob.size,
+        contentHash: input.contentHash,
+        pixelWidth: input.pixelWidth,
+        pixelHeight: input.pixelHeight,
+        createdAt: '2026-08-30T00:00:00.000Z',
+        activatedAt: '2026-08-30T00:00:00.000Z',
+      } satisfies BookAssetMetadata,
+      metadataRevision: 1,
+    }));
+    const assets = {
+      getActiveCover: vi.fn(async () => ({ metadata: { provenance: 'archive_embedded' }, blob: new Blob() })),
+      saveApprovedEnrichmentCover,
+    } as unknown as BookAssetRepository;
+    const previousCreateImageBitmap = globalThis.createImageBitmap;
+    vi.stubGlobal(
+      'createImageBitmap',
+      vi.fn(async () => ({ width: 1, height: 1, close: vi.fn() }) as unknown as ImageBitmap),
+    );
+    const timestamp = '2026-08-30T00:00:00.000Z';
+    let preparedNovel: Novel | undefined;
+    const hosted = transport !== 'browser-archive';
+    const unchanged = transport === 'unchanged-receipt';
+    const resolveCover = vi.fn(async () => coverUrl);
+    const port: import('../../services/import/hosted-image-import').HostedImageImportPort = {
+      download: vi.fn(async () => ({
+        artifactId: 'cover-chapter',
+        sourceContentHash: await sha256(unchanged ? '기존 원격 원문' : 'new chapter'),
+        byteLength: 100,
+      })),
+      assemble: vi.fn(async (input) => {
+        preparedNovel = novel({
+          id: input.clientBookId!,
+          format: 'image_archive',
+          sourceContentHash: await sha256('aggregate'),
+          activeContentRevisionId: 'new',
+        });
+        return { uploadId: 'cover-upload', sourceContentHash: preparedNovel.sourceContentHash!, byteLength: 120 };
+      }),
+      discard: vi.fn(async () => {}),
+    };
+    const harness = await createHarness({
+      downloadedContent: '',
+      downloadedFile: await singlePageComicFile(),
+      localBookMissing: !unchanged,
+      novelOverrides: { format: 'image_archive', activeContentRevisionId: 'old', documentSectionCount: 1 },
+      initialLinkOverrides: { collectionRemoteId: 'manga:1' },
+      ...(hosted
+        ? {
+            hostedImageImport: port,
+            importPrepared: () => ({
+              jobId: 'cover-job',
+              cancel: vi.fn(),
+              promise: Promise.resolve({ novel: preparedNovel! }),
+            }),
+            ...(!unchanged ? { getNovel: async () => preparedNovel } : {}),
+          }
+        : {}),
+      serial: true,
+      supportsIncrementalImageSeriesAppend: true,
+      supportsExpectedSourceContentHash: true,
+      assets,
+      ...(transport === 'cover-reference'
+        ? {
+            detail: { title: '연동 작품', coverRef: { ...ITEM_KEY, remoteId: 'manga:1' } },
+            resolveCover,
+          }
+        : {}),
+      ...(['work-reference', 'reader-cover-reference'].includes(transport) ? { resolveCover } : {}),
+      subscriptions: [
+        {
+          id: 'subscription-1',
+          connectorId: SOURCE_ID,
+          accountConnectionId: 'fixture-account',
+          collectionRemoteId: 'manga:1',
+          navigationRef: 'manga:1',
+          title: '연동 작품',
+          thumbnailUrl: ['cover-reference', 'work-reference', 'reader-cover-reference'].includes(transport)
+            ? undefined
+            : coverUrl,
+          knownReleaseIds: ['work-1'],
+          newReleaseIds: [],
+          availableReleaseCount: 1,
+          lastCheckedAt: timestamp,
+          createdAt: timestamp,
+          updatedAt: timestamp,
+          schemaVersion: 1,
+        },
+      ],
+    });
+
+    try {
+      await act(async () => {
+        if (transport === 'reader-cover-reference') await harness.controller.saveStream!(harness.controller.items[0]!);
+        else await harness.controller.importSelected();
       });
 
-      try {
-        await act(async () => {
-          await harness.controller.importSelected();
-        });
-
-        expect(saveApprovedEnrichmentCover).toHaveBeenCalledWith(
-          expect.any(String),
-          expect.objectContaining({
-            contentType: 'image/png',
-            contentHash: integrityHash(coverBytes),
-            expectedMetadataRevision: 0,
-            fit: 'crop',
-          }),
-        );
-        if (hosted) expect(harness.importFile).not.toHaveBeenCalled();
-        else expect(harness.importFile.mock.calls[0]![0]).not.toHaveProperty('importMode');
-        if (unchanged) expect(port.assemble).not.toHaveBeenCalled();
-        // The library resolves artwork independently of the downloaded book cover.
-        if (transport === 'cover-reference') expect(resolveCover).toHaveBeenCalledTimes(2);
+      expect(saveApprovedEnrichmentCover).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({
+          contentType: 'image/png',
+          contentHash: integrityHash(coverBytes),
+          expectedMetadataRevision: 0,
+          fit: 'crop',
+        }),
+      );
+      if (hosted) expect(harness.importFile).not.toHaveBeenCalled();
+      else expect(harness.importFile.mock.calls[0]![0]).not.toHaveProperty('importMode');
+      if (unchanged) expect(port.assemble).not.toHaveBeenCalled();
+      // The library resolves artwork independently of the downloaded book cover.
+      if (transport === 'cover-reference') expect(resolveCover).toHaveBeenCalledTimes(2);
+      if (transport !== 'reader-cover-reference')
         expect(harness.notify).toHaveBeenCalledWith(expect.stringContaining('1개 회차'), 'success');
-      } finally {
-        vi.stubGlobal('createImageBitmap', previousCreateImageBitmap);
-        await act(async () => harness.renderer.unmount());
-      }
-    },
-  );
+    } finally {
+      vi.stubGlobal('createImageBitmap', previousCreateImageBitmap);
+      await act(async () => harness.renderer.unmount());
+    }
+  });
 
   it('uploads only a Suwayomi chapter delta when the active importer supports series append', async () => {
     const exportSource = vi.fn(async () => ({ metadata: {} as BookAssetMetadata, blob: new Blob(['old aggregate']) }));

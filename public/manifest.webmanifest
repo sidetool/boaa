@@ -13,13 +13,13 @@
   "orientation": "any",
   "icons": [
     {
-      "src": "/icons/boaa-192.png",
+      "src": "/icons/boaa-192.png?v=45d7dfb00b97",
       "sizes": "192x192",
       "type": "image/png",
       "purpose": "any"
     },
     {
-      "src": "/icons/boaa-512.png",
+      "src": "/icons/boaa-512.png?v=e1d2ffe5f9d7",
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "any"

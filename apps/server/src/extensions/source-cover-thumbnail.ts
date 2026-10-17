@@ -17,7 +17,7 @@ export async function sourceCoverThumbnail(blob: Blob, signal: AbortSignal): Pro
     const metadata = await image.metadata();
     if (!['jpeg', 'png', 'webp', 'gif'].includes(metadata.format ?? '')) return blob;
     if (!metadata.width || !metadata.height) return blob;
-    if (metadata.width <= 480 && metadata.height <= 720 && blob.size <= 256 * 1024) return blob;
+    if (metadata.width <= 480 && metadata.height <= 720 && blob.size <= 48 * 1024) return blob;
     const bytes = await image
       .rotate()
       .resize(480, 720, { fit: 'inside', withoutEnlargement: true })

@@ -842,6 +842,19 @@
 /* ───────── phones ───────── */
 
 @media (max-width: 699px) {
+  /* Multiple actions must not consume the title's entire grid track on phones. */
+  .un-ext .extension-settings-card > .installed-extension-actions:has(> :nth-child(2)) {
+    grid-column: 1 / -1;
+    grid-row: auto;
+    justify-content: flex-start;
+    margin-top: 8px;
+  }
+
+  .un-ext .extension-settings-card > strong {
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+
   .un-ext-head .un-btn {
     padding: 0 12px;
   }

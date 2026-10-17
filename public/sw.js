@@ -1,5 +1,11 @@
-const CACHE_NAME = 'boaa-app-shell-v4';
-const APP_SHELL = ['/', '/manifest.webmanifest', '/icons/boaa-32.png', '/icons/boaa-192.png', '/icons/boaa-512.png'];
+const CACHE_NAME = 'boaa-app-shell-v5';
+const APP_SHELL = [
+  '/',
+  '/manifest.webmanifest',
+  '/icons/boaa-32.png?v=ddc41669658c',
+  '/icons/boaa-192.png?v=45d7dfb00b97',
+  '/icons/boaa-512.png?v=e1d2ffe5f9d7',
+];
 const IS_TAURI_SHELL = self.location.hostname === 'tauri.localhost' || self.location.protocol === 'tauri:';
 
 if (IS_TAURI_SHELL) {
