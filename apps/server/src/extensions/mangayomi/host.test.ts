@@ -423,9 +423,9 @@ it('preserves encrypted options across restart and imports original-script pages
       });
       expect(cover.statusCode).toBe(200);
       expect(cover.headers['content-type']).toContain('image/');
-      expect(cover.headers['set-cookie']).toEqual(
-        expect.arrayContaining([expect.stringContaining('boaa_session=legacy-fixture-session; Path=/api;')]),
-      );
+      // Ordinary source responses must not rewrite cookies: a delayed response
+      // could otherwise replace the session established by another tab.
+      expect(cover.headers['set-cookie']).toBeUndefined();
     }
     const canonical = await app.inject({
       method: 'POST',

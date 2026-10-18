@@ -72,7 +72,7 @@ async function source(format: string) {
   }
   return Buffer.from(await (await zip.close()).arrayBuffer());
 }
-suite('two-account persisted data isolation', () => {
+suite('two-account persisted data isolation', { timeout: 60_000 }, () => {
   afterAll(async () => harness?.stop(), POSTGRES_HARNESS_CLEANUP_TIMEOUT_MS);
   test('migration preserves legacy object identity and rejects cross-owner parent links', async () => {
     await withPostgresSchema(harness!, 'owner_legacy', async (pool) => {

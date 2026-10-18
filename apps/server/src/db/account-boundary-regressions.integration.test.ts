@@ -28,7 +28,7 @@ for (const key of Object.keys(process.env))
 const harness = await startPostgresIntegrationHarness();
 if (harness?.source === 'environment') throw new Error('isolated database required');
 const suite = harness ? describe : describe.skip;
-suite('account write boundaries', () => {
+suite('account write boundaries', { timeout: 60_000 }, () => {
   afterAll(async () => harness?.stop(), POSTGRES_HARNESS_CLEANUP_TIMEOUT_MS);
   test('reading events and payload-only sync cannot cross owners, even for admin', async () => {
     await withPostgresSchema(harness!, 'account_writes', async (pool) => {

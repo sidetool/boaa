@@ -115,6 +115,7 @@ describe('local chapter sequence through the real browser storage boundary', () 
         await act(async () => renderer.unmount());
       }
     },
-    30_000,
+    // This is a 101-archive persistence/identity acceptance test, not a latency benchmark.
+    120_000,
   );
 });

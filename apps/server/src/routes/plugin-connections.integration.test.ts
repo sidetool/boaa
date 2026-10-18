@@ -14,7 +14,7 @@ import {
   startPostgresIntegrationHarness,
   withPostgresSchema,
 } from '../services/id-v2-migration/postgres-integration-harness';
-import { SELF_HOST_SESSION_COOKIE } from '../auth-cookie';
+import { SELF_HOST_SESSION_COOKIE, requestCookie } from '../auth-cookie';
 import { testPluginBackend } from './test-fixtures/plugin-backend';
 const harness = await startPostgresIntegrationHarness();
 afterAll(() => harness?.stop(), POSTGRES_HARNESS_CLEANUP_TIMEOUT_MS);
@@ -33,6 +33,12 @@ it.skipIf(!harness)(
         const auth = new SelfHostAuthService(new PostgresSelfHostAuthStore(pool), 'owner');
         const account = await auth.register({ username: 'http-owner', password: 'Synthetic-plugin-password-2026!' });
         const app = Fastify();
+        // Supply the authenticated principal normally installed by the server auth hook.
+        app.addHook('onRequest', async (request) => {
+          const token = requestCookie(request, SELF_HOST_SESSION_COOKIE);
+          const session = token ? await auth.authenticateSession(token) : undefined;
+          if (session) request.principal = { ...session, authMethod: 'session' };
+        });
         registerPluginConnectionRoutes(
           app,
           loadConfig({
