@@ -1,4 +1,4 @@
-import { spawn } from 'node:child_process';
+import { spawnWithBudget } from './process-budget.mjs';
 import { readdir, rename } from 'node:fs/promises';
 import { delimiter, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -10,7 +10,7 @@ import { ApkWorkerSupervisor } from './supervisor.mjs';
 export async function createJavaApkTools(
   java,
   build,
-  { systemRoot = process.env.SystemRoot, resolveDefaultProxy = () => undefined } = {},
+  { systemRoot = process.env.SystemRoot, resolveDefaultProxy = () => undefined, processBudget } = {},
 ) {
   const env = systemRoot ? { SystemRoot: systemRoot } : {};
   const dependencies = (await readdir(join(build, 'dependencies'))).filter((name) => name.endsWith('.jar'));
@@ -62,11 +62,16 @@ export async function createJavaApkTools(
   async function tool(args, signal) {
     signal.throwIfAborted();
     return new Promise((resolve, reject) => {
-      const child = spawn(java, ['-Xmx256m', '-cp', toolsPath, ...args], {
-        env,
-        windowsHide: true,
-        stdio: ['ignore', 'pipe', 'pipe'],
-      });
+      const child = spawnWithBudget(
+        java,
+        ['-Xmx256m', '-cp', toolsPath, ...args],
+        {
+          env,
+          windowsHide: true,
+          stdio: ['ignore', 'pipe', 'pipe'],
+        },
+        processBudget,
+      );
       const parts = [];
       let length = 0;
       let failure;
@@ -107,7 +112,7 @@ export async function createJavaApkTools(
         metadata.pkg,
         resolveDefaultProxy() ?? '',
       ],
-      { env, pagesTimeoutMs: 165000, chaptersTimeoutMs: 600000 },
+      { env, pagesTimeoutMs: 165000, chaptersTimeoutMs: 600000, processBudget },
     );
     return {
       get busy() {

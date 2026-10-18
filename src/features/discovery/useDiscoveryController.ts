@@ -12,9 +12,13 @@ export function useDiscoveryController(
   client?: RemoteApiClient,
 ) {
   const auth = useOptionalSelfHostAuth();
-  const scope = `${location.origin}:${serverScope}:${auth?.account.username ?? 'local'}`;
+  const scope = auth?.session?.storageScope ?? `${location.origin}:${serverScope}:${auth?.account.username ?? 'local'}`;
   const [active, setActive] = useState(false);
-  const store = useMemo(() => new DiscoverySettingsStore(scope, client), [scope, client]);
+  const store = useMemo(
+    () =>
+      new DiscoverySettingsStore(scope, client, localStorage, !auth?.session || auth.session.context.legacyDataOwner),
+    [scope, client, auth?.session],
+  );
   const shared = useSyncExternalStore(store.subscribe, store.getSnapshot);
   useEffect(() => store.mount(), [store]);
   useEffect(() => {

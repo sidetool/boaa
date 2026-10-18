@@ -2,7 +2,6 @@ import {
   isBrandValue,
   legacyBrandNames,
   readBrandStorage,
-  removeBrandStorage,
   writeBrandStorage,
 } from '@boaa/extension-contracts/brand-compat';
 import { exchangeDropboxAuthorizationCode, type DropboxCredential } from './dropbox-provider';
@@ -245,11 +244,14 @@ export async function connectDropboxWithPopup(input: {
 
 /** Starts an OAuth flow in the current tab for runtimes that do not expose popup windows. */
 export async function beginDropboxAuthorizationRedirect(input: {
+  readonly storageScope?: string;
+  readonly signal?: AbortSignal;
   readonly appKey: string;
   readonly redirectUri?: string;
   readonly scopes?: readonly string[];
 }): Promise<void> {
   const prepared = await prepareDropboxAuthorization(input);
+  input.signal?.throwIfAborted();
   const pending: PendingDropboxRedirectV1 = {
     version: 1,
     state: prepared.state,
@@ -258,7 +260,9 @@ export async function beginDropboxAuthorizationRedirect(input: {
     createdAt: Date.now(),
   };
   try {
-    writeBrandStorage(globalThis.sessionStorage, REDIRECT_PENDING_KEY, JSON.stringify(pending));
+    if (input.storageScope)
+      globalThis.sessionStorage.setItem(`${REDIRECT_PENDING_KEY}:${input.storageScope}`, JSON.stringify(pending));
+    else writeBrandStorage(globalThis.sessionStorage, REDIRECT_PENDING_KEY, JSON.stringify(pending));
   } catch {
     throw new Error('Dropbox 연결 상태를 이 탭에 임시 저장할 수 없습니다.');
   }
@@ -267,6 +271,7 @@ export async function beginDropboxAuthorizationRedirect(input: {
 
 /** Completes a current-tab OAuth redirect once, then removes code/state from the visible URL. */
 export function completeDropboxAuthorizationRedirect(input: {
+  readonly storageScope?: string;
   readonly appKey: string;
   readonly fetchImpl?: typeof fetch;
 }): Promise<DropboxCredential | undefined> {
@@ -275,20 +280,24 @@ export function completeDropboxAuthorizationRedirect(input: {
   const code = query.get('code');
   const error = query.get('error');
   if (!state || (!code && !error)) return Promise.resolve(undefined);
+  if (input.storageScope) return completeDropboxAuthorizationRedirectOnce(input, { state, code, error });
   if (redirectCompletionPromise) return redirectCompletionPromise;
   redirectCompletionPromise = completeDropboxAuthorizationRedirectOnce(input, { state, code, error });
   return redirectCompletionPromise;
 }
 
 async function completeDropboxAuthorizationRedirectOnce(
-  input: { readonly appKey: string; readonly fetchImpl?: typeof fetch },
+  input: { readonly appKey: string; readonly fetchImpl?: typeof fetch; readonly storageScope?: string },
   callback: { readonly state: string; readonly code: string | null; readonly error: string | null },
 ): Promise<DropboxCredential> {
   let pending: Partial<PendingDropboxRedirectV1> | undefined;
   try {
-    const raw = readBrandStorage(globalThis.sessionStorage, REDIRECT_PENDING_KEY);
+    const key = input.storageScope ? `${REDIRECT_PENDING_KEY}:${input.storageScope}` : REDIRECT_PENDING_KEY;
+    const raw = input.storageScope
+      ? globalThis.sessionStorage.getItem(key)
+      : readBrandStorage(globalThis.sessionStorage, key);
     pending = raw ? (JSON.parse(raw) as Partial<PendingDropboxRedirectV1>) : undefined;
-    removeBrandStorage(globalThis.sessionStorage, REDIRECT_PENDING_KEY);
+    globalThis.sessionStorage.removeItem(key);
   } catch {
     cleanDropboxCallbackQuery();
     throw new Error('저장된 Dropbox 연결 상태를 읽을 수 없습니다. 다시 연결해 주세요.');
@@ -315,5 +324,14 @@ async function completeDropboxAuthorizationRedirectOnce(
     });
   } finally {
     cleanDropboxCallbackQuery();
+  }
+}
+
+/** Retire only this account's unfinished redirect on an actual session end. */
+export function discardDropboxAuthorizationRedirect(storageScope: string): void {
+  try {
+    globalThis.sessionStorage.removeItem(`${REDIRECT_PENDING_KEY}:${storageScope}`);
+  } catch {
+    /* unavailable */
   }
 }

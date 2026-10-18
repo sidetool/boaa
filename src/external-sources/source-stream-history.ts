@@ -1,4 +1,4 @@
-import { readBrandStorage, writeBrandStorage } from '@boaa/extension-contracts/brand-compat';
+import { readBrandStorage } from '@boaa/extension-contracts/brand-compat';
 /** Device-only reading metadata. No source URL, credential, or image payload is stored. */
 export interface SourceStreamPosition {
   page: number;
@@ -9,9 +9,21 @@ export interface SourceStreamPosition {
 }
 const key = 'boaa.source-stream-positions.v1';
 const maxAge = 180 * 86400000;
-function entries(): [string, SourceStreamPosition][] {
+function storageKey(identity: string): string {
   try {
-    const value: unknown = JSON.parse(readBrandStorage(localStorage, key) ?? '[]');
+    const base = identity.split(':text:')[0];
+    const scope = JSON.parse(base)?.[0];
+    if (typeof scope === 'string' && scope.startsWith('hosted-account:')) return `${key}:${scope}`;
+  } catch {
+    /* Legacy/local identity. */
+  }
+  return key;
+}
+function entries(storage = key): [string, SourceStreamPosition][] {
+  try {
+    const value: unknown = JSON.parse(
+      (storage === key ? readBrandStorage(localStorage, key) : localStorage.getItem(storage)) ?? '[]',
+    );
     if (!Array.isArray(value)) return [];
     return value
       .filter((entry): entry is [string, SourceStreamPosition] => {
@@ -38,13 +50,14 @@ function entries(): [string, SourceStreamPosition][] {
   }
 }
 export function readSourceStreamPosition(identity: string): SourceStreamPosition | undefined {
-  return entries().find(([id]) => id === identity)?.[1];
+  return entries(storageKey(identity)).find(([id]) => id === identity)?.[1];
 }
 export function saveSourceStreamPosition(identity: string, position: Omit<SourceStreamPosition, 'updatedAt'>): void {
   try {
-    const next = entries().filter(([id]) => id !== identity);
+    const storage = storageKey(identity);
+    const next = entries(storage).filter(([id]) => id !== identity);
     next.push([identity, { ...position, updatedAt: Date.now() }]);
-    writeBrandStorage(localStorage, key, JSON.stringify(next.slice(-200)));
+    localStorage.setItem(storage, JSON.stringify(next.slice(-200)));
   } catch {
     /* Reading remains available with browser storage disabled or full. */
   }
@@ -52,8 +65,16 @@ export function saveSourceStreamPosition(identity: string, position: Omit<Source
 
 /** Remove both image offsets and every text-revision offset for the selected episodes. */
 export function clearSourceStreamPositions(identities: readonly string[], cutoff = Infinity): void {
+  const grouped = new Map<string, string[]>();
+  for (const identity of identities) {
+    const storage = storageKey(identity);
+    grouped.set(storage, [...(grouped.get(storage) ?? []), identity]);
+  }
+  for (const [storage, values] of grouped) clearGroup(storage, values, cutoff);
+}
+function clearGroup(storage: string, identities: readonly string[], cutoff: number) {
   const selected = new Set(identities);
-  const before = entries();
+  const before = entries(storage);
   const remaining = before.filter(([id, position]) => {
     if (position.updatedAt > cutoff) return true;
     if (selected.has(id)) return false;
@@ -61,5 +82,5 @@ export function clearSourceStreamPositions(identities: readonly string[], cutoff
     return textSuffix < 0 || !selected.has(id.slice(0, textSuffix));
   });
   if (remaining.length === before.length) return;
-  writeBrandStorage(localStorage, key, JSON.stringify(remaining));
+  localStorage.setItem(storage, JSON.stringify(remaining));
 }

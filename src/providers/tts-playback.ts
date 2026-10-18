@@ -7,6 +7,9 @@ import { structuredIntegrityHash } from '@boaa/text-core/hash';
 import type { SpokenTextProjectionSpan, SpokenTextRule } from '../domain/types';
 
 export interface PlayableTtsSegment {
+  /** Client-only timing weights; these are estimates, not provider word timestamps. */
+  readonly plainBatchPositions?: readonly { paragraphId: string; paragraphIndex: number; spokenLength: number }[];
+  readonly plainBatch?: readonly { paragraphId: string; paragraphHash: string }[];
   readonly paragraphId: string;
   readonly text: string;
   readonly language?: string;

@@ -34,8 +34,8 @@ const item = (id: number): DocumentSeriesImportOptions['items'][number] => ({
   remoteRevision: `remote-${id}`,
 });
 
-function fixture() {
-  const state = new ExternalSourceLocalStateStore();
+function fixture(confirmedBookId?: string) {
+  const state = new ExternalSourceLocalStateStore(confirmedBookId);
   const abort = new AbortController();
   const bookId = externalDocumentCollectionId(item(1).key, collection.remoteId);
   let novel: Novel | undefined;
@@ -62,7 +62,7 @@ function fixture() {
     const archive = (await readDocumentSeriesArchive(file))!;
     source = file;
     novel = {
-      id: bookId,
+      id: confirmedBookId ?? bookId,
       title: collection.title,
       format: 'txt',
       sourceFileName: file.name,
@@ -133,10 +133,10 @@ function fixture() {
       connectionGeneration: generation,
     }),
   } as unknown as ExternalSourceRegistryPort;
-  const getNovel = vi.fn(async () => novel);
+  const getNovel = vi.fn(async (id: string) => (id === novel?.id ? novel : undefined));
   const assets = {
-    exportSource: vi.fn(async () =>
-      source && novel
+    exportSource: vi.fn(async (id: string) =>
+      source && novel && id === novel.id
         ? {
             blob: source,
             metadata: {
@@ -468,5 +468,50 @@ describe('TXT series import coordinator', () => {
     expect(await h.state.listLinks()).toEqual([]);
     Object.assign(h.importService, { supportsExpectedBase: false });
     await expect(h.run([item(1)])).rejects.toThrow('안전한 텍스트');
+  });
+});
+
+it.each(['member-a-book', 'member-b-book'])(
+  'uses canonical %s for later batches, new releases and retry imports',
+  async (canonicalId) => {
+    const h = fixture(canonicalId);
+    await h.run(Array.from({ length: 51 }, (_, index) => item(index + 1)));
+    expect(h.importFile.mock.calls.map(([input]) => input.clientBookId)).toEqual([h.bookId, canonicalId]);
+    expect((await h.state.listLinks()).every((link) => link.localBookId === canonicalId && !link.pendingImport)).toBe(
+      true,
+    );
+    await reconcilePendingExternalSourceLinks(h.state, await h.state.listLinks(), [h.novel()!], Date.now(), {
+      catalogIncludesTrash: true,
+    });
+    expect(await h.state.listLinks()).toHaveLength(51);
+    await h.run([item(1)]);
+    expect(h.importFile).toHaveBeenCalledTimes(2);
+    h.bodies.set('release-1', 'a revised source');
+    await h.run([item(1), item(52)]);
+    expect(h.importFile.mock.calls.at(-1)![0].clientBookId).toBe(canonicalId);
+    expect(h.novel()!.totalChapters).toBe(52);
+    expect(await h.state.listLinks()).toHaveLength(52);
+  },
+);
+
+it('recovers a canonical ID checkpoint after link finalization is interrupted', async () => {
+  const h = fixture('member-recovered-book');
+  const original = h.state.compareAndSwapPendingLinks.bind(h.state);
+  const save = vi
+    .spyOn(h.state, 'compareAndSwapPendingLinks')
+    .mockImplementation((expected, links, remove) =>
+      links.some((link) => !link.pendingImport)
+        ? Promise.reject(new Error('interrupted finalization'))
+        : original(expected, links, remove),
+    );
+  await expect(h.run([item(1)])).rejects.toThrow('본문은 저장되었습니다');
+  expect((await h.state.listLinks())[0]!.pendingImport?.resolvedLocalBookId).toBe('member-recovered-book');
+  save.mockRestore();
+  await reconcilePendingExternalSourceLinks(h.state, await h.state.listLinks(), [h.novel()!], Date.now(), {
+    catalogIncludesTrash: true,
+  });
+  expect((await h.state.listLinks())[0]).toMatchObject({
+    localBookId: 'member-recovered-book',
+    pendingImport: undefined,
   });
 });

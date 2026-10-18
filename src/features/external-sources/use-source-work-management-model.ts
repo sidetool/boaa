@@ -15,7 +15,11 @@ export function useSourceWorkManagementModel({ novel, controller, library }: Sou
   useEffect(() => {
     if (!id) return;
     let active = true;
-    void sourceWorkReadingSeconds(id).then(
+    void (
+      controller.sourceHistoryScope?.startsWith('hosted-account:')
+        ? sourceWorkReadingSeconds(id, controller.sourceHistoryScope)
+        : sourceWorkReadingSeconds(id)
+    ).then(
       (seconds) => {
         if (active) setTime({ id, revision, seconds });
       },
@@ -26,7 +30,7 @@ export function useSourceWorkManagementModel({ novel, controller, library }: Sou
     return () => {
       active = false;
     };
-  }, [id, revision]);
+  }, [id, revision, controller.sourceHistoryScope]);
   const seconds = time?.id === id && time?.revision === revision ? time.seconds : undefined;
   const remove = async () => {
     if (novel) {

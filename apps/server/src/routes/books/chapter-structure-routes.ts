@@ -1,3 +1,4 @@
+import { requestOwnerConfig } from '../../services/owner-context.js';
 import type { FastifyInstance } from 'fastify';
 import pg from 'pg';
 import type { ChapterStructureCommand } from '@boaa/text-core/chapter-structure';
@@ -49,7 +50,10 @@ export async function registerChapterStructureRoutes(
   pool: pg.Pool,
   config: ServerConfig,
 ): Promise<void> {
+  const deploymentConfig = config;
   app.get<{ Params: { bookId: string } }>('/api/books/:bookId/chapter-structure', async (request, reply) => {
+    const config = requestOwnerConfig(deploymentConfig, request);
+
     try {
       return { editor: await getHostedChapterStructureEditorState(pool, config, request.params.bookId) };
     } catch (error) {
@@ -60,6 +64,8 @@ export async function registerChapterStructureRoutes(
   app.post<{ Params: { bookId: string }; Body: unknown }>(
     '/api/books/:bookId/chapter-structure/preview',
     async (request, reply) => {
+      const config = requestOwnerConfig(deploymentConfig, request);
+
       const parsed = commands(request.body);
       if (!parsed) return reply.code(400).send({ error: 'invalid chapter structure commands' });
       try {
@@ -71,6 +77,8 @@ export async function registerChapterStructureRoutes(
   );
 
   app.post<{ Params: { draftId: string } }>('/api/chapter-structure/drafts/:draftId/apply', async (request, reply) => {
+    const config = requestOwnerConfig(deploymentConfig, request);
+
     try {
       return { receipt: await applyHostedChapterStructure(pool, config, request.params.draftId) };
     } catch (error) {
@@ -81,6 +89,8 @@ export async function registerChapterStructureRoutes(
   app.post<{ Params: { receiptId: string } }>(
     '/api/chapter-structure/receipts/:receiptId/rollback',
     async (request, reply) => {
+      const config = requestOwnerConfig(deploymentConfig, request);
+
       try {
         return { receipt: await rollbackHostedChapterStructure(pool, config, request.params.receiptId) };
       } catch (error) {
@@ -89,7 +99,10 @@ export async function registerChapterStructureRoutes(
     },
   );
 
-  app.get<{ Params: { bookId: string } }>('/api/books/:bookId/chapter-structure/review', async (request) => ({
-    items: await listHostedChapterStructureReview(pool, config, request.params.bookId),
-  }));
+  app.get<{ Params: { bookId: string } }>('/api/books/:bookId/chapter-structure/review', async (request) => {
+    const config = requestOwnerConfig(deploymentConfig, request);
+    return {
+      items: await listHostedChapterStructureReview(pool, config, request.params.bookId),
+    };
+  });
 }

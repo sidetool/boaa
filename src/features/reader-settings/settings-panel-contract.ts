@@ -9,6 +9,7 @@ import {
   RefreshCw,
   ServerCog,
   Type,
+  UserRound,
   type LucideIcon,
 } from 'lucide-react';
 import { type ReactNode } from 'react';
@@ -25,6 +26,7 @@ import type { StorageSettingsProps } from './StorageSettingsPanel';
 import type { ReaderSettingsController } from './useReaderSettingsDraft';
 
 export type SettingsTab =
+  | 'account'
   | 'appearance'
   | 'layout'
   | 'gesture'
@@ -45,6 +47,12 @@ interface SettingsSection {
 }
 
 export const SETTINGS_SECTIONS: readonly SettingsSection[] = [
+  {
+    id: 'account',
+    label: '계정',
+    detail: '내 계정, 비밀번호, 로그아웃',
+    icon: UserRound,
+  },
   {
     id: 'appearance',
     label: '모양',

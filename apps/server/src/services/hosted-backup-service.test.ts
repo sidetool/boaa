@@ -27,16 +27,13 @@ describe('hosted backup restore', () => {
   it('ignores superseded asset metadata from older archives when no object blob was exported', async () => {
     const snapshot: HostedBackupSnapshot = {
       tables: new Map([
-        [
-          'library_books',
-          [{ id: 'book_1', user_id: 'old_user', object_id: null, title: 'Book', cover_asset_id: null }],
-        ],
+        ['library_books', [{ id: 'book_1', user_id: 'user_1', object_id: null, title: 'Book', cover_asset_id: null }]],
         [
           'book_assets',
           [
             {
               id: 'cover_old',
-              user_id: 'old_user',
+              user_id: 'user_1',
               book_id: 'book_1',
               kind: 'cover',
               status: 'superseded',
@@ -55,8 +52,9 @@ describe('hosted backup restore', () => {
     const [archive] = await Promise.all([collect(streamed.readable), streamed.completion]);
     const calls: string[] = [];
     const client = {
-      query: vi.fn(async (sql: string) => {
+      query: vi.fn(async (sql: string, values?: unknown[]) => {
         calls.push(sql);
+        if (sql.includes('insert into paragraph_search')) return { rows: [], rowCount: (values?.length ?? 0) / 9 };
         if (sql.includes('select id, title from library_books')) return { rows: [] };
         return { rows: [] };
       }),
@@ -80,7 +78,7 @@ describe('hosted backup restore', () => {
           [
             {
               id: 'book_1',
-              user_id: 'old_user',
+              user_id: 'user_1',
               object_id: null,
               title: 'Book',
               active_content_revision_id: 'revision_1',
@@ -92,7 +90,7 @@ describe('hosted backup restore', () => {
           'voice_casting_states',
           [
             {
-              user_id: 'old_user',
+              user_id: 'user_1',
               book_id: 'book_1',
               version: 'voice-casting-v1',
               revision: 4,
@@ -125,6 +123,7 @@ describe('hosted backup restore', () => {
     const client = {
       query: vi.fn(async (sql: string, values?: unknown[]) => {
         calls.push({ sql, values });
+        if (sql.includes('insert into paragraph_search')) return { rows: [], rowCount: (values?.length ?? 0) / 9 };
         if (sql.includes('select id, title from library_books')) return { rows: [] };
         return { rows: [] };
       }),
@@ -154,7 +153,7 @@ describe('hosted backup restore', () => {
           [
             {
               id: 'book_1',
-              user_id: 'old_user',
+              user_id: 'user_1',
               object_id: null,
               title: 'Book',
               active_content_revision_id: null,
@@ -219,7 +218,7 @@ describe('hosted backup restore', () => {
           [
             {
               book_id: 'book_1',
-              user_id: 'old_user',
+              user_id: 'user_1',
               chapter_id: 'chapter_1',
               paragraph_id: 'paragraph_1',
             },
@@ -230,7 +229,7 @@ describe('hosted backup restore', () => {
           [
             {
               book_id: 'book_1',
-              user_id: 'old_user',
+              user_id: 'user_1',
               chapter_id: 'chapter_1',
               anchor: { kind: 'reflowable_text', reader: { bookId: 'book_1', sectionId: 'chapter_1' } },
               content_revision_id: 'revision_1',
@@ -243,7 +242,7 @@ describe('hosted backup restore', () => {
             {
               id: 'document_note_1',
               book_id: 'book_1',
-              user_id: 'old_user',
+              user_id: 'user_1',
               page_index: 0,
               annotation_type: 'text_note',
               anchor: { kind: 'fixed_page', bookId: 'book_1', pageIndex: 0, pageHash: 'page-hash' },
@@ -257,7 +256,7 @@ describe('hosted backup restore', () => {
             {
               id: 'text_order_1',
               book_id: 'book_1',
-              user_id: 'old_user',
+              user_id: 'user_1',
               page_index: 0,
               page_hash: 'page-hash',
               source_revision_id: 'revision_1',
@@ -266,17 +265,14 @@ describe('hosted backup restore', () => {
             },
           ],
         ],
-        ['comic_reading_profiles', [{ book_id: 'book_1', user_id: 'old_user', profile: { fit: 'width' } }]],
-        [
-          'spoken_text_rules',
-          [{ id: 'spoken_rule_1', book_id: 'book_1', user_id: 'old_user', rule: { text: 'test' } }],
-        ],
+        ['comic_reading_profiles', [{ book_id: 'book_1', user_id: 'user_1', profile: { fit: 'width' } }]],
+        ['spoken_text_rules', [{ id: 'spoken_rule_1', book_id: 'book_1', user_id: 'user_1', rule: { text: 'test' } }]],
         [
           'fixed_document_section_read_states',
           [
             {
               book_id: 'book_1',
-              user_id: 'old_user',
+              user_id: 'user_1',
               document_section_id: 'chapter:6',
               last_read_at: '2026-08-30T01:06:00.000Z',
             },
@@ -286,7 +282,7 @@ describe('hosted backup restore', () => {
           'voice_casting_states',
           [
             {
-              user_id: 'old_user',
+              user_id: 'user_1',
               book_id: 'book_1',
               version: 'voice-casting-v1',
               revision: 1,
@@ -314,6 +310,7 @@ describe('hosted backup restore', () => {
     const client = {
       query: vi.fn(async (sql: string, values?: unknown[]) => {
         calls.push({ sql, values });
+        if (sql.includes('insert into paragraph_search')) return { rows: [], rowCount: (values?.length ?? 0) / 9 };
         if (sql.includes('select id, title from library_books')) return { rows: [{ id: 'book_1', title: 'Existing' }] };
         if (sql.includes('select count(*)::text as count from paragraph_search')) return { rows: [{ count: '1' }] };
         return { rows: [] };
@@ -327,7 +324,9 @@ describe('hosted backup restore', () => {
     } as ServerConfig;
 
     const result = await restoreHostedBackup(pool, config, archive, { defaultConflictResolution: 'copy' });
-    const serializedValues = JSON.stringify(calls.flatMap((call) => call.values ?? []));
+    const serializedValues = JSON.stringify(
+      calls.filter((call) => /^\s*(insert|update)/i.test(call.sql)).flatMap((call) => call.values ?? []),
+    );
 
     expect(result).toMatchObject({ restoredBooks: 1, copiedBooks: 1, skippedBooks: 0 });
     expect(serializedValues).not.toContain('"paragraph_1"');
@@ -386,7 +385,7 @@ describe('hosted backup restore', () => {
           [
             {
               id: 'book_1',
-              user_id: 'old_user',
+              user_id: 'user_1',
               object_id: null,
               title: 'Book',
               active_content_revision_id: null,
@@ -435,8 +434,9 @@ describe('hosted backup restore', () => {
     const [archive] = await Promise.all([collect(streamed.readable), streamed.completion]);
     const calls: string[] = [];
     const client = {
-      query: vi.fn(async (sql: string) => {
+      query: vi.fn(async (sql: string, values?: unknown[]) => {
         calls.push(sql);
+        if (sql.includes('insert into paragraph_search')) return { rows: [], rowCount: (values?.length ?? 0) / 9 };
         if (sql.includes('select id, title from library_books')) return { rows: [] };
         if (sql.includes('select count(*)::text as count from paragraph_search')) return { rows: [{ count: '0' }] };
         return { rows: [] };

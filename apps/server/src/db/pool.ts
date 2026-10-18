@@ -56,6 +56,10 @@ export function createPool(config: ServerConfig): pg.Pool {
 }
 
 export async function seedDefaultUser(pool: pg.Pool, userId: string): Promise<void> {
+  const owner = await pool.query<{ user_id: string }>(
+    'select user_id from self_host_accounts where bootstrap_owner_key = 1',
+  );
+  if (owner.rows[0] && owner.rows[0].user_id !== userId) throw new Error('self_host_account_owner_mismatch');
   await pool.query(
     `
       insert into users (id, email, display_name)

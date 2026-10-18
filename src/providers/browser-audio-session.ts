@@ -1,6 +1,10 @@
 export interface BrowserAudioElement {
+  src: string;
   onended: HTMLAudioElement['onended'];
   onerror: HTMLAudioElement['onerror'];
+  ontimeupdate?: HTMLAudioElement['ontimeupdate'];
+  readonly currentTime?: number;
+  readonly duration?: number;
   play(): Promise<void>;
   pause(): void;
   removeAttribute(name: string): void;
@@ -23,6 +27,7 @@ interface ActiveBrowserAudio {
 
 export class BrowserAudioSession {
   private active?: ActiveBrowserAudio;
+  private audio?: BrowserAudioElement;
   private volume = 1;
 
   constructor(
@@ -33,13 +38,16 @@ export class BrowserAudioSession {
     return this.active !== undefined;
   }
 
-  async playBlob(blob: Blob): Promise<boolean> {
-    this.stop(true);
+  async playBlob(blob: Blob, onProgress?: (fraction: number) => void): Promise<boolean> {
+    if (this.active) this.stop(true);
     let url: string | undefined;
     let audio: BrowserAudioElement;
     try {
       url = this.dependencies.createObjectUrl(blob);
-      audio = this.dependencies.createAudio(url);
+      // Keep the media element (and its playback permission) across sentences.
+      // Replacing it for every blob can turn background continuation into a new autoplay.
+      audio = this.audio ??= this.dependencies.createAudio(url);
+      audio.src = url;
       audio.volume = this.volume;
     } catch {
       if (url) this.revoke(url);
@@ -51,6 +59,10 @@ export class BrowserAudioSession {
       this.active = active;
       audio.onended = () => this.finish(active, true);
       audio.onerror = () => this.finish(active, false);
+      audio.ontimeupdate = () => {
+        if (this.active !== active || active.settled || !Number.isFinite(audio.duration) || !audio.duration) return;
+        onProgress?.(Math.max(0, Math.min(1, (audio.currentTime ?? 0) / audio.duration)));
+      };
       try {
         void audio.play().catch(() => this.finish(active, false));
       } catch {
@@ -81,8 +93,12 @@ export class BrowserAudioSession {
 
   stop(played = true): void {
     const active = this.active;
-    if (!active) return;
-    this.finish(active, played, true);
+    if (active) this.finish(active, played, true);
+    else if (this.audio) {
+      this.audio.pause();
+      this.audio.removeAttribute('src');
+      this.audio.load();
+    }
   }
 
   private finish(active: ActiveBrowserAudio, played: boolean, clearSource = false): void {
@@ -90,6 +106,7 @@ export class BrowserAudioSession {
     active.settled = true;
     active.audio.onended = null;
     active.audio.onerror = null;
+    active.audio.ontimeupdate = null;
     if (clearSource) {
       active.audio.pause();
       active.audio.removeAttribute('src');

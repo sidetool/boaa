@@ -1,5 +1,6 @@
 import { act, create, type ReactTestInstance, type ReactTestRenderer } from 'react-test-renderer';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import ProviderSettingsPanel from '../../features/providers/ProviderSettingsPanel';
 import TTSAddonPanel, { type TTSAddonPanelProps } from '../../features/tts/TTSAddonPanel';
 import { DEFAULT_TTS_PLAYBACK_SETTINGS } from '../../providers/tts-playback-settings';
 import UiNextListenPanel from './UiNextListenPanel';
@@ -233,5 +234,134 @@ describe('UiNextListenPanel pages and status', () => {
   });
   it('does not show a warning for ready status', () => {
     expect(mount().root.findAllByProps({ role: 'status' })).toHaveLength(0);
+  });
+});
+
+describe('UiNextListenPanel plain engine voices', () => {
+  const catalog = {
+    available: true,
+    revision: 'engines-r7',
+    voices: [
+      { id: 'M1', label: 'Supertonic M1', lang: 'ko', providerId: 'supertonic', providerName: 'Supertonic 3' },
+      { id: 'F1', label: 'Supertonic F1', lang: 'ko', providerId: 'supertonic', providerName: 'Supertonic 3' },
+      { id: 'gemini:Kore', label: 'Kore', lang: 'ko', providerId: 'gemini', paid: true },
+      { id: 'other:Ann', label: 'Ann', lang: 'ko', providerId: 'other' },
+    ],
+    providers: [
+      { id: 'supertonic', name: 'Supertonic 3', available: true, paid: false },
+      { id: 'gemini', name: 'Gemini', modelId: 'gemini-tts-lite', available: true, paid: true },
+      { id: 'other', name: 'Other TTS', available: false, paid: true, message: 'API 키 오류' },
+    ],
+  } as TTSAddonPanelProps['plainVoices'];
+  const serverFixture = (serverVoiceId?: string, overrides: Partial<TTSAddonPanelProps> = {}) =>
+    fixture({
+      plainVoices: catalog,
+      previewPlainVoice: vi.fn(),
+      refreshPlainVoices: vi.fn(),
+      playbackSettings: { ...DEFAULT_TTS_PLAYBACK_SETTINGS, mode: 'plain', voiceSource: 'server', serverVoiceId },
+      ...overrides,
+    });
+  const select = (root: ReactTestInstance) => root.findByProps({ 'aria-label': '서버 목소리' });
+
+  it('groups voices by engine and saves the opaque voice id', () => {
+    const { root, props } = mount(serverFixture('M1'));
+    const groups = select(root).findAllByType('optgroup');
+    expect(groups.map((group) => group.props.label)).toEqual(['Supertonic 3', 'Gemini · gemini-tts-lite', 'Other TTS']);
+    expect(groups[1]!.findAllByType('option').map(text)).toEqual(['Kore · 유료 API']);
+    expect(groups[2]!.findByType('option').props.disabled).toBe(true);
+    act(() => select(root).props.onChange({ target: { value: 'gemini:Kore' } }));
+    expect(props.changePlaybackSettings).toHaveBeenCalledExactlyOnceWith({ serverVoiceId: 'gemini:Kore' });
+    expect(root.findAllByProps({ className: 'un-listen-note is-paid' })).toHaveLength(0);
+    expect(text(root.findByProps({ 'aria-label': '연결 안 된 엔진' }))).toContain('Other TTS 연결 안 됨 · API 키 오류');
+    expect(button(root, '재생').props.disabled).toBe(false);
+  });
+  it('warns that a paid external voice uses API quota while still allowing preview', () => {
+    const { root, props } = mount(serverFixture('gemini:Kore'));
+    expect(text(root.findByProps({ role: 'note' }))).toContain('Gemini API 사용량(요금)이 발생할 수 있어요');
+    click(button(root, '목소리 미리듣기'));
+    expect(props.previewPlainVoice).toHaveBeenCalledOnce();
+  });
+  it('blocks a voice whose engine is down without switching to another engine', () => {
+    const { root, props } = mount(serverFixture('other:Ann'));
+    expect(button(root, '재생').props.disabled).toBe(true);
+    expect(button(root, '목소리 미리듣기').props.disabled).toBe(true);
+    expect(root.findAllByType('p').map(text).join('\n')).toContain('Other TTS에 연결할 수 없어요 (API 키 오류)');
+    expect(props.changePlaybackSettings).not.toHaveBeenCalled();
+  });
+  it('blocks the server default when the server has no default voice even if a paid engine is up', () => {
+    const { root, props } = mount(
+      serverFixture(undefined, { plainVoices: { ...catalog!, defaultVoiceId: '' } as never }),
+    );
+    expect(text(select(root).findAllByType('option')[0]!)).toBe('서버 기본 목소리 · 준비 안 됨');
+    expect(button(root, '재생').props.disabled).toBe(true);
+    expect(button(root, '목소리 미리듣기').props.disabled).toBe(true);
+    expect(root.findAllByProps({ role: 'note' })).toHaveLength(0);
+    expect(root.findAllByType('p').map(text).join('\n')).toContain('목소리를 직접 고르세요');
+    expect(props.changePlaybackSettings).not.toHaveBeenCalled();
+  });
+  it('names the engine of the chosen voice even when only one engine is listed', () => {
+    const single = {
+      available: true,
+      voices: [{ id: 'F1', label: '한국어 여성1', lang: 'ko', providerId: 'supertonic' }],
+      providers: [{ id: 'supertonic', name: 'Supertonic 3', available: true, paid: false }],
+    } as never;
+    const { root } = mount(serverFixture('F1', { plainVoices: single }));
+    expect(select(root).findAllByType('optgroup')).toHaveLength(0);
+    expect(select(root).props.value).toBe('F1');
+    expect(text(root.findByProps({ className: 'un-listen-engine-tag' }))).toBe('엔진 Supertonic 3');
+  });
+  const openDetails = (root: ReactTestInstance) =>
+    click(button(root.findByProps({ 'aria-label': '더 많은 청취 설정' }), /^세부 청취 설정/));
+
+  it('keeps synthesis units in the detail settings and switches sentence/paragraph', () => {
+    const { root, props } = mount(serverFixture('M1'));
+    expect(root.findAllByProps({ label: '합성 단위' })).toHaveLength(0);
+    openDetails(root);
+    const units = root.findByProps({ label: '합성 단위' });
+    expect(units.props.value).toBe('sentence');
+    act(() => units.props.onChange('paragraph'));
+    expect(props.changePlaybackSettings).toHaveBeenCalledExactlyOnceWith({ plainChunking: 'paragraph' });
+    act(() =>
+      renderer!.update(
+        <UiNextListenPanel {...props} playbackSettings={{ ...props.playbackSettings, plainChunking: 'paragraph' }} />,
+      ),
+    );
+    expect(text(root.findByProps({ className: 'un-listen-hint' }))).toContain('700자');
+  });
+  it('offers batch synthesis in the detail settings only', () => {
+    const { root, props } = mount(serverFixture('M1'));
+    expect(text(root)).not.toContain('묶음');
+    openDetails(root);
+    const units = root.findByProps({ label: '합성 단위' });
+    expect(units.props.options.map((option: { value: string }) => option.value)).toEqual([
+      'sentence',
+      'paragraph',
+      'batch',
+    ]);
+    act(() => units.props.onChange('batch'));
+    expect(props.changePlaybackSettings).toHaveBeenCalledExactlyOnceWith({ plainChunking: 'batch' });
+    act(() =>
+      renderer!.update(
+        <UiNextListenPanel {...props} playbackSettings={{ ...props.playbackSettings, plainChunking: 'batch' }} />,
+      ),
+    );
+    const hint = text(root.findByProps({ className: 'un-listen-hint' }));
+    expect(hint).toContain('문단을 대략 따라가요');
+    expect(hint).toContain('이어듣기는 묶음 첫 문단부터');
+    expect(hint).toContain('쉬는 간격이 적용되지 않아요');
+  });
+  it('hides synthesis units for device voices', () => {
+    const { root } = mount();
+    openDetails(root);
+    expect(root.findAllByProps({ label: '합성 단위' })).toHaveLength(0);
+  });
+  it('opens TTS engine settings without speaker analysis and reloads voices on return', () => {
+    const { root, props } = mount(serverFixture('M1'));
+    click(button(root.findByProps({ 'aria-label': '더 많은 청취 설정' }), /^TTS 엔진 연결/));
+    expect(root.findByType(ProviderSettingsPanel).props.scope).toBe('tts_synthesis');
+    expect(root.findAllByType(TTSAddonPanel)).toHaveLength(0);
+    click(button(root, '듣기'));
+    expect(props.refreshPlainVoices).toHaveBeenCalledOnce();
+    expect(button(root, '재생')).toBeDefined();
   });
 });

@@ -255,6 +255,23 @@ function ttsRenderOptions(providerId: ServerTTSProviderId): ProviderOptionConfig
   return [renderFormatOption(), renderSpeedOption(0.25, 4), toneRenderOption, emotionRenderOption];
 }
 
+const googleConnectionOptions: ProviderOptionConfig[] = [
+  {
+    optionKey: 'project',
+    displayName: 'Google Cloud 프로젝트 ID',
+    valueType: 'string',
+    placements: ['provider_settings'],
+    description: '비우면 업로드한 서비스 계정 JSON의 프로젝트를 사용합니다.',
+  },
+  {
+    optionKey: 'location',
+    displayName: 'Google Cloud 리전',
+    valueType: 'string',
+    placements: ['provider_settings'],
+    defaultValue: 'global',
+  },
+];
+
 function ttsProviderOptions(providerId: ServerTTSProviderId): ProviderOptionConfig[] {
   if (providerId === 'system') return [];
   if (providerId === 'openai-tts') {
@@ -328,6 +345,7 @@ function ttsProviderOptions(providerId: ServerTTSProviderId): ProviderOptionConf
       voiceOption,
       ...(providerId === 'gemini-vertex-tts'
         ? [
+            ...googleConnectionOptions,
             {
               optionKey: 'languageCode',
               displayName: 'Language code',
@@ -353,6 +371,7 @@ function ttsProviderOptions(providerId: ServerTTSProviderId): ProviderOptionConf
   if (providerId === 'google-cloud-tts') {
     return [
       voiceOption,
+      ...googleConnectionOptions,
       {
         optionKey: 'languageCode',
         displayName: 'Language code',
@@ -523,8 +542,8 @@ export function listServerProviderCatalog(
     system: undefined,
     'openai-tts': env.TTS_OPENAI_MODEL_ID?.trim() || undefined,
     elevenlabs: env.TTS_ELEVENLABS_MODEL_ID?.trim() || 'eleven_flash_v2_5',
-    'gemini-tts': env.TTS_GEMINI_MODEL_ID?.trim() || 'gemini-3.1-flash-tts-preview',
-    'gemini-vertex-tts': env.TTS_GEMINI_VERTEX_MODEL_ID?.trim() || 'gemini-3.1-flash-tts-preview',
+    'gemini-tts': env.TTS_GEMINI_MODEL_ID?.trim() || 'gemini-3.8-flash-lite-tts',
+    'gemini-vertex-tts': env.TTS_GEMINI_VERTEX_MODEL_ID?.trim() || 'gemini-3.8-flash-lite-tts',
     'google-cloud-tts': env.TTS_GOOGLE_CLOUD_MODEL_ID?.trim() || 'gemini-3.1-flash-tts-preview',
     'local-endpoint': env.TTS_LOCAL_ENDPOINT_MODEL_ID?.trim() || undefined,
   };

@@ -1,8 +1,7 @@
-import { ExternalLink, FileScan, FileText, Images, LogOut, ShieldCheck } from 'lucide-react';
+import { ExternalLink, FileScan, FileText, Images, ShieldCheck } from 'lucide-react';
 import type { ReactNode } from 'react';
 import packageMetadata from '../../../../package.json';
 import { useOptionalAppRuntime } from '../../../app/runtime/RuntimeProvider';
-import type { SelfHostAccount } from '../../../features/auth/self-host-auth-client';
 import { useApplicationInfoSettingsModel } from '../../../features/reader-settings/use-application-info-settings-model';
 import { remoteAccessAddress } from '../../../features/reader-settings/use-remote-access-settings-model';
 import type { PlatformRuntimeInfo, ProviderExecutionRuntimeKind } from '../../../platform/runtime';
@@ -58,12 +57,10 @@ function OutLink({ href, title, help }: { href: string; title: ReactNode; help?:
   );
 }
 
-/** 앱 정보: who is signed in, what this build can do here, formats, data and notices. */
+/** 앱 정보: what this build can do here, formats, data and notices. */
 export function AppInfoPage(props: {
   platformRuntime: PlatformRuntimeInfo;
   providerExecutionRuntime: ProviderExecutionRuntimeKind;
-  selfHostAccount?: SelfHostAccount;
-  logoutSelfHostAccount?: () => Promise<void>;
 }) {
   const { webAccessUrl, isAndroid, mediaSessionAvailable } = useApplicationInfoSettingsModel(props.platformRuntime);
   const product = useOptionalAppRuntime()?.product;
@@ -84,7 +81,6 @@ export function AppInfoPage(props: {
         ? '저장한 작품은 오프라인으로 읽기'
         : '서버 음성을 이 브라우저에 저장';
   const files = isAndroid ? 'Android 파일 선택' : desktop ? '기기 파일 열기·저장' : '브라우저 파일 선택·내보내기';
-  const account = props.selfHostAccount;
 
   return (
     <>
@@ -98,27 +94,6 @@ export function AppInfoPage(props: {
         </div>
         <span className="un-about-version">v{packageMetadata.version}</span>
       </header>
-
-      {account && props.logoutSelfHostAccount && (
-        <PrefSection title="계정">
-          <PrefGroup>
-            <Pref
-              title={account.displayName}
-              help={`@${account.username} · 이 기기에서 자동 로그인 중`}
-              control={
-                <button
-                  type="button"
-                  className="un-btn is-ghost is-sm"
-                  onClick={() => void props.logoutSelfHostAccount?.()}
-                >
-                  <LogOut size={15} />
-                  로그아웃
-                </button>
-              }
-            />
-          </PrefGroup>
-        </PrefSection>
-      )}
 
       {webAccessUrl && (
         <PrefSection

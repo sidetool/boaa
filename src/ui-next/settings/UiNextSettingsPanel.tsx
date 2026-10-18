@@ -3,6 +3,8 @@ import { useContext, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useOptionalAppRuntime } from '../../app/runtime/RuntimeProvider';
 import { serverManagementApi } from '../../features/server-management/use-server-management-client';
+import { useOptionalSelfHostAuth } from '../../features/auth/SelfHostAccountGate';
+import { useSelfHostCapability } from '../../features/auth/self-host-account-api';
 import { EmbeddedAccessContext } from '../../platform/embedded-access-context';
 import {
   SETTINGS_SECTIONS,
@@ -19,6 +21,7 @@ import './settings.css';
 
 /** Category groups shown as an inset list, like a native settings app. */
 const GROUPS: readonly { title: string; ids: readonly SettingsTab[] }[] = [
+  { title: '계정', ids: ['account'] },
   { title: '일반', ids: ['appearance'] },
   { title: '읽기', ids: ['layout', 'gesture'] },
   { title: '콘텐츠', ids: ['sources', 'extensions'] },
@@ -44,10 +47,14 @@ export default function UiNextSettingsPanel(props: ReaderSettingsPanelProps) {
   const embedded = useContext(EmbeddedAccessContext);
   const handledUpdates = useRef(0);
   const serverManaged = Boolean(serverManagementApi(useOptionalAppRuntime()));
+  const selfHostAuth = useOptionalSelfHostAuth();
+  const canManageServer = useSelfHostCapability('manageServer');
+  const accountManager = selfHostAuth?.session?.context.capabilities.manageAccounts === true;
 
   const sections = SETTINGS_SECTIONS.filter((section) => {
     if (section.id === 'remote-access') return Boolean(embedded) || Boolean(props.serverApiBaseUrl);
-    if (section.id === 'server') return serverManaged;
+    if (section.id === 'server') return serverManaged && canManageServer;
+    if (section.id === 'account') return Boolean(selfHostAuth?.session);
     return true;
   });
   const current = sections.find((section) => section.id === tab) ?? sections[0];
@@ -173,7 +180,13 @@ export default function UiNextSettingsPanel(props: ReaderSettingsPanelProps) {
                         </span>
                         <span className="un-settings-item-text">
                           <b>{section.label}</b>
-                          <small>{section.id === 'appearance' ? '시작 화면' : section.detail}</small>
+                          <small>
+                            {section.id === 'appearance'
+                              ? '시작 화면'
+                              : section.id === 'account' && selfHostAuth
+                                ? `${selfHostAuth.account.displayName}${accountManager ? ' · 회원 관리' : ''}`
+                                : section.detail}
+                          </small>
                         </span>
                         <ChevronRight size={18} className="un-settings-chevron" aria-hidden="true" />
                       </button>

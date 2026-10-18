@@ -19,6 +19,6 @@ export function isTextSourceItem(item: ExternalItemSummary, port?: SourceReading
     port ? isTextStream(port) : item.formatHint?.toLowerCase() === 'txt' || item.mimeType?.startsWith('text/'),
   );
 }
-export function preferTextLibrary(item: ExternalItemSummary, port?: SourceReadingPort): boolean {
-  return isTextSourceItem(item, port) && sourceReadingPreferences().textMode === 'library';
+export function preferTextLibrary(item: ExternalItemSummary, port?: SourceReadingPort, scope?: string): boolean {
+  return isTextSourceItem(item, port) && sourceReadingPreferences(scope).textMode === 'library';
 }

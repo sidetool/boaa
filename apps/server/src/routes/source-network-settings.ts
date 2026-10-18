@@ -1,3 +1,4 @@
+import { requireAdmin } from '../auth.js';
 import type { FastifyInstance } from 'fastify';
 import type { SourceNetworkSettingsRequest } from '../../../../packages/extension-contracts/source-network-settings.js';
 import type { createSourceNetworkSettings } from '../extensions/source-network-settings.js';
@@ -7,6 +8,8 @@ export async function registerSourceNetworkSettingsRoutes(
   settings: ReturnType<typeof createSourceNetworkSettings>,
 ) {
   app.get('/api/source-network-settings', async (_request, reply) => {
+    requireAdmin(_request);
+
     reply.header('Cache-Control', 'no-store');
     return settings.read();
   });
@@ -14,6 +17,8 @@ export async function registerSourceNetworkSettingsRoutes(
     '/api/source-network-settings',
     { bodyLimit: 4096 },
     async (request, reply) => {
+      requireAdmin(request);
+
       reply.header('Cache-Control', 'no-store');
       try {
         return await settings.save(request.body);

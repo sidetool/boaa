@@ -182,28 +182,28 @@ docker compose -f compose.yaml -f compose.local-tts.yaml logs -f tts-model
 If the model-only build fails during a source clone, Python build or dependency installation, the Web/API/worker
 started by the first command remain available. Fix and retry that build before applying the override.
 
-The override builds the official MeloTTS source at the pinned `MELOTTS_COMMIT`, starts the Korean model on CPU and
-sets the hosted default TTS provider to `local-endpoint`. The first start downloads the Korean model into
-`local-tts-models`, so its own readiness can take several minutes. API and worker deliberately do not wait for this
-optional service: Library, Reader and document import remain available while TTS reports an unavailable endpoint and
-can be retried after `tts-model` becomes healthy. The service exposes no host port; API and worker call
-`http://tts-model:9010/synthesize`, while `/voices` returns the model speaker ids.
+The override runs **Supertonic 3 on CPU/ONNX**, with all ten voices F1–F5/M1–M5.
+It sets `local-endpoint` as the TTS default. Ordinary listening uses it without character analysis or voice approval.
+The first start verifies/downloads a pinned ~401 MB model bundle into `local-tts-models`.
+API and worker do not wait for this optional service; library and imports remain available during model setup.
+The internal endpoint is `http://tts-model:9010/synthesize`, with voice discovery at `/voices`.
 
-Important settings:
+Defaults: `TTS_LOCAL_ENDPOINT_MODEL_ID=supertonic-3-ko`, `TTS_LOCAL_ENDPOINT_VOICE_ID=M1`,
+`LOCAL_TTS_MEMORY_LIMIT=1536m`, four CPU threads, WAV output. Model files are outside the application image.
 
-- `LOCAL_TTS_PROVIDER_DEFAULT=local-endpoint`: overrides the ordinary `system` default only when this Compose file is used
-- `LOCAL_TTS_PROVIDER_ENABLED=local-endpoint`: enables the internal endpoint only in this Compose variant
-- `MELOTTS_DEVICE=cpu`: default and portable path; a CUDA image/device reservation is not provided yet
-- `MELOTTS_LANGUAGE=KR`: model locale
-- `TTS_LOCAL_ENDPOINT_MODEL_ID=melotts-korean`: must match the adapter model id
-- `LOCAL_TTS_MEMORY_LIMIT=4g`: container memory ceiling
-- `MELOTTS_MAX_TEXT_CHARACTERS=20000`: adapter request ceiling
+**Migrating from MeloTTS:** remove old `melotts-korean`/`KR` environment overrides and choose a Supertonic voice
+in listening settings. The service name and model volume remain the same; old downloads are preserved but not loaded.
+Both runtimes use UID 10001. Do not delete the model volume to upgrade.
+Use either `compose.local-tts.yaml` or `compose.plain-tts.yaml`, not both (they would start duplicate models).
 
-The sidecar supports WAV, MP3, OGG and FLAC output. Synthesis is serialized inside the model process because the loaded
-PyTorch model is shared. Run additional model replicas only after defining an explicit queue/capacity policy.
-
-MeloTTS source and the `myshell-ai/MeloTTS-Korean` model card both declare MIT licensing. The repository pins the
-source commit but does not redistribute the downloaded model in the default web/desktop artifacts.
+The listening panel's **TTS 엔진 연결** page reuses provider secrets/model settings. Enable the desired provider there.
+Gemini API (`gemini-3.8-flash-lite-tts`), OpenAI, ElevenLabs and the existing Google adapters can narrate a single voice
+without casting. Server providers remain administrator-only in multi-account v1; members retain device voices.
+For a private external engine, configure `local-endpoint`, its model and endpoint URL, and allow its hostname through
+`LOCAL_TTS_ALLOWED_HOSTS`. `/synthesize` uses the BOAA contract; `/v1/audio/speech` uses the OpenAI-compatible contract.
+Voice discovery tries `/v1/audio/voices`, then `/v1/voices`; if neither exists, set the provider's `voice` option explicitly.
+Authenticated OpenAI-compatible APIs can use the OpenAI provider/API key and server `TTS_OPENAI_BASE_URL` instead.
+See [runtime and connection details](../../deploy/plain-tts/README.md).
 
 ## Public HTTPS deployment
 
@@ -348,7 +348,7 @@ disposable test instance; it registers a throwaway owner with a random password.
 
 The hosted live smoke validates protected sync capability negotiation, TXT multi-chunk upload/import, manifest/page and
 search reads, reader mutations, sync events, and cleanup. The ordinary hosted E2E also covers the mock AI workflow. It
-does not prove MeloTTS model download/real synthesis, restart during a large PDF/archive import, the operator's outer
+does not prove Supertonic model download/real synthesis, restart during a large PDF/archive import, the operator's outer
 nginx configuration, or a full 512 MiB backup restore. Keep those as practical checks on the target host.
 
 The Library linked-folder feature remains client-owned. A browser/Desktop/Android client scans its selected directory
@@ -356,8 +356,8 @@ and uploads changes. Mounting a host novel directory into the server container d
 
 ## Upstream local TTS references
 
-- <https://github.com/myshell-ai/MeloTTS>
-- <https://huggingface.co/myshell-ai/MeloTTS-Korean>
+- <https://github.com/supertone-oss-archive/supertonic>
+- <https://huggingface.co/supertone-oss-archive/supertonic-3>
 
 ### Storage capacity and low-space checks
 
@@ -368,3 +368,15 @@ The storage settings card separates current BOAA file usage from the total/avail
 `STORAGE_MIN_FREE_BYTES` defaults to 256 MiB. Raw assets, imported/restored files, TTS audio and object copies check the available space before writing when the actual storage filesystem is configured. A failed configured probe stops the write rather than assuming sufficient space. The existing temporary-upload space check remains separate. This is an advisory check, not an atomic reservation: other services and simultaneous writers can consume capacity after the check. It does not enforce a BOAA quota or replace the filesystem's own limits.
 
 The usage breakdown deduplicates object keys and groups current files into documents (TXT/EPUB/PDF), images (including comic archives, pages and covers), audio and other files. Classification follows stored file types rather than the content genre; embedded EPUB content is not separately estimated. Retained TTS files with known sizes are included; missing legacy audio size records are reported as unmeasured. Browser catalog-cache payload size is shown separately from server disk usage, and excludes browser HTTP cache overhead and in-memory covers. Byte displays use IEC units (MiB/GiB).
+
+
+### Building a hosted web hotfix outside Docker
+
+Use `pnpm build:hosted` for server-hosted web artifacts. It fixes
+`VITE_READER_BACKEND=remote` and `VITE_API_BASE_URL=/api` during compilation.
+The generic `pnpm build` is also used by local/desktop targets and must not be substituted.
+Before replacing a hosted web image, run `pnpm check:hosted-startup` with Chromium installed
+(or set `BOAA_CHROMIUM_PATH`). This opens the actual built entrypoint at 390px and 820px,
+requires a same-origin authentication request and a visible login screen, and rejects
+uncaught browser errors. API-only or component-only smoke checks do not verify this boundary.
+`BOAA_WEB_DIST` selects a different artifact directory for the startup check.

@@ -8,12 +8,6 @@ importers:
 
   .:
     dependencies:
-      '@googleworkspace/drive-picker-element':
-        specifier: 0.7.3
-        version: 0.7.3
-      '@noble/hashes':
-        specifier: 2.0.1
-        version: 2.0.1
       '@boaa/document-series-core':
         specifier: workspace:*
         version: link:packages/document-series-core
@@ -26,6 +20,12 @@ importers:
       '@boaa/fixed-document-core':
         specifier: workspace:*
         version: link:packages/fixed-document-core
+      '@googleworkspace/drive-picker-element':
+        specifier: 0.7.3
+        version: 0.7.3
+      '@noble/hashes':
+        specifier: 2.0.1
+        version: 2.0.1
       '@tanstack/react-virtual':
         specifier: ^3.14.5
         version: 3.14.5(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
@@ -57,9 +57,6 @@ importers:
         specifier: 7.0.0
         version: 7.0.0
     devDependencies:
-      '@eslint/js':
-        specifier: ^10.0.1
-        version: 10.0.1(eslint@10.6.0)
       '@boaa/contracts':
         specifier: workspace:*
         version: link:packages/contracts
@@ -69,6 +66,9 @@ importers:
       '@boaa/text-core':
         specifier: workspace:*
         version: link:packages/text-core
+      '@eslint/js':
+        specifier: ^10.0.1
+        version: 10.0.1(eslint@10.6.0)
       '@tauri-apps/cli':
         specifier: ^2.9.0
         version: 2.11.4
@@ -129,21 +129,21 @@ importers:
       '@aws-sdk/client-s3':
         specifier: ^3.734.0
         version: 3.1079.0
+      '@boaa/extension-runtime':
+        specifier: workspace:*
+        version: link:../../packages/extension-runtime
+      '@boaa/reader-core':
+        specifier: workspace:*
+        version: link:../../packages/reader-core
       '@google/genai':
         specifier: ^2.10.0
         version: 2.10.0
       '@kayahr/text-encoding':
         specifier: 2.2.0
         version: 2.2.0
-      '@boaa/extension-runtime':
-        specifier: workspace:*
-        version: link:../../packages/extension-runtime
       '@noble/hashes':
         specifier: 2.0.1
         version: 2.0.1
-      '@boaa/reader-core':
-        specifier: workspace:*
-        version: link:../../packages/reader-core
       '@xmldom/xmldom':
         specifier: 0.9.10
         version: 0.9.10
@@ -253,12 +253,12 @@ importers:
 
   packages/epub-core:
     dependencies:
-      '@noble/hashes':
-        specifier: 2.0.1
-        version: 2.0.1
       '@boaa/text-core':
         specifier: workspace:*
         version: link:../text-core
+      '@noble/hashes':
+        specifier: 2.0.1
+        version: 2.0.1
       '@xmldom/xmldom':
         specifier: 0.9.10
         version: 0.9.10
@@ -358,6 +358,9 @@ importers:
       '@noble/hashes':
         specifier: 2.0.1
         version: 2.0.1
+      re2js:
+        specifier: 2.8.8
+        version: 2.8.8
     devDependencies:
       '@boaa/contracts':
         specifier: workspace:*
@@ -2400,6 +2403,10 @@ packages:
 
   quickjs-emscripten-core@0.32.0:
     resolution: {integrity: sha512-QFnPfjFey8EqknSrSxe1hZrf1/8z7/6s1QzGOmKo6++02r7QRRX7ZoyNaZh7JuVjWsVW87KnQrbZqnHkOAzUyg==}
+
+  re2js@2.8.8:
+    resolution: {integrity: sha512-E2FVgqD2mzJ+ZmMSHLnkOvZ7PiZ4FgMdfVCA3YsJWs9gtyoaKmUMxyVPCXS1yK209/mz3XkdT7kr3OlMWW2Fww==}
+    engines: {node: '>=20.0.0'}
 
   react-dom@18.3.1:
     resolution: {integrity: sha512-5m4nQKp+rZRb09LNH59GM4BxTh9251/ylbKIbpe7TpGxfJ+9kv6BLkLBXIjjspbgbnIBNqlI23tRnTWT0snUIw==}
@@ -4678,6 +4685,8 @@ snapshots:
   quickjs-emscripten-core@0.32.0:
     dependencies:
       '@jitl/quickjs-ffi-types': 0.32.0
+
+  re2js@2.8.8: {}
 
   react-dom@18.3.1(react@18.3.1):
     dependencies:

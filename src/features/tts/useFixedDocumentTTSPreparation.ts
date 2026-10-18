@@ -1,3 +1,4 @@
+import { useOptionalAppRuntime } from '../../app/runtime/RuntimeProvider';
 import { useLayoutEffect, useMemo, useRef } from 'react';
 import type { TTSDownloadPolicy } from '../../domain/types';
 import { isAbortError } from '../../utils/async';
@@ -24,6 +25,7 @@ export interface FixedDocumentTTSPreparationInput {
 }
 /** App-session owner: closing a panel does not end preparation; replacing its source does. */
 export function useFixedDocumentTTSPreparation(input: FixedDocumentTTSPreparationInput) {
+  const auxiliaryDatabase = useOptionalAppRuntime()?.readerRuntime.auxiliaryDatabase;
   const { owner, chapterId } = input;
   const bookId = input.plan?.novel.id,
     revision = input.plan?.voices.contentRevision;
@@ -88,9 +90,11 @@ export function useFixedDocumentTTSPreparation(input: FixedDocumentTTSPreparatio
       assertWarmupCurrent(execution);
       if (!input.backend.native && !(await input.prepareHosted(bookId, plan.chapterIds, current))) return;
       assertWarmupCurrent(execution);
-      const { IndexedDbTTSDownloadRepository } = await import('../../storage/tts-download-store');
+      const downloads = await import('../../storage/tts-download-store');
       assertWarmupCurrent(execution);
-      const repository = new IndexedDbTTSDownloadRepository();
+      const repository = auxiliaryDatabase
+        ? new (downloads.createTTSDownloadStore(auxiliaryDatabase).IndexedDbTTSDownloadRepository)()
+        : new downloads.IndexedDbTTSDownloadRepository();
       const job = await repository.create({
         bookId,
         contentRevisionId: revision,

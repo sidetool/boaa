@@ -1,3 +1,5 @@
+import { useOptionalAppRuntime } from '../../app/runtime/RuntimeProvider';
+import { createDocumentTextStore } from '../../storage/document-text-store';
 import { comicCropKey } from './comic-crop-key';
 import { useSourceComicLayout, type SourceComicLayoutState } from './use-source-comic-layout';
 import { usePdfTextSession } from './use-pdf-text-session';
@@ -77,7 +79,7 @@ import { IndexedDbDocumentAnnotationRepository } from '../../storage/document-an
 import type { DocumentAnnotationRepository } from '../../repositories/document-annotation-repository';
 import type { ReaderRepository } from '../../repositories/reader-repository';
 import { useScrollChapterBoundary } from '../reader/use-scroll-chapter-boundary';
-import { IndexedDbDocumentTextRepository } from '../../storage/document-text-store';
+
 import { IndexedDbComicReadingProfileRepository } from '../../storage/comic-reading-profile-store';
 import {
   getDocumentThumbnail,
@@ -139,9 +141,6 @@ import '../../ui-next/reader/document.css';
 type FitMode = ComicReadingProfile['fit'];
 type ViewMode = ComicViewMode;
 
-const documentTextRepository = new IndexedDbDocumentTextRepository();
-const localDocumentAnnotationRepository = new IndexedDbDocumentAnnotationRepository();
-const comicReadingProfileRepository = new IndexedDbComicReadingProfileRepository();
 const CONTINUOUS_SECTION_NAV_HEIGHT = 112;
 const CONTINUOUS_SECTION_BOUNDARY_HEIGHT = 196;
 
@@ -380,8 +379,21 @@ export default function FixedDocumentScreen({
   listeningPreparationBusy = false,
   listeningPosition,
   annotationSyncRevision,
-  documentAnnotationRepository = localDocumentAnnotationRepository,
+  documentAnnotationRepository: providedDocumentAnnotationRepository,
 }: FixedDocumentScreenProps) {
+  const auxiliaryDatabase = useOptionalAppRuntime()?.readerRuntime.auxiliaryDatabase;
+  const documentTextRepository = useMemo(
+    () => new (createDocumentTextStore(auxiliaryDatabase).IndexedDbDocumentTextRepository)(),
+    [auxiliaryDatabase],
+  );
+  const documentAnnotationRepository = useMemo(
+    () => providedDocumentAnnotationRepository ?? new IndexedDbDocumentAnnotationRepository(auxiliaryDatabase),
+    [providedDocumentAnnotationRepository, auxiliaryDatabase],
+  );
+  const comicReadingProfileRepository = useMemo(
+    () => new IndexedDbComicReadingProfileRepository(auxiliaryDatabase),
+    [auxiliaryDatabase],
+  );
   const persistThumbnails = !remoteNavigation;
   const sortedChapters = useMemo(() => [...chapters].sort((left, right) => left.index - right.index), [chapters]);
   const documentSections = useMemo(
@@ -893,7 +905,7 @@ export default function FixedDocumentScreen({
         return next;
       });
     },
-    [novel, remoteNavigation?.profileKey],
+    [novel, remoteNavigation?.profileKey, comicReadingProfileRepository],
   );
 
   const changeComicViewMode = (next: ViewMode) => {

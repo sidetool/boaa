@@ -74,3 +74,60 @@ it('routes real SDK broker requests through the saved default while respecting p
   await invoke();
   expect(observed).toEqual(['socks5://shared:1080', 'direct', 'http://custom:8080/', 'socks5://shared:1080', 'direct']);
 });
+
+it('allows member dynamic public endpoints without turning them into private network grants', async () => {
+  const { SessionSourceCredentialVault } = await import('./source-credential-vault');
+  const transport = vi.fn(async () => ({ status: 200, headers: {}, body: Readable.from(['{}']) }));
+  const execution = createNodePackageExecution('self-host-gateway', {
+    vault: new SessionSourceCredentialVault(),
+    allowPrivateNetwork: false,
+    network: createSourceNetworkSettings(undefined, ''),
+    transport: {
+      lookup: async (host) => [{ address: host === 'private.example' ? '127.0.0.1' : '93.184.216.34', family: 4 }],
+      transport,
+    },
+  });
+  const sourceId = 'org.example.catalog.source';
+  const pkg = {
+    manifest: {
+      ...examplePackageManifest(),
+      preferences: [
+        {
+          sourceId,
+          fields: [{ key: 'endpoint', title: 'Endpoint', kind: 'text', secret: false, networkOrigin: true }],
+        },
+      ],
+    },
+    digest: 'fixture',
+    archive: new Blob(),
+    source: `globalThis.boaaExtension=async(method,input,host)=>{const url=await host.request('preferences.get',{key:'endpoint'});await host.request('http.request',{url,response:'text'});return {items:[]};};`,
+  } as VerifiedBoaaPackage;
+  const signal = AbortSignal.timeout(10000);
+  await execution.preferences!(
+    pkg,
+    sourceId,
+    'epoch',
+    { action: 'save', revision: 0, changes: { endpoint: 'https://public.example' }, privateOrigins: [] },
+    signal,
+  );
+  await execution.invoke(pkg, 'source.listWorks', { sourceId }, signal, {}, 'epoch');
+  expect(transport).toHaveBeenCalledTimes(1);
+  await execution.preferences!(
+    pkg,
+    sourceId,
+    'epoch',
+    { action: 'save', revision: 1, changes: { endpoint: 'https://private.example' }, privateOrigins: [] },
+    signal,
+  );
+  await expect(execution.invoke(pkg, 'source.listWorks', { sourceId }, signal, {}, 'epoch')).rejects.toThrow();
+  expect(transport).toHaveBeenCalledTimes(1);
+  await expect(
+    execution.preferences!(
+      pkg,
+      sourceId,
+      'epoch',
+      { action: 'save', revision: 2, changes: {}, privateOrigins: ['http://localhost'] },
+      signal,
+    ),
+  ).rejects.toThrow('invalid_source_preferences');
+});

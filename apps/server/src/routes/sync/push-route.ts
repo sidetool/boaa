@@ -1,10 +1,12 @@
+import { requirePrincipal } from '../../auth.js';
+import { requestOwnerConfig } from '../../services/owner-context.js';
 import type { FastifyInstance } from 'fastify';
 import { isDeepStrictEqual } from 'node:util';
 import pg from 'pg';
 import type { RejectedSyncEvent, ResolvedSyncContract, SyncEvent } from '@boaa/contracts/sync';
 import { resolveSyncContract } from '@boaa/reader-core/sync-contract';
 import type { ServerConfig } from '../../config.js';
-import { hasExistingBookForEvent, shouldAcceptSyncEvent } from './revision-conflict-policy.js';
+import { hasExistingBookForEvent, shouldAcceptSyncEvent, syncEventBookBoundary } from './revision-conflict-policy.js';
 import { validateSyncEventPayload } from './event-contracts.js';
 import { applySyncEvent } from './event-application.js';
 import { pushSyncContract, type PushEventsBody } from './request-contracts.js';
@@ -57,6 +59,8 @@ async function processSourceEvent(
   const sourceEventId = typeof sourceEvent?.id === 'string' ? sourceEvent.id : '';
   let translated;
   try {
+    const boundary = syncEventBookBoundary(sourceEvent);
+    if (!boundary.ok) throw new Error('sync book references are missing or inconsistent');
     const eventContract = resolveSyncContract(sourceEvent);
     if (eventContract.contractVersion > envelopeContract.contractVersion) {
       throw new SyncIdentityTranslationError(
@@ -76,13 +80,20 @@ async function processSourceEvent(
       },
     };
   }
-  const event = translated.event;
+  const boundary = syncEventBookBoundary(translated.event);
+  if (!boundary.ok)
+    return {
+      sourceEventId,
+      inserted: false,
+      rejection: { id: sourceEventId, reason: 'invalid', message: 'sync book references are missing or inconsistent' },
+    };
+  const event = boundary.bookId ? { ...translated.event, novelId: boundary.bookId } : translated.event;
   const replay = async (): Promise<'same' | 'different' | 'absent'> => {
     const existing = await client.query<SyncEventRow>(
       `select id, user_id, device_id, type, book_id, entity_id, payload, revision, created_at,
             id_contract, hash_contract, sequence
-       from sync_events where id = $1`,
-      [event.id],
+       from sync_events where id = $1 and user_id=$2`,
+      [event.id, config.defaultUserId],
     );
     if (!existing.rows[0]) return 'absent';
     const row = existing.rows[0];
@@ -193,8 +204,25 @@ export async function applySyncEventsInTransaction(
 }
 
 export function registerSyncPushRoute(app: FastifyInstance, pool: pg.Pool, config: ServerConfig): void {
+  const deploymentConfig = config;
   app.post<{ Body: PushEventsBody }>('/api/sync/events', async (request, reply) => {
+    const config = requestOwnerConfig(deploymentConfig, request);
+
     const events = request.body?.events;
+    const unavailable = new Set([
+      'voice_casting_updated',
+      'character_graph_updated',
+      'chapter_segments_updated',
+      'voice_profiles_updated',
+      'user_correction_created',
+      'user_correction_deleted',
+    ]);
+    if (
+      requirePrincipal(request).role !== 'admin' &&
+      Array.isArray(events) &&
+      events.some((event) => unavailable.has(event.type))
+    )
+      return reply.code(403).send({ error: 'provider_capability_unavailable' });
     if (!Array.isArray(events)) {
       return reply.code(400).send({ error: 'events array is required' });
     }

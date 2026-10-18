@@ -1,8 +1,26 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState, useSyncExternalStore } from 'react';
+import { ReaderWakeLock, type ReaderWakeLockSentinel } from './reader-wake-lock';
 
-interface WakeLockSentinelLike {
-  readonly released: boolean;
-  release(): Promise<void>;
+const readerWakeLock = new ReaderWakeLock(
+  () =>
+    (
+      navigator as Navigator & { wakeLock: { request(type: 'screen'): Promise<ReaderWakeLockSentinel> } }
+    ).wakeLock.request('screen'),
+  () => document.visibilityState === 'visible',
+);
+
+/** Mounted by App so dismissing the settings sheet cannot release the screen lock. */
+export function useReaderWakeLockOwner(active: boolean) {
+  useEffect(() => {
+    document.addEventListener('visibilitychange', readerWakeLock.visibilityChanged);
+    window.addEventListener('focus', readerWakeLock.visibilityChanged);
+    return () => {
+      document.removeEventListener('visibilitychange', readerWakeLock.visibilityChanged);
+      window.removeEventListener('focus', readerWakeLock.visibilityChanged);
+      readerWakeLock.dispose();
+    };
+  }, []);
+  useEffect(() => readerWakeLock.setActive(active), [active]);
 }
 
 interface OrientationLike {
@@ -10,10 +28,9 @@ interface OrientationLike {
   unlock?: () => void;
 }
 
-/** Keep-awake and orientation lock for reading. Both are released when the owner unmounts. */
+/** Settings subscribe to the reader-owned lock; orientation keeps its existing lifetime. */
 export function useReaderDeviceControls() {
-  const sentinelRef = useRef<WakeLockSentinelLike>();
-  const [wakeLocked, setWakeLocked] = useState(false);
+  const wakeLocked = useSyncExternalStore(readerWakeLock.subscribe, readerWakeLock.snapshot, () => false);
   const [orientation, setOrientation] = useState<'portrait' | 'landscape'>();
   const wakeLockAvailable = Boolean((navigator as Navigator & { wakeLock?: unknown }).wakeLock);
   const orientationApi = screen.orientation as ScreenOrientation & OrientationLike;
@@ -21,24 +38,12 @@ export function useReaderDeviceControls() {
 
   useEffect(
     () => () => {
-      void sentinelRef.current?.release();
       orientationApi.unlock?.();
     },
     [orientationApi],
   );
 
-  const toggleWakeLock = async () => {
-    if (sentinelRef.current && !sentinelRef.current.released) {
-      await sentinelRef.current.release();
-      sentinelRef.current = undefined;
-      setWakeLocked(false);
-      return;
-    }
-    const wakeLock = (navigator as Navigator & { wakeLock: { request(type: 'screen'): Promise<WakeLockSentinelLike> } })
-      .wakeLock;
-    sentinelRef.current = await wakeLock.request('screen');
-    setWakeLocked(true);
-  };
+  const toggleWakeLock = () => readerWakeLock.toggle();
 
   const setOrientationLock = async (next?: 'portrait' | 'landscape') => {
     if (!next) {

@@ -1,3 +1,4 @@
+import { requestOwnerConfig } from '../../services/owner-context.js';
 import { registerDiscoverySettingsRoutes } from './discovery-settings-routes.js';
 import { registerChapterReadRoutes } from './chapter-read-routes.js';
 import type { FastifyInstance } from 'fastify';
@@ -19,9 +20,12 @@ export async function registerReaderStateRoutes(
   pool: pg.Pool,
   config: ServerConfig,
 ): Promise<void> {
+  const deploymentConfig = config;
   app.patch<{ Params: { bookId: string }; Body: ReadingPositionBody }>(
     '/api/books/:bookId/reading-position',
     async (request, reply) => {
+      const config = requestOwnerConfig(deploymentConfig, request);
+
       const parsed = validateReadingPositionBody(request.body);
       if (!parsed.ok) return reply.code(400).send({ error: parsed.error });
       const body = parsed.value;
@@ -41,6 +45,7 @@ export async function registerReaderStateRoutes(
               join chapters c on c.book_id = b.id and c.id = $3
              where b.id = $1 and b.user_id = $2 and b.deleted_at is null
                and ($11::text is null or c.document_section_id = $11)
+               and ($4::text is null or exists (select 1 from paragraph_search p where p.paragraph_id=$4 and p.book_id=b.id and p.chapter_id=c.id))
           ),
           position_write as (insert into reading_positions (
             book_id, user_id, chapter_id, paragraph_id, paragraph_index, offset_in_paragraph,
@@ -138,6 +143,8 @@ export async function registerReaderStateRoutes(
   app.delete<{ Params: { bookId: string }; Body: ReadingPositionBody }>(
     '/api/books/:bookId/reading-position',
     async (request, reply) => {
+      const config = requestOwnerConfig(deploymentConfig, request);
+
       const parsed = validateReadingPositionDeleteBody(request.body);
       if (!parsed.ok) return reply.code(400).send({ error: parsed.error });
       const body = parsed.value;
@@ -231,7 +238,9 @@ export async function registerReaderStateRoutes(
   registerDiscoverySettingsRoutes(app, pool, config);
   registerChapterReadRoutes(app, pool, config);
 
-  app.get('/api/settings', async () => {
+  app.get('/api/settings', async (request) => {
+    const config = requestOwnerConfig(deploymentConfig, request);
+
     const result = await pool.query('select settings from reader_settings where user_id = $1', [config.defaultUserId]);
     const {
       _boaaIntegrations: _reservedIntegrations,
@@ -256,6 +265,8 @@ export async function registerReaderStateRoutes(
   });
 
   app.put<{ Body: Record<string, unknown> }>('/api/settings', async (request, reply) => {
+    const config = requestOwnerConfig(deploymentConfig, request);
+
     const parsed = validateSettingsBody(request.body);
     if (!parsed.ok) return reply.code(400).send({ error: parsed.error });
     const settings = sharedReaderSettings(parsed.value);
@@ -292,6 +303,8 @@ export async function registerReaderStateRoutes(
   });
 
   app.get<{ Querystring: { revision?: string } }>('/api/integration-settings', async (request) => {
+    const config = requestOwnerConfig(deploymentConfig, request);
+
     const parsedRevision = request.query.revision === undefined ? null : Number(request.query.revision);
     const revision =
       parsedRevision === null || (Number.isSafeInteger(parsedRevision) && parsedRevision >= 0) ? parsedRevision : null;
@@ -308,6 +321,8 @@ export async function registerReaderStateRoutes(
   });
 
   app.put<{ Body: unknown }>('/api/integration-settings', async (request, reply) => {
+    const config = requestOwnerConfig(deploymentConfig, request);
+
     const body =
       request.body && typeof request.body === 'object' && !Array.isArray(request.body)
         ? (request.body as Record<string, unknown>)

@@ -1,11 +1,12 @@
+import { useAccountStorage } from '../auth/use-account-storage';
 import { useState } from 'react';
 import { readBrandStorage, writeBrandStorage } from '@boaa/extension-contracts/brand-compat';
 import type { ExternalSourceController } from './external-source-controller-contract';
 const SOURCE_FILTER_THRESHOLD = 6;
 const FAVORITES_KEY = 'boaa.source-favorites.v1';
-function loadFavorites(): string[] {
+function loadFavorites(storage: Storage): string[] {
   try {
-    const value: unknown = JSON.parse(readBrandStorage(localStorage, FAVORITES_KEY) ?? '[]');
+    const value: unknown = JSON.parse(readBrandStorage(storage, FAVORITES_KEY) ?? '[]');
     return Array.isArray(value) ? value.filter((id): id is string => typeof id === 'string') : [];
   } catch {
     return [];
@@ -13,16 +14,17 @@ function loadFavorites(): string[] {
 }
 
 export function useExternalSourceSettingsModel(controller: Pick<ExternalSourceController, 'sources'>) {
+  const storage = useAccountStorage();
   const [query, setQuery] = useState('');
   const [kind, setKind] = useState('all');
   const [language, setLanguage] = useState('*');
   const [state, setState] = useState('all');
-  const [favorites, setFavorites] = useState(loadFavorites);
+  const [favorites, setFavorites] = useState(() => loadFavorites(storage));
   const [error, setError] = useState(false);
   const toggleFavorite = (id: string) => {
     const next = favorites.includes(id) ? favorites.filter((value) => value !== id) : [...favorites, id];
     try {
-      writeBrandStorage(localStorage, FAVORITES_KEY, JSON.stringify(next));
+      writeBrandStorage(storage, FAVORITES_KEY, JSON.stringify(next));
       setFavorites(next);
       setError(false);
     } catch {

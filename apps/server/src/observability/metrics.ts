@@ -1,3 +1,4 @@
+import { requireAdmin } from '../auth.js';
 import type { Queue } from 'bullmq';
 import type { FastifyInstance } from 'fastify';
 import type { ProviderErrorCategory } from '../providers/provider-error-classification.js';
@@ -187,6 +188,8 @@ export async function registerMetricsRoute(
   queues: readonly QueueMetricSource[],
 ): Promise<void> {
   app.get('/metrics', async (_request, reply) => {
+    requireAdmin(_request);
+
     const body = await metrics.renderPrometheus(queues);
     return reply.header('Content-Type', 'text/plain; version=0.0.4; charset=utf-8').send(body);
   });

@@ -32,6 +32,9 @@ const code = `globalThis.boaaExtension=async(method,input)=>{
 describe('installed text migration', () => {
   it('preserves old identities and raw text through the existing broker without a companion server', async () => {
     const app = Fastify();
+    app.addHook('onRequest', async (request) => {
+      request.principal = { userId: 'fixture-admin', role: 'admin', authMethod: 'legacy-token' };
+    });
     app.addContentTypeParser('application/octet-stream', { parseAs: 'buffer' }, (_request, body, done) =>
       done(null, body),
     );

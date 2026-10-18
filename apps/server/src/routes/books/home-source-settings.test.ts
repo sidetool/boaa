@@ -17,7 +17,13 @@ it('round trips independent source rows through PUT/GET settings, preserving dup
   });
   const pool = { query } as unknown as pg.Pool;
   const app = Fastify();
+  app.addHook('onRequest', async (request) => {
+    request.principal = { userId: 'one', role: 'admin', authMethod: 'legacy-token' };
+  });
   const other = Fastify();
+  other.addHook('onRequest', async (request) => {
+    request.principal = { userId: 'two', role: 'admin', authMethod: 'legacy-token' };
+  });
   await registerReaderStateRoutes(app, pool, { defaultUserId: 'one' } as ServerConfig);
   await registerReaderStateRoutes(other, pool, { defaultUserId: 'two' } as ServerConfig);
   const rows = [

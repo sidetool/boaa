@@ -1,3 +1,4 @@
+import { requestOwnerConfig } from '../services/owner-context.js';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
@@ -100,6 +101,7 @@ function validSourceContentHash(value: unknown): string | undefined {
 async function uploadProgress(
   poolOrClient: pg.Pool | pg.PoolClient,
   uploadId: string,
+  userId: string,
 ): Promise<{
   session?: UploadSessionRow;
   chunks: UploadChunkRow[];
@@ -110,9 +112,9 @@ async function uploadProgress(
       select id, file_name, size_bytes, content_type, encoding, chapter_split_mode, status, total_chunks,
              source_content_hash, import_mode, base_active_content_revision_id, expected_base, created_at, updated_at
       from upload_sessions
-      where id = $1
+      where id = $1 and user_id = $2
     `,
-    [uploadId],
+    [uploadId, userId],
   );
   const session = sessionResult.rows[0];
   if (!session) return { chunks: [] };
@@ -168,7 +170,10 @@ export async function registerUploadRoutes(
   config: ServerConfig,
   importQueue: Queue,
 ): Promise<void> {
+  const deploymentConfig = config;
   app.post<{ Body: InitUploadBody }>('/api/uploads/init', async (request, reply) => {
+    const config = requestOwnerConfig(deploymentConfig, request);
+
     const body = request.body ?? {};
     if (body.encoding !== undefined && !isEncodingMode(body.encoding))
       return reply.code(400).send({ error: '지원하지 않는 텍스트 인코딩입니다.' });
@@ -277,16 +282,23 @@ export async function registerUploadRoutes(
   });
 
   app.get<{ Params: { uploadId: string } }>('/api/uploads/:uploadId', async (request, reply) => {
-    const { session, chunks, importJob } = await uploadProgress(pool, request.params.uploadId);
+    const config = requestOwnerConfig(deploymentConfig, request);
+
+    const { session, chunks, importJob } = await uploadProgress(pool, request.params.uploadId, config.defaultUserId);
     if (!session) return reply.code(404).send({ error: 'upload session not found' });
     return uploadStatusPayload(session, chunks, importJob);
   });
 
-  app.post('/api/uploads/prune', async () => pruneStaleUploadSessions(pool, config, { userId: config.defaultUserId }));
+  app.post('/api/uploads/prune', async (request) => {
+    const config = requestOwnerConfig(deploymentConfig, request);
+    return pruneStaleUploadSessions(pool, config, { userId: config.defaultUserId });
+  });
 
   app.put<{ Params: { uploadId: string; chunkIndex: string }; Body: Buffer }>(
     '/api/uploads/:uploadId/chunks/:chunkIndex',
     async (request, reply) => {
+      const config = requestOwnerConfig(deploymentConfig, request);
+
       const chunkIndex = nonNegativeInteger(request.params.chunkIndex);
       if (chunkIndex === undefined) {
         return reply.code(400).send({ error: 'chunkIndex must be a non-negative integer' });
@@ -306,10 +318,10 @@ export async function registerUploadRoutes(
             select id, file_name, size_bytes, content_type, encoding, chapter_split_mode, status, total_chunks,
                    source_content_hash, import_mode, base_active_content_revision_id, expected_base, created_at, updated_at
             from upload_sessions
-            where id = $1
+            where id = $1 and user_id = $2
             for update
           `,
-          [request.params.uploadId],
+          [request.params.uploadId, config.defaultUserId],
         );
         const session = sessionResult.rows[0];
         if (!session) {
@@ -359,7 +371,7 @@ export async function registerUploadRoutes(
           [request.params.uploadId, chunkIndex, request.body.length, chunkPath],
         );
         await client.query('update upload_sessions set updated_at = now() where id = $1', [request.params.uploadId]);
-        const progress = await uploadProgress(client, request.params.uploadId);
+        const progress = await uploadProgress(client, request.params.uploadId, config.defaultUserId);
         await client.query('commit');
         if (!progress.session) return reply.code(404).send({ error: 'upload session not found' });
         return {
@@ -378,6 +390,8 @@ export async function registerUploadRoutes(
   );
 
   app.delete<{ Params: { uploadId: string } }>('/api/uploads/:uploadId', async (request, reply) => {
+    const config = requestOwnerConfig(deploymentConfig, request);
+
     const client = await pool.connect();
     let cancelled = false;
     try {
@@ -385,8 +399,8 @@ export async function registerUploadRoutes(
       const sessionResult = await client.query<UploadSessionRow>(
         `select id, file_name, size_bytes, content_type, encoding, chapter_split_mode, status, total_chunks,
                 source_content_hash, import_mode, base_active_content_revision_id, expected_base, created_at, updated_at
-           from upload_sessions where id = $1 for update`,
-        [request.params.uploadId],
+           from upload_sessions where id = $1 and user_id = $2 for update`,
+        [request.params.uploadId, config.defaultUserId],
       );
       const session = sessionResult.rows[0];
       if (!session) {
@@ -398,7 +412,7 @@ export async function registerUploadRoutes(
         return reply.code(409).send({ error: 'upload session is already imported' });
       }
       if (session.status === 'cancelled') {
-        const progress = await uploadProgress(client, request.params.uploadId);
+        const progress = await uploadProgress(client, request.params.uploadId, config.defaultUserId);
         await client.query('commit');
         cancelled = true;
         if (!progress.session) return reply.code(404).send({ error: 'upload session not found' });
@@ -429,7 +443,7 @@ export async function registerUploadRoutes(
         request.params.uploadId,
       ]);
       if (!processing) await client.query('delete from upload_chunks where upload_id = $1', [request.params.uploadId]);
-      const progress = await uploadProgress(client, request.params.uploadId);
+      const progress = await uploadProgress(client, request.params.uploadId, config.defaultUserId);
       await client.query('commit');
       cancelled = true;
       if (!processing) await removeUploadDirectory(config, request.params.uploadId);
@@ -448,14 +462,16 @@ export async function registerUploadRoutes(
   });
 
   app.post<{ Params: { uploadId: string } }>('/api/uploads/:uploadId/complete', async (request, reply) => {
+    const config = requestOwnerConfig(deploymentConfig, request);
+
     const client = await pool.connect();
     const jobId = `job_${randomUUID()}`;
     try {
       await client.query('begin');
       const sessionResult = await client.query<UploadSessionRow>(
         `select id, size_bytes, status, total_chunks, source_content_hash
-           from upload_sessions where id = $1 for update`,
-        [request.params.uploadId],
+           from upload_sessions where id = $1 and user_id = $2 for update`,
+        [request.params.uploadId, config.defaultUserId],
       );
       const session = sessionResult.rows[0];
       if (!session) {
@@ -573,6 +589,8 @@ export async function registerUploadRoutes(
   });
 
   app.get<{ Params: { jobId: string } }>('/api/import-jobs/:jobId', async (request, reply) => {
+    const config = requestOwnerConfig(deploymentConfig, request);
+
     const result = await pool.query(
       `
         select
@@ -580,9 +598,9 @@ export async function registerUploadRoutes(
           paragraphs_written, progress_completed, progress_total, progress_unit, message, book_id, error_message, cancel_requested_at,
           queue_generation, active_queue_job_id, created_at, updated_at
         from import_jobs
-        where id = $1
+        where id = $1 and user_id = $2
       `,
-      [request.params.jobId],
+      [request.params.jobId, config.defaultUserId],
     );
     const job = result.rows[0];
     if (!job) return reply.code(404).send({ error: 'import job not found' });

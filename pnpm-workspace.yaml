@@ -10,3 +10,6 @@ allowBuilds:
   protobufjs: true
   sharp: true
   tesseract.js: false
+
+minimumReleaseAgeExclude:
+  - re2js@2.8.8

@@ -1,6 +1,6 @@
 {
   "name": "boaa",
-  "version": "0.1.1-beta.3",
+  "version": "0.1.1-beta.4",
   "description": "BOAA - 텍스트 및 만화 뷰어",
   "license": "Apache-2.0",
   "private": true,
@@ -9,6 +9,8 @@
   "scripts": {
     "dev": "vite --host 127.0.0.1 --port 1421 --strictPort",
     "build": "tsc && vite build",
+    "build:hosted": "node scripts/build-hosted-web.mjs",
+    "check:hosted-startup": "node scripts/check-hosted-web-startup.mjs",
     "format": "prettier --write \"src/**/*.{css,ts,tsx}\" \"apps/server/src/**/*.ts\" \"apps/server/*.{json,mjs}\" \"packages/**/*.{json,ts}\" \"scripts/**/*.{ts,mjs}\" \"*.{json,js,ts,mjs}\"",
     "format:check": "node scripts/check-changed-format.mjs",
     "lint": "eslint src apps/server/src apps/server/*.mjs packages/extension-contracts packages/text-core packages/reader-core scripts vite.config.ts --max-warnings 34",

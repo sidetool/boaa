@@ -37,7 +37,7 @@ describeWithPostgres('hosted source book trash and re-add lifecycle', () => {
         );
         const seedBook = async () => {
           await pool.query(
-            "insert into book_objects (id, raw_text_hash, storage_key, file_name, content_type, size_bytes) values ('object', 'same-bytes', 'fixture-source', 'fixture.cbz', 'application/zip', 100)",
+            "insert into book_objects (user_id, id, raw_text_hash, storage_key, file_name, content_type, size_bytes) values ('user_test', 'object', 'same-bytes', 'fixture-source', 'fixture.cbz', 'application/zip', 100)",
           );
           await pool.query(`insert into library_books (id, user_id, object_id, title, source_file_name, source_encoding, format, normalized_text_hash, total_chapters, total_characters, total_paragraphs)
           values ('book', 'user_test', 'object', 'Fixture', 'fixture.cbz', 'utf-8', 'image_archive', 'same-text', 1, 0, 0)`);
@@ -48,6 +48,9 @@ describeWithPostgres('hosted source book trash and re-add lifecycle', () => {
         await pool.query(`insert into library_books (id, user_id, title, source_file_name, source_encoding, normalized_text_hash, total_chapters, total_characters, total_paragraphs)
         values ('other-book', 'other', 'Private', 'other.txt', 'utf-8', 'other-text', 0, 0, 0)`);
         const app = Fastify();
+        app.addHook('onRequest', async (request) => {
+          request.principal = { userId: 'user_test', role: 'admin', authMethod: 'legacy-token' };
+        });
         const config = { defaultUserId: 'user_test' } as ServerConfig;
         await registerBookCatalogRoutes(app, pool, config);
         await registerBookContentRoutes(app, pool, config);

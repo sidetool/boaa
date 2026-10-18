@@ -432,3 +432,112 @@ describe('server TTS providers', () => {
     }
   });
 });
+
+describe('ordinary external TTS compatibility', () => {
+  it.each(['wav', 'pcm'])(
+    'sends Gemini 3.8 verbatim text with separate instructions and handles %s',
+    async (format) => {
+      const pcm = Buffer.from([1, 0, 2, 0]);
+      const { wavFromPcm16 } = await import('./tts-audio.js');
+      const expected = wavFromPcm16(pcm, 24000);
+      const fetchImpl = vi.fn(async (_url: unknown, init?: RequestInit) => {
+        const body = JSON.parse(String(init?.body));
+        expect(body).toMatchObject({
+          model: 'gemini-3.8-flash-lite-tts',
+          input: [
+            {
+              type: 'user_input',
+              content: [
+                {
+                  type: 'text',
+                  text: '본문만 읽어요.',
+                  annotations: [{ type: 'speech_metadata', style: 'Speak softly.' }],
+                },
+              ],
+            },
+          ],
+          generation_config: { speech_config: [{ voice: 'Kore' }] },
+          response_format: { mime_type: 'audio/l16', sample_rate: 24000 },
+        });
+        return Response.json({
+          steps: [
+            {
+              type: 'model_output',
+              content: [{ type: 'audio', data: (format === 'wav' ? expected : pcm).toString('base64') }],
+            },
+          ],
+        });
+      });
+      const provider = new GeminiTTSProvider({ apiKey: 'fixture', modelId: 'gemini-3.8-flash-lite-tts', fetchImpl });
+      const result = await provider.synthesize({
+        text: '본문만 읽어요.',
+        voiceProfile,
+        providerOptions: { voice: 'Kore' },
+      });
+      expect(Buffer.from(result.audio)).toEqual(expected);
+      expect(await provider.listVoices()).toHaveLength(30);
+    },
+  );
+
+  it('discovers and synthesizes through a private OpenAI-compatible engine', async () => {
+    const fetchImpl = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      if (String(url).endsWith('/audio/voices')) return new Response('', { status: 404 });
+      if (String(url).endsWith('/voices')) return Response.json({ voices: ['alloy', 'custom'] });
+      expect(JSON.parse(String(init?.body))).toEqual({
+        model: 'my-engine',
+        input: '본문',
+        voice: 'custom',
+        speed: 1.2,
+        response_format: 'wav',
+      });
+      return new Response(new Uint8Array([1, 2]), { headers: { 'content-type': 'audio/wav' } });
+    });
+    const provider = new LocalEndpointTTSProvider({
+      endpointUrl: 'http://127.0.0.1:9010/v1/audio/speech',
+      modelId: 'my-engine',
+      fetchImpl,
+    });
+    expect((await provider.listVoices()).map((v) => v.id)).toEqual(['alloy', 'custom']);
+    expect(
+      (
+        await provider.synthesize({
+          text: '본문',
+          voiceProfile,
+          speed: 1.2,
+          format: 'wav',
+          providerOptions: { voice: 'custom' },
+        })
+      ).contentType,
+    ).toBe('audio/wav');
+  });
+
+  it('uses an explicit custom voice only for absent discovery APIs, never network failures', async () => {
+    const fetchImpl = vi.fn(async () => new Response('', { status: 404 }));
+    const provider = new LocalEndpointTTSProvider({
+      endpointUrl: 'http://127.0.0.1:9010/v1/audio/speech',
+      providerOptions: { voice: 'custom' },
+      fetchImpl,
+    });
+    expect((await provider.listVoices())[0].id).toBe('custom');
+    fetchImpl.mockResolvedValue(new Response('', { status: 503 }));
+    await expect(provider.listVoices()).rejects.toThrow('503');
+  });
+
+  it('loads paginated ElevenLabs voices and wraps PCM for browser playback', async () => {
+    const fetchImpl = vi.fn(async (url: string | URL | Request) => {
+      if (String(url).includes('/v2/voices'))
+        return Response.json(
+          String(url).includes('next_page_token')
+            ? { voices: [{ voice_id: 'two', name: 'Two' }] }
+            : { voices: [{ voice_id: 'one', name: 'One' }], has_more: true, next_page_token: 'page2' },
+        );
+      return new Response(new Uint8Array([1, 0, 2, 0]), { headers: { 'content-type': 'audio/pcm' } });
+    });
+    const provider = new ElevenLabsTTSProvider({ apiKey: 'fixture', modelId: 'eleven_flash_v2_5', fetchImpl });
+    expect((await provider.listVoices()).map((v) => v.id)).toEqual(['one', 'two']);
+    const audio = await provider.synthesize({ text: '본문', voiceProfile, format: 'wav' });
+    expect(audio.contentType).toBe('audio/wav');
+    expect(Buffer.from(audio.audio).toString('ascii', 0, 4)).toBe('RIFF');
+    expect(audio.audio.byteLength).toBe(48);
+  });
+});

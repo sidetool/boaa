@@ -220,6 +220,15 @@ export async function processImportJob(
   attempt: ImportExecutionAttempt = SINGLE_IMPORT_ATTEMPT,
   logger?: Pick<StructuredLogger, 'info'>,
 ): Promise<void> {
+  // The queue supplies identifiers, never authority. Verify their persisted relationship before claiming work.
+  const ownership = await pool.query<{ user_id: string; legacy_owner: boolean }>(
+    `select j.user_id, exists(select 1 from self_host_accounts owner where owner.user_id=j.user_id and owner.bootstrap_owner_key=1) as legacy_owner from import_jobs j join upload_sessions u on u.id=j.upload_id and u.user_id=j.user_id
+      where j.id=$1 and j.upload_id=$2
+        and not exists (select 1 from self_host_accounts a where a.user_id=j.user_id and a.status<>'active')`,
+    [jobId, uploadId],
+  );
+  if (!ownership.rows[0]) throw new Error('import_job_upload_mismatch');
+  config = Object.freeze({ ...config, defaultUserId: ownership.rows[0].user_id });
   if (!(await claimImportExecution(pool, jobId, attempt.executionId))) return;
   const measurements = new ImportMeasurements(logger, jobId);
   if (!attempt.executionId) {
@@ -275,6 +284,22 @@ export async function processImportJob(
     const uploadedSourceContentHash = upload.contentHash;
     if (session.source_content_hash && uploadedSourceContentHash !== session.source_content_hash) {
       throw new Error('Uploaded source bytes do not match sourceContentHash');
+    }
+    const suppliedBookId = session.client_book_id?.trim();
+    const existingTarget = suppliedBookId
+      ? await pool.query<{ user_id: string }>('select user_id from library_books where id=$1', [suppliedBookId])
+      : undefined;
+    if (existingTarget?.rows[0] && existingTarget.rows[0].user_id !== session.user_id)
+      throw new Error('import_target_not_found');
+    if (!existingTarget?.rows[0]) {
+      if (session.import_mode && session.import_mode !== 'replace_book') throw new Error('import_target_not_found');
+      // Supply the owner identity before any materializer creates chapters, pages, assets or nested references.
+      if (!ownership.rows[0].legacy_owner) {
+        session.client_book_id = persistentId128('hosted_book', [
+          session.user_id,
+          suppliedBookId || uploadedSourceContentHash,
+        ]);
+      }
     }
     let sourceContentHash = uploadedSourceContentHash;
     let canonicalFileName = session.file_name;
@@ -646,7 +671,7 @@ export async function processImportJob(
       attempt.executionId,
     );
     const rawHash = parsed.novel.rawTextHash;
-    const objectId = persistentId128('object', [rawHash]);
+    let objectId = persistentId128('object', [session.user_id, rawHash]);
     const storageKey = `${session.user_id}/sources/${objectId}/${jobId}/${attempt.executionId ?? randomUUID()}/attempt-${attempt.attemptNumber}/${canonicalFileName}`;
     const canonicalSizeBytes = sourceBlob.size;
     measurements.counts.canonicalBytes = canonicalSizeBytes;
@@ -828,6 +853,15 @@ export async function processImportJob(
     const releaseTransactionClient = client !== appendLockClient;
     try {
       await client.query('begin');
+      // The materializer's final ID may differ from client_book_id. Lock that
+      // identity before replacement preparation can delete or rewrite children.
+      await client.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [`import-book:${parsed.novel.id}`]);
+      const finalTarget = await client.query<{ user_id: string }>(
+        'select user_id from library_books where id=$1 for update',
+        [parsed.novel.id],
+      );
+      if (finalTarget.rows[0] && finalTarget.rows[0].user_id !== session.user_id)
+        throw new Error('import_target_not_found');
       await assertImportExpectedBase(client, { bookId: parsed.novel.id, userId: session.user_id, expectedBase });
       if (appendBaseContentRevisionId) {
         const currentBase = await client.query<{ id: string }>(
@@ -838,23 +872,24 @@ export async function processImportJob(
         );
         if (!currentBase.rows[0]) throw new Error('image_series_append_base_changed');
       }
-      await client.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [rawHash]);
-      const previousSource = await client.query<{ storage_key: string }>(
-        'select storage_key from book_objects where raw_text_hash = $1 for update',
-        [rawHash],
+      await client.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [`${session.user_id}:${rawHash}`]);
+      const previousSource = await client.query<{ id: string; storage_key: string }>(
+        'select id, storage_key from book_objects where raw_text_hash = $1 and user_id = $2 for update',
+        [rawHash, session.user_id],
       );
+      objectId = previousSource.rows[0]?.id ?? objectId;
       const obsoleteSourceKeys = previousSource.rows.map((row) => row.storage_key).filter((key) => key !== storageKey);
       await client.query(
         `
-          insert into book_objects (id, raw_text_hash, storage_key, file_name, content_type, size_bytes)
-          values ($1, $2, $3, $4, $5, $6)
-          on conflict (raw_text_hash) do update
+          insert into book_objects (id, raw_text_hash, storage_key, file_name, content_type, size_bytes, user_id)
+          values ($1, $2, $3, $4, $5, $6, $7)
+          on conflict (user_id, raw_text_hash) do update
             set storage_key = excluded.storage_key,
                 file_name = excluded.file_name,
                 content_type = excluded.content_type,
                 size_bytes = excluded.size_bytes
         `,
-        [objectId, rawHash, storageKey, canonicalFileName, canonicalContentType, canonicalSizeBytes],
+        [objectId, rawHash, storageKey, canonicalFileName, canonicalContentType, canonicalSizeBytes, session.user_id],
       );
       const previousBookObject = await client.query<{ object_id?: string | null }>(
         'select object_id from library_books where id = $1 and user_id = $2',
@@ -898,10 +933,10 @@ export async function processImportJob(
                   else library_books.metadata_revision + 1
                 end,
                 updated_at = excluded.updated_at
-          where $20::text is null or (
+          where library_books.user_id = excluded.user_id and ($20::text is null or (
             $20::text = 'revision' and library_books.user_id = excluded.user_id and
             library_books.active_content_revision_id = $21::text
-          )
+          ))
         `,
         [
           parsed.novel.id,
@@ -927,7 +962,8 @@ export async function processImportJob(
           expectedBase?.kind === 'revision' ? expectedBase.contentRevisionId : null,
         ],
       );
-      if (expectedBase && activatedBook.rowCount === 0) throw new Error('import_expected_base_conflict');
+      if (activatedBook.rowCount !== 1)
+        throw new Error(expectedBase ? 'import_expected_base_conflict' : 'import_target_not_found');
       if (previousBookObject.rows[0]?.object_id && previousBookObject.rows[0].object_id !== objectId) {
         const orphanedSource = await client.query<{ storage_key: string }>(
           `delete from book_objects object
@@ -968,8 +1004,8 @@ export async function processImportJob(
       const replacedAssetIds = storedAssets.map((asset) => asset.id);
       const replacedAssets = replacedAssetIds.length
         ? await client.query<{ id: string; storage_key: string }>(
-            'select id, storage_key from book_assets where id = any($1::text[])',
-            [replacedAssetIds],
+            'select id, storage_key from book_assets where id = any($1::text[]) and user_id=$2',
+            [replacedAssetIds, session.user_id],
           )
         : { rows: [] as Array<{ id: string; storage_key: string }> };
       const nextStorageById = new Map(storedAssets.map((asset) => [asset.id, asset.storageKey]));
@@ -1003,7 +1039,7 @@ export async function processImportJob(
           .map((asset) => asset.storageKey),
       );
       for (const asset of assetsToActivate) {
-        await client.query(
+        const activatedAsset = await client.query(
           `insert into book_assets (
              id, user_id, book_id, content_revision_id, kind, provenance, status, storage_key, file_name,
              content_type, byte_length, content_hash, page_index, created_at, activated_at
@@ -1012,7 +1048,8 @@ export async function processImportJob(
              status = excluded.status, storage_key = excluded.storage_key, file_name = excluded.file_name,
              provenance = excluded.provenance, content_type = excluded.content_type,
              byte_length = excluded.byte_length, content_hash = excluded.content_hash,
-             page_index = excluded.page_index, activated_at = now()`,
+             page_index = excluded.page_index, activated_at = now()
+           where book_assets.user_id=excluded.user_id and book_assets.book_id=excluded.book_id`,
           [
             asset.id,
             session.user_id,
@@ -1028,6 +1065,7 @@ export async function processImportJob(
             asset.pageIndex ?? null,
           ],
         );
+        if (activatedAsset.rowCount !== 1) throw new Error('import_asset_parent_conflict');
       }
       const cover = assetsToActivate.find((asset) => asset.kind === 'cover');
       if (cover && !preserveExistingCover) {
@@ -1086,7 +1124,7 @@ export async function processImportJob(
         `
           insert into sync_events (id, user_id, type, book_id, entity_id, payload, revision, created_at)
           values ($1, $2, $3, $4, $5, $6, $7, $8)
-          on conflict (id) do nothing
+          on conflict (user_id, id) do nothing
         `,
         [
           persistentId128('sync_event', [

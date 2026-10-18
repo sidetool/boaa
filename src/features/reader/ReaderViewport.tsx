@@ -824,6 +824,38 @@ function VirtualizedReaderViewportComponent({
     virtualizer,
   ]);
 
+  // TanStack drops (not defers) row measurements outside the target window while a smooth
+  // scrollToIndex runs. TTS follows every paragraph with one, so rows mounting at the leading
+  // overscan edge keep their estimate and later overlap. Re-read mounted rows once it settles.
+  const scrollSettled = !virtualizer.isScrolling;
+  useEffect(() => {
+    const root = rootRef.current;
+    if (!scrollSettled || opening || !root) return;
+    for (const row of root.querySelectorAll<HTMLElement>('.reader-virtual-row[data-index]')) {
+      if (!row.querySelector('[data-paragraph-id]')) continue;
+      virtualizer.resizeItem(Number(row.dataset.index), Math.ceil(row.getBoundingClientRect().height));
+    }
+  }, [opening, scrollSettled, virtualRangeKey, virtualizer]);
+
+  // Playback skips follow-scrolling while the page is hidden; catch up once on return.
+  const ttsIndexRef = useRef(ttsIndex);
+  ttsIndexRef.current = ttsIndex;
+  useEffect(() => {
+    if (!isActive) return;
+    let hiddenAt: number | undefined;
+    const onVisibility = () => {
+      if (document.visibilityState === 'hidden') {
+        hiddenAt = ttsIndexRef.current;
+        return;
+      }
+      const index = ttsIndexRef.current;
+      if (index !== undefined && index !== hiddenAt) void scrollToParagraphIndex(index, 'center', 'auto');
+      hiddenAt = undefined;
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => document.removeEventListener('visibilitychange', onVisibility);
+  }, [isActive, scrollToParagraphIndex]);
+
   useEffect(() => {
     if (opening) return;
     const activeItems = virtualizer.getVirtualItems();

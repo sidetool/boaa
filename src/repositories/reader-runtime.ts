@@ -1,3 +1,5 @@
+import { createAccountReaderDb } from '../storage/reader-database';
+import type { SelfHostSession } from '../features/auth/self-host-session';
 import { readBrandStorage, removeBrandStorage, writeBrandStorage } from '@boaa/extension-contracts/brand-compat';
 import { BrowserImportService } from '../services/import/browser-import-service';
 import { ImportService } from '../services/import/import-service';
@@ -40,6 +42,8 @@ import { notifySelfHostAuthRequired } from '../services/remote/self-host-auth-ev
 export type ReaderBackendMode = 'local' | 'remote';
 
 export interface ReaderRuntime {
+  session?: SelfHostSession;
+  auxiliaryDatabase?: () => Promise<IDBDatabase>;
   mode: ReaderBackendMode;
   managedByDesktop?: boolean;
   apiBaseUrl?: string;
@@ -302,6 +306,7 @@ export function getOrCreateRemoteDeviceId(): string {
 
 export function createReaderRuntime(
   options: {
+    session?: SelfHostSession;
     mode?: ReaderBackendMode;
     allowServerSync?: boolean;
     apiBaseUrl?: string;
@@ -310,17 +315,23 @@ export function createReaderRuntime(
   } = {},
 ): ReaderRuntime {
   const mode = options.mode ?? (import.meta.env.VITE_READER_BACKEND === 'remote' ? 'remote' : 'local');
-  const bookEnrichmentRepository = new IndexedDbBookEnrichmentRepository();
+  const auxiliaryDatabase = options.session
+    ? createAccountReaderDb(options.session.storageScope, options.session.signal)
+    : undefined;
+  const bookEnrichmentRepository = new IndexedDbBookEnrichmentRepository(auxiliaryDatabase);
   if (mode === 'remote') {
     const apiBaseUrl = options.apiBaseUrl?.replace(/\/+$/, '') || resolveApiBaseUrl();
     const client = new RemoteApiClient(apiBaseUrl, {
-      getAuthToken: options.getAuthToken ?? resolveApiAuthToken,
+      session: options.session,
+      getAuthToken: options.session ? undefined : (options.getAuthToken ?? resolveApiAuthToken),
       onUnauthorized: notifySelfHostAuthRequired,
     });
     const deviceId = getOrCreateRemoteDeviceId();
     const remoteRepository = new RemoteReaderRepository(client, deviceId);
     return {
       mode,
+      session: options.session,
+      auxiliaryDatabase,
       managedByDesktop: options.managedByDesktop,
       apiBaseUrl,
       remoteApiClient: client,
@@ -332,7 +343,7 @@ export function createReaderRuntime(
       bookEnrichmentRepository,
       backupRepository: new RemoteBackupRepository(client),
       chapterStructureRepository: new RemoteChapterStructureRepository(client),
-      personalizationRepository: new RemoteReaderPersonalizationRepository(client),
+      personalizationRepository: new RemoteReaderPersonalizationRepository(client, options.session),
       importService: new ServerUploadImportService(client),
     };
   }

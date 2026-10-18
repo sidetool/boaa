@@ -10,7 +10,7 @@ type StoredAccount = NonNullable<Awaited<ReturnType<SelfHostAuthStore['loadAccou
 
 class RouteAuthStore implements SelfHostAuthStore {
   account?: StoredAccount;
-  sessions = new Map<string, { userId: string; expiresAt: string }>();
+  sessions = new Map<string, { userId: string; expiresAt: string; sessionContext?: string }>();
   async loadAccount() {
     return this.account;
   }
@@ -20,12 +20,20 @@ class RouteAuthStore implements SelfHostAuthStore {
     return true;
   }
   async updateUserDisplayName() {}
-  async createSession(userId: string, tokenHash: string, expiresAt: string) {
-    this.sessions.set(tokenHash, { userId, expiresAt });
+  async createSession(
+    userId: string,
+    tokenHash: string,
+    expiresAt: string,
+    _version?: number,
+    sessionContext?: string,
+  ) {
+    this.sessions.set(tokenHash, { userId, expiresAt, sessionContext });
   }
   async resolveSession(tokenHash: string, now: string) {
     const session = this.sessions.get(tokenHash);
-    return session && session.expiresAt > now && session.userId === this.account?.userId ? this.account : undefined;
+    return session && session.expiresAt > now && session.userId === this.account?.userId
+      ? { ...this.account, sessionContext: session.sessionContext }
+      : undefined;
   }
   async revokeSession(tokenHash: string) {
     this.sessions.delete(tokenHash);
@@ -75,6 +83,7 @@ describe('self-host account routes', () => {
 
     const denied = await app.inject({
       method: 'POST',
+      headers: { origin: 'http://localhost:80' },
       url: '/api/auth/register',
       payload: { username: 'owner', password: 'a sufficiently long password', setupCode: 'wrong' },
     });
@@ -84,7 +93,7 @@ describe('self-host account routes', () => {
     const registered = await app.inject({
       method: 'POST',
       url: '/api/auth/register',
-      headers: { 'x-forwarded-proto': 'https' },
+      headers: { 'x-forwarded-proto': 'https', origin: 'http://localhost:80' },
       payload: { username: 'owner', password: 'a sufficiently long password', setupCode: 'first-device-code' },
     });
     expect(registered.statusCode).toBe(201);
@@ -96,35 +105,47 @@ describe('self-host account routes', () => {
     const session = await app.inject({
       method: 'GET',
       url: '/api/auth/session',
-      headers: { cookie: cookieValue(registered.headers['set-cookie']) },
+      headers: {
+        cookie: cookieValue(registered.headers['set-cookie']),
+        'x-boaa-session-context': registered.json().sessionContext,
+      },
     });
     expect(session.statusCode).toBe(200);
     expect(session.json()).toMatchObject({ authenticated: true, account: { username: 'owner' } });
     await app.close();
   });
 
-  it('logs in a second device and clears only that cookie on logout', async () => {
+  it('logs in a second device and revokes only that session without rewriting cookies', async () => {
     const app = Fastify({ logger: false });
     const store = new RouteAuthStore();
     const service = new SelfHostAuthService(store, 'user_test');
     await registerSelfHostAuthRoutes(app, service, config('loopback', 'synthetic-legacy-token'));
     await app.inject({
       method: 'POST',
+      headers: { origin: 'http://localhost:80' },
       url: '/api/auth/register',
       payload: { username: 'owner', password: 'a sufficiently long password', setupCode: 'synthetic-legacy-token' },
     });
 
     const loggedIn = await app.inject({
       method: 'POST',
+      headers: { origin: 'http://localhost:80' },
       url: '/api/auth/login',
       payload: { username: 'owner', password: 'a sufficiently long password', setupCode: 'synthetic-legacy-token' },
     });
     const cookie = cookieValue(loggedIn.headers['set-cookie']);
     expect(loggedIn.statusCode).toBe(200);
-    const logout = await app.inject({ method: 'POST', url: '/api/auth/logout', headers: { cookie } });
-    expect(logout.headers['set-cookie']).toHaveLength(2);
-    expect((logout.headers['set-cookie'] as string[]).every((value) => value.includes('Max-Age=0'))).toBe(true);
-    const expired = await app.inject({ method: 'GET', url: '/api/auth/session', headers: { cookie } });
+    const logout = await app.inject({
+      method: 'POST',
+      url: '/api/auth/logout',
+      headers: { cookie, origin: 'http://localhost:80', 'x-boaa-session-context': loggedIn.json().sessionContext },
+    });
+    expect(logout.headers['set-cookie']).toBeUndefined();
+    const expired = await app.inject({
+      method: 'GET',
+      url: '/api/auth/session',
+      headers: { cookie, origin: 'http://localhost:80', 'x-boaa-session-context': loggedIn.json().sessionContext },
+    });
     expect(expired.statusCode).toBe(401);
     await app.close();
   });
@@ -136,12 +157,14 @@ describe('self-host account routes', () => {
     await registerSelfHostAuthRoutes(app, service, config('loopback', 'synthetic-legacy-token'));
     await app.inject({
       method: 'POST',
+      headers: { origin: 'http://localhost:80' },
       url: '/api/auth/register',
       payload: { username: 'owner', password: 'a sufficiently long password', setupCode: 'synthetic-legacy-token' },
     });
 
     const oversized = await app.inject({
       method: 'POST',
+      headers: { origin: 'http://localhost:80' },
       url: '/api/auth/login',
       payload: { username: 'owner', password: 'x'.repeat(5_000) },
     });
@@ -150,6 +173,7 @@ describe('self-host account routes', () => {
     for (let index = 0; index < 8; index += 1) {
       const denied = await app.inject({
         method: 'POST',
+        headers: { origin: 'http://localhost:80' },
         url: '/api/auth/login',
         payload: { username: `rotated-${index}`, password: 'a sufficiently long password' },
       });
@@ -157,6 +181,7 @@ describe('self-host account routes', () => {
     }
     const throttled = await app.inject({
       method: 'POST',
+      headers: { origin: 'http://localhost:80' },
       url: '/api/auth/login',
       payload: { username: 'owner', password: 'a sufficiently long password', setupCode: 'synthetic-legacy-token' },
     });
@@ -178,11 +203,16 @@ describe('self-host account routes', () => {
 
     const registered = await app.inject({
       method: 'POST',
+      headers: { origin: 'http://localhost:80' },
       url: '/api/auth/register',
       payload: { username: 'owner', password: 'a sufficiently long password', setupCode: 'recovery-code' },
     });
     const cookie = cookieValue(registered.headers['set-cookie']);
-    const cookieAccess = await app.inject({ method: 'GET', url: '/api/books', headers: { cookie } });
+    const cookieAccess = await app.inject({
+      method: 'GET',
+      url: '/api/books',
+      headers: { cookie, origin: 'http://localhost:80', 'x-boaa-session-context': registered.json().sessionContext },
+    });
     const recoveryAccess = await app.inject({
       method: 'GET',
       url: '/api/books',
@@ -225,6 +255,7 @@ it('requires logged one-time codes even on loopback, throttles setup, and stops 
   const register = (setupCode?: string, remoteAddress = '127.0.0.1') =>
     app.inject({
       method: 'POST',
+      headers: { origin: 'http://localhost:80' },
       url: '/api/auth/register',
       remoteAddress,
       payload: { username: 'owner', password: 'long synthetic password', setupCode },
@@ -272,6 +303,7 @@ it('shared database rejects other API-instance codes once one owner is committed
     apps.map((app) =>
       app.inject({
         method: 'POST',
+        headers: { origin: 'http://localhost:80' },
         url: '/api/auth/register',
         payload: { username: 'owner', password: 'long synthetic password', setupCode: 'synthetic-legacy' },
       }),
@@ -281,9 +313,164 @@ it('shared database rejects other API-instance codes once one owner is committed
   for (const app of apps) {
     expect((await app.inject('/api/auth/status')).json().setupCodeRequired).toBe(false);
     expect(
-      (await app.inject({ method: 'POST', url: '/api/auth/register', payload: { setupCode: 'synthetic-legacy' } }))
-        .statusCode,
+      (
+        await app.inject({
+          method: 'POST',
+          headers: { origin: 'http://localhost:80' },
+          url: '/api/auth/register',
+          payload: { setupCode: 'synthetic-legacy' },
+        })
+      ).statusCode,
     ).toBe(409);
+    await app.close();
+  }
+});
+
+it('rejects stale logout and implicit login replacement without changing the active cookie', async () => {
+  const app = Fastify();
+  const service = new SelfHostAuthService(new RouteAuthStore(), 'user_test');
+  const session = await service.register({ username: 'owner', password: 'a sufficiently long password' });
+  await registerSelfHostAuthRoutes(app, service, config('loopback'));
+  const headers = {
+    cookie: `boaa_session=${session.token}`,
+    origin: 'http://localhost:80',
+    'x-boaa-session-context': 'stale',
+  };
+  const stale = await app.inject({ method: 'POST', url: '/api/auth/logout', headers });
+  expect(stale.statusCode).toBe(409);
+  expect(stale.headers['set-cookie']).toBeUndefined();
+  expect(await service.authenticateSession(session.token)).toBeDefined();
+  const replacement = await app.inject({
+    method: 'POST',
+    url: '/api/auth/login',
+    headers: { ...headers, 'x-boaa-session-context': session.account.sessionContext! },
+    payload: { username: 'owner', password: 'a sufficiently long password' },
+  });
+  expect(replacement.statusCode).toBe(409);
+  expect(replacement.json()).toEqual({ error: 'account_session_active' });
+  for (const origin of [undefined, 'null', 'https://attacker.example']) {
+    const denied = await app.inject({
+      method: 'POST',
+      url: '/api/auth/login',
+      headers: origin ? { origin } : {},
+      payload: { username: 'owner', password: 'a sufficiently long password' },
+    });
+    expect(denied.statusCode).toBe(403);
+  }
+  await app.close();
+});
+
+it.each(['/api/auth/logout', '/api/auth/logout-all'])(
+  'a delayed %s response does not clear a later login cookie',
+  async (path) => {
+    const app = Fastify();
+    const a = { userId: 'a', username: 'a', displayName: 'A', role: 'admin' as const, sessionContext: 'context-a' };
+    const b = { userId: 'b', username: 'b', displayName: 'B', role: 'member' as const, sessionContext: 'context-b' };
+    const sessions = new Map<string, typeof a | typeof b>([['token-a', a]]);
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let revoked!: () => void;
+    const revokedPromise = new Promise<void>((resolve) => {
+      revoked = resolve;
+    });
+    const revoke = async () => {
+      sessions.delete('token-a');
+      revoked();
+      await held;
+    };
+    const service = {
+      authenticateSession: async (token: string) => sessions.get(token),
+      setupRequired: async () => false,
+      logout: revoke,
+      revokeAll: revoke,
+      login: async () => {
+        sessions.set('token-b', b);
+        return { token: 'token-b', account: b, expiresAt: '2099-01-01T00:00:00Z' };
+      },
+    } as unknown as SelfHostAuthService;
+    app.addHook('onRequest', async (request) => {
+      request.principal = { userId: 'a', role: 'admin', authMethod: 'session', sessionContext: 'context-a' };
+    });
+    await registerSelfHostAuthRoutes(app, service, config('loopback'));
+    const pending = app
+      .inject({
+        method: 'POST',
+        url: path,
+        headers: {
+          cookie: 'boaa_session=token-a',
+          origin: 'http://localhost:80',
+          'x-boaa-session-context': 'context-a',
+        },
+      })
+      .then((response) => response);
+    try {
+      await revokedPromise;
+      const loggedIn = await app.inject({
+        method: 'POST',
+        url: '/api/auth/login',
+        headers: { cookie: 'boaa_session=token-a', origin: 'http://localhost:80' },
+        payload: { username: 'b', password: 'fixture-password' },
+      });
+      expect(loggedIn.statusCode).toBe(200);
+      expect(cookieValue(loggedIn.headers['set-cookie'])).toBe('boaa_session=token-b');
+      release();
+      const logout = await pending;
+      expect(logout.statusCode).toBe(200);
+      expect(logout.headers['set-cookie']).toBeUndefined();
+      const active = await app.inject({ url: '/api/auth/session', headers: { cookie: 'boaa_session=token-b' } });
+      expect(active.json().account.userId).toBe('b');
+    } finally {
+      release();
+      await app.close();
+    }
+  },
+);
+
+it('a delayed legacy-cookie session read cannot overwrite a newer canonical cookie', async () => {
+  const app = Fastify();
+  const service = new SelfHostAuthService(new RouteAuthStore(), 'user_test');
+  const a = await service.register({ username: 'owner', password: 'a sufficiently long password' });
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let ready!: () => void;
+  const pendingResponse = new Promise<void>((resolve) => {
+    ready = resolve;
+  });
+  app.addHook('onSend', async (request, _reply, payload) => {
+    if (request.url === '/api/auth/session' && request.headers.cookie?.startsWith('moya_session=')) {
+      ready();
+      await held;
+    }
+    return payload;
+  });
+  await registerSelfHostAuthRoutes(app, service, config('loopback'));
+  const pending = app
+    .inject({ url: '/api/auth/session', headers: { cookie: `moya_session=${a.token}` } })
+    .then((response) => response);
+  try {
+    await pendingResponse;
+    const login = await app.inject({
+      method: 'POST',
+      url: '/api/auth/login',
+      headers: {
+        cookie: `moya_session=${a.token}`,
+        origin: 'http://localhost:80',
+        'x-boaa-session-context': a.account.sessionContext!,
+      },
+      payload: { username: 'owner', password: 'a sufficiently long password', replaceCurrentSession: true },
+    });
+    expect(login.statusCode).toBe(200);
+    expect(login.headers['set-cookie']).toContain('boaa_session=');
+    release();
+    const read = await pending;
+    expect(read.statusCode).toBe(200);
+    expect(read.headers['set-cookie']).toBeUndefined();
+  } finally {
+    release();
     await app.close();
   }
 });

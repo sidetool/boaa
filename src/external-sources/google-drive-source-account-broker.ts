@@ -137,7 +137,13 @@ export class GoogleDriveSourceAccountBroker implements ExternalSourceBroker {
     private readonly state: ExternalSourceLocalState,
     private readonly picker: GoogleDrivePickerPort = new GoogleDriveWebPicker(),
     private readonly fetchImpl: typeof fetch = globalThis.fetch.bind(globalThis),
+    private readonly lifetime?: AbortSignal,
   ) {}
+
+  dispose(): void {
+    this.record = undefined;
+    this.credential = undefined;
+  }
 
   async initialize(): Promise<void> {
     this.record = await this.state.getCredential(this.connectorId);
@@ -157,6 +163,7 @@ export class GoogleDriveSourceAccountBroker implements ExternalSourceBroker {
         this.reauthorizationRequired = true;
         return;
       }
+      this.lifetime?.throwIfAborted();
       this.credential = credential;
     } catch {
       this.credential = undefined;
@@ -264,6 +271,7 @@ export class GoogleDriveSourceAccountBroker implements ExternalSourceBroker {
     const config = this.requireConfiguration();
     const existingCredential = isTokenFresh(this.credential) ? this.credential : undefined;
     const documents = await this.picker.open({
+      signal: this.lifetime,
       ...config,
       accessToken: existingCredential?.accessToken,
       onToken: (token) => this.persistToken(token),
@@ -325,7 +333,9 @@ export class GoogleDriveSourceAccountBroker implements ExternalSourceBroker {
       updatedAt: timestamp,
     };
     await this.state.saveCredential(record);
+    this.lifetime?.throwIfAborted();
     this.record = record;
+    this.lifetime?.throwIfAborted();
     this.credential = credential;
     this.reauthorizationRequired = false;
     this.connectionReason = undefined;

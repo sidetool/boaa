@@ -584,6 +584,57 @@
   padding-inline: 9px;
 }
 
+/* Service-account JSON: a full-width file button, then actions that wrap instead of squeezing labels. */
+.provider-json-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.provider-json-actions .primary-btn,
+.provider-json-actions .ghost-btn {
+  flex: 1 1 0;
+  min-width: max-content;
+  padding-inline: 10px;
+  white-space: nowrap;
+}
+
+.provider-json-actions .is-file {
+  flex-basis: 100%;
+}
+
+.provider-json-picked {
+  display: grid;
+  gap: 2px;
+  margin: 0;
+  color: var(--text-2);
+  font-size: 0.82rem;
+  overflow-wrap: anywhere;
+}
+
+.provider-json-picked b {
+  color: var(--text);
+  font-weight: 650;
+}
+
+.provider-json-notes {
+  display: grid;
+  gap: 6px;
+  margin: 2px 0 0;
+  padding: 0;
+  list-style: none;
+  color: var(--text-2);
+  font-size: 0.8rem;
+  line-height: 1.5;
+}
+
+.provider-json-notes b {
+  display: block;
+  color: var(--text);
+  font-size: 0.76rem;
+  font-weight: 650;
+}
+
 .provider-row.disabled {
   opacity: 0.62;
 }

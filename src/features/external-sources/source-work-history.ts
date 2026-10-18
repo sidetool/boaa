@@ -81,7 +81,7 @@ export async function clearSourceWorkHistory(input: {
     ...[...targets.values()].map((p) => JSON.stringify([scope, externalItemKeyId(p.source)])),
     ...(input.releaseIds ?? []).map((remoteId) => JSON.stringify([scope, externalItemKeyId({ ...work, remoteId })])),
   ]);
-  await clearSourceWorkReadingTime(sourceWorkSessionId(scope, work));
+  await clearSourceWorkReadingTime(sourceWorkSessionId(scope, work), undefined, scope);
 }
 
 /** Retry only device-history cleanup for atomically retired associations. Never reset newer visits. */
@@ -102,7 +102,7 @@ export async function finishSourceAssociationPurges(
       releaseIds.map((remoteId) => JSON.stringify([scope, externalItemKeyId({ ...work, remoteId })])),
       Date.parse(resetAt),
     );
-    await clearSourceWorkReadingTime(sourceWorkSessionId(scope, work), resetAt);
+    await clearSourceWorkReadingTime(sourceWorkSessionId(scope, work), resetAt, scope);
     await state.acknowledgeAssociationPurgeIntent?.(intent);
   }
 }

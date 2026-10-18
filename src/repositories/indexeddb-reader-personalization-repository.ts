@@ -6,15 +6,16 @@ import { requestToPromise, transactionDone } from '../storage/indexeddb-transact
 import type { InstallUserFontInput, ReaderPersonalizationRepository } from './reader-personalization-repository';
 
 export class IndexedDbReaderPersonalizationRepository implements ReaderPersonalizationRepository {
+  constructor(private readonly openDatabase: () => Promise<IDBDatabase> = openReaderDb) {}
   async listUserFonts(): Promise<UserFontAsset[]> {
-    const db = await openReaderDb();
+    const db = await this.openDatabase();
     const tx = db.transaction(READER_PERSONALIZATION_STORES.fonts, 'readonly');
     const rows = await requestToPromise<UserFontAsset[]>(tx.objectStore(READER_PERSONALIZATION_STORES.fonts).getAll());
     return rows.sort((left, right) => left.familyLabel.localeCompare(right.familyLabel));
   }
 
   async getUserFontContent(id: string): Promise<Blob | undefined> {
-    const db = await openReaderDb();
+    const db = await this.openDatabase();
     const tx = db.transaction([READER_PERSONALIZATION_STORES.fonts, BOOK_ASSET_STORES.blobs], 'readonly');
     const asset = await requestToPromise<UserFontAsset | undefined>(
       tx.objectStore(READER_PERSONALIZATION_STORES.fonts).get(id),
@@ -27,7 +28,7 @@ export class IndexedDbReaderPersonalizationRepository implements ReaderPersonali
   }
 
   async installUserFont(input: InstallUserFontInput): Promise<UserFontAsset> {
-    const db = await openReaderDb();
+    const db = await this.openDatabase();
     const tx = db.transaction([READER_PERSONALIZATION_STORES.fonts, BOOK_ASSET_STORES.blobs], 'readwrite');
     tx.objectStore(BOOK_ASSET_STORES.blobs).put({
       id: input.asset.storageKey,
@@ -43,7 +44,7 @@ export class IndexedDbReaderPersonalizationRepository implements ReaderPersonali
   }
 
   async updateUserFont(id: string, patch: Pick<UserFontAsset, 'familyLabel' | 'licenseNote'>): Promise<UserFontAsset> {
-    const db = await openReaderDb();
+    const db = await this.openDatabase();
     const tx = db.transaction(READER_PERSONALIZATION_STORES.fonts, 'readwrite');
     const store = tx.objectStore(READER_PERSONALIZATION_STORES.fonts);
     const existing = await requestToPromise<UserFontAsset | undefined>(store.get(id));
@@ -60,7 +61,7 @@ export class IndexedDbReaderPersonalizationRepository implements ReaderPersonali
   }
 
   async deleteUserFont(id: string): Promise<void> {
-    const db = await openReaderDb();
+    const db = await this.openDatabase();
     const tx = db.transaction([READER_PERSONALIZATION_STORES.fonts, BOOK_ASSET_STORES.blobs], 'readwrite');
     const store = tx.objectStore(READER_PERSONALIZATION_STORES.fonts);
     const existing = await requestToPromise<UserFontAsset | undefined>(store.get(id));
@@ -70,7 +71,7 @@ export class IndexedDbReaderPersonalizationRepository implements ReaderPersonali
   }
 
   async appendReadingSession(event: ReadingSessionEvent): Promise<void> {
-    const db = await openReaderDb();
+    const db = await this.openDatabase();
     const tx = db.transaction(READER_PERSONALIZATION_STORES.sessions, 'readwrite');
     tx.objectStore(READER_PERSONALIZATION_STORES.sessions).put(event);
     await transactionDone(tx);
@@ -79,7 +80,7 @@ export class IndexedDbReaderPersonalizationRepository implements ReaderPersonali
   async listReadingSessions(
     options: { bookId?: string; from?: string; to?: string } = {},
   ): Promise<ReadingSessionEvent[]> {
-    const db = await openReaderDb();
+    const db = await this.openDatabase();
     const tx = db.transaction(READER_PERSONALIZATION_STORES.sessions, 'readonly');
     const rows = await requestToPromise<ReadingSessionEvent[]>(
       tx.objectStore(READER_PERSONALIZATION_STORES.sessions).getAll(),
@@ -95,7 +96,7 @@ export class IndexedDbReaderPersonalizationRepository implements ReaderPersonali
   }
 
   async deleteReadingSessions(options: { bookId?: string; before?: string } = {}): Promise<number> {
-    const db = await openReaderDb();
+    const db = await this.openDatabase();
     const tx = db.transaction(READER_PERSONALIZATION_STORES.sessions, 'readwrite');
     const store = tx.objectStore(READER_PERSONALIZATION_STORES.sessions);
     const rows = await requestToPromise<ReadingSessionEvent[]>(store.getAll());

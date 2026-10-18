@@ -145,3 +145,36 @@ describe('createAppRuntime', () => {
     expect(remoteBookAnalysisWorkflowGatewayFactory).toHaveBeenCalledWith(readerRuntime.syncApiClient);
   });
 });
+
+it('keeps member sources and system TTS while withholding every server provider port', () => {
+  const controller = new AbortController();
+  const readerRuntime = createReaderRuntime({ mode: 'remote', apiBaseUrl: '/api' });
+  const memberRuntime = {
+    ...readerRuntime,
+    session: {
+      context: { capabilities: { useProviders: false } },
+      signal: controller.signal,
+      dispose: () => controller.abort(),
+    } as NonNullable<typeof readerRuntime.session>,
+  };
+  const providerRuntime = createReaderProviderRuntime();
+  const remoteProviderControlClientFactory = vi.fn(providerControlClient);
+  const remoteBookAnalysisWorkflowGatewayFactory = vi.fn(() => workflowGateway());
+  const runtime = createAppRuntime({
+    readerRuntimeFactory: () => memberRuntime,
+    providerRuntimeFactory: () => providerRuntime,
+    extensionRuntimeFactory: () => createAppExtensionRuntime({ trustedDefinitions: [] }),
+    platformRuntimeDetector: () => ({ kind: 'browser', hasTauri: false, isMobileWebView: false, userAgent: 'fixture' }),
+    remoteProviderControlClientFactory,
+    remoteBookAnalysisWorkflowGatewayFactory,
+  });
+  expect(runtime.sourceApiClient).toBe(readerRuntime.remoteApiClient);
+  expect(runtime.sourceApiClient).toBeDefined();
+  expect(runtime.providerApiClient).toBeUndefined();
+  expect(runtime.providerControlClient).toBeUndefined();
+  expect(runtime.bookAnalysisWorkflowGateway).toBeUndefined();
+  expect(runtime.ttsCacheGateway).toBeUndefined();
+  expect(remoteProviderControlClientFactory).not.toHaveBeenCalled();
+  expect(remoteBookAnalysisWorkflowGatewayFactory).not.toHaveBeenCalled();
+  expect(runtime.defaultTTSProvider).toBe(providerRuntime.getDefaultTTSProvider());
+});

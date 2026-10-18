@@ -6,6 +6,7 @@ export interface InstallUserFontInput {
 }
 
 export interface ReaderPersonalizationRepository {
+  readonly signal?: AbortSignal;
   listUserFonts(): Promise<UserFontAsset[]>;
   getUserFontContent(id: string): Promise<Blob | undefined>;
   installUserFont(input: InstallUserFontInput): Promise<UserFontAsset>;

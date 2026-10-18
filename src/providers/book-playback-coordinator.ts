@@ -39,3 +39,22 @@ export class BookPlaybackCoordinator {
     return this.generation;
   }
 }
+
+/** Consume only when the deferred start runs, so a render/StrictMode cleanup cannot lose the request. */
+export function deferChapterPlayback(
+  coordinator: BookPlaybackCoordinator,
+  bookId: string,
+  chapterId: string,
+  start: (pending: PendingChapterPlayback) => void,
+): () => void {
+  let cancelled = false;
+  const generation = coordinator.currentGeneration;
+  queueMicrotask(() => {
+    if (cancelled || generation !== coordinator.currentGeneration) return;
+    const pending = coordinator.take(bookId, chapterId);
+    if (pending) start(pending);
+  });
+  return () => {
+    cancelled = true;
+  };
+}

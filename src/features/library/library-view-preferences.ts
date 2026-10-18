@@ -9,9 +9,9 @@ interface LibraryViewPreferences {
   libraryViewMode?: LibraryViewMode;
 }
 
-export function readLibraryViewPreferences(): LibraryViewPreferences {
+export function readLibraryViewPreferences(storage?: Storage): LibraryViewPreferences {
   try {
-    const value: unknown = JSON.parse(readBrandStorage(localStorage, KEY) ?? '{}');
+    const value: unknown = JSON.parse(readBrandStorage(storage ?? globalThis.localStorage, KEY) ?? '{}');
     if (!value || typeof value !== 'object') return {};
     const preferences = value as Record<string, unknown>;
     return {
@@ -30,9 +30,13 @@ export function readLibraryViewPreferences(): LibraryViewPreferences {
   }
 }
 
-export function saveLibraryViewPreferences(patch: LibraryViewPreferences): void {
+export function saveLibraryViewPreferences(patch: LibraryViewPreferences, storage?: Storage): void {
   try {
-    writeBrandStorage(localStorage, KEY, JSON.stringify({ ...readLibraryViewPreferences(), ...patch }));
+    writeBrandStorage(
+      storage ?? globalThis.localStorage,
+      KEY,
+      JSON.stringify({ ...readLibraryViewPreferences(storage), ...patch }),
+    );
   } catch {
     // A blocked/full device store must not prevent changing the current Library view.
   }

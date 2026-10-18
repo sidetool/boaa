@@ -45,9 +45,16 @@ export class BookWorkspaceController {
   private readonly listeners = new Set<Listener>();
   private navigationGeneration = 0;
 
-  constructor(ports: BookWorkspacePorts, initialState?: BookWorkspaceState) {
+  constructor(
+    ports: BookWorkspacePorts,
+    initialState?: BookWorkspaceState,
+    private readonly preferenceStorage?: Storage,
+  ) {
     this.ports = ports;
-    this.state = initialState ?? { ...INITIAL_BOOK_WORKSPACE_STATE, ...readLibraryViewPreferences() };
+    this.state = initialState ?? {
+      ...INITIAL_BOOK_WORKSPACE_STATE,
+      ...readLibraryViewPreferences(this.preferenceStorage),
+    };
   }
 
   updatePorts(ports: BookWorkspacePorts): void {
@@ -198,11 +205,11 @@ export class BookWorkspaceController {
   readonly setLibraryFilter = (libraryFilter: LibraryFilter): void => this.updateState({ libraryFilter });
   readonly setLibrarySort = (librarySort: LibrarySort): void => {
     this.updateState({ librarySort });
-    saveLibraryViewPreferences({ librarySort });
+    saveLibraryViewPreferences({ librarySort }, this.preferenceStorage);
   };
   readonly setLibraryViewMode = (libraryViewMode: LibraryViewMode): void => {
     this.updateState({ libraryViewMode });
-    saveLibraryViewPreferences({ libraryViewMode });
+    saveLibraryViewPreferences({ libraryViewMode }, this.preferenceStorage);
   };
   readonly setChapterQuery = (chapterQuery: string): void => this.updateState({ chapterQuery });
   readonly setChapterReadFilter = (chapterReadFilter: ChapterReadFilter): void =>

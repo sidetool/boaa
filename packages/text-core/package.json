@@ -72,6 +72,10 @@
     "./identity/workflow": {
       "types": "./identity/workflow.ts",
       "default": "./identity/workflow.ts"
+    },
+    "./spoken-text-filter": {
+      "types": "./spoken-text-filter.ts",
+      "default": "./spoken-text-filter.ts"
     }
   },
   "scripts": {
@@ -79,7 +83,8 @@
   },
   "dependencies": {
     "@kayahr/text-encoding": "2.2.0",
-    "@noble/hashes": "2.0.1"
+    "@noble/hashes": "2.0.1",
+    "re2js": "2.8.8"
   },
   "devDependencies": {
     "@boaa/contracts": "workspace:*",

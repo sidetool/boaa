@@ -1,3 +1,4 @@
+import { useOptionalAppRuntime } from '../../app/runtime/RuntimeProvider';
 import { useLayoutEffect, useMemo } from 'react';
 import type { Chapter, Novel, TTSDownloadPolicy } from '../../domain/types';
 import type { TTSWarmupSource, TTSWarmupVoicePlan } from './hosted-tts-download';
@@ -40,6 +41,7 @@ export interface TTSWarmupControllerInput {
 
 /** Owns an App-session preparation lane; UI panels only invoke commands. */
 export function useTTSWarmupController(input: TTSWarmupControllerInput) {
+  const auxiliaryDatabase = useOptionalAppRuntime()?.readerRuntime.auxiliaryDatabase;
   const bookId = input.novel?.id,
     revision = input.novel?.activeContentRevisionId,
     chapterId = input.currentChapter?.id;
@@ -113,9 +115,11 @@ export function useTTSWarmupController(input: TTSWarmupControllerInput) {
       };
       if (!input.native && !(await input.prepareHosted(chapters, current))) return;
       assertWarmupCurrent(execution);
-      const { IndexedDbTTSDownloadRepository } = await import('../../storage/tts-download-store');
+      const downloads = await import('../../storage/tts-download-store');
       assertWarmupCurrent(execution);
-      const repository = new IndexedDbTTSDownloadRepository();
+      const repository = auxiliaryDatabase
+        ? new (downloads.createTTSDownloadStore(auxiliaryDatabase).IndexedDbTTSDownloadRepository)()
+        : new downloads.IndexedDbTTSDownloadRepository();
       const job = await repository.create({
         bookId: input.novel.id,
         contentRevisionId: revision,

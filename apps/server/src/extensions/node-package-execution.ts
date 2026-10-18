@@ -27,14 +27,19 @@ export function createNodePackageExecution(
   runtime: 'self-host-gateway' | 'tauri-native' = 'self-host-gateway',
   options: {
     vault?: SourceCredentialVault;
+    allowPrivateNetwork?: boolean;
+    allowContentService?: boolean;
     network?: ReturnType<typeof createSourceNetworkSettings>;
     transport?: SourceTransport;
     contentResolver?: SourceContentResolver;
     contentConfigured?: (scope: Parameters<SourceContentResolver>[0]) => boolean;
   } = {},
 ): PackageExecutionPort {
-  const storedContent = options.vault ? createStoredContentService(options.vault) : undefined;
-  const preferences = options.vault ? createSourcePreferences(options.vault) : undefined;
+  const storedContent =
+    options.vault && options.allowContentService !== false ? createStoredContentService(options.vault) : undefined;
+  const preferences = options.vault
+    ? createSourcePreferences(options.vault, options.allowPrivateNetwork !== false)
+    : undefined;
   const network = options.network ?? createSourceNetworkSettings(options.vault);
   const repositoryTransport = () => ({ ...options.transport, ...createSourceProxyTransport(network.resolve()) });
   const authentication = options.vault
@@ -119,12 +124,14 @@ export function createNodePackageExecution(
           : {
               values: {} as Record<string, string | number | boolean>,
               privateOrigins: [],
+              networkOrigins: [],
               outboundProxy: undefined,
             };
+      const networkOrigins = [...pkg.manifest.requestedAccess.networkOrigins, ...sourceOptions.networkOrigins];
       const outboundProxy = network.resolve(sourceOptions);
       const broker = createSourceBroker(
         {
-          origins: pkg.manifest.requestedAccess.networkOrigins,
+          origins: networkOrigins,
           allowDownloads: pkg.manifest.extension.permissions.includes('external.source.download'),
         },
         {
@@ -159,7 +166,7 @@ export function createNodePackageExecution(
             'source.request': async (request, requestSignal) => {
               const http = request as CompatibilityHttpInput;
               const origin = new URL(http.url).origin;
-              if (![...pkg.manifest.requestedAccess.networkOrigins, ...sourceOptions.privateOrigins].includes(origin))
+              if (![...networkOrigins, ...sourceOptions.privateOrigins].includes(origin))
                 throw new Error('source_url_denied');
               // Return redirects to the guest: subsequent targets must pass this same origin check.
               const response = await sourceBrowserHttp(
@@ -198,7 +205,7 @@ export function createNodePackageExecution(
                     credentialEpoch ?? pkg.digest,
                   ]),
                   vault: options.vault,
-                  origins: pkg.manifest.requestedAccess.networkOrigins,
+                  origins: networkOrigins,
                   privateOrigins: sourceOptions.privateOrigins,
                   outboundProxy,
                   browserMode: 'browserMode' in sourceOptions ? sourceOptions.browserMode : undefined,

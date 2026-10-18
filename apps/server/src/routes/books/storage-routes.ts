@@ -1,3 +1,4 @@
+import { requestOwnerConfig } from '../../services/owner-context.js';
 import { readStorageCapacity } from '../../services/storage-capacity.js';
 import type { FastifyInstance } from 'fastify';
 import type pg from 'pg';
@@ -54,7 +55,10 @@ select jsonb_build_object(
 ) as usage`;
 
 export async function registerStorageRoutes(app: FastifyInstance, pool: pg.Pool, config: ServerConfig) {
+  const deploymentConfig = config;
   app.get('/api/storage/usage', async (_request, reply): Promise<LibraryStorageUsage> => {
+    const config = requestOwnerConfig(deploymentConfig, _request);
+
     reply.header('Cache-Control', 'no-store');
     const [result, capacity] = await Promise.all([
       pool.query(storageUsageSql, [config.defaultUserId]),

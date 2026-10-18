@@ -251,6 +251,7 @@ class BrowserRemoteUploadSessionStore implements RemoteUploadSessionStore {
 
 export class ServerUploadImportService implements ImportService {
   readonly supportsExpectedBase = true;
+  readonly mayChangeBookId = true;
   readonly supportsExpectedSourceContentHash = true;
   readonly supportsIncrementalImageSeriesAppend = true;
   readonly supportsLocalArchiveAppend = true;

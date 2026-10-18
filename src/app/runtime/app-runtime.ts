@@ -1,3 +1,5 @@
+import { invalidateSharedParagraphPages } from '../../features/reader/shared-paragraph-pages';
+import { invalidateReaderPositionPersistence } from '../../features/reader/reader-progress-controller';
 import type { ComponentType } from 'react';
 import type { SyncPanelProps } from '../../features/sync/sync-panel-contract';
 import type { AIProvider } from '../../providers/ai';
@@ -46,6 +48,7 @@ export interface ProductLifecycleProps {
 }
 
 export interface AppRuntime {
+  readonly dispose?: () => void;
   /** Optional product composition; omitted by existing desktop/self-host entrypoints. */
   readonly product?: {
     readonly kind: 'local-static';
@@ -63,6 +66,8 @@ export interface AppRuntime {
   readonly defaultTTSProvider: TTSProvider;
   readonly platformRuntime: PlatformRuntimeInfo;
   readonly providerExecutionRuntime: ProviderExecutionRuntimeKind;
+  /** Source transport remains available when server AI/TTS is unavailable. */
+  readonly sourceApiClient?: RemoteApiClient;
   readonly providerApiClient?: RemoteApiClient;
   readonly providerControlClient?: ProviderControlClient;
   readonly bookAnalysisWorkflowGateway?: BookAnalysisWorkflowGateway;
@@ -112,8 +117,11 @@ export function createAppRuntime(dependencies: AppRuntimeDependencies = {}): App
     hasRemoteApiClient: Boolean(readerRuntime.remoteApiClient),
     hasSyncApiClient: Boolean(readerRuntime.syncApiClient),
   });
-  const providerApiClient =
+  const sourceApiClient =
     providerExecutionRuntime === 'server' ? (readerRuntime.remoteApiClient ?? readerRuntime.syncApiClient) : undefined;
+
+  const providerApiClient =
+    readerRuntime.session?.context.capabilities.useProviders === false ? undefined : sourceApiClient;
 
   let providerControlClient: ProviderControlClient | undefined;
   let bookAnalysisWorkflowGateway: BookAnalysisWorkflowGateway | undefined;
@@ -136,7 +144,18 @@ export function createAppRuntime(dependencies: AppRuntimeDependencies = {}): App
     }
   }
 
+  let disposed = false;
+  const dispose = () => {
+    if (disposed) return;
+    disposed = true;
+    readerRuntime.session?.dispose();
+    invalidateSharedParagraphPages(readerRuntime.readerRepository);
+    invalidateReaderPositionPersistence(readerRuntime.readerRepository);
+    extensionRuntime.webNovelMetadataCollector.disconnect();
+  };
+  readerRuntime.session?.signal.addEventListener('abort', dispose, { once: true });
   return {
+    dispose,
     extensionRuntime,
     readerRuntime,
     providerRuntime,
@@ -144,6 +163,7 @@ export function createAppRuntime(dependencies: AppRuntimeDependencies = {}): App
     defaultTTSProvider: providerRuntime.getDefaultTTSProvider(),
     platformRuntime,
     providerExecutionRuntime,
+    sourceApiClient,
     providerApiClient,
     providerControlClient,
     bookAnalysisWorkflowGateway,

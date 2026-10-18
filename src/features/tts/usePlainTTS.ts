@@ -1,3 +1,4 @@
+import { requestPlainTTSWithRetry } from '../../providers/plain-tts-retry';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Paragraph, SpokenTextRule, TTSPlaybackSettings } from '../../domain/types';
 import {
@@ -73,10 +74,12 @@ export function usePlainTTS(input: {
       input.chapterId,
     ],
   );
-  const voiceId = input.settings.serverVoiceId || catalog?.voices[0]?.id;
+  const voiceId = input.settings.serverVoiceId || (catalog?.defaultVoiceId ?? catalog?.voices[0]?.id);
   const ready = Boolean(
     input.client && catalog?.available && catalog.revision && catalog.voices.some((voice) => voice.id === voiceId),
   );
+  const latestContent = useRef({ chapterId: input.chapterId, revision: input.contentRevision });
+  latestContent.current = { chapterId: input.chapterId, revision: input.contentRevision };
   const requestFor = (playable: PlayableTtsSegment, paragraph: Paragraph): PlainTTSRequest => {
     if (!ready || !voiceId || !catalog?.revision || !playable.spokenTextFingerprint)
       throw new Error('서버 목소리를 선택하고 목록을 새로고침하세요.');
@@ -88,12 +91,22 @@ export function usePlainTTS(input: {
       rate: playable.rate,
       paragraphId: paragraph.id,
       paragraphHash: plainTTSParagraphHash(paragraph),
-      contentRevision: input.contentRevision,
+      contentRevision:
+        latestContent.current.chapterId === paragraph.chapterId
+          ? latestContent.current.revision
+          : input.contentRevision,
       chunkHash: playable.spokenTextFingerprint,
+      chunking: input.settings.plainChunking ?? 'sentence',
+      batch: playable.plainBatch,
       rules: input.rules,
     };
   };
-  const play = async (playable: PlayableTtsSegment, paragraph: Paragraph, sessionId: number): Promise<boolean> => {
+  const play = async (
+    playable: PlayableTtsSegment,
+    paragraph: Paragraph,
+    sessionId: number,
+    onProgress?: (fraction: number) => void,
+  ): Promise<boolean> => {
     const operation = input.controller.beginHostedPlayback(sessionId, '음성 준비 중');
     if (!operation) return true;
     try {
@@ -102,21 +115,42 @@ export function usePlainTTS(input: {
       const prefetched = input.controller.takePrefetched(key);
       const blob =
         prefetched?.blob ??
-        (await input.client!.synthesizePlainTTS(paragraph.chapterId, request, operation.controller.signal));
+        (await requestPlainTTSWithRetry(
+          () => input.client!.synthesizePlainTTS(paragraph.chapterId, request, operation.controller.signal),
+          {
+            signal: operation.controller.signal,
+            onWait: (seconds) =>
+              input.controller.setHostedStatus(operation, `음성 제공자 대기 중 · ${Math.ceil(seconds)}초 후 다시 시도`),
+          },
+        ));
       if (!input.controller.isSessionCurrent(sessionId)) return true;
-      return await input.controller.playAudio(blob, sessionId);
+      input.controller.setHostedStatus(operation, undefined);
+      return await input.controller.playAudio(blob, sessionId, onProgress);
     } catch (error) {
       if (input.controller.isSessionCurrent(sessionId))
-        input.onError(error instanceof Error ? error.message : '서버 음성을 재생하지 못했습니다.');
+        input.onError(
+          (error as { status?: number })?.status === 429
+            ? '음성 제공자의 제한이 계속되어 자동 재시도를 멈췄습니다. 읽던 위치에서 다시 재생할 수 있습니다.'
+            : error instanceof Error
+              ? error.message
+              : '서버 음성을 재생하지 못했습니다.',
+        );
       return false;
     } finally {
       input.controller.finishOperation(operation);
     }
   };
-  const prefetch = async (playable: PlayableTtsSegment, paragraph: Paragraph, sessionId: number) => {
+  const prefetch = async (
+    playable: PlayableTtsSegment,
+    paragraph: Paragraph,
+    sessionId: number,
+    contentRevision = latestContent.current.chapterId === paragraph.chapterId
+      ? latestContent.current.revision
+      : input.contentRevision,
+  ) => {
     let request: PlainTTSRequest;
     try {
-      request = requestFor(playable, paragraph);
+      request = { ...requestFor(playable, paragraph), contentRevision };
     } catch {
       return;
     }

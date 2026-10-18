@@ -1,10 +1,14 @@
-import { SELF_HOST_AUTH_ENDING_EVENT } from '../../services/remote/self-host-auth-events';
+import { withSelfHostAuthMutation } from './self-host-auth-mutation';
+import type { SelfHostAuthenticatedContext } from './self-host-session';
 export interface SelfHostAccount {
+  readonly userId?: string;
+  readonly role?: 'admin' | 'member';
   readonly username: string;
   readonly displayName: string;
 }
 
 export interface SelfHostAuthStatus {
+  readonly context?: SelfHostAuthenticatedContext;
   readonly setupRequired: boolean;
   readonly authenticated: boolean;
   readonly account?: SelfHostAccount;
@@ -53,6 +57,7 @@ export class SelfHostAuthClient {
   async status(signal?: AbortSignal): Promise<SelfHostAuthStatus> {
     const response = await fetch(`${this.baseUrl}/auth/status`, {
       credentials: 'same-origin',
+      cache: 'no-store',
       signal,
     });
     const body = await responseBody(response);
@@ -73,12 +78,16 @@ export class SelfHostAuthClient {
     return this.submit('/auth/login', input);
   }
 
-  async logout(): Promise<void> {
-    globalThis.dispatchEvent?.(new Event(SELF_HOST_AUTH_ENDING_EVENT));
-    const response = await fetch(`${this.baseUrl}/auth/logout`, {
-      method: 'POST',
-      credentials: 'same-origin',
-    });
+  async logout(sessionContext?: string): Promise<void> {
+    // The gate locks its originating runtime before beginning revocation.
+    const response = await withSelfHostAuthMutation(this.baseUrl, () =>
+      fetch(`${this.baseUrl}/auth/logout`, {
+        method: 'POST',
+        headers: sessionContext ? { 'X-BOAA-Session-Context': sessionContext } : undefined,
+        credentials: 'same-origin',
+        cache: 'no-store',
+      }),
+    );
     if (!response.ok) {
       const body = await responseBody(response);
       throw new SelfHostAuthClientError(body.error ?? 'authentication_unavailable', response.status);
@@ -86,12 +95,15 @@ export class SelfHostAuthClient {
   }
 
   private async submit(path: string, input: Record<string, string | undefined>): Promise<SelfHostAccount> {
-    const response = await fetch(`${this.baseUrl}${path}`, {
-      method: 'POST',
-      credentials: 'same-origin',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(input),
-    });
+    const response = await withSelfHostAuthMutation(this.baseUrl, () =>
+      fetch(`${this.baseUrl}${path}`, {
+        method: 'POST',
+        credentials: 'same-origin',
+        cache: 'no-store',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(input),
+      }),
+    );
     const body = await responseBody(response);
     if (!response.ok || !body.authenticated || !body.account) {
       throw new SelfHostAuthClientError(body.error ?? 'authentication_unavailable', response.status);

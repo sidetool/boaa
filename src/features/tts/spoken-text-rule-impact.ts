@@ -35,7 +35,7 @@ export async function inspectSpokenTextRuleImpact(
 ): Promise<SpokenTextRuleImpactSummary> {
   const skipRuleIds = new Set(
     input.rules
-      .filter((rule) => rule.enabled && rule.kind !== 'replace_literal' && rule.pattern.trim())
+      .filter((rule) => rule.enabled && rule.kind.startsWith('skip_') && rule.pattern.trim())
       .map((rule) => rule.id),
   );
   const sampleLimit = Math.max(0, Math.trunc(input.sampleLimit ?? 3));

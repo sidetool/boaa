@@ -25,8 +25,8 @@ const MAX_CACHE_BYTES = 32 * 1024 * 1024;
 const MAX_CACHE_PAGES = 1000;
 const CREDENTIAL_KEY_ID = 'external-source-credentials-v1';
 
-let dbPromise: Promise<IDBDatabase> | undefined;
-let credentialKeyPromise: Promise<CryptoKey> | undefined;
+const sourceDatabases = new Map<string, Promise<IDBDatabase>>();
+const credentialKeys = new Map<string, Promise<CryptoKey>>();
 
 function requestToPromise<T>(request: IDBRequest<T>): Promise<T> {
   return new Promise((resolve, reject) => {
@@ -43,13 +43,14 @@ function transactionDone(transaction: IDBTransaction): Promise<void> {
   });
 }
 
-function openExternalSourceDb(): Promise<IDBDatabase> {
+function openExternalSourceDb(dbName = DB_NAME): Promise<IDBDatabase> {
+  const dbPromise = sourceDatabases.get(dbName);
   if (dbPromise) return dbPromise;
-  const opening = prepareBrandDatabase(indexedDB, DB_NAME)
+  const opening = (dbName === DB_NAME ? prepareBrandDatabase(indexedDB, DB_NAME) : Promise.resolve())
     .then(
       () =>
         new Promise<IDBDatabase>((resolve, reject) => {
-          const request = indexedDB.open(DB_NAME, DB_VERSION);
+          const request = indexedDB.open(dbName, DB_VERSION);
           request.onupgradeneeded = () => {
             const db = request.result;
             if (!db.objectStoreNames.contains('credentials')) {
@@ -92,24 +93,24 @@ function openExternalSourceDb(): Promise<IDBDatabase> {
             if (request.error?.name === 'VersionError') {
               // A pre-release build briefly created v7. Open that database at its current
               // version without advancing it again; clean installs remain on shipped v6.
-              const fallback = indexedDB.open(DB_NAME);
+              const fallback = indexedDB.open(dbName);
               fallback.onsuccess = () => resolve(fallback.result);
               fallback.onerror = () => {
-                if (dbPromise === opening) dbPromise = undefined;
+                if (sourceDatabases.get(dbName) === opening) sourceDatabases.delete(dbName);
                 reject(fallback.error);
               };
               return;
             }
-            if (dbPromise === opening) dbPromise = undefined;
+            if (sourceDatabases.get(dbName) === opening) sourceDatabases.delete(dbName);
             reject(request.error);
           };
         }),
     )
     .catch((error: unknown) => {
-      dbPromise = undefined;
+      sourceDatabases.delete(dbName);
       throw error;
     });
-  dbPromise = opening;
+  sourceDatabases.set(dbName, opening);
   return opening;
 }
 
@@ -252,8 +253,26 @@ export interface ExternalSourceLocalState {
 }
 
 export class ExternalSourceLocalStateStore implements ExternalSourceLocalState {
+  private readonly dbName: string;
+  constructor(
+    readonly scope?: string,
+    private readonly signal?: AbortSignal,
+  ) {
+    this.dbName = scope ? `${DB_NAME}:account:${scope}` : DB_NAME;
+  }
+  private async openDb() {
+    this.signal?.throwIfAborted();
+    const db = await openExternalSourceDb(this.dbName);
+    this.signal?.throwIfAborted();
+    return db;
+  }
+  dispose() {
+    credentialKeys.delete(this.dbName);
+    this.sharedConnections.clear();
+  }
+
   async listReleasePreferences(): Promise<SourceReleasePreference[]> {
-    const db = await openExternalSourceDb();
+    const db = await this.openDb();
     if (!db.objectStoreNames.contains('browsePreferences')) return [];
     const rows = await requestToPromise<SourceReleasePreference[]>(
       db.transaction('browsePreferences').objectStore('browsePreferences').getAll(),
@@ -262,7 +281,7 @@ export class ExternalSourceLocalStateStore implements ExternalSourceLocalState {
   }
 
   async saveReleasePreferences(records: readonly SourceReleasePreference[]): Promise<void> {
-    const db = await openExternalSourceDb();
+    const db = await this.openDb();
     const tx = db.transaction('browsePreferences', 'readwrite');
     records.forEach((record) => tx.objectStore('browsePreferences').put(record));
     await transactionDone(tx);
@@ -279,7 +298,7 @@ export class ExternalSourceLocalStateStore implements ExternalSourceLocalState {
     ) {
       throw new Error('Invalid source stream visit');
     }
-    const db = await openExternalSourceDb();
+    const db = await this.openDb();
     const tx = db.transaction('browsePreferences', 'readwrite');
     const done = transactionDone(tx);
     const store = tx.objectStore('browsePreferences');
@@ -294,7 +313,7 @@ export class ExternalSourceLocalStateStore implements ExternalSourceLocalState {
   }
 
   async listDownloadQueues(): Promise<SourceDownloadQueue[]> {
-    const db = await openExternalSourceDb();
+    const db = await this.openDb();
     if (!db.objectStoreNames.contains('browsePreferences')) return [];
     const rows = await requestToPromise<SourceDownloadQueue[]>(
       db.transaction('browsePreferences').objectStore('browsePreferences').getAll(),
@@ -304,7 +323,7 @@ export class ExternalSourceLocalStateStore implements ExternalSourceLocalState {
 
   async saveDownloadQueue(queue: SourceDownloadQueue): Promise<void> {
     if (queue.items.length > 50_000) throw new Error('한 작품의 대기열은 50,000회차까지 저장할 수 있습니다.');
-    const db = await openExternalSourceDb();
+    const db = await this.openDb();
     const tx = db.transaction('browsePreferences', 'readwrite');
     const store = tx.objectStore('browsePreferences');
     const previous = await requestToPromise<SourceDownloadQueue | undefined>(store.get(queue.id));
@@ -322,7 +341,7 @@ export class ExternalSourceLocalStateStore implements ExternalSourceLocalState {
     id: string,
     completed: SourceDownloadQueue['items'],
   ): Promise<SourceDownloadQueue | undefined> {
-    const db = await openExternalSourceDb();
+    const db = await this.openDb();
     const tx = db.transaction('browsePreferences', 'readwrite');
     const store = tx.objectStore('browsePreferences');
     const current = await requestToPromise<SourceDownloadQueue | undefined>(store.get(id));
@@ -343,7 +362,7 @@ export class ExternalSourceLocalStateStore implements ExternalSourceLocalState {
   }
 
   async deleteDownloadQueue(id: string): Promise<void> {
-    const db = await openExternalSourceDb();
+    const db = await this.openDb();
     const tx = db.transaction('browsePreferences', 'readwrite');
     tx.objectStore('browsePreferences').delete(id);
     await transactionDone(tx);
@@ -361,16 +380,19 @@ export class ExternalSourceLocalStateStore implements ExternalSourceLocalState {
   }
 
   async getOrCreateCredentialKey(): Promise<CryptoKey> {
-    if (credentialKeyPromise) return credentialKeyPromise;
-    credentialKeyPromise = this.loadOrCreateCredentialKey().catch((error) => {
-      credentialKeyPromise = undefined;
+    this.signal?.throwIfAborted();
+    const cached = credentialKeys.get(this.dbName);
+    if (cached) return cached;
+    const credentialKeyPromise = this.loadOrCreateCredentialKey().catch((error) => {
+      credentialKeys.delete(this.dbName);
       throw error;
     });
+    credentialKeys.set(this.dbName, credentialKeyPromise);
     return credentialKeyPromise;
   }
 
   private async loadOrCreateCredentialKey(): Promise<CryptoKey> {
-    const db = await openExternalSourceDb();
+    const db = await this.openDb();
     const readTx = db.transaction('credentialKeys', 'readonly');
     const existing = await requestToPromise<{ id: string; key: CryptoKey } | undefined>(
       readTx.objectStore('credentialKeys').get(CREDENTIAL_KEY_ID),
@@ -385,7 +407,7 @@ export class ExternalSourceLocalStateStore implements ExternalSourceLocalState {
   }
 
   async getCredential(connectorId: string): Promise<ExternalSourceCredentialRecord | undefined> {
-    const db = await openExternalSourceDb();
+    const db = await this.openDb();
     const tx = db.transaction('credentials', 'readonly');
     const records = await requestToPromise<ExternalSourceCredentialRecord[]>(
       tx.objectStore('credentials').index('connectorId').getAll(IDBKeyRange.only(connectorId)),
@@ -394,7 +416,7 @@ export class ExternalSourceLocalStateStore implements ExternalSourceLocalState {
   }
 
   async saveCredential(record: ExternalSourceCredentialRecord): Promise<void> {
-    const db = await openExternalSourceDb();
+    const db = await this.openDb();
     const tx = db.transaction('credentials', 'readwrite');
     tx.objectStore('credentials').put(record);
     await transactionDone(tx);
@@ -403,14 +425,14 @@ export class ExternalSourceLocalStateStore implements ExternalSourceLocalState {
   async deleteCredential(connectorId: string): Promise<void> {
     const record = await this.getCredential(connectorId);
     if (!record) return;
-    const db = await openExternalSourceDb();
+    const db = await this.openDb();
     const tx = db.transaction('credentials', 'readwrite');
     tx.objectStore('credentials').delete(record.id);
     await transactionDone(tx);
   }
 
   async getCachePage(id: string): Promise<ExternalCatalogCachePage | undefined> {
-    const db = await openExternalSourceDb();
+    const db = await this.openDb();
     const tx = db.transaction('cachePages', 'readwrite');
     const store = tx.objectStore('cachePages');
     const page = await requestToPromise<ExternalCatalogCachePage | undefined>(store.get(id));
@@ -434,7 +456,7 @@ export class ExternalSourceLocalStateStore implements ExternalSourceLocalState {
       fetchedAt + 7 * 86400_000,
     );
     const byteLength = new TextEncoder().encode(JSON.stringify(page)).length;
-    const db = await openExternalSourceDb();
+    const db = await this.openDb();
     const tx = db.transaction('cachePages', 'readwrite');
     const store = tx.objectStore('cachePages');
     const existing = await requestToPromise<ExternalCatalogCachePage[]>(store.getAll());
@@ -471,7 +493,7 @@ export class ExternalSourceLocalStateStore implements ExternalSourceLocalState {
   }
 
   async clearCache(connectorId: string, accountConnectionId?: string): Promise<void> {
-    const db = await openExternalSourceDb();
+    const db = await this.openDb();
     const tx = db.transaction('cachePages', 'readwrite');
     const store = tx.objectStore('cachePages');
     const request = store.index('connectorId').openCursor(IDBKeyRange.only(connectorId));
@@ -486,7 +508,7 @@ export class ExternalSourceLocalStateStore implements ExternalSourceLocalState {
   }
 
   async listLinks(connectorId?: string): Promise<ExternalSourceLink[]> {
-    const db = await openExternalSourceDb();
+    const db = await this.openDb();
     const tx = db.transaction('links', 'readonly');
     const store = tx.objectStore('links');
     return connectorId
@@ -495,7 +517,7 @@ export class ExternalSourceLocalStateStore implements ExternalSourceLocalState {
   }
 
   async saveLink(link: ExternalSourceLink): Promise<void> {
-    const db = await openExternalSourceDb();
+    const db = await this.openDb();
     const tx = db.transaction('links', 'readwrite');
     tx.objectStore('links').put(link);
     await transactionDone(tx);
@@ -504,7 +526,7 @@ export class ExternalSourceLocalStateStore implements ExternalSourceLocalState {
 
   async saveLinks(links: readonly ExternalSourceLink[]): Promise<void> {
     if (links.length === 0) return;
-    const db = await openExternalSourceDb();
+    const db = await this.openDb();
     const tx = db.transaction('links', 'readwrite');
     const store = tx.objectStore('links');
     links.forEach((link) => store.put(link));
@@ -514,7 +536,7 @@ export class ExternalSourceLocalStateStore implements ExternalSourceLocalState {
 
   async deleteLinks(ids: readonly string[]): Promise<void> {
     if (ids.length === 0) return;
-    const db = await openExternalSourceDb();
+    const db = await this.openDb();
     const tx = db.transaction('links', 'readwrite');
     const store = tx.objectStore('links');
     ids.forEach((id) => store.delete(id));
@@ -524,7 +546,7 @@ export class ExternalSourceLocalStateStore implements ExternalSourceLocalState {
 
   async replaceLinks(links: readonly ExternalSourceLink[], deleteIds: readonly string[]): Promise<void> {
     if (links.length === 0 && deleteIds.length === 0) return;
-    const db = await openExternalSourceDb();
+    const db = await this.openDb();
     const tx = db.transaction('links', 'readwrite');
     const store = tx.objectStore('links');
     links.forEach((link) => store.put(link));
@@ -534,12 +556,12 @@ export class ExternalSourceLocalStateStore implements ExternalSourceLocalState {
   }
 
   async listAssociationPurgeIntents(): Promise<SourceAssociationPurgeIntent[]> {
-    const db = await openExternalSourceDb();
+    const db = await this.openDb();
     return requestToPromise(db.transaction('associationPurgeIntents').objectStore('associationPurgeIntents').getAll());
   }
 
   async acknowledgeAssociationPurgeIntent(intent: SourceAssociationPurgeIntent): Promise<void> {
-    const db = await openExternalSourceDb();
+    const db = await this.openDb();
     const tx = db.transaction('associationPurgeIntents', 'readwrite');
     const done = transactionDone(tx);
     const store = tx.objectStore('associationPurgeIntents');
@@ -553,7 +575,7 @@ export class ExternalSourceLocalStateStore implements ExternalSourceLocalState {
     history: MissingBookHistoryContext = {},
   ): Promise<void> {
     if (expected.length === 0) return;
-    const db = await openExternalSourceDb();
+    const db = await this.openDb();
     const tx = db.transaction(['links', 'subscriptions', 'browsePreferences', 'associationPurgeIntents'], 'readwrite');
     const done = transactionDone(tx);
     const store = tx.objectStore('links');
@@ -665,7 +687,7 @@ export class ExternalSourceLocalStateStore implements ExternalSourceLocalState {
   async acquirePendingLinks(links: readonly ExternalSourceLink[]): Promise<boolean> {
     if (links.length === 0 || links.some((link) => !link.pendingImport)) return false;
     if (new Set(links.map((link) => link.id)).size !== links.length) return false;
-    const db = await openExternalSourceDb();
+    const db = await this.openDb();
     const tx = db.transaction('links', 'readwrite');
     const done = transactionDone(tx);
     const store = tx.objectStore('links');
@@ -706,7 +728,7 @@ export class ExternalSourceLocalStateStore implements ExternalSourceLocalState {
     deleteIds: readonly string[],
   ): Promise<boolean> {
     if (expected.length === 0) return false;
-    const db = await openExternalSourceDb();
+    const db = await this.openDb();
     const tx = db.transaction('links', 'readwrite');
     const done = transactionDone(tx);
     const store = tx.objectStore('links');
@@ -728,7 +750,7 @@ export class ExternalSourceLocalStateStore implements ExternalSourceLocalState {
     connectorId: string,
     accountConnectionId?: string,
   ): Promise<ExternalSourceDefaultFolder | undefined> {
-    const db = await openExternalSourceDb();
+    const db = await this.openDb();
     const tx = db.transaction('browsePreferences', 'readonly');
     return requestToPromise<ExternalSourceDefaultFolder | undefined>(
       tx.objectStore('browsePreferences').get(externalSourceDefaultFolderId(connectorId, accountConnectionId)),
@@ -736,14 +758,14 @@ export class ExternalSourceLocalStateStore implements ExternalSourceLocalState {
   }
 
   async saveDefaultFolder(folder: ExternalSourceDefaultFolder): Promise<void> {
-    const db = await openExternalSourceDb();
+    const db = await this.openDb();
     const tx = db.transaction('browsePreferences', 'readwrite');
     tx.objectStore('browsePreferences').put(folder);
     await transactionDone(tx);
   }
 
   async deleteDefaultFolder(connectorId: string, accountConnectionId?: string): Promise<void> {
-    const db = await openExternalSourceDb();
+    const db = await this.openDb();
     const tx = db.transaction('browsePreferences', 'readwrite');
     tx.objectStore('browsePreferences').delete(externalSourceDefaultFolderId(connectorId, accountConnectionId));
     await transactionDone(tx);
@@ -754,7 +776,7 @@ export class ExternalSourceLocalStateStore implements ExternalSourceLocalState {
     accountConnectionId: string | undefined,
     parentRef: string,
   ): Promise<ExternalSourceCatalogPreference | undefined> {
-    const db = await openExternalSourceDb();
+    const db = await this.openDb();
     const tx = db.transaction('browsePreferences', 'readonly');
     return requestToPromise<ExternalSourceCatalogPreference | undefined>(
       tx
@@ -764,7 +786,7 @@ export class ExternalSourceLocalStateStore implements ExternalSourceLocalState {
   }
 
   async saveCatalogPreference(preference: ExternalSourceCatalogPreference): Promise<void> {
-    const db = await openExternalSourceDb();
+    const db = await this.openDb();
     const tx = db.transaction('browsePreferences', 'readwrite');
     tx.objectStore('browsePreferences').put(preference);
     await transactionDone(tx);
@@ -774,7 +796,7 @@ export class ExternalSourceLocalStateStore implements ExternalSourceLocalState {
     connectorId?: string,
     accountConnectionId?: string,
   ): Promise<ExternalSourceSubscriptionRecord[]> {
-    const db = await openExternalSourceDb();
+    const db = await this.openDb();
     const tx = db.transaction('subscriptions', 'readonly');
     const store = tx.objectStore('subscriptions');
     const records = connectorId
@@ -788,7 +810,7 @@ export class ExternalSourceLocalStateStore implements ExternalSourceLocalState {
   }
 
   async saveSubscription(subscription: ExternalSourceSubscriptionRecord): Promise<void> {
-    const db = await openExternalSourceDb();
+    const db = await this.openDb();
     const tx = db.transaction('subscriptions', 'readwrite');
     tx.objectStore('subscriptions').put(subscription);
     await transactionDone(tx);
@@ -796,7 +818,7 @@ export class ExternalSourceLocalStateStore implements ExternalSourceLocalState {
   }
 
   async deleteSubscription(id: string): Promise<void> {
-    const db = await openExternalSourceDb();
+    const db = await this.openDb();
     const tx = db.transaction('subscriptions', 'readwrite');
     tx.objectStore('subscriptions').delete(id);
     await transactionDone(tx);
@@ -804,7 +826,7 @@ export class ExternalSourceLocalStateStore implements ExternalSourceLocalState {
   }
 
   async listSelectedItems(connectorId: string, accountConnectionId: string): Promise<ExternalSourceSelectionRecord[]> {
-    const db = await openExternalSourceDb();
+    const db = await this.openDb();
     const tx = db.transaction('selectedItems', 'readonly');
     const records = await requestToPromise<ExternalSourceSelectionRecord[]>(
       tx.objectStore('selectedItems').index('connectorId').getAll(IDBKeyRange.only(connectorId)),
@@ -815,14 +837,14 @@ export class ExternalSourceLocalStateStore implements ExternalSourceLocalState {
   }
 
   async saveSelectedItem(record: ExternalSourceSelectionRecord): Promise<void> {
-    const db = await openExternalSourceDb();
+    const db = await this.openDb();
     const tx = db.transaction('selectedItems', 'readwrite');
     tx.objectStore('selectedItems').put(record);
     await transactionDone(tx);
   }
 
   async deleteSelectedItem(id: string): Promise<void> {
-    const db = await openExternalSourceDb();
+    const db = await this.openDb();
     const tx = db.transaction('selectedItems', 'readwrite');
     tx.objectStore('selectedItems').delete(id);
     await transactionDone(tx);
@@ -844,7 +866,7 @@ export class ExternalSourceLocalStateStore implements ExternalSourceLocalState {
 
   async exportSharedState(): Promise<ExternalSourceSharedStateV1> {
     const releasePreferences = await this.listReleasePreferences();
-    const db = await openExternalSourceDb();
+    const db = await this.openDb();
     const tx = db.transaction(['links', 'subscriptions'], 'readonly');
     const [links, subscriptions] = await Promise.all([
       requestToPromise<ExternalSourceLink[]>(tx.objectStore('links').getAll()),
@@ -864,7 +886,7 @@ export class ExternalSourceLocalStateStore implements ExternalSourceLocalState {
   }
 
   async replaceSharedState(snapshot: ExternalSourceSharedStateV1): Promise<void> {
-    const db = await openExternalSourceDb();
+    const db = await this.openDb();
     const hasPreferences = db.objectStoreNames.contains('browsePreferences');
     if (!hasPreferences && snapshot.releasePreferences?.length)
       throw new Error('회차 설정 저장소를 사용할 수 없습니다.');
@@ -895,9 +917,16 @@ export class ExternalSourceLocalStateStore implements ExternalSourceLocalState {
 }
 
 export async function resetExternalSourceLocalStateForTests(): Promise<void> {
-  dbPromise?.then((db) => db.close()).catch(() => undefined);
-  dbPromise = undefined;
-  credentialKeyPromise = undefined;
+  await Promise.all([...sourceDatabases.values()].map(async (promise) => (await promise).close()));
+  const names = [...sourceDatabases.keys()];
+  sourceDatabases.clear();
+  credentialKeys.clear();
+  for (const name of names.filter((name) => name !== DB_NAME))
+    await new Promise<void>((resolve, reject) => {
+      const request = indexedDB.deleteDatabase(name);
+      request.onsuccess = () => resolve();
+      request.onerror = () => reject(request.error);
+    });
   await new Promise<void>((resolve, reject) => {
     const request = indexedDB.deleteDatabase(DB_NAME);
     request.onsuccess = () => resolve();
@@ -907,16 +936,16 @@ export async function resetExternalSourceLocalStateForTests(): Promise<void> {
 }
 
 /** Metadata only; downloads, credentials and library links are deliberately outside this operation. */
-export async function clearSourceMetadataCache(): Promise<void> {
-  const db = await openExternalSourceDb();
+export async function clearSourceMetadataCache(scope?: string): Promise<void> {
+  const db = await openExternalSourceDb(scope ? `${DB_NAME}:account:${scope}` : DB_NAME);
   const tx = db.transaction('cachePages', 'readwrite');
   tx.objectStore('cachePages').clear();
   await transactionDone(tx);
 }
 
 /** Serialized payload estimate only, not IndexedDB overhead or the browser HTTP cache. */
-export async function readSourceMetadataCacheUsage(): Promise<{ bytes: number; entries: number }> {
-  const db = await openExternalSourceDb();
+export async function readSourceMetadataCacheUsage(scope?: string): Promise<{ bytes: number; entries: number }> {
+  const db = await openExternalSourceDb(scope ? `${DB_NAME}:account:${scope}` : DB_NAME);
   const tx = db.transaction('cachePages', 'readonly');
   const done = transactionDone(tx);
   const pages = await requestToPromise<ExternalCatalogCachePage[]>(tx.objectStore('cachePages').getAll());

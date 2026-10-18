@@ -1,10 +1,15 @@
+import { sourceReadingPreferences } from '../../external-sources/source-reading-preferences';
 import { createLibraryCoverResolver } from './library-cover-resolver';
 import { isTextStream } from '../../external-sources/source-text-stream';
 import { useSourceWorkMetadata } from './use-source-work-metadata';
 import { useStreamLibraryContinuity } from './use-stream-library-continuity';
 import { useSourceLibraryReader } from './use-source-library-reader';
 
-import { sourceReadMode, isTextSourceItem, preferTextLibrary } from './source-read-mode';
+import {
+  sourceReadMode as baseSourceReadMode,
+  isTextSourceItem,
+  preferTextLibrary as basePreferTextLibrary,
+} from './source-read-mode';
 import { useSourceLibraryOpen } from './use-source-library-open';
 import { useSourceStreamSession } from './use-source-stream-session';
 import { useSourceCatalogQuery, type SourceCatalogQueryIntent } from './use-source-catalog-query';
@@ -75,6 +80,7 @@ import {
   acquireExternalSourcePendingLinks,
   finalizeExternalSourceLinks,
   finalizeImporterResolvedExternalSourceLinks,
+  checkpointImportedExternalSourceLinks,
   restoreExternalSourceLinks,
   saveExternalSourceLinks,
 } from '../../external-sources/link-import-reconciliation';
@@ -153,6 +159,18 @@ function filterChanges(
 }
 
 export function useExternalSourceController(options: UseExternalSourceControllerOptions): ExternalSourceController {
+  const preferenceScope = options.settingsScope?.startsWith('hosted-account:') ? options.settingsScope : undefined;
+  const sourceReadMode = useCallback(
+    (item: Parameters<typeof baseSourceReadMode>[0], port?: Parameters<typeof baseSourceReadMode>[1]) =>
+      baseSourceReadMode(item, port, sourceReadingPreferences(preferenceScope)),
+    [preferenceScope],
+  );
+  const preferTextLibrary = useCallback(
+    (item: Parameters<typeof basePreferTextLibrary>[0], port?: Parameters<typeof basePreferTextLibrary>[1]) =>
+      basePreferTextLibrary(item, port, preferenceScope),
+    [preferenceScope],
+  );
+
   const [workLayout] = useSourceWorkLayout();
   const optionsRef = useRef(options);
   optionsRef.current = options;
@@ -2118,6 +2136,7 @@ export function useExternalSourceController(options: UseExternalSourceController
                     hadExistingLink: true,
                     previousActiveContentRevisionId: existingNovel?.activeContentRevisionId,
                     expectedActiveSourceContentHash: uploadedSourceContentHash,
+                    bookIdMayChange: optionsRef.current.importService.mayChangeBookId,
                     sourceHashResolvedByImporter: incrementalSeriesAppend || undefined,
                     collectionRemoteId: collection.remoteId,
                     importedRemoteRevision: link.importedRemoteRevision,
@@ -2141,6 +2160,7 @@ export function useExternalSourceController(options: UseExternalSourceController
                   hadExistingLink: Boolean(existingLink),
                   previousActiveContentRevisionId: existingNovel?.activeContentRevisionId,
                   expectedActiveSourceContentHash: uploadedSourceContentHash,
+                  bookIdMayChange: optionsRef.current.importService.mayChangeBookId,
                   sourceHashResolvedByImporter: incrementalSeriesAppend || undefined,
                   collectionRemoteId: collection.remoteId,
                   importedRemoteRevision: remoteRevision,
@@ -2197,6 +2217,12 @@ export function useExternalSourceController(options: UseExternalSourceController
             importRef.current = undefined;
             contentApplied = true;
             changedCount += preparedChanged ? 1 : downloadedChapters.length;
+            importedNovel = result.novel;
+            stagedLinks = await checkpointImportedExternalSourceLinks(
+              optionsRef.current.state,
+              stagedLinks,
+              result.novel,
+            );
             importedNovel = (await optionsRef.current.getNovel(result.novel.id).catch(() => undefined)) ?? result.novel;
           } else {
             importedNovel = existingNovel;
@@ -2312,7 +2338,11 @@ export function useExternalSourceController(options: UseExternalSourceController
         downloads.close();
         hostedDownloads?.close();
         importRef.current = undefined;
-        if (!contentApplied && stagedLinks.length > 0) {
+        if (
+          !contentApplied &&
+          stagedLinks.length > 0 &&
+          !stagedLinks.some((link) => link.pendingImport?.bookIdMayChange && !link.pendingImport.hadExistingLink)
+        ) {
           await restoreExternalSourceLinks(optionsRef.current.state, stagedLinks, previousLinks).catch(() => undefined);
         }
         if (changedCount > 0 || completedKeys.size > 0) {
@@ -2552,6 +2582,7 @@ export function useExternalSourceController(options: UseExternalSourceController
                   hadExistingLink: Boolean(existingLink),
                   previousActiveContentRevisionId: target?.activeContentRevisionId,
                   expectedActiveSourceContentHash: sourceHash,
+                  bookIdMayChange: optionsRef.current.importService.mayChangeBookId,
                   collectionRemoteId: existingLink?.collectionRemoteId,
                   importedRemoteRevision: downloaded.remoteRevision ?? item.remoteRevision,
                   importedSourceContentHash: sourceHash,
@@ -2586,6 +2617,11 @@ export function useExternalSourceController(options: UseExternalSourceController
               const result = await controller.promise;
               importRef.current = undefined;
               contentApplied = true;
+              stagedLinks = await checkpointImportedExternalSourceLinks(
+                optionsRef.current.state,
+                stagedLinks,
+                result.novel,
+              );
               importedNovel =
                 (await optionsRef.current.getNovel(result.novel.id).catch(() => undefined)) ?? result.novel;
               knownNovels.push(importedNovel);
@@ -2616,7 +2652,11 @@ export function useExternalSourceController(options: UseExternalSourceController
           } catch (error) {
             importRef.current = undefined;
             if (isAbort(error)) {
-              if (stagedLinks.length > 0) {
+              if (
+                !contentApplied &&
+                stagedLinks.length > 0 &&
+                !stagedLinks.some((link) => link.pendingImport?.bookIdMayChange && !link.pendingImport.hadExistingLink)
+              ) {
                 await restoreExternalSourceLinks(optionsRef.current.state, stagedLinks, previousLinks).catch(
                   () => undefined,
                 );
@@ -2630,7 +2670,10 @@ export function useExternalSourceController(options: UseExternalSourceController
               linkRepairPending += stagedLinks.length;
               continue;
             }
-            if (stagedLinks.length > 0) {
+            if (
+              stagedLinks.length > 0 &&
+              !stagedLinks.some((link) => link.pendingImport?.bookIdMayChange && !link.pendingImport.hadExistingLink)
+            ) {
               await restoreExternalSourceLinks(optionsRef.current.state, stagedLinks, previousLinks).catch(
                 () => undefined,
               );
@@ -2900,7 +2943,7 @@ export function useExternalSourceController(options: UseExternalSourceController
         documentSectionTitle: item.release.title,
       });
     },
-    [importItems, beginStream],
+    [importItems, beginStream, sourceReadMode],
   );
 
   const libraryReader = useSourceLibraryReader(
@@ -2970,7 +3013,7 @@ export function useExternalSourceController(options: UseExternalSourceController
       else await optionsRef.current.openNovel(novel);
       setOpen(false);
     },
-    [blockingBusy, rawItems, refreshLocalProjection, beginStream],
+    [blockingBusy, rawItems, refreshLocalProjection, beginStream, sourceReadMode],
   );
 
   const cancel = useCallback(() => {
@@ -3722,7 +3765,7 @@ export function useExternalSourceController(options: UseExternalSourceController
         const completeCache =
           cached?.completeSeries &&
           !cached.nextCursor &&
-          Date.parse(cached.fetchedAt) + sourceCachePolicy(input).keep > Date.now();
+          Date.parse(cached.fetchedAt) + sourceCachePolicy(input, false, preferenceScope).keep > Date.now();
 
         const read = (cursor?: string) =>
           current.registry.listExternalSource(sourceId, current.hostContext, { ...input, cursor }, abort.signal);
@@ -3774,6 +3817,8 @@ export function useExternalSourceController(options: UseExternalSourceController
       reconcileStreamProgress,
       beginStream,
       resumeSourceVisit,
+      preferTextLibrary,
+      preferenceScope,
     ],
   );
 

@@ -471,6 +471,7 @@ function requiresExistingBook(event: SyncEvent): boolean {
     event.type === 'listening_position_updated' ||
     event.type === 'listening_position_deleted' ||
     event.type === 'book_updated' ||
+    event.type === 'book_deleted' ||
     event.type === 'book_trashed' ||
     event.type === 'book_restored' ||
     event.type === 'book_purged' ||
@@ -496,15 +497,51 @@ function requiresExistingBook(event: SyncEvent): boolean {
   );
 }
 
+/** Resolve every book reference used by persistence before translation or mutation.
+ * An envelope ID never overrides a conflicting payload ID. */
+export function syncEventBookBoundary(event: SyncEvent): { ok: true; bookId?: string } | { ok: false } {
+  if (!requiresExistingBook(event)) return { ok: true };
+  const payload = record(event.payload);
+  const records = [
+    payload,
+    ...[
+      'position',
+      'listeningPosition',
+      'bookmark',
+      'highlight',
+      'note',
+      'annotation',
+      'orderOverride',
+      'correction',
+      'membership',
+      'novel',
+    ].map((key) => record(payload[key])),
+  ];
+  const ids: unknown[] = [event.novelId];
+  for (const value of records) {
+    ids.push(value.bookId, value.novelId);
+    const anchor = record(value.anchor);
+    ids.push(anchor.bookId, anchor.novelId);
+  }
+  if (event.type === 'book_updated') ids.push(record(payload.novel).id);
+  const supplied = ids.filter((value) => value !== undefined && value !== null);
+  if (supplied.some((value) => typeof value !== 'string' || !value)) return { ok: false };
+  const unique = new Set(supplied as string[]);
+  if (unique.size !== 1) return { ok: false };
+  return { ok: true, bookId: [...unique][0] };
+}
+
 export async function hasExistingBookForEvent(
   client: pg.PoolClient,
   userId: string,
   event: SyncEvent,
 ): Promise<boolean> {
-  if (!requiresExistingBook(event) || !event.novelId) return true;
+  const boundary = syncEventBookBoundary(event);
+  if (!boundary.ok) return false;
+  if (!boundary.bookId) return true;
   const result = await client.query<{ exists: boolean }>(
     'select true as exists from library_books where id = $1 and user_id = $2 for share',
-    [event.novelId, userId],
+    [boundary.bookId, userId],
   );
   return result.rows[0]?.exists ?? false;
 }

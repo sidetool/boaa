@@ -190,6 +190,11 @@ function validateTTSPlaybackSettings(
       return { ok: false, error: 'ttsPlayback.serverVoiceId is invalid' };
     next.serverVoiceId = body.serverVoiceId;
   }
+  if (body.plainChunking !== undefined) {
+    if (body.plainChunking !== 'sentence' && body.plainChunking !== 'paragraph' && body.plainChunking !== 'batch')
+      return { ok: false, error: 'ttsPlayback.plainChunking is invalid' };
+    next.plainChunking = body.plainChunking;
+  }
   if (body.offlineOnly !== undefined) {
     if (typeof body.offlineOnly !== 'boolean') return { ok: false, error: 'ttsPlayback.offlineOnly must be boolean' };
     next.offlineOnly = body.offlineOnly;
@@ -485,6 +490,7 @@ export function validateSettingsBody(value: unknown): ValidationResult<ReaderSet
         'mode',
         'voiceSource',
         'serverVoiceId',
+        'plainChunking',
         'offlineOnly',
         'footnotePlayback',
         'rate',

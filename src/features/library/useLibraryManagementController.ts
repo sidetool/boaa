@@ -1,3 +1,4 @@
+import { useAccountStorage } from '../auth/use-account-storage';
 import { moveLibraryBookToShelf, renameLibraryBook } from './library-work-mutations';
 import { executeLibraryBatch, type ExternalLibraryBatch } from './library-batch';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -152,11 +153,12 @@ export interface UseLibraryManagementControllerInput {
 export function useLibraryManagementController(
   input: UseLibraryManagementControllerInput,
 ): LibraryManagementController {
+  const storage = useAccountStorage();
   const [loadedCatalog, setLoadedCatalog] = useState<typeof input.catalog>();
   const [shelves, setShelves] = useState<Shelf[]>([]);
   const [memberships, setMemberships] = useState<ShelfMembership[]>([]);
   const [activeShelfId, setActiveShelfIdState] = useState<string | undefined>(
-    () => readLibraryViewPreferences().activeShelfId,
+    () => readLibraryViewPreferences(storage).activeShelfId,
   );
   const [selectionMode, setSelectionMode] = useState(false);
   const [selectedBookIds, setSelectedBookIds] = useState<Set<string>>(() => new Set());
@@ -168,8 +170,8 @@ export function useLibraryManagementController(
   const latestBooksRef = useRef(new Map<string, Novel>());
 
   useEffect(() => {
-    saveLibraryViewPreferences({ activeShelfId });
-  }, [activeShelfId]);
+    saveLibraryViewPreferences({ activeShelfId }, storage);
+  }, [activeShelfId, storage]);
 
   const rememberBook = useCallback((book: Novel): Novel => {
     const remembered = latestBooksRef.current.get(book.id);

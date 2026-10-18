@@ -10,7 +10,7 @@ type StoredAccount = NonNullable<Awaited<ReturnType<SelfHostAuthStore['loadAccou
 
 class MemoryAuthStore implements SelfHostAuthStore {
   account?: StoredAccount;
-  readonly sessions = new Map<string, { userId: string; expiresAt: string }>();
+  readonly sessions = new Map<string, { userId: string; expiresAt: string; sessionContext?: string }>();
 
   async loadAccount() {
     return this.account;
@@ -24,13 +24,21 @@ class MemoryAuthStore implements SelfHostAuthStore {
 
   async updateUserDisplayName(_userId: string, _displayName: string) {}
 
-  async createSession(userId: string, tokenHash: string, expiresAt: string) {
-    this.sessions.set(tokenHash, { userId, expiresAt });
+  async createSession(
+    userId: string,
+    tokenHash: string,
+    expiresAt: string,
+    _version?: number,
+    sessionContext?: string,
+  ) {
+    this.sessions.set(tokenHash, { userId, expiresAt, sessionContext });
   }
 
   async resolveSession(tokenHash: string, now: string) {
     const session = this.sessions.get(tokenHash);
-    return session && session.expiresAt > now && session.userId === this.account?.userId ? this.account : undefined;
+    return session && session.expiresAt > now && session.userId === this.account?.userId
+      ? { ...this.account, sessionContext: session.sessionContext }
+      : undefined;
   }
 
   async revokeSession(tokenHash: string) {
@@ -63,7 +71,7 @@ describe('SelfHostAuthService', () => {
     expect(store.account?.passwordSalt).not.toContain('correct horse');
     expect([...store.sessions.keys()]).toEqual([selfHostSessionTokenHash(session.token)]);
     expect([...store.sessions.keys()][0]).not.toBe(session.token);
-    expect(await service.authenticateSession(session.token)).toEqual({
+    expect(await service.authenticateSession(session.token)).toMatchObject({
       username: 'Alice',
       displayName: '테스트 사용자',
     });
@@ -72,7 +80,7 @@ describe('SelfHostAuthService', () => {
       'user_existing',
       () => new Date('2026-08-28T00:00:00.000Z'),
     );
-    expect(await restartedService.authenticateSession(session.token)).toEqual({
+    expect(await restartedService.authenticateSession(session.token)).toMatchObject({
       username: 'Alice',
       displayName: '테스트 사용자',
     });
@@ -127,7 +135,7 @@ describe('SelfHostAuthService', () => {
     for (let index = 0; index < 1_005; index += 1) {
       await expect(
         service.login({ username: 'unknown', password: '', throttleKey: `client-${index}` }),
-      ).rejects.toMatchObject({ code: 'invalid_credentials' });
+      ).rejects.toBeInstanceOf(SelfHostAuthError);
     }
 
     const failures = (

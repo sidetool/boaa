@@ -1,6 +1,7 @@
 import { randomUuid } from '../utils/random-uuid';
 import {
   beginDropboxAuthorizationRedirect,
+  discardDropboxAuthorizationRedirect,
   completeDropboxAuthorizationRedirect,
   defaultDropboxRedirectUri,
 } from '../cloud-vault/dropbox-oauth';
@@ -40,12 +41,31 @@ export class DropboxSourceAccountBroker implements ExternalSourceBroker {
     private readonly appKey: string | undefined,
     private readonly state: ExternalSourceLocalState,
     private readonly fetchImpl: typeof fetch = globalThis.fetch.bind(globalThis),
-  ) {}
+    private readonly owner?: { storageScope: string; signal: AbortSignal },
+  ) {
+    owner?.signal.addEventListener(
+      'abort',
+      () => {
+        discardDropboxAuthorizationRedirect(owner.storageScope);
+        this.dispose();
+      },
+      { once: true },
+    );
+  }
+
+  dispose(): void {
+    this.record = undefined;
+    this.credential = undefined;
+    this.credentialKey = undefined;
+    this.api = undefined;
+  }
 
   async initialize(): Promise<void> {
+    this.owner?.signal.throwIfAborted();
     if (this.appKey) {
       try {
         const redirectedCredential = await completeDropboxAuthorizationRedirect({
+          storageScope: this.owner?.storageScope,
           appKey: this.appKey,
           fetchImpl: this.fetchImpl,
         });
@@ -107,6 +127,8 @@ export class DropboxSourceAccountBroker implements ExternalSourceBroker {
     this.connectionReason = undefined;
     await beginDropboxAuthorizationRedirect({
       appKey,
+      storageScope: this.owner?.storageScope,
+      signal: this.owner?.signal,
       scopes: DROPBOX_EXTERNAL_SOURCE_SCOPES,
     });
     await new Promise<never>(() => undefined);
@@ -127,6 +149,7 @@ export class DropboxSourceAccountBroker implements ExternalSourceBroker {
       updatedAt: timestamp,
     };
     await this.state.saveCredential(record);
+    this.owner?.signal.throwIfAborted();
     this.record = record;
     this.reauthorizationRequired = false;
     this.connectionReason = undefined;
@@ -154,6 +177,7 @@ export class DropboxSourceAccountBroker implements ExternalSourceBroker {
   }
 
   private installCredential(credential: DropboxCredential, key: CryptoKey): void {
+    this.owner?.signal.throwIfAborted();
     this.credential = credential;
     this.credentialKey = key;
     const credentialStore: DropboxCredentialStore = {

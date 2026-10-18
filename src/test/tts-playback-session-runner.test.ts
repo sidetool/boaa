@@ -384,3 +384,64 @@ describe('runTTSPlaybackSession', () => {
     await expect(resultPromise).resolves.toEqual({ completed: false, stopped: true, lastParagraphIndex: 0 });
   });
 });
+
+it('plays prepared paragraph windows once and prefetches after the consumed window', async () => {
+  const starts: number[] = [],
+    played: string[] = [],
+    prefetched: string[] = [];
+  const rows = Array.from({ length: 4 }, (_, i) => paragraph(`p${i}`, i, `text${i}`));
+  const result = await runTTSPlaybackSession({
+    startIndex: 0,
+    paragraphCount: 4,
+    getParagraph: async (i) => rows[i],
+    buildPlayableSegments: (p) => [playable(p.id, p.text, p.id)],
+    prepareParagraph: async (i, p) => ({ playables: [playable(p.id, `batch${i}`, p.id)], nextParagraphIndex: i + 2 }),
+    shouldContinue: () => true,
+    waitForResume: async () => true,
+    allowSystemFallback: false,
+    playHostedSegment: async (p) => {
+      played.push(p.text);
+      await new Promise((r) => setTimeout(r, 0));
+      return true;
+    },
+    prefetchHostedSegment: async (p) => {
+      prefetched.push(p.text);
+    },
+    hostedPrefetchDepth: () => 1,
+    onParagraphStart: (i) => {
+      starts.push(i);
+    },
+    buildSystemFallbackInput: (p) => ({ text: p.text, rate: 1 }),
+    speakSystem: async () => {},
+  });
+  expect(result.completed).toBe(true);
+  expect(starts).toEqual([0, 2]);
+  expect(played).toEqual(['batch0', 'batch2']);
+  expect(prefetched).toEqual(['batch2']);
+});
+
+it('starts next-chapter preparation once near the end, while current audio is still playing', async () => {
+  const rows = Array.from({ length: 8 }, (_, i) => paragraph(`p${i}`, i, 'A sentence.'));
+  let active = -1;
+  const preparedAt: number[] = [];
+  const result = await runTTSPlaybackSession({
+    startIndex: 0,
+    paragraphCount: rows.length,
+    getParagraph: async (i) => rows[i],
+    buildPlayableSegments: (p) => [playable(p.id, p.text, 'voice')],
+    shouldContinue: () => true,
+    waitForResume: async () => true,
+    playHostedSegment: async (_p, paragraph) => {
+      active = paragraph.index;
+      return true;
+    },
+    prefetchNextChapter: async () => {
+      preparedAt.push(active);
+      throw new Error('speculative failure');
+    },
+    buildSystemFallbackInput: (p) => ({ text: p.text, rate: p.rate }),
+    speakSystem: async () => undefined,
+  });
+  expect(result.completed).toBe(true);
+  expect(preparedAt).toEqual([4]);
+});

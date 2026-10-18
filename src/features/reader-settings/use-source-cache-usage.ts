@@ -1,3 +1,4 @@
+import { useOptionalAppRuntime } from '../../app/runtime/RuntimeProvider';
 import { useEffect, useState } from 'react';
 import { readSourceMetadataCacheUsage } from '../../external-sources/local-state';
 
@@ -6,12 +7,13 @@ export type SourceCacheUsage =
   | { status: 'ready'; bytes: number; entries: number };
 
 export function useSourceCacheUsage(enabled: boolean): SourceCacheUsage {
+  const scope = useOptionalAppRuntime()?.readerRuntime.session?.storageScope;
   const [usage, setUsage] = useState<SourceCacheUsage>({ status: 'loading' });
   useEffect(() => {
     if (!enabled) return;
     let active = true;
     setUsage({ status: 'loading' });
-    void readSourceMetadataCacheUsage().then(
+    void readSourceMetadataCacheUsage(scope).then(
       (next) => {
         if (active) setUsage({ status: 'ready', ...next });
       },
@@ -22,6 +24,6 @@ export function useSourceCacheUsage(enabled: boolean): SourceCacheUsage {
     return () => {
       active = false;
     };
-  }, [enabled]);
+  }, [enabled, scope]);
   return enabled ? usage : { status: 'idle' };
 }

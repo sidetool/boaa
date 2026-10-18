@@ -7,6 +7,8 @@ import {
   type SourceReadingPreferences,
 } from '../../external-sources/source-reading-preferences';
 import type { ExternalSourceController } from '../../features/external-sources/external-source-controller-contract';
+import { RuntimeProvider } from '../../app/runtime/RuntimeProvider';
+import type { AppRuntime } from '../../app/runtime/app-runtime';
 import { UiNextSourceReadingSettings } from './UiNextSourceReadingSettings';
 
 vi.mock('../../external-sources/source-reading-preferences', async (importOriginal) => ({
@@ -85,7 +87,7 @@ describe('UiNextSourceReadingSettings opening and prefetch preferences', () => {
   ] as const)('saves text mode %s', (label, textMode) => {
     const { root } = mount();
     click(button(group(root, '소설 회차 열기'), label));
-    expect(saveSourceReadingPreferences).toHaveBeenCalledExactlyOnceWith({ textMode });
+    expect(saveSourceReadingPreferences).toHaveBeenCalledExactlyOnceWith({ textMode }, undefined);
     expect(button(group(root, '소설 회차 열기'), label).props['aria-checked']).toBe(true);
   });
   it.each([
@@ -95,14 +97,14 @@ describe('UiNextSourceReadingSettings opening and prefetch preferences', () => {
   ] as const)('saves comic mode %s', (label, mode) => {
     const { root } = mount();
     click(button(group(root, '만화·웹툰 회차 열기'), label));
-    expect(saveSourceReadingPreferences).toHaveBeenCalledExactlyOnceWith({ mode });
+    expect(saveSourceReadingPreferences).toHaveBeenCalledExactlyOnceWith({ mode }, undefined);
     expect(button(group(root, '만화·웹툰 회차 열기'), label).props['aria-checked']).toBe(true);
   });
   it.each([0, 2, 4, 5, 8, 10] as const)('saves image prefetch %s', (prefetch) => {
     const { root } = mount();
     const label = prefetch === 0 ? '끔' : `${prefetch}장`;
     click(button(group(root, '이미지 미리 불러오기'), label));
-    expect(saveSourceReadingPreferences).toHaveBeenCalledExactlyOnceWith({ prefetch });
+    expect(saveSourceReadingPreferences).toHaveBeenCalledExactlyOnceWith({ prefetch }, undefined);
     expect(button(group(root, '이미지 미리 불러오기'), label).props['aria-checked']).toBe(true);
   });
   it('reports preference save failures and keeps the previous choice', () => {
@@ -187,7 +189,30 @@ describe('UiNextSourceReadingSettings cache fold', () => {
     const fold = root.findByType('details');
     expect(text(fold.findByType('summary'))).toContain('캐시');
     click(button(group(fold, name), label));
-    expect(saveSourceReadingPreferences).toHaveBeenCalledExactlyOnceWith(patch);
+    expect(saveSourceReadingPreferences).toHaveBeenCalledExactlyOnceWith(patch, undefined);
     expect(button(group(fold, name), label).props['aria-checked']).toBe(true);
+  });
+});
+
+describe('UiNextSourceReadingSettings account scope', () => {
+  it('reads and saves a hosted account’s own preferences, never the device-wide key', () => {
+    const runtime = {
+      readerRuntime: { session: { storageScope: 'hosted-account:synthetic' } },
+    } as unknown as AppRuntime;
+    act(() => {
+      renderer = create(
+        <RuntimeProvider runtime={runtime}>
+          <UiNextSourceReadingSettings controller={controller()} />
+        </RuntimeProvider>,
+      );
+    });
+    expect(
+      vi.mocked(sourceReadingPreferences).mock.calls.every(([scope]) => scope === 'hosted-account:synthetic'),
+    ).toBe(true);
+    click(button(group(renderer!.root, '소설 회차 열기'), '바로 읽기'));
+    expect(saveSourceReadingPreferences).toHaveBeenCalledExactlyOnceWith(
+      { textMode: 'stream' },
+      'hosted-account:synthetic',
+    );
   });
 });

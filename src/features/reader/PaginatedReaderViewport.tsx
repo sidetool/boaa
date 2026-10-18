@@ -1,3 +1,4 @@
+import { useOptionalAppRuntime } from '../../app/runtime/RuntimeProvider';
 import { useReaderSearchInset } from './reader-search-occlusion';
 import { readReaderSelection, useReaderSelectionChanges } from './reader-selection';
 import { AutoReadingPresentation } from './auto-reading-modes';
@@ -71,6 +72,9 @@ export function PaginatedReaderViewport(
     readonly initialAnchor?: ReaderAnchor;
   },
 ) {
+  const accountRuntime = useOptionalAppRuntime()?.readerRuntime;
+  const auxiliaryDatabase = accountRuntime?.auxiliaryDatabase;
+  const accountEpoch = accountRuntime?.session?.epoch;
   const {
     repository,
     novel,
@@ -292,7 +296,7 @@ export function PaginatedReaderViewport(
     }),
     [chapter.id, contentRevisionId, layoutKey],
   );
-  const pageMapKey = `${chapter.id}:${layoutKey}`;
+  const pageMapKey = `${accountEpoch ?? 'local'}:${chapter.id}:${layoutKey}`;
 
   const session = useMemo(() => {
     const create = () => {
@@ -326,7 +330,8 @@ export function PaginatedReaderViewport(
             const cached = pluginLayoutRevision ? undefined : getCachedPageMap(pageMapKey);
             const stored = pluginLayoutRevision
               ? undefined
-              : (cached ?? (await loadReaderPageMap(pageMapIdentity).catch(() => undefined)));
+              : (cached ??
+                (await loadReaderPageMap(pageMapIdentity, undefined, auxiliaryDatabase).catch(() => undefined)));
             controller.signal.throwIfAborted();
             if (stored) window.seed(stored.boundaries);
           })()),
@@ -355,6 +360,7 @@ export function PaginatedReaderViewport(
     pageMapKey,
     pluginLayers,
     pluginLayoutRevision,
+    auxiliaryDatabase,
   ]);
   useEffect(() => {
     session.restart();
@@ -614,7 +620,9 @@ export function PaginatedReaderViewport(
       const boundaries = session.window.snapshot();
       if (pluginLayoutRevision) return;
       cachePageMap({ key: pageMapKey, boundaries });
-      await saveReaderPageMap(pageMapIdentity, boundaries).then(() => pruneReaderPageMaps(PAGE_MAP_CACHE_LIMIT));
+      await saveReaderPageMap(pageMapIdentity, boundaries, undefined, auxiliaryDatabase).then(() =>
+        pruneReaderPageMaps(PAGE_MAP_CACHE_LIMIT, auxiliaryDatabase),
+      );
     };
     const cancel = scheduleIdleWork(() => void warm().catch(() => undefined), 1500);
     return () => {
@@ -636,6 +644,7 @@ export function PaginatedReaderViewport(
     pluginLayoutRevision,
     repository,
     session,
+    auxiliaryDatabase,
   ]);
 
   const goChapter = useCallback(

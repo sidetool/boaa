@@ -17,7 +17,7 @@ export function storedSourcePage(
   scope?: string,
 ): ExternalCatalogCachePage {
   const time = sourcePageTime(page),
-    policy = sourceCachePolicy(input);
+    policy = sourceCachePolicy(input, false, scope?.startsWith('hosted-account:') ? scope : undefined);
   const needsCoverRefresh = [...page.items, ...(page.detail ? [page.detail] : [])].some(
     (item) => item.thumbnailUrl && !item.coverRef && !persistentCover(item),
   );

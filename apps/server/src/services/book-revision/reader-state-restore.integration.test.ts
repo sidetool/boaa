@@ -15,12 +15,12 @@ const timestamp = '2026-08-30T00:00:00.000Z';
 async function seedBooks(pool: pg.Pool): Promise<void> {
   await pool.query(`insert into users (id, email, display_name) values ('user_test', 'test@example.com', 'Test')`);
   await pool.query(`
-    insert into book_objects (id, raw_text_hash, storage_key, file_name, content_type, size_bytes)
+    insert into book_objects (user_id, id, raw_text_hash, storage_key, file_name, content_type, size_bytes)
     values
-      ('object_target_old', 'raw_target_old', 'target-old.cbz', 'target-old.cbz', 'application/zip', 100),
-      ('object_target_new', 'raw_target_new', 'target-new.cbz', 'target-new.cbz', 'application/zip', 120),
-      ('object_other_old', 'raw_other_old', 'other-old.cbz', 'other-old.cbz', 'application/zip', 100),
-      ('object_other_new', 'raw_other_new', 'other-new.cbz', 'other-new.cbz', 'application/zip', 120)
+      ('user_test', 'object_target_old', 'raw_target_old', 'target-old.cbz', 'target-old.cbz', 'application/zip', 100),
+      ('user_test', 'object_target_new', 'raw_target_new', 'target-new.cbz', 'target-new.cbz', 'application/zip', 120),
+      ('user_test', 'object_other_old', 'raw_other_old', 'other-old.cbz', 'other-old.cbz', 'application/zip', 100),
+      ('user_test', 'object_other_new', 'raw_other_new', 'other-new.cbz', 'other-new.cbz', 'application/zip', 120)
   `);
   await pool.query(`
     insert into library_books (

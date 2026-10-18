@@ -18,7 +18,11 @@ export function optionalStringField(body: Record<string, unknown>, field: string
 }
 
 export function providerSecretName(value: unknown): ProviderSecretName | undefined {
-  return value === 'api_key' || value === 'access_token' || value === 'credential_path' || value === 'endpoint_url'
+  return value === 'service_account_json' ||
+    value === 'api_key' ||
+    value === 'access_token' ||
+    value === 'credential_path' ||
+    value === 'endpoint_url'
     ? value
     : undefined;
 }

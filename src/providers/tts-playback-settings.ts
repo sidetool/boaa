@@ -26,6 +26,8 @@ export function normalizeTTSPlaybackSettings(
     mode: value?.mode === 'cast' ? 'cast' : 'plain',
     voiceSource: value?.voiceSource === 'server' ? 'server' : 'system',
     serverVoiceId: typeof value?.serverVoiceId === 'string' ? value.serverVoiceId.slice(0, 160) : undefined,
+    plainChunking:
+      value?.plainChunking === 'batch' ? 'batch' : value?.plainChunking === 'paragraph' ? 'paragraph' : 'sentence',
     rate: clamp(finiteNumber(value?.rate, legacyRate), 0.5, 2.5),
     pitch: clamp(finiteNumber(value?.pitch, 1), 0.5, 2),
     volume: clamp(finiteNumber(value?.volume, 1), 0, 1),

@@ -1,3 +1,4 @@
+import { useOptionalAppRuntime } from '../../app/runtime/RuntimeProvider';
 /** useSourceHubModel(props: SourceHubScreenProps) — headless source/detail screen model.
  * primaryRead / primaryReadFor(sort): data-only first/continue episode descriptor; no presentation labels.
  * Hero: activeSource/connected, hasWorkHero, seriesNovel, workTitle/workByline/workTags/workSourceLabel,
@@ -22,7 +23,7 @@ import type { ReleaseSort } from './source-release-list-model';
 
 import { useMemo, useRef, type FormEvent, type ComponentProps } from 'react';
 import { useDownloadSelectionFocus } from './use-download-selection-focus';
-import { useSourceWorkReadingTime } from './source-work-reading-time';
+import { useSourceWorkReadingTime } from './use-source-work-reading-time';
 import { useSourceStreamNavigation } from './use-source-stream-navigation';
 import { sourceReadingPreferences } from '../../external-sources/source-reading-preferences';
 import { useSourceWorkLayout } from './source-work-layout';
@@ -50,7 +51,10 @@ export function useSourceHubModel({
     controller.workReadingSessionId,
     Boolean(controller.streaming && !controller.streamingBookId),
   );
-  const streamNavigation = useSourceStreamNavigation(controller, sourceReadingPreferences().prefetch > 0);
+  const streamNavigation = useSourceStreamNavigation(
+    controller,
+    sourceReadingPreferences(useOptionalAppRuntime()?.readerRuntime.session?.storageScope).prefetch > 0,
+  );
   const scrollRef = useRef<HTMLDivElement>(null);
   useDownloadSelectionFocus(
     scrollRef,

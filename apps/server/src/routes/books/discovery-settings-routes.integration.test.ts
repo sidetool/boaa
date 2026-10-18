@@ -19,10 +19,16 @@ const harness = await startPostgresIntegrationHarness();
         'create table reader_settings (user_id text primary key references users(id), settings jsonb not null, updated_at timestamptz not null default now())',
       );
       await pool.query(
-        'create table sync_events (id text primary key, user_id text, device_id text, type text, book_id text, entity_id text, payload jsonb, revision jsonb, created_at timestamptz)',
+        'create table sync_events (id text, user_id text, unique(user_id,id), device_id text, type text, book_id text, entity_id text, payload jsonb, revision jsonb, created_at timestamptz)',
       );
       const a = Fastify(),
         b = Fastify();
+      a.addHook('onRequest', async (request) => {
+        request.principal = { userId: 'a', role: 'member', authMethod: 'session', sessionContext: 'a' };
+      });
+      b.addHook('onRequest', async (request) => {
+        request.principal = { userId: 'b', role: 'member', authMethod: 'session', sessionContext: 'b' };
+      });
       await registerReaderStateRoutes(a, pool, { defaultUserId: 'a' } as ServerConfig);
       await registerReaderStateRoutes(b, pool, { defaultUserId: 'b' } as ServerConfig);
       const config = {

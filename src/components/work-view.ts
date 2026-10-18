@@ -1,3 +1,4 @@
+import { useOptionalAppRuntime } from '../app/runtime/RuntimeProvider';
 import { readBrandStorage, writeBrandStorage } from '@boaa/extension-contracts/brand-compat';
 import { useSyncExternalStore } from 'react';
 
@@ -42,10 +43,12 @@ function subscribe(changed: () => void) {
   };
 }
 export function useWorkView(key: string, fallback: WorkView = 'grid') {
+  const scope = useOptionalAppRuntime()?.readerRuntime.session?.storageScope;
+  const ownedKey = scope ? `${key}:${scope}` : key;
   const value = useSyncExternalStore(
     subscribe,
-    () => readWorkView(key, fallback),
+    () => readWorkView(ownedKey, fallback),
     () => fallback,
   );
-  return [value, (next: WorkView) => saveWorkView(key, next)] as const;
+  return [value, (next: WorkView) => saveWorkView(ownedKey, next)] as const;
 }

@@ -18,9 +18,11 @@ export const sourceReadingDefaults: SourceReadingPreferences = {
 };
 const key = 'boaa.source-reading.v1';
 export const sourceReadingPreferenceEvent = 'boaa-source-reading-preferences';
-export function sourceReadingPreferences(): SourceReadingPreferences {
+export function sourceReadingPreferences(scope?: string): SourceReadingPreferences {
   try {
-    const value = JSON.parse(readBrandStorage(localStorage, key) ?? '{}');
+    const value = JSON.parse(
+      (scope ? localStorage.getItem(`${key}:${scope}`) : readBrandStorage(localStorage, key)) ?? '{}',
+    );
     return {
       textMode: value.textMode === 'stream' ? 'stream' : 'library',
       mode: ['stream-save', 'stream', 'download'].includes(value.mode) ? value.mode : sourceReadingDefaults.mode,
@@ -35,7 +37,9 @@ export function sourceReadingPreferences(): SourceReadingPreferences {
     return { ...sourceReadingDefaults };
   }
 }
-export function saveSourceReadingPreferences(patch: Partial<SourceReadingPreferences>) {
-  writeBrandStorage(localStorage, key, JSON.stringify({ ...sourceReadingPreferences(), ...patch }));
+export function saveSourceReadingPreferences(patch: Partial<SourceReadingPreferences>, scope?: string) {
+  const value = JSON.stringify({ ...sourceReadingPreferences(scope), ...patch });
+  if (scope) localStorage.setItem(`${key}:${scope}`, value);
+  else writeBrandStorage(localStorage, key, value);
   window.dispatchEvent(new Event(sourceReadingPreferenceEvent));
 }

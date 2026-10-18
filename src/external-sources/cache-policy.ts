@@ -12,9 +12,9 @@ function defaultSourceCachePolicy(input: ExternalSourceListInput, completed = fa
     return { fresh: 10 * minute, keep: 6 * hour };
   return { fresh: input.browseMode === 'latest' ? 2 * minute : 30 * minute, keep: day };
 }
-export function sourceCachePolicy(input: ExternalSourceListInput, completed = false) {
+export function sourceCachePolicy(input: ExternalSourceListInput, completed = false, scope?: string) {
   const policy = defaultSourceCachePolicy(input, completed);
-  const value = input.cacheMaxAgeMs ?? sourceReadingPreferences().listMinutes * minute;
+  const value = input.cacheMaxAgeMs ?? sourceReadingPreferences(scope).listMinutes * minute;
   const max =
     typeof value === 'number' && Number.isFinite(value) && value >= 0 ? Math.min(value, 6 * hour) : policy.fresh;
   return { ...policy, fresh: Math.min(policy.fresh, max) };

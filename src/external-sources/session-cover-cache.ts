@@ -42,6 +42,7 @@ export class SessionCoverCache {
     private maxBytes = 64 * 1024 * 1024,
     private maxEntries = 400,
     private storage?: CoverStorage,
+    private readonly preferenceScope?: string,
   ) {}
   /** A permit belongs to actual I/O, even if a loader ignores cancellation. */
   private async run<T>(signal: AbortSignal, task: () => Promise<T>): Promise<T> {
@@ -139,14 +140,17 @@ export class SessionCoverCache {
     signal.throwIfAborted();
     lifetime.signal.throwIfAborted();
     const missingAt = this.missing.get(key);
-    if (missingAt !== undefined && missingAt + sourceReadingPreferences().coverHours * 3600000 > Date.now())
+    if (
+      missingAt !== undefined &&
+      missingAt + sourceReadingPreferences(this.preferenceScope).coverHours * 3600000 > Date.now()
+    )
       return undefined;
     this.missing.delete(key);
     const found = this.entries.get(key);
     if (found) {
       this.entries.delete(key);
       this.entries.set(key, found);
-      if (found.time + sourceReadingPreferences().coverHours * 3600000 > Date.now()) {
+      if (found.time + sourceReadingPreferences(this.preferenceScope).coverHours * 3600000 > Date.now()) {
         this.pin(found.url, signal);
         return found.url;
       }

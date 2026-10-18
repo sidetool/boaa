@@ -19,8 +19,8 @@ async function seedBook(pool: pg.Pool): Promise<{ contentRevisionId: string; anc
   const anchorHash = textIntegrityHash(anchorText);
   await pool.query(`insert into users (id, email, display_name) values ('user_test', 'test@example.com', 'Test')`);
   await pool.query(`
-    insert into book_objects (id, raw_text_hash, storage_key, file_name, content_type, size_bytes)
-    values ('object_old', 'raw_old', 'old.txt', 'old.txt', 'text/plain', 100)
+    insert into book_objects (user_id, id, raw_text_hash, storage_key, file_name, content_type, size_bytes)
+    values ('user_test', 'object_old', 'raw_old', 'old.txt', 'old.txt', 'text/plain', 100)
   `);
   await pool.query(
     `
@@ -270,8 +270,8 @@ describeWithPostgres('book replacement revision lifecycle', () => {
       const { contentRevisionId, anchorHash } = await seedBook(pool);
       const app = await appWithSync(pool);
       await pool.query(`
-        insert into book_objects (id, raw_text_hash, storage_key, file_name, content_type, size_bytes)
-        values ('object_new', 'raw_new', 'new.txt', 'new.txt', 'text/plain', 120)
+        insert into book_objects (user_id, id, raw_text_hash, storage_key, file_name, content_type, size_bytes)
+        values ('user_test', 'object_new', 'raw_new', 'new.txt', 'new.txt', 'text/plain', 120)
       `);
       const client = await pool.connect();
       try {

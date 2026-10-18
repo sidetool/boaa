@@ -112,3 +112,26 @@ test('authentication page discovery has a separate bounded deadline and remains 
     host.close();
   }
 });
+
+test('separate owner supervisors share a lazy process budget until children actually close', async () => {
+  const { ApkProcessBudget } = await import('./process-budget.mjs');
+  const budget = new ApkProcessBudget(1);
+  const ownerA = worker({ processBudget: budget, idleMs: 10000 });
+  const ownerB = worker({ processBudget: budget, idleMs: 10000 });
+  try {
+    assert.equal(budget.active, 0); // Inventories and supervisors do not allocate JVMs.
+    assert.equal((await ownerA.request('list', { value: 'a' })).value, 'a');
+    assert.equal(budget.active, 1);
+    await assert.rejects(ownerB.request('list'), /apk_worker_busy/);
+    ownerA.close();
+    assert.equal(budget.active, 1); // Sending kill alone must not release a permit.
+    for (let attempt = 0; budget.active && attempt < 100; attempt++)
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.equal(budget.active, 0);
+    assert.equal((await ownerB.request('list', { value: 'b' })).value, 'b');
+    assert.equal(budget.active, 1);
+  } finally {
+    ownerA.close();
+    ownerB.close();
+  }
+});

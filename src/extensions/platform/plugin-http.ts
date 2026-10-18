@@ -41,6 +41,7 @@ export class PluginHttp {
     private store: PlatformPluginStore,
     private profileId: string,
     private lifetime: AbortSignal,
+    private transport: typeof fetch = (input, init) => globalThis.fetch(input, init),
   ) {}
   owner(row: Pick<Installation, 'installationId' | 'active' | 'revision'>): PluginHttpOwner {
     return {
@@ -56,7 +57,7 @@ export class PluginHttp {
     data: Record<string, unknown> = {},
     signal?: AbortSignal,
   ): Promise<unknown> {
-    const response = await fetch(`/api/plugins/connections/${action}`, {
+    const response = await this.transport(`/api/plugins/connections/${action}`, {
       method: 'POST',
       credentials: 'same-origin',
       cache: 'no-store',
@@ -100,7 +101,7 @@ export class PluginHttp {
     const cancel = () => {
       if (!dispatched) return;
       // Independent best-effort cancellation complements disconnect detection and server deadline.
-      void fetch('/api/plugins/connections/cancel', {
+      void this.transport('/api/plugins/connections/cancel', {
         method: 'POST',
         credentials: 'same-origin',
         keepalive: true,

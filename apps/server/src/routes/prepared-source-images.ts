@@ -1,3 +1,4 @@
+import { requireUserId } from '../auth.js';
 import { requestProgress } from './request-progress.js';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { ExtensionContributionId } from '@boaa/extension-contracts';
@@ -12,6 +13,7 @@ export type StageServerImageImport = (
   file: File,
   input: HostedImageAssembly,
   signal: AbortSignal,
+  request?: FastifyRequest,
 ) => Promise<PreparedServerImport>;
 const context = { brokers: { get: () => undefined } };
 const record = (value: unknown): value is Record<string, unknown> =>
@@ -53,7 +55,7 @@ export function validHostedImageAssembly(body: unknown): body is HostedImageAsse
 
 export function registerPreparedSourceImages(
   app: FastifyInstance,
-  registry: ExternalSourceRegistryPort,
+  registry: ExternalSourceRegistryPort | undefined,
   refresh: () => Promise<unknown>,
   stage: StageServerImageImport,
   handle: <T>(reply: FastifyReply, run: () => Promise<T>) => Promise<unknown>,
@@ -62,18 +64,26 @@ export function registerPreparedSourceImages(
     reply: FastifyReply,
     run: (signal: AbortSignal) => Promise<T>,
   ) => Promise<T>,
+  resolveRuntime?: (request: FastifyRequest) => Promise<{
+    store: PreparedImageDownloads;
+    registry: ExternalSourceRegistryPort;
+    refresh: () => Promise<unknown>;
+    stage: StageServerImageImport;
+  }>,
 ) {
-  const store = new PreparedImageDownloads();
-  const generation = (id: string) => {
+  const store = resolveRuntime ? undefined : new PreparedImageDownloads();
+  const defaults = { store: store!, registry: registry!, refresh, stage };
+  const generation = (id: string, registry: ExternalSourceRegistryPort) => {
     const status = registry.getExternalSourceStatus(id as ExtensionContributionId, context);
     if (status.state !== 'connected') throw new Error('package_source_unavailable');
     return JSON.stringify([status.accountConnectionId, status.connectionGeneration]);
   };
-  app.addHook('onClose', async () => store.close());
+  app.addHook('onClose', async () => store?.close());
   const prefix = '/api/extensions/sources/:id/prepared-images';
   const track = requestProgress(app, `${prefix}/progress/:progressId`);
-  app.post<{ Params: { id: string } }>(prefix, { bodyLimit: 16 * 1024 }, (request, reply) =>
-    handle(reply, () =>
+  app.post<{ Params: { id: string } }>(prefix, { bodyLimit: 16 * 1024 }, async (request, reply) => {
+    const { store, registry, refresh } = resolveRuntime ? await resolveRuntime(request) : defaults;
+    return handle(reply, () =>
       withCancellation(request, reply, async (signal) => {
         const body = request.body;
         if (
@@ -84,10 +94,10 @@ export function registerPreparedSourceImages(
           !text(body.fileName, 1024)
         )
           return reply.code(400).send({ error: 'invalid_source_input' });
-        const progress = track(request.query);
+        const progress = track(request.query, requireUserId(request));
         try {
           await refresh();
-          const before = generation(request.params.id);
+          const before = generation(request.params.id, registry);
           const result = await registry.downloadExternalSource(
             request.params.id as ExtensionContributionId,
             context,
@@ -106,10 +116,11 @@ export function registerPreparedSourceImages(
           progress({ phase: 'finalizing' });
         }
       }),
-    ),
-  );
-  app.post<{ Params: { id: string } }>(`${prefix}/assemble`, { bodyLimit: 32 * 1024 }, (request, reply) =>
-    handle(reply, () =>
+    );
+  });
+  app.post<{ Params: { id: string } }>(`${prefix}/assemble`, { bodyLimit: 32 * 1024 }, async (request, reply) => {
+    const { store, registry, refresh, stage } = resolveRuntime ? await resolveRuntime(request) : defaults;
+    return handle(reply, () =>
       withCancellation(request, reply, async (signal) => {
         const body = request.body;
         if (!validHostedImageAssembly(body)) return reply.code(400).send({ error: 'invalid_source_input' });
@@ -119,7 +130,7 @@ export function registerPreparedSourceImages(
           registry.getExternalSourceStatus(request.params.id as ExtensionContributionId, context).state !== 'connected'
         )
           throw new Error('package_source_unavailable');
-        const before = generation(request.params.id);
+        const before = generation(request.params.id, registry);
         return store.consume(
           body.artifactId,
           request.params.id,
@@ -142,15 +153,17 @@ export function registerPreparedSourceImages(
               signal,
             });
             signal.throwIfAborted();
-            if (generation(request.params.id) !== before) throw new Error('prepared_download_unavailable');
+            if (generation(request.params.id, registry) !== before) throw new Error('prepared_download_unavailable');
             return stage(archive, body, signal);
           },
           before,
         );
       }),
-    ),
-  );
+    );
+  });
   app.delete<{ Params: { id: string; artifactId: string } }>(`${prefix}/:artifactId`, async (request) => {
+    const { store } = resolveRuntime ? await resolveRuntime(request) : defaults;
+
     store.discard(request.params.artifactId, request.params.id);
     return { ok: true };
   });

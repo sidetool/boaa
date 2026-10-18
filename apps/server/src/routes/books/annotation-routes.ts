@@ -1,3 +1,4 @@
+import { requestOwnerConfig } from '../../services/owner-context.js';
 import type { FastifyInstance } from 'fastify';
 import pg from 'pg';
 import { resourceEntityRevision } from '@boaa/text-core/identity/sync';
@@ -138,10 +139,13 @@ export async function registerAnnotationRoutes(
   pool: pg.Pool,
   config: ServerConfig,
 ): Promise<void> {
+  const deploymentConfig = config;
   // Additive paging path: existing UI list endpoints retain their ordering/shape.
   app.get<{ Params: { bookId: string; kind: string }; Querystring: { after?: string } }>(
     '/api/books/:bookId/annotations/:kind',
     async (request, reply) => {
+      const config = requestOwnerConfig(deploymentConfig, request);
+
       const kinds = {
         bookmark: { table: 'bookmarks', columns: 'label, scroll_top' },
         highlight: { table: 'highlights', columns: 'quote, color, updated_at' },
@@ -173,6 +177,8 @@ export async function registerAnnotationRoutes(
   );
 
   app.get<{ Params: { bookId: string } }>('/api/books/:bookId/bookmarks', async (request) => {
+    const config = requestOwnerConfig(deploymentConfig, request);
+
     const result = await pool.query(
       'select id, book_id, chapter_id, paragraph_id, label, progress, scroll_top, created_at from bookmarks where book_id = $1 and user_id = $2 and deleted_at is null order by created_at desc',
       [request.params.bookId, config.defaultUserId],
@@ -183,6 +189,8 @@ export async function registerAnnotationRoutes(
   app.post<{ Params: { bookId: string }; Body: Record<string, unknown> }>(
     '/api/books/:bookId/bookmarks',
     async (request, reply) => {
+      const config = requestOwnerConfig(deploymentConfig, request);
+
       const parsed = validateBookmarkBody(request.body);
       if (!parsed.ok) return reply.code(400).send({ error: parsed.error });
       const expectedRevision = expectedResourceRevision(request.body);
@@ -191,7 +199,16 @@ export async function registerAnnotationRoutes(
         novelId: request.params.bookId,
         bookId: request.params.bookId,
       };
-      if (!(await hasBookChapterAccess(pool, config, request.params.bookId, bookmark.chapterId))) {
+      if (
+        !(await hasBookChapterAccess(
+          pool,
+          config,
+          request.params.bookId,
+          bookmark.chapterId,
+          undefined,
+          bookmark.paragraphId,
+        ))
+      ) {
         return reply.code(404).send({ error: 'book or chapter not found' });
       }
       const createdAt = bookmark.createdAt;
@@ -201,7 +218,16 @@ export async function registerAnnotationRoutes(
           if (!(await lockBookResource(db, config.defaultUserId, request.params.bookId))) {
             throw new Error('book not found');
           }
-          if (!(await hasBookChapterAccess(db, config, request.params.bookId, bookmark.chapterId))) {
+          if (
+            !(await hasBookChapterAccess(
+              db,
+              config,
+              request.params.bookId,
+              bookmark.chapterId,
+              undefined,
+              bookmark.paragraphId,
+            ))
+          ) {
             throw new Error('book or chapter not found');
           }
           await assertAnnotationContent(db, config.defaultUserId, request.params.bookId, request.body);
@@ -277,6 +303,8 @@ export async function registerAnnotationRoutes(
   app.delete<{ Params: { bookmarkId: string }; Body: Record<string, unknown> }>(
     '/api/bookmarks/:bookmarkId',
     async (request, reply) => {
+      const config = requestOwnerConfig(deploymentConfig, request);
+
       const expectedRevision = expectedResourceRevision(request.body);
       const deletedAt = new Date().toISOString();
       try {
@@ -332,6 +360,8 @@ export async function registerAnnotationRoutes(
   );
 
   app.get<{ Params: { bookId: string } }>('/api/books/:bookId/highlights', async (request) => {
+    const config = requestOwnerConfig(deploymentConfig, request);
+
     const result = await pool.query(
       'select id, book_id, chapter_id, paragraph_id, quote, color, progress, created_at, updated_at from highlights where book_id = $1 and user_id = $2 and deleted_at is null order by updated_at desc',
       [request.params.bookId, config.defaultUserId],
@@ -342,6 +372,8 @@ export async function registerAnnotationRoutes(
   app.post<{ Params: { bookId: string }; Body: Record<string, unknown> }>(
     '/api/books/:bookId/highlights',
     async (request, reply) => {
+      const config = requestOwnerConfig(deploymentConfig, request);
+
       const parsed = validateHighlightBody(request.body);
       if (!parsed.ok) return reply.code(400).send({ error: parsed.error });
       const expectedRevision = expectedResourceRevision(request.body);
@@ -350,7 +382,16 @@ export async function registerAnnotationRoutes(
         novelId: request.params.bookId,
         bookId: request.params.bookId,
       };
-      if (!(await hasBookChapterAccess(pool, config, request.params.bookId, highlight.chapterId))) {
+      if (
+        !(await hasBookChapterAccess(
+          pool,
+          config,
+          request.params.bookId,
+          highlight.chapterId,
+          undefined,
+          highlight.paragraphId,
+        ))
+      ) {
         return reply.code(404).send({ error: 'book or chapter not found' });
       }
       try {
@@ -358,7 +399,16 @@ export async function registerAnnotationRoutes(
           if (!(await lockBookResource(db, config.defaultUserId, request.params.bookId))) {
             throw new Error('book not found');
           }
-          if (!(await hasBookChapterAccess(db, config, request.params.bookId, highlight.chapterId))) {
+          if (
+            !(await hasBookChapterAccess(
+              db,
+              config,
+              request.params.bookId,
+              highlight.chapterId,
+              undefined,
+              highlight.paragraphId,
+            ))
+          ) {
             throw new Error('book or chapter not found');
           }
           await assertAnnotationContent(db, config.defaultUserId, request.params.bookId, request.body);
@@ -434,6 +484,8 @@ export async function registerAnnotationRoutes(
   app.delete<{ Params: { highlightId: string }; Body: Record<string, unknown> }>(
     '/api/highlights/:highlightId',
     async (request, reply) => {
+      const config = requestOwnerConfig(deploymentConfig, request);
+
       const expectedRevision = expectedResourceRevision(request.body);
       const deletedAt = new Date().toISOString();
       try {
@@ -489,6 +541,8 @@ export async function registerAnnotationRoutes(
   );
 
   app.get<{ Params: { bookId: string } }>('/api/books/:bookId/notes', async (request) => {
+    const config = requestOwnerConfig(deploymentConfig, request);
+
     const result = await pool.query(
       'select id, book_id, chapter_id, paragraph_id, quote, body, progress, created_at, updated_at from notes where book_id = $1 and user_id = $2 and deleted_at is null order by updated_at desc',
       [request.params.bookId, config.defaultUserId],
@@ -499,6 +553,8 @@ export async function registerAnnotationRoutes(
   app.post<{ Params: { bookId: string }; Body: Record<string, unknown> }>(
     '/api/books/:bookId/notes',
     async (request, reply) => {
+      const config = requestOwnerConfig(deploymentConfig, request);
+
       const parsed = validateNoteBody(request.body);
       if (!parsed.ok) return reply.code(400).send({ error: parsed.error });
       const expectedRevision = expectedResourceRevision(request.body);
@@ -507,7 +563,9 @@ export async function registerAnnotationRoutes(
         novelId: request.params.bookId,
         bookId: request.params.bookId,
       };
-      if (!(await hasBookChapterAccess(pool, config, request.params.bookId, note.chapterId))) {
+      if (
+        !(await hasBookChapterAccess(pool, config, request.params.bookId, note.chapterId, undefined, note.paragraphId))
+      ) {
         return reply.code(404).send({ error: 'book or chapter not found' });
       }
       try {
@@ -515,7 +573,16 @@ export async function registerAnnotationRoutes(
           if (!(await lockBookResource(db, config.defaultUserId, request.params.bookId))) {
             throw new Error('book not found');
           }
-          if (!(await hasBookChapterAccess(db, config, request.params.bookId, note.chapterId))) {
+          if (
+            !(await hasBookChapterAccess(
+              db,
+              config,
+              request.params.bookId,
+              note.chapterId,
+              undefined,
+              note.paragraphId,
+            ))
+          ) {
             throw new Error('book or chapter not found');
           }
           await assertAnnotationContent(db, config.defaultUserId, request.params.bookId, request.body);
@@ -588,6 +655,8 @@ export async function registerAnnotationRoutes(
   app.delete<{ Params: { noteId: string }; Body: Record<string, unknown> }>(
     '/api/notes/:noteId',
     async (request, reply) => {
+      const config = requestOwnerConfig(deploymentConfig, request);
+
       const expectedRevision = expectedResourceRevision(request.body);
       const deletedAt = new Date().toISOString();
       try {

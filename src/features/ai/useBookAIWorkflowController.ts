@@ -1,3 +1,5 @@
+import { useOptionalAppRuntime } from '../../app/runtime/RuntimeProvider';
+import { accountStorage } from '../../storage/account-storage';
 import { readBrandStorage, removeBrandStorage, writeBrandStorage } from '@boaa/extension-contracts/brand-compat';
 import { useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { BookAIWorkflowPlan } from '../../providers/book-ai-workflow-plan';
@@ -68,7 +70,10 @@ function errorMessage(error: unknown, fallback: string): string {
   return fallback;
 }
 
-function browserWorkflowIdStore(runner: BookAITTSPreparationRunner): BookAIWorkflowIdStore {
+function browserWorkflowIdStore(
+  runner: BookAITTSPreparationRunner,
+  storage: Storage = window.localStorage,
+): BookAIWorkflowIdStore {
   const runnerKey = encodeURIComponent(runner.id);
   const versionKey = encodeURIComponent(runner.workflowVersion);
   const key = (bookId: string) => `boaa.book_ai_workflow.${runner.runtime}.${runnerKey}.${versionKey}.${bookId}`;
@@ -78,33 +83,33 @@ function browserWorkflowIdStore(runner: BookAITTSPreparationRunner): BookAIWorkf
   const readsLegacyKeys = runner.restoresLegacyWorkflowIds === true;
   return {
     get: (bookId) => {
-      const current = readBrandStorage(window.localStorage, key(bookId));
+      const current = readBrandStorage(storage, key(bookId));
       if (current || !readsLegacyKeys) return current ?? undefined;
       const migrated =
-        readBrandStorage(window.localStorage, previousDefinitionKey(bookId)) ??
-        readBrandStorage(window.localStorage, previousRuntimeKey(bookId)) ??
-        (runner.runtime === 'hosted' ? readBrandStorage(window.localStorage, legacyKey(bookId)) : null);
+        readBrandStorage(storage, previousDefinitionKey(bookId)) ??
+        readBrandStorage(storage, previousRuntimeKey(bookId)) ??
+        (runner.runtime === 'hosted' ? readBrandStorage(storage, legacyKey(bookId)) : null);
       if (!migrated) return undefined;
-      writeBrandStorage(window.localStorage, key(bookId), migrated);
-      removeBrandStorage(window.localStorage, previousDefinitionKey(bookId));
-      removeBrandStorage(window.localStorage, previousRuntimeKey(bookId));
-      if (runner.runtime === 'hosted') removeBrandStorage(window.localStorage, legacyKey(bookId));
+      writeBrandStorage(storage, key(bookId), migrated);
+      removeBrandStorage(storage, previousDefinitionKey(bookId));
+      removeBrandStorage(storage, previousRuntimeKey(bookId));
+      if (runner.runtime === 'hosted') removeBrandStorage(storage, legacyKey(bookId));
       return migrated;
     },
     set: (bookId, workflowId) => {
-      writeBrandStorage(window.localStorage, key(bookId), workflowId);
+      writeBrandStorage(storage, key(bookId), workflowId);
       if (readsLegacyKeys) {
-        removeBrandStorage(window.localStorage, previousDefinitionKey(bookId));
-        removeBrandStorage(window.localStorage, previousRuntimeKey(bookId));
-        if (runner.runtime === 'hosted') removeBrandStorage(window.localStorage, legacyKey(bookId));
+        removeBrandStorage(storage, previousDefinitionKey(bookId));
+        removeBrandStorage(storage, previousRuntimeKey(bookId));
+        if (runner.runtime === 'hosted') removeBrandStorage(storage, legacyKey(bookId));
       }
     },
     delete: (bookId) => {
-      removeBrandStorage(window.localStorage, key(bookId));
+      removeBrandStorage(storage, key(bookId));
       if (readsLegacyKeys) {
-        removeBrandStorage(window.localStorage, previousDefinitionKey(bookId));
-        removeBrandStorage(window.localStorage, previousRuntimeKey(bookId));
-        if (runner.runtime === 'hosted') removeBrandStorage(window.localStorage, legacyKey(bookId));
+        removeBrandStorage(storage, previousDefinitionKey(bookId));
+        removeBrandStorage(storage, previousRuntimeKey(bookId));
+        if (runner.runtime === 'hosted') removeBrandStorage(storage, legacyKey(bookId));
       }
     },
   };
@@ -134,6 +139,12 @@ function withoutTTSReadiness(workflow: BookAnalysisWorkflow): BookAnalysisWorkfl
 }
 
 export function useBookAIWorkflowController(input: BookAIWorkflowControllerInput) {
+  const accountSession = useOptionalAppRuntime()?.readerRuntime.session;
+  const workflowStorage = useMemo(
+    () =>
+      accountSession ? accountStorage(localStorage, accountSession.storageScope, accountSession.signal) : undefined,
+    [accountSession],
+  );
   const { runner, bookId } = input;
   const [state, setState] = useState<BookAIWorkflowState>(INITIAL_STATE);
   const stateRef = useRef(state);
@@ -170,7 +181,7 @@ export function useBookAIWorkflowController(input: BookAIWorkflowControllerInput
       runnerId: runner.id,
       runnerVersion: runner.workflowVersion,
       runtime: runner.runtime,
-      store: browserWorkflowIdStore(runner),
+      store: browserWorkflowIdStore(runner, workflowStorage),
     };
   }
   const store = input.store ?? browserStoreRef.current?.store;

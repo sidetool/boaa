@@ -69,3 +69,11 @@ export function clearedSessionCookies(request: FastifyRequest, forceSecure = fal
     selfHostSessionCookie(request, '', 0, forceSecure, LEGACY_SESSION_COOKIE),
   ];
 }
+
+export function hasSessionCookie(request: FastifyRequest): boolean {
+  return Boolean(
+    request.headers.cookie
+      ?.split(';')
+      .some((entry) => ['boaa_session', 'moya_session'].includes(entry.split('=', 1)[0].trim())),
+  );
+}

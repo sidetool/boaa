@@ -31,6 +31,7 @@ describe('SelfHostAuthClient', () => {
     expect(status.account).toEqual({ username: 'owner', displayName: 'Owner' });
     expect(fetchMock).toHaveBeenCalledWith('/api/auth/status', {
       credentials: 'same-origin',
+      cache: 'no-store',
       signal: undefined,
     });
     expect(JSON.stringify(status)).not.toContain('token');

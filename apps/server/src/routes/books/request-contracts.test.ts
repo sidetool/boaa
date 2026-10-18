@@ -145,3 +145,29 @@ describe('reader settings request contract', () => {
     ).toEqual({ ok: false, error: 'aiWorkflows.defaultWorkflowId is invalid' });
   });
 });
+
+it.each(['sentence', 'paragraph', 'batch'] as const)(
+  'persists %s globally and as a sparse book override across reloads',
+  (plainChunking) => {
+    const saved = validateSettingsBody({
+      ...defaultSettings,
+      ttsPlayback: { ...defaultSettings.ttsPlayback, plainChunking },
+      ttsBookOverrides: { book_a: { plainChunking }, book_b: { rate: 1.2 } },
+    });
+    expect(saved.ok).toBe(true);
+    if (!saved.ok) return;
+    expect(saved.value.ttsPlayback.plainChunking).toBe(plainChunking);
+    expect(saved.value.ttsBookOverrides?.book_a).toEqual({ plainChunking });
+    expect(saved.value.ttsBookOverrides?.book_b).not.toHaveProperty('plainChunking');
+    const reloaded = validateSettingsBody(JSON.parse(JSON.stringify(saved.value)));
+    expect(reloaded).toEqual(saved);
+  },
+);
+it('rejects invalid synthesis units instead of silently resetting them', () => {
+  expect(
+    validateSettingsBody({
+      ...defaultSettings,
+      ttsPlayback: { ...defaultSettings.ttsPlayback, plainChunking: 'unlimited' },
+    }),
+  ).toEqual({ ok: false, error: 'ttsPlayback.plainChunking is invalid' });
+});

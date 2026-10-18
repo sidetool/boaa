@@ -187,8 +187,8 @@ async function snapshotHostedData(pool: pg.Pool, userId: string) {
         bookIds.length === 0
           ? { rows: [] }
           : await client.query(
-              `select * from ${quoteIdentifier(table)} where book_id = any($1::text[])${table === 'book_assets' ? " and status = 'active'" : ''}`,
-              [bookIds],
+              `select * from ${quoteIdentifier(table)} where book_id = any($1::text[])${table === 'book_assets' ? " and status = 'active'" : ''} and (to_jsonb(${quoteIdentifier(table)})->>'user_id' is null or to_jsonb(${quoteIdentifier(table)})->>'user_id' = $2)`,
+              [bookIds, userId],
             );
       tables.set(table, result.rows);
     }
@@ -355,14 +355,16 @@ async function insertHostedBackupRow(
     return;
   }
   if (table === 'user_fonts') {
-    await client.query(
+    const restored = await client.query(
       `insert into ${quoteIdentifier(table)} (${columns.join(', ')}) values (${placeholders.join(', ')})
        on conflict (id) do update set family_label = excluded.family_label, file_name = excluded.file_name,
          style = excluded.style, weight = excluded.weight, content_hash = excluded.content_hash,
          content_type = excluded.content_type, byte_length = excluded.byte_length, storage_key = excluded.storage_key,
-         license_note = excluded.license_note, updated_at = excluded.updated_at`,
+         license_note = excluded.license_note, updated_at = excluded.updated_at
+       where user_fonts.user_id = excluded.user_id`,
       values,
     );
+    if (restored.rowCount !== 1) throw new Error('backup_restore_identity_conflict');
     return;
   }
   const inserted = await client.query(
@@ -372,6 +374,19 @@ async function insertHostedBackupRow(
   );
   if (table === 'library_books' && inserted.rowCount === 0) {
     throw new Error('복원하는 동안 같은 작품이 생성되어 기존 작품을 변경하지 않았습니다.');
+  }
+  if (inserted.rowCount === 0) {
+    // A preflight read cannot protect against a concurrent writer winning a
+    // global ID. A skipped duplicate is safe only under the same parent/owner.
+    const identity = ['id', 'user_id', 'book_id', 'chapter_id'].filter(
+      (key) => row[key] !== undefined && row[key] !== null,
+    );
+    if (identity.length === 0) throw new Error('backup_restore_identity_conflict');
+    const same = await client.query(
+      `select 1 from ${quoteIdentifier(table)} where ${identity.map((key, index) => `${quoteIdentifier(key)} = $${index + 1}`).join(' and ')} for share`,
+      identity.map((key) => row[key]),
+    );
+    if (same.rowCount !== 1) throw new Error('backup_restore_identity_conflict');
   }
 }
 
@@ -408,8 +423,9 @@ async function restoreSourceObjects(
       if (!object || !bytes || !asset || normalizedHash(object.raw_text_hash) !== asset.contentHash) {
         throw new Error(`Backup source object is incomplete: ${archivedObjectId}`);
       }
-      const existing = await client.query('select id from book_objects where raw_text_hash = $1', [
+      const existing = await client.query('select id from book_objects where raw_text_hash = $1 and user_id=$2', [
         object.raw_text_hash,
+        config.defaultUserId,
       ]);
       if (existing.rows[0]) {
         objectIdMap.set(archivedObjectId, String(existing.rows[0].id));
@@ -422,9 +438,9 @@ async function restoreSourceObjects(
       stagedKeys.push(storageKey);
       await putRawBookObject(s3, config, storageKey, bytes, object.content_type, signal);
       const inserted = await client.query(
-        `insert into book_objects (id, raw_text_hash, storage_key, file_name, content_type, size_bytes, created_at)
-       values ($1, $2, $3, $4, $5, $6, $7)
-       on conflict (raw_text_hash) do update set raw_text_hash = excluded.raw_text_hash
+        `insert into book_objects (id, raw_text_hash, storage_key, file_name, content_type, size_bytes, created_at, user_id)
+       values ($1, $2, $3, $4, $5, $6, $7, $8)
+       on conflict (user_id, raw_text_hash) do update set raw_text_hash = excluded.raw_text_hash
        returning id, storage_key`,
         [
           targetObjectId,
@@ -434,6 +450,7 @@ async function restoreSourceObjects(
           object.content_type,
           Number(object.size_bytes),
           object.created_at,
+          config.defaultUserId,
         ],
       );
       const actualId = String(inserted.rows[0].id);
@@ -634,6 +651,78 @@ export async function restoreHostedBackup(
     signal.throwIfAborted();
     await client.query('begin');
     await client.query("set local statement_timeout = '1h'");
+    for (const [table, rows] of parsed.tables) {
+      const columns = await client.query<{ column_name: string }>(
+        'select column_name from information_schema.columns where table_schema=current_schema() and table_name=$1',
+        [table],
+      );
+      const names = new Set(columns.rows.map((row) => row.column_name));
+      for (const row of rows) {
+        if (row.user_id !== undefined && row.user_id !== config.defaultUserId)
+          throw new Error('cross_account_backup_restore_unsupported');
+      }
+      const ids = rows.map((row) => row.id).filter((id): id is string => typeof id === 'string');
+      if (!ids.length || !names.has('id')) continue;
+      const foreign = names.has('user_id')
+        ? await client.query(
+            `select 1 from ${quoteIdentifier(table)} where id=any($1::text[]) and user_id<>$2 limit 1`,
+            [ids, config.defaultUserId],
+          )
+        : names.has('book_id')
+          ? await client.query(
+              `select 1 from ${quoteIdentifier(table)} t join library_books b on b.id=t.book_id where t.id=any($1::text[]) and b.user_id<>$2 limit 1`,
+              [ids, config.defaultUserId],
+            )
+          : { rows: [] };
+      if (foreign.rows.length) throw new Error('backup_contains_foreign_identity');
+    }
+    // References can name an existing foreign row even when that row is absent from the archive.
+    const references: Array<[string[], string, string, boolean]> = [
+      [['book_id'], 'library_books', 'id', true],
+      [['object_id', 'source_object_id'], 'book_objects', 'id', true],
+      [['cover_asset_id'], 'book_assets', 'id', true],
+      [['chapter_id'], 'chapters', 'id', false],
+      [['paragraph_id'], 'paragraph_search', 'paragraph_id', false],
+      [
+        [
+          'active_content_revision_id',
+          'content_revision_id',
+          'base_content_revision_id',
+          'previous_content_revision_id',
+          'rollback_content_revision_id',
+        ],
+        'book_content_revisions',
+        'id',
+        false,
+      ],
+      [['character_id', 'source_character_id', 'target_character_id', 'speaker_id'], 'characters', 'id', true],
+      [['voice_profile_id'], 'voice_profiles', 'id', false],
+      [['segment_id'], 'labeled_segments', 'id', false],
+    ];
+    for (const [fields, table, idColumn, directOwner] of references) {
+      const ids = [
+        ...new Set(
+          [...parsed.tables.values()].flatMap((rows) =>
+            rows.flatMap((row) =>
+              fields.map((field) => row[field]).filter((id): id is string => typeof id === 'string'),
+            ),
+          ),
+        ),
+      ];
+      if (!ids.length) continue;
+      const foreign = await client.query(
+        directOwner
+          ? `select 1 from ${quoteIdentifier(table)} t where t.${quoteIdentifier(idColumn)}=any($1::text[]) and t.user_id<>$2 limit 1`
+          : `select 1 from ${quoteIdentifier(table)} t join library_books b on b.id=t.book_id where t.${quoteIdentifier(idColumn)}=any($1::text[]) and b.user_id<>$2 limit 1`,
+        [ids, config.defaultUserId],
+      );
+      if (foreign.rows.length) throw new Error('backup_contains_foreign_reference');
+    }
+    const foreignObjects = await client.query(
+      'select 1 from book_objects where id=any($1::text[]) and user_id<>$2 limit 1',
+      [parsed.objects.map((row) => row.id), config.defaultUserId],
+    );
+    if (foreignObjects.rows.length) throw new Error('backup_contains_foreign_identity');
     const existing = await existingBookTitles(client, config.defaultUserId, bookIds);
     const conflicts = new Set(existing.keys());
     const resolutions = new Map(bookIds.map((bookId) => [bookId, resolutionFor(bookId, conflicts, options)] as const));

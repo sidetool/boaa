@@ -1,3 +1,4 @@
+import { requirePrincipal, requireUserId } from '../../auth.js';
 import { isLocalArchiveSeriesContentType } from '@boaa/document-series-core/local-archive-series';
 import { createHash, randomBytes } from 'node:crypto';
 import { Readable } from 'node:stream';
@@ -31,19 +32,30 @@ function attachmentName(name: string): string {
 export async function registerOriginalFileRoutes(app: FastifyInstance, pool: pg.Pool, config: ServerConfig) {
   const s3 = createS3Client(config);
   // Scoped to this server instance; a restart invalidates unused links, not existing downloads.
-  const tickets = new Map<string, { bookId: string; fileId: string; hash: string; expires: number }>();
+  const tickets = new Map<
+    string,
+    {
+      userId: string;
+      sessionContext?: string;
+      authMethod: 'session' | 'legacy-token';
+      bookId: string;
+      fileId: string;
+      hash: string;
+      expires: number;
+    }
+  >();
   app.addHook('onClose', async () => {
     tickets.clear();
     s3.destroy();
   });
 
-  async function originals(bookId: string): Promise<StoredOriginal[] | null | undefined> {
+  async function originals(bookId: string, userId: string): Promise<StoredOriginal[] | null | undefined> {
     const result = await pool.query(
       `select o.id, o.storage_key as "storageKey", o.file_name as "fileName",
               o.content_type as "contentType", o.size_bytes as "byteLength", o.raw_text_hash as "contentHash"
          from library_books b join book_objects o on o.id=b.object_id
         where b.id=$1 and b.user_id=$2 and b.deleted_at is null`,
-      [bookId, config.defaultUserId],
+      [bookId, userId],
     );
     const source = result.rows[0];
     if (!source) return undefined;
@@ -56,7 +68,7 @@ export async function registerOriginalFileRoutes(app: FastifyInstance, pool: pg.
           where a.book_id=$1 and a.user_id=$2 and a.kind='source_part' and a.status='active'
             and b.deleted_at is null and b.object_id=$3
           order by a.page_index nulls last, a.id limit 2001`,
-        [bookId, config.defaultUserId, source.id],
+        [bookId, userId, source.id],
       );
       if (!parts.rows.length || parts.rows.length > 2000) throw new Error('보관된 원본 목록을 확인하지 못했습니다.');
       return parts.rows.map((part) => ({ ...part, byteLength: Number(part.byteLength) }));
@@ -67,7 +79,7 @@ export async function registerOriginalFileRoutes(app: FastifyInstance, pool: pg.
   }
 
   app.get<{ Params: { bookId: string } }>('/api/books/:bookId/original-files', async (request, reply) => {
-    const files = await originals(request.params.bookId);
+    const files = await originals(request.params.bookId, requireUserId(request));
     reply.header('Cache-Control', 'no-store');
     if (!files) return files === null ? { files: null } : reply.code(404).send({ error: '보관된 원본이 없습니다.' });
     return {
@@ -85,7 +97,7 @@ export async function registerOriginalFileRoutes(app: FastifyInstance, pool: pg.
     '/api/books/:bookId/original-files/:fileId/download',
     async (request, reply) => {
       reply.header('Cache-Control', 'no-store');
-      const files = await originals(request.params.bookId);
+      const files = await originals(request.params.bookId, requireUserId(request));
       const all = request.params.fileId === '__all__' && files && files.length > 1;
       const file = files?.find((item) => item.id === request.params.fileId);
       if (!file && !all) return reply.code(404).send({ error: '보관된 원본이 없습니다. 목록을 다시 열어 주세요.' });
@@ -94,6 +106,9 @@ export async function registerOriginalFileRoutes(app: FastifyInstance, pool: pg.
       if (tickets.size >= 128) return reply.code(429).send({ error: '잠시 후 다시 시도해 주세요.' });
       const ticket = randomBytes(32).toString('base64url');
       tickets.set(ticket, {
+        userId: requireUserId(request),
+        sessionContext: requirePrincipal(request).sessionContext,
+        authMethod: requirePrincipal(request).authMethod,
         bookId: request.params.bookId,
         fileId: all ? '__all__' : file!.id,
         hash: all ? originalsHash(files) : file!.contentHash,
@@ -103,14 +118,21 @@ export async function registerOriginalFileRoutes(app: FastifyInstance, pool: pg.
     },
   );
 
-  // Only this exact GET is exempt from account authentication. The single-file ticket is its credential.
+  // Redemption requires the same authenticated account and session that created the ticket.
   app.get<{ Params: { ticket: string } }>('/api/original-downloads/:ticket', async (request, reply) => {
     reply.header('Cache-Control', 'no-store').header('Referrer-Policy', 'no-referrer');
     const ticket = tickets.get(request.params.ticket);
-    tickets.delete(request.params.ticket);
-    if (!ticket || ticket.expires <= Date.now())
+    const principal = request.principal;
+    if (
+      !ticket ||
+      (principal
+        ? ticket.userId !== principal.userId || ticket.sessionContext !== principal.sessionContext
+        : ticket.authMethod !== 'legacy-token' || ticket.userId !== config.defaultUserId) ||
+      ticket.expires <= Date.now()
+    )
       return reply.code(410).send({ error: '다운로드 주소가 만료되었습니다. 원본 목록에서 다시 눌러 주세요.' });
-    const files = await originals(ticket.bookId);
+    tickets.delete(request.params.ticket);
+    const files = await originals(ticket.bookId, ticket.userId);
     if (ticket.fileId === '__all__') {
       if (!files || originalsHash(files) !== ticket.hash)
         return reply.code(404).send({ error: '보관된 원본이 변경되거나 삭제되었습니다.' });

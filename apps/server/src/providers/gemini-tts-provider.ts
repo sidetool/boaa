@@ -1,3 +1,5 @@
+import { wavFromPcm16 } from './tts-audio.js';
+import { GEMINI_VOICES, namedVoices } from './tts-voices.js';
 import type { TTSSynthesisInput, TTSSynthesisProvider, TTSSynthesisResult } from '../../../../src/providers/tts';
 
 export interface GeminiTTSProviderOptions {
@@ -17,6 +19,10 @@ export class GeminiTTSProvider implements TTSSynthesisProvider {
 
   constructor(private readonly options: GeminiTTSProviderOptions) {}
 
+  async listVoices() {
+    return namedVoices(GEMINI_VOICES);
+  }
+
   async synthesize(input: TTSSynthesisInput): Promise<TTSSynthesisResult> {
     const apiKey = this.options.apiKey?.trim();
     if (!apiKey) throw new Error('GEMINI_API_KEY or GOOGLE_API_KEY is required for gemini-tts provider');
@@ -28,6 +34,20 @@ export class GeminiTTSProvider implements TTSSynthesisProvider {
     );
     const voice = stringOption(providerOptions, 'voice') ?? input.voiceProfile.providerVoiceId ?? 'Kore';
     const sampleRate = integerOption(providerOptions, 'sampleRate') ?? 24_000;
+    const model = this.options.modelId || 'gemini-3.8-flash-lite-tts';
+    const verbatim = model.startsWith('gemini-3.8-');
+    const direction =
+      stringOption(providerOptions, 'prompt') ??
+      stringOption(providerOptions, 'instructions') ??
+      speechInstructions(input);
+    const style = [
+      direction,
+      input.speed !== undefined && input.speed !== 1
+        ? `Speak at ${input.speed} times the normal reading speed.`
+        : undefined,
+    ]
+      .filter(Boolean)
+      .join(' ');
     const response = await fetchImpl(
       `${this.options.baseUrl?.replace(/\/+$/, '') || 'https://generativelanguage.googleapis.com'}/v1beta/interactions`,
       {
@@ -37,9 +57,24 @@ export class GeminiTTSProvider implements TTSSynthesisProvider {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          model: this.options.modelId || 'gemini-3.1-flash-tts-preview',
-          input: ttsInputText(input, providerOptions),
-          response_format: { type: 'audio' },
+          model,
+          input: verbatim
+            ? [
+                {
+                  type: 'user_input',
+                  content: [
+                    {
+                      type: 'text',
+                      text: input.text,
+                      ...(style ? { annotations: [{ type: 'speech_metadata', style }] } : {}),
+                    },
+                  ],
+                },
+              ]
+            : ttsInputText(input, providerOptions),
+          response_format: verbatim
+            ? { type: 'audio', mime_type: 'audio/l16', sample_rate: sampleRate }
+            : { type: 'audio' },
           generation_config: {
             speech_config: [{ voice }],
           },
@@ -54,13 +89,14 @@ export class GeminiTTSProvider implements TTSSynthesisProvider {
     const json = await response.json().catch(() => undefined);
     const pcm = audioDataFromGeminiInteraction(json);
     if (!pcm.byteLength) throw new Error('Gemini TTS returned no audio data');
-    const wav = wavFromPcm16(pcm, sampleRate);
+    const isWav = pcm.toString('ascii', 0, 4) === 'RIFF' && pcm.toString('ascii', 8, 12) === 'WAVE';
+    const wav = isWav ? pcm : wavFromPcm16(pcm, sampleRate);
     return {
       audio: wav.buffer.slice(wav.byteOffset, wav.byteOffset + wav.byteLength) as ArrayBuffer,
       contentType: 'audio/wav',
       providerRequestId: response.headers.get('x-request-id') ?? undefined,
       providerMetadata: {
-        sourceContentType: 'audio/pcm',
+        sourceContentType: isWav ? 'audio/wav' : 'audio/pcm',
         sampleRate,
         voice,
       },
@@ -121,7 +157,10 @@ function findBase64AudioData(value: unknown): string | undefined {
   }
   const record = value as Record<string, unknown>;
   const mimeType = record.mimeType ?? record.mime_type;
-  if (typeof record.data === 'string' && typeof mimeType === 'string' && mimeType.startsWith('audio/')) {
+  if (
+    typeof record.data === 'string' &&
+    ((typeof mimeType === 'string' && mimeType.startsWith('audio/')) || record.type === 'audio')
+  ) {
     return record.data;
   }
   for (const item of Object.values(record)) {
@@ -129,25 +168,4 @@ function findBase64AudioData(value: unknown): string | undefined {
     if (found) return found;
   }
   return undefined;
-}
-
-function wavFromPcm16(pcm: Buffer, sampleRate: number): Buffer {
-  const header = Buffer.alloc(44);
-  const channels = 1;
-  const bitsPerSample = 16;
-  const byteRate = (sampleRate * channels * bitsPerSample) / 8;
-  header.write('RIFF', 0);
-  header.writeUInt32LE(36 + pcm.byteLength, 4);
-  header.write('WAVE', 8);
-  header.write('fmt ', 12);
-  header.writeUInt32LE(16, 16);
-  header.writeUInt16LE(1, 20);
-  header.writeUInt16LE(channels, 22);
-  header.writeUInt32LE(sampleRate, 24);
-  header.writeUInt32LE(byteRate, 28);
-  header.writeUInt16LE((channels * bitsPerSample) / 8, 32);
-  header.writeUInt16LE(bitsPerSample, 34);
-  header.write('data', 36);
-  header.writeUInt32LE(pcm.byteLength, 40);
-  return Buffer.concat([header, pcm]);
 }

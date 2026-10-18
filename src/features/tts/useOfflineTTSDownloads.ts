@@ -1,3 +1,4 @@
+import { useOptionalAppRuntime } from '../../app/runtime/RuntimeProvider';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useState } from 'react';
 import type { TTSDownloadJob, TTSDownloadPolicy } from '../../domain/types';
 import type {
@@ -30,6 +31,7 @@ interface Snapshot {
 
 /** App-session download monitoring. Closing a panel does not revoke downloads or their persisted jobs. */
 export function useOfflineTTSDownloads(input: OfflineTTSDownloadsInput) {
+  const auxiliaryDatabase = useOptionalAppRuntime()?.readerRuntime.auxiliaryDatabase;
   const { bookId, contentRevision, runtime, accountKey, mobile, cache, gateway, notify } = input;
   const owner = useMemo(
     () => ({
@@ -73,8 +75,10 @@ export function useOfflineTTSDownloads(input: OfflineTTSDownloadsInput) {
       return;
     }
     try {
-      const repository = await (owner.repository ??= import('../../storage/tts-download-store').then(
-        ({ IndexedDbTTSDownloadRepository }) => new IndexedDbTTSDownloadRepository(),
+      const repository = await (owner.repository ??= import('../../storage/tts-download-store').then((downloads) =>
+        auxiliaryDatabase
+          ? new (downloads.createTTSDownloadStore(auxiliaryDatabase).IndexedDbTTSDownloadRepository)()
+          : new downloads.IndexedDbTTSDownloadRepository(),
       ));
       if (!current()) return;
       const recovery =
@@ -112,7 +116,7 @@ export function useOfflineTTSDownloads(input: OfflineTTSDownloadsInput) {
       if (current()) setSnapshot({ scope, value: {} });
       throw error;
     }
-  }, [scope, owner, bookId, contentRevision, cache, gateway, mobile]);
+  }, [scope, owner, bookId, contentRevision, cache, gateway, mobile, auxiliaryDatabase]);
   useEffect(() => {
     void refresh().catch(() => undefined);
   }, [refresh]);

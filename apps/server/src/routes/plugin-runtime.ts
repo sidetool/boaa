@@ -1,3 +1,4 @@
+import { requireUserId } from '../auth.js';
 import { pluginScope } from '../plugins/plugin-scope.js';
 export { pluginScope } from '../plugins/plugin-scope.js';
 import { registerPluginConnectionRoutes } from './plugin-connections.js';
@@ -60,7 +61,7 @@ export async function registerPluginRuntimeRoutes(
     reply.header('Cache-Control', 'no-store').header('Vary', 'Cookie');
     const token = requestCookie(request, SELF_HOST_SESSION_COOKIE);
     if (!token || token.length > 512) return reply.code(401).send({ error: 'plugin_account_required' });
-    const scope = await pluginScope(pool, token, config.defaultUserId);
+    const scope = await pluginScope(pool, token, requireUserId(request));
     if (!scope) return reply.code(401).send({ error: 'plugin_account_required' });
     return {
       version: 1,

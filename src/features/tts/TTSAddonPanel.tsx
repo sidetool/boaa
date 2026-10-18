@@ -27,6 +27,17 @@ import ProviderSettingsPanel, { type ProviderSettingsPanelController } from '../
 import type { SpokenTextRuleImpactSummary } from './spoken-text-rule-impact';
 import type { VoiceCastingPoolView } from './useVoiceProductController';
 
+/** Plain-TTS text filter as saved by the parent; `replace_regex` uses JS `$1` replacements on the safe engine. */
+export interface SpokenTextFilterInput {
+  readonly id?: string;
+  readonly scope: 'book' | 'global';
+  readonly kind: 'replace_literal' | 'replace_regex';
+  readonly pattern: string;
+  readonly replacement: string;
+  readonly enabled: boolean;
+  readonly priority?: number;
+}
+
 export interface VoiceTarget {
   readonly role: VoiceProfile['role'];
   readonly characterId?: string;
@@ -82,6 +93,8 @@ export interface TTSAddonPanelProps {
   readonly voiceProductSummary: { readonly major: number; readonly approved: number; readonly stale: number };
   readonly spokenTextRules: readonly SpokenTextRule[];
   readonly spokenPreviewRequest?: { readonly id: number; readonly text: string };
+  /** Text of the paragraph being read now, for the filter's before/after preview. */
+  readonly currentParagraphText?: string;
   readonly voiceCastingSummary?: {
     readonly assigned: number;
     readonly reviews: number;
@@ -136,6 +149,8 @@ export interface TTSAddonPanelProps {
     kind: Extract<SpokenTextRule['kind'], 'skip_line' | 'skip_prefix' | 'skip_suffix'>,
   ): void | Promise<unknown>;
   deleteSpokenTextSkipRule(id: string): void | Promise<unknown>;
+  saveSpokenTextFilter?(input: SpokenTextFilterInput): Promise<void>;
+  importSpokenTextFilters?(inputs: readonly SpokenTextFilterInput[]): Promise<void>;
   previewSpokenTextRuleImpact(signal: AbortSignal): Promise<SpokenTextRuleImpactSummary>;
   setMinorFallbackEnabled(enabled: boolean): void | Promise<unknown>;
   setMajorCharacterLimit(value: number): void | Promise<unknown>;
@@ -434,7 +449,7 @@ export default function TTSAddonPanel(props: TTSAddonPanelProps) {
     (rule) => rule.enabled && rule.kind === 'skip_line' && rule.pattern === spokenPreviewPattern,
   );
   const activeSkipRuleSignature = props.spokenTextRules
-    .filter((rule) => rule.enabled && rule.kind !== 'replace_literal' && rule.pattern.trim())
+    .filter((rule) => rule.enabled && rule.kind.startsWith('skip_') && rule.pattern.trim())
     .map((rule) => `${rule.id}:${rule.updatedAt}:${rule.kind}:${rule.pattern}`)
     .join('|');
   const hasActiveSkipRules = activeSkipRuleSignature.length > 0;

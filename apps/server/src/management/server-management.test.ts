@@ -14,6 +14,9 @@ async function fixture() {
   const directory = await mkdtemp(path.join(tmpdir(), 'boaa-management-'));
   cleanup.push(() => rm(directory, { recursive: true, force: true }));
   const app = Fastify();
+  app.addHook('onRequest', async (request) => {
+    request.principal = { userId: 'fixture-admin', role: 'admin', authMethod: 'legacy-token' };
+  });
   cleanup.push(() => app.close());
   app.addHook('onRequest', async (request, reply) => {
     if (request.headers.authorization !== 'Bearer owner') return reply.code(401).send({ error: 'unauthorized' });

@@ -1,3 +1,5 @@
+import type { SelfHostSession } from '../features/auth/self-host-session';
+import { persistentId128 } from '@boaa/text-core/hash';
 import type { ReadingSessionEvent, UserFontAsset } from '../domain/types';
 import type { RemoteApiClient } from '../services/remote/remote-api-client';
 import type { InstallUserFontInput, ReaderPersonalizationRepository } from './reader-personalization-repository';
@@ -12,7 +14,13 @@ function queryString(values: Record<string, string | undefined>): string {
 }
 
 export class RemoteReaderPersonalizationRepository implements ReaderPersonalizationRepository {
-  constructor(private readonly client: RemoteApiClient) {}
+  constructor(
+    private readonly client: RemoteApiClient,
+    private readonly session?: SelfHostSession,
+  ) {}
+  get signal(): AbortSignal | undefined {
+    return this.session?.signal;
+  }
 
   async listUserFonts(): Promise<UserFontAsset[]> {
     return (await this.client.request<{ fonts: UserFontAsset[] }>('/fonts')).fonts;
@@ -28,7 +36,13 @@ export class RemoteReaderPersonalizationRepository implements ReaderPersonalizat
   }
 
   async installUserFont(input: InstallUserFontInput): Promise<UserFontAsset> {
-    const asset = input.asset;
+    const asset =
+      this.session && !this.session.context.legacyDataOwner
+        ? {
+            ...input.asset,
+            id: persistentId128('user_font_asset', [this.session.context.account.userId, input.asset.contentHash]),
+          }
+        : input.asset;
     const response = await this.client.request<{ font: UserFontAsset }>(`/fonts/${encodeURIComponent(asset.id)}`, {
       method: 'PUT',
       body: input.blob,

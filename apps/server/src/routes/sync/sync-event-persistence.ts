@@ -16,7 +16,7 @@ export async function insertSyncEvent(
         id_contract, hash_contract, source_contract_version, source_event_id
       )
       values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
-      on conflict (id) do nothing
+      on conflict (user_id, id) do nothing
       returning id
     `,
     [

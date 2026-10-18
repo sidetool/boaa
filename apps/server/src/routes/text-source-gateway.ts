@@ -1,3 +1,4 @@
+import { requireAdmin } from '../auth.js';
 import { readBrandHeader } from '@boaa/extension-contracts/brand-compat';
 import type { FastifyInstance } from 'fastify';
 import type { ServerConfig } from '../config.js';
@@ -74,6 +75,8 @@ export async function registerTextSourceGateway(
 ): Promise<void> {
   const fetchImpl = options.fetchImpl ?? globalThis.fetch.bind(globalThis);
   app.get(`${PREFIX}/*`, async (request, reply) => {
+    requireAdmin(request);
+
     reply.header('Cache-Control', 'no-store').header('X-Content-Type-Options', 'nosniff');
     if (!options.installedFetch && (!config.textSourceServerUrl || !config.textSourceServerKey)) {
       return reply.code(503).send({

@@ -1,3 +1,5 @@
+import { wavFromPcm16 } from './tts-audio.js';
+import type { TTSVoice } from '../../../../src/providers/tts';
 import type { TTSSynthesisInput, TTSSynthesisProvider, TTSSynthesisResult } from '../../../../src/providers/tts';
 
 export interface ElevenLabsTTSProviderOptions {
@@ -17,15 +19,49 @@ export class ElevenLabsTTSProvider implements TTSSynthesisProvider {
 
   constructor(private readonly options: ElevenLabsTTSProviderOptions) {}
 
+  async listVoices(): Promise<TTSVoice[]> {
+    const apiKey = this.options.apiKey?.trim();
+    if (!apiKey) throw new Error('ElevenLabs API key is required');
+    const signal = AbortSignal.timeout(10_000);
+    const voices: TTSVoice[] = [];
+    let token: string | undefined;
+    for (let page = 0; page < 10; page++) {
+      const url = new URL(`${this.options.baseUrl?.replace(/\/+$/, '') || 'https://api.elevenlabs.io'}/v2/voices`);
+      url.searchParams.set('page_size', '100');
+      if (token) url.searchParams.set('next_page_token', token);
+      const response = await (this.options.fetchImpl ?? fetch)(url, { headers: { 'xi-api-key': apiKey }, signal });
+      if (!response.ok) throw new Error('ElevenLabs voice discovery failed');
+      const body = (await response.json()) as {
+        voices?: Array<{ voice_id: string; name: string; labels?: { language?: string } }>;
+        has_more?: boolean;
+        next_page_token?: string;
+      };
+      voices.push(
+        ...(body.voices ?? [])
+          .filter((v) => typeof v.voice_id === 'string')
+          .map((v) => ({ id: v.voice_id, label: v.name || v.voice_id, lang: v.labels?.language || 'und' })),
+      );
+      if (!body.has_more || !body.next_page_token || body.next_page_token === token) break;
+      token = body.next_page_token;
+    }
+    return voices;
+  }
+
   async synthesize(input: TTSSynthesisInput): Promise<TTSSynthesisResult> {
     const apiKey = this.options.apiKey?.trim();
     if (!apiKey) throw new Error('ELEVENLABS_API_KEY is required for elevenlabs provider');
     const fetchImpl = this.options.fetchImpl ?? fetch;
-    const providerOptions = mergeOptions(this.options.providerOptions, input.voiceProfile.providerOptions, input.providerOptions);
+    const providerOptions = mergeOptions(
+      this.options.providerOptions,
+      input.voiceProfile.providerOptions,
+      input.providerOptions,
+    );
     const voiceId = stringOption(providerOptions, 'voice') ?? input.voiceProfile.providerVoiceId;
     if (!voiceId?.trim()) throw new Error('ElevenLabs voice id is required');
     const outputFormat = stringOption(providerOptions, 'outputFormat') ?? outputFormatForInput(input.format);
-    const url = new URL(`${this.options.baseUrl?.replace(/\/+$/, '') || 'https://api.elevenlabs.io'}/v1/text-to-speech/${encodeURIComponent(voiceId.trim())}`);
+    const url = new URL(
+      `${this.options.baseUrl?.replace(/\/+$/, '') || 'https://api.elevenlabs.io'}/v1/text-to-speech/${encodeURIComponent(voiceId.trim())}`,
+    );
     url.searchParams.set('output_format', outputFormat);
     const enableLogging = booleanOption(providerOptions, 'enableLogging');
     if (enableLogging !== undefined) url.searchParams.set('enable_logging', String(enableLogging));
@@ -56,9 +92,14 @@ export class ElevenLabsTTSProvider implements TTSSynthesisProvider {
       throw new Error(`ElevenLabs TTS request failed with ${response.status}: ${errorText.slice(0, 500)}`);
     }
 
+    const raw = Buffer.from(await response.arrayBuffer());
+    const wrap = input.format === 'wav' && /^pcm_\d+$/.test(outputFormat);
+    const audio = wrap ? wavFromPcm16(raw, Number(outputFormat.slice(4))) : raw;
     return {
-      audio: await response.arrayBuffer(),
-      contentType: response.headers.get('content-type') ?? contentTypeForOutputFormat(outputFormat),
+      audio: audio.buffer.slice(audio.byteOffset, audio.byteOffset + audio.byteLength) as ArrayBuffer,
+      contentType: wrap
+        ? 'audio/wav'
+        : (response.headers.get('content-type') ?? contentTypeForOutputFormat(outputFormat)),
       providerRequestId: response.headers.get('request-id') ?? response.headers.get('x-request-id') ?? undefined,
       providerMetadata: { outputFormat },
     };
@@ -101,10 +142,7 @@ function contentTypeForOutputFormat(outputFormat: string): string {
   return 'audio/mpeg';
 }
 
-function voiceSettingsFromOptions(
-  options: Record<string, unknown>,
-  input: TTSSynthesisInput,
-): Record<string, unknown> {
+function voiceSettingsFromOptions(options: Record<string, unknown>, input: TTSSynthesisInput): Record<string, unknown> {
   const settings: Record<string, unknown> = {};
   const stability = numberOption(options, 'stability');
   const similarityBoost = numberOption(options, 'similarityBoost') ?? numberOption(options, 'similarity_boost');

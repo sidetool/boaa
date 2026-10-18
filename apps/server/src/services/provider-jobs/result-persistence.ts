@@ -115,7 +115,7 @@ async function insertProviderSyncEvent(
     `
       insert into sync_events (id, user_id, device_id, type, book_id, entity_id, payload, revision, created_at)
       values ($1, $2, null, $3, $4, $5, $6, $7, $8)
-      on conflict (id) do nothing
+      on conflict (user_id, id) do nothing
     `,
     [
       syncEventId({

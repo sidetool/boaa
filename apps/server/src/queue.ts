@@ -90,6 +90,7 @@ export async function enqueueImportJob(pool: pg.Pool, queue: Queue, jobId: strin
             updated_at = now()
       where id = $1 and upload_id = $2 and status = 'queued'
         and cancel_requested_at is null and active_queue_job_id is null
+        and not exists (select 1 from self_host_accounts a where a.user_id=import_jobs.user_id and a.status<>'active')
       returning id`,
     [jobId, uploadId, bullmqJobId],
   );
@@ -472,6 +473,7 @@ export async function requeuePendingProviderJobs(
       left join provider_job_attempts a on a.id = j.current_attempt_id
       left join provider_job_outbox o on o.attempt_id = a.id
       where j.status = 'queued'
+        and not exists (select 1 from self_host_accounts account where account.user_id=j.user_id and account.status<>'active')
       order by j.created_at asc
     `,
   );

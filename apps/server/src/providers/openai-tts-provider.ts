@@ -1,3 +1,4 @@
+import { namedVoices } from './tts-voices.js';
 import type { TTSSynthesisInput, TTSSynthesisProvider, TTSSynthesisResult } from '../../../../src/providers/tts';
 
 type OpenAITTSFormat = 'mp3' | 'opus' | 'aac' | 'flac' | 'wav' | 'pcm';
@@ -22,11 +23,23 @@ export class OpenAITTSProvider implements TTSSynthesisProvider {
 
   constructor(private readonly options: OpenAITTSProviderOptions) {}
 
+  async listVoices() {
+    const voices = ['alloy', 'ash', 'coral', 'echo', 'fable', 'onyx', 'nova', 'sage', 'shimmer'];
+    if (!legacyTTSModel(this.options.modelId)) voices.push('ballad', 'verse', 'marin', 'cedar');
+    if (this.options.defaultVoice && !voices.includes(this.options.defaultVoice))
+      voices.push(this.options.defaultVoice);
+    return namedVoices(voices);
+  }
+
   async synthesize(input: TTSSynthesisInput): Promise<TTSSynthesisResult> {
     const apiKey = this.options.apiKey?.trim();
     if (!apiKey) throw new Error('OPENAI_API_KEY is required for openai-tts provider');
     const fetchImpl = this.options.fetchImpl ?? fetch;
-    const providerOptions = mergeOptions(this.options.providerOptions, input.voiceProfile.providerOptions, input.providerOptions);
+    const providerOptions = mergeOptions(
+      this.options.providerOptions,
+      input.voiceProfile.providerOptions,
+      input.providerOptions,
+    );
     const responseFormat = openAIFormat(input.format, stringOption(providerOptions, 'responseFormat'));
     const headers: Record<string, string> = {
       Authorization: `Bearer ${apiKey}`,
@@ -38,7 +51,12 @@ export class OpenAITTSProvider implements TTSSynthesisProvider {
     const body: Record<string, unknown> = {
       model: this.options.modelId,
       input: input.text,
-      voice: voiceValue(stringOption(providerOptions, 'voice') ?? input.voiceProfile.providerVoiceId ?? this.options.defaultVoice ?? 'alloy'),
+      voice: voiceValue(
+        stringOption(providerOptions, 'voice') ??
+          input.voiceProfile.providerVoiceId ??
+          this.options.defaultVoice ??
+          'alloy',
+      ),
       response_format: responseFormat,
     };
     const speed = clampSpeed(numberOption(providerOptions, 'speed') ?? input.speed ?? input.voiceProfile.speed);
@@ -105,8 +123,10 @@ function clampSpeed(value: number | undefined): number | undefined {
 }
 
 function speechInstructions(input: TTSSynthesisInput): string | undefined {
-  const parts = [input.tone, input.emotion && input.emotion !== 'neutral' ? `emotion: ${input.emotion}` : undefined]
-    .filter((part): part is string => Boolean(part && part.trim()));
+  const parts = [
+    input.tone,
+    input.emotion && input.emotion !== 'neutral' ? `emotion: ${input.emotion}` : undefined,
+  ].filter((part): part is string => Boolean(part && part.trim()));
   return parts.length ? parts.join('; ') : undefined;
 }
 

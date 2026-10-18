@@ -35,7 +35,10 @@ export async function readUploadFile(
   signal: AbortSignal,
   onProgress: (bytes: number, total: number) => Promise<void>,
 ) {
-  const sessionResult = await pool.query<UploadSessionRow>('select * from upload_sessions where id = $1', [uploadId]);
+  const sessionResult = await pool.query<UploadSessionRow>(
+    'select * from upload_sessions where id = $1 and user_id=$2',
+    [uploadId, config.defaultUserId],
+  );
   const session = sessionResult.rows[0];
   if (!session) throw new Error(`Upload session not found: ${uploadId}`);
   if (Number(session.size_bytes) > localUploadLimit(config, session.file_name, session.import_mode))

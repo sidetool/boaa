@@ -1,3 +1,4 @@
+import { createRequire } from 'node:module';
 import { buildProductPluginRuntime } from '../../scripts/plugins/build-product-runtime.mjs';
 import { copyFile, mkdir, readdir, rm } from 'node:fs/promises';
 import path from 'node:path';
@@ -12,6 +13,8 @@ await rm(outdir, { force: true, recursive: true });
 await build({
   absWorkingDir: serverRoot,
   alias: {
+    re2js: createRequire(new URL('../../packages/text-core/package.json', import.meta.url)).resolve('re2js'),
+    '@boaa/text-core/spoken-text-filter': '../../packages/text-core/spoken-text-filter.ts',
     '@boaa/extension-contracts/source-identity': '../../packages/extension-contracts/source-identity.mjs',
     '@boaa/reader-core/sync-contract': '../../packages/reader-core/sync-contract.ts',
     '@boaa/reader-core/search-policy': '../../packages/reader-core/search-policy.ts',
@@ -88,3 +91,9 @@ await Promise.all(
 );
 
 await buildProductPluginRuntime(path.join(outdir, 'plugin-runtime-assets'));
+
+await mkdir(path.join(outdir, 'licenses'), { recursive: true });
+await copyFile(
+  path.join(serverRoot, '../../public/licenses/re2js-2.8.8.txt'),
+  path.join(outdir, 'licenses/re2js-2.8.8.txt'),
+);

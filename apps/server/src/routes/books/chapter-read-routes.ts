@@ -1,12 +1,16 @@
+import { requestOwnerConfig } from '../../services/owner-context.js';
 import type { FastifyInstance } from 'fastify';
 import type pg from 'pg';
 import type { ServerConfig } from '../../config.js';
 
 export function registerChapterReadRoutes(app: FastifyInstance, pool: pg.Pool, config: ServerConfig) {
+  const deploymentConfig = config;
   app.patch<{
     Params: { bookId: string; chapterId: string };
     Body: { title?: unknown; expectedContentRevisionId?: unknown };
   }>('/api/books/:bookId/chapters/:chapterId', async (request, reply) => {
+    const config = requestOwnerConfig(deploymentConfig, request);
+
     const body = request.body;
     if (
       !body ||
@@ -39,6 +43,8 @@ export function registerChapterReadRoutes(app: FastifyInstance, pool: pg.Pool, c
     Params: { bookId: string };
     Body: { chapterId?: unknown; previous?: unknown; expectedContentRevisionId?: unknown };
   }>('/api/books/:bookId/chapters/read', async (request, reply) => {
+    const config = requestOwnerConfig(deploymentConfig, request);
+
     const body = request.body;
     if (
       !body ||

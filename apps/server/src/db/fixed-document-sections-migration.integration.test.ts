@@ -21,8 +21,8 @@ describeWithPostgres('fixed-document section migration backfill', () => {
       await migrateDatabase(pool);
       await pool.query(`insert into users (id, email, display_name) values ('user_test', 'test@example.com', 'Test')`);
       await pool.query(`
-        insert into book_objects (id, raw_text_hash, storage_key, file_name, content_type, size_bytes)
-        values ('object_legacy', 'raw_legacy', 'legacy.cbz', 'legacy.cbz', 'application/vnd.comicbook+zip', 100)
+        insert into book_objects (user_id, id, raw_text_hash, storage_key, file_name, content_type, size_bytes)
+        values ('user_test', 'object_legacy', 'raw_legacy', 'legacy.cbz', 'legacy.cbz', 'application/vnd.comicbook+zip', 100)
       `);
       await pool.query(`
         insert into library_books (

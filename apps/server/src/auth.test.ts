@@ -106,7 +106,9 @@ describe('server auth hook', () => {
     const service = {
       setupRequired: async () => setupRequired,
       authenticateSession: async (token: string | undefined) =>
-        token === 'valid-session' ? { username: 'owner', displayName: 'Owner' } : undefined,
+        token === 'valid-session'
+          ? { userId: 'user_test', role: 'admin', username: 'owner', displayName: 'Owner', sessionContext: 'context' }
+          : undefined,
     } as SelfHostAuthService;
     await registerAuthHook(app, testConfig(), service);
     app.get('/api/books', async () => ({ books: [] }));
@@ -120,10 +122,54 @@ describe('server auth hook', () => {
     const allowed = await app.inject({
       method: 'GET',
       url: '/api/books',
-      headers: { cookie: 'boaa_session=valid-session' },
+      headers: { cookie: 'boaa_session=valid-session', 'x-boaa-session-context': 'context' },
     });
     expect(missing.statusCode).toBe(401);
     expect(allowed.statusCode).toBe(200);
     await app.close();
   });
+});
+
+it('cookie authority wins over operator bearer and stale context fails before handler work', async () => {
+  const app = Fastify();
+  const service = {
+    setupRequired: async () => false,
+    authenticateSession: async (token: string) =>
+      token === 'member'
+        ? {
+            userId: 'member',
+            role: 'member',
+            username: 'member',
+            displayName: 'Member',
+            sessionContext: 'new-context',
+            authVersion: 1,
+          }
+        : undefined,
+  } as unknown as SelfHostAuthService;
+  await registerAuthHook(app, testConfig('operator'), service);
+  app.get('/api/principal', async (request) => request.principal);
+  const mixed = await app.inject({
+    url: '/api/principal',
+    headers: {
+      cookie: 'boaa_session=member',
+      authorization: 'Bearer operator',
+      'x-boaa-session-context': 'new-context',
+    },
+  });
+  expect(mixed.json()).toMatchObject({ userId: 'member', role: 'member', authMethod: 'session' });
+  const stale = await app.inject({
+    url: '/api/principal',
+    headers: {
+      cookie: 'boaa_session=member',
+      authorization: 'Bearer operator',
+      'x-boaa-session-context': 'old-context',
+    },
+  });
+  expect(stale.statusCode).toBe(409);
+  expect(stale.headers['set-cookie']).toBeUndefined();
+  for (const cookie of ['boaa_session=bad', 'boaa_session=', 'boaa_session=%broken', 'moya_session=bad']) {
+    const denied = await app.inject({ url: '/api/principal', headers: { cookie, authorization: 'Bearer operator' } });
+    expect(denied.statusCode).toBe(401);
+  }
+  await app.close();
 });

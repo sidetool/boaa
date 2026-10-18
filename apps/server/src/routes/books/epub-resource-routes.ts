@@ -1,3 +1,4 @@
+import { requestOwnerConfig } from '../../services/owner-context.js';
 import type { FastifyInstance } from 'fastify';
 import pg from 'pg';
 import type { ServerConfig } from '../../config.js';
@@ -20,10 +21,13 @@ export async function registerEpubResourceRoutes(
   pool: pg.Pool,
   config: ServerConfig,
 ): Promise<void> {
+  const deploymentConfig = config;
   const objectStorage = createS3Client(config);
   app.get<{ Params: { bookId: string; assetId: string } }>(
     '/api/books/:bookId/resources/:assetId',
     async (request, reply) => {
+      const config = requestOwnerConfig(deploymentConfig, request);
+
       const result = await pool.query<ResourceRow>(
         `select asset.id, asset.book_id, asset.storage_key, asset.file_name, asset.content_type,
                 asset.byte_length, asset.content_hash, asset.kind, asset.page_index

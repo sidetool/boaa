@@ -489,7 +489,7 @@ export interface SpokenTextRule {
   id: string;
   scope: 'global' | 'book';
   bookId?: string;
-  kind: 'replace_literal' | 'skip_line' | 'skip_prefix' | 'skip_suffix';
+  kind: 'replace_literal' | 'replace_regex' | 'skip_line' | 'skip_prefix' | 'skip_suffix';
   pattern: string;
   replacement?: string;
   enabled: boolean;
@@ -671,6 +671,7 @@ export interface TTSPlaybackSettings {
   mode?: 'plain' | 'cast';
   voiceSource?: 'system' | 'server';
   serverVoiceId?: string;
+  plainChunking?: 'sentence' | 'paragraph' | 'batch';
   rate: number;
   pitch: number;
   volume: number;

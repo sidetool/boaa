@@ -151,7 +151,10 @@ export function useSourceLibraryOpen(input: {
     const active = capture();
     const saved = await ensure(item);
     const chapter = saved?.chapters.find((chapter) => chapter.documentSectionId === externalItemSectionId(item));
-    if (saved && chapter && active()) latest.current.options.prefetchChapter?.(saved.novel, chapter);
+    if (saved && chapter && active()) {
+      latest.current.options.prefetchChapter?.(saved.novel, chapter);
+      return { novel: saved.novel, chapter, chapters: saved.chapters };
+    }
   };
   const open = async (item: ExternalSourceItemView, readerOptions?: OpenReaderChapterOptions) => {
     const current = latest.current;

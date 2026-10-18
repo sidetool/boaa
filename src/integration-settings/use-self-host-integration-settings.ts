@@ -21,6 +21,8 @@ type ExtensionManager = AppExtensionManager<TrustedReaderAddonHostContext, Trust
 
 export interface SelfHostIntegrationSettingsInput {
   readonly enabled: boolean;
+  readonly allowLegacyImport?: boolean;
+  readonly signal?: AbortSignal;
   readonly client?: Pick<RemoteApiClient, 'getIntegrationSettings' | 'saveIntegrationSettings'>;
   readonly extensionManager: ExtensionManager;
   readonly metadataCollector: WebNovelMetadataCollectorBroker;
@@ -71,6 +73,7 @@ export function useSelfHostIntegrationSettings(input: SelfHostIntegrationSetting
 
   const apply = useCallback(async (settings: SelfHostIntegrationSettingsV1) => {
     const current = inputRef.current;
+    current.signal?.throwIfAborted();
     applyingRef.current = true;
     try {
       current.extensionManager.applyEnablementSnapshot(settings.extensionEnablement);
@@ -80,6 +83,7 @@ export function useSelfHostIntegrationSettings(input: SelfHostIntegrationSetting
       legacyImportCompletedRef.current = settings.legacyImportCompleted;
       lastRemoteRevisionRef.current = settings.revision;
       lastSavedContentRef.current = comparable(settings);
+      current.signal?.throwIfAborted();
       current.onApplied();
     } finally {
       applyingRef.current = false;
@@ -163,7 +167,7 @@ export function useSelfHostIntegrationSettings(input: SelfHostIntegrationSetting
         const { settings } = await input.client!.getIntegrationSettings();
         if (!active) return;
         if (settings) {
-          if (settings.legacyImportCompleted) {
+          if (settings.legacyImportCompleted || input.allowLegacyImport === false) {
             await apply(settings);
           } else {
             const local = await capture();
@@ -212,7 +216,7 @@ export function useSelfHostIntegrationSettings(input: SelfHostIntegrationSetting
       active = false;
       window.clearInterval(retryTimer);
     };
-  }, [apply, capture, input.client, input.enabled]);
+  }, [apply, capture, input.client, input.enabled, input.allowLegacyImport]);
 
   useEffect(() => {
     if (!input.enabled || !input.client) return;

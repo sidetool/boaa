@@ -1,3 +1,4 @@
+import { useAccountStorage } from '../auth/use-account-storage';
 import { readBrandStorage, writeBrandStorage } from '@boaa/extension-contracts/brand-compat';
 import { useCallback, useEffect, useRef, useState, type MutableRefObject } from 'react';
 import { autoReadingRate, isAutoReadingMode, type AutoReadingMode, type AutoReadingResult } from './auto-reading-modes';
@@ -11,17 +12,17 @@ export interface AutoReadingViewport {
 
 const SPEED_KEY = 'boaa.reader-auto-scroll-speed.v1';
 const MODE_KEY = 'boaa.reader-auto-scroll-mode.v1';
-function savedMode(key: string): AutoReadingMode {
+function savedMode(key: string, storage: Storage = localStorage): AutoReadingMode {
   try {
-    const value = readBrandStorage(localStorage, key);
+    const value = readBrandStorage(storage, key);
     return isAutoReadingMode(value) ? value : 'pixel';
   } catch {
     return 'pixel';
   }
 }
-function savedSpeed(key = SPEED_KEY, max = 12): number {
+function savedSpeed(key = SPEED_KEY, max = 12, storage: Storage = localStorage): number {
   try {
-    const value = Number(readBrandStorage(localStorage, key));
+    const value = Number(readBrandStorage(storage, key));
     return Number.isInteger(value) && value >= 1 && value <= max ? value : 4;
   } catch {
     return 4;
@@ -36,19 +37,20 @@ export function useAutoScroll(
   nextChapter?: { scope: string; open: (isCurrent: () => boolean) => Promise<void> },
   kind: 'text' | 'comic' = 'text',
 ) {
-  const [standardSpeed, setSpeedState] = useState(() => savedSpeed());
+  const storage = useAccountStorage();
+  const [standardSpeed, setSpeedState] = useState(() => savedSpeed(SPEED_KEY, 12, storage));
   const pixelSpeedKey = `boaa.${kind}-auto-pixel-speed.v2`;
   const [pixelSpeed, setPixelSpeed] = useState(() => {
     try {
-      if (readBrandStorage(localStorage, pixelSpeedKey) !== null) return savedSpeed(pixelSpeedKey, 240);
+      if (readBrandStorage(storage, pixelSpeedKey) !== null) return savedSpeed(pixelSpeedKey, 240, storage);
     } catch {
       /* Optional preference. */
     }
-    return savedSpeed();
+    return savedSpeed(SPEED_KEY, 12, storage);
   });
   const modeKey = kind === 'text' ? MODE_KEY : 'boaa.comic-auto-reading-mode.v1';
   const intervalKey = `boaa.${kind}-auto-page-interval.v1`;
-  const [userMode, setModeState] = useState<AutoReadingMode>(() => savedMode(modeKey));
+  const [userMode, setModeState] = useState<AutoReadingMode>(() => savedMode(modeKey, storage));
   const [temporary, setTemporary] = useState<{ id: string; speed: number }>();
   const temporaryOwner = useRef<string>();
   const mode = temporary ? 'pixel' : userMode;
@@ -56,7 +58,7 @@ export function useAutoScroll(
   const maxSpeed = mode === 'pixel' ? 240 : 12;
   const [interval, setIntervalState] = useState(() => {
     try {
-      const value = Number(readBrandStorage(localStorage, intervalKey));
+      const value = Number(readBrandStorage(storage, intervalKey));
       if (Number.isInteger(value) && value >= 3 && value <= 120) return value;
     } catch {
       /* Optional preference. */
@@ -69,7 +71,7 @@ export function useAutoScroll(
   const overlayKey = `boaa.${kind}-auto-overlay.v1`;
   const [alwaysShowOverlay, setAlwaysShowOverlayState] = useState(() => {
     try {
-      return readBrandStorage(localStorage, overlayKey) === 'true';
+      return readBrandStorage(storage, overlayKey) === 'true';
     } catch {
       return false;
     }
@@ -77,7 +79,7 @@ export function useAutoScroll(
   const setAlwaysShowOverlay = (value: boolean) => {
     setAlwaysShowOverlayState(value);
     try {
-      writeBrandStorage(localStorage, overlayKey, String(value));
+      writeBrandStorage(storage, overlayKey, String(value));
     } catch {
       /* Optional preference. */
     }
@@ -125,7 +127,7 @@ export function useAutoScroll(
     stop();
     setModeState(value);
     try {
-      writeBrandStorage(localStorage, modeKey, value);
+      writeBrandStorage(storage, modeKey, value);
     } catch {
       /* Optional browser preference. */
     }
@@ -134,7 +136,7 @@ export function useAutoScroll(
     if (!Number.isInteger(value) || value < 3 || value > 120) return;
     setIntervalState(value);
     try {
-      writeBrandStorage(localStorage, intervalKey, String(value));
+      writeBrandStorage(storage, intervalKey, String(value));
     } catch {
       /* Optional preference. */
     }
@@ -145,7 +147,7 @@ export function useAutoScroll(
     if (userMode === 'pixel') setPixelSpeed(value);
     else setSpeedState(value);
     try {
-      writeBrandStorage(localStorage, userMode === 'pixel' ? pixelSpeedKey : SPEED_KEY, String(value));
+      writeBrandStorage(storage, userMode === 'pixel' ? pixelSpeedKey : SPEED_KEY, String(value));
     } catch {
       /* Browser storage is optional. */
     }

@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import { parseGoogleServiceAccount, type GoogleServiceAccount } from './google-service-account.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import pg from 'pg';
@@ -13,7 +14,8 @@ import type { ServerProviderCatalog } from './server-provider-catalog.js';
 import { serverAIProviderTransportRegistry } from './server-ai-provider-factory.js';
 import { serverTTSProviderTransportRegistry } from './server-tts-provider-factory.js';
 
-export type ProviderSecretName = 'api_key' | 'access_token' | 'credential_path' | 'endpoint_url';
+export type ProviderSecretName =
+  'api_key' | 'access_token' | 'credential_path' | 'endpoint_url' | 'service_account_json';
 
 export interface ProviderSecretRow {
   readonly scope: ProviderSettingsScope;
@@ -39,6 +41,7 @@ export interface ResolvedProviderSecrets {
   readonly apiKey?: string;
   readonly accessToken?: string;
   readonly credentialsPath?: string;
+  readonly serviceAccount?: GoogleServiceAccount;
   readonly endpointUrl?: string;
 }
 
@@ -60,8 +63,13 @@ export function providerSupportsUserSecret(
   providerId: string,
   secretName?: string,
 ): boolean {
+  if (secretName === 'service_account_json') return supportsGoogleServiceAccount(scope, providerId);
   const expected = defaultProviderSecretName(scope, providerId);
   return Boolean(expected && (!secretName || secretName === expected));
+}
+
+function supportsGoogleServiceAccount(scope: ProviderSettingsScope, providerId: string): boolean {
+  return scope === 'tts_synthesis' && (providerId === 'gemini-vertex-tts' || providerId === 'google-cloud-tts');
 }
 
 export async function saveProviderSecret(
@@ -74,7 +82,10 @@ export async function saveProviderSecret(
   if (!secretName || !providerSupportsUserSecret(input.scope, input.providerId, secretName)) {
     throw new Error('provider secret is not supported for this provider');
   }
-  const secretValue = input.secretValue.trim();
+  const secretValue =
+    secretName === 'service_account_json'
+      ? JSON.stringify(parseGoogleServiceAccount(input.secretValue))
+      : input.secretValue.trim();
   if (!secretValue) throw new Error('provider secret value is required');
   const key = loadProviderSecretMasterKey(config, env);
   const encrypted = encryptProviderSecret(
@@ -157,6 +168,19 @@ export async function buildProviderSecretStatuses(
   ];
   const statuses: ProviderSecretStatus[] = [];
   for (const item of providers) {
+    if (supportsGoogleServiceAccount(item.scope, item.provider.providerId)) {
+      const jsonRow = userByKey.get(statusKey(item.scope, item.provider.providerId, 'service_account_json'));
+      statuses.push(
+        jsonRow
+          ? userSecretStatusFromRow(jsonRow)
+          : {
+              scope: item.scope,
+              providerId: item.provider.providerId,
+              secretName: 'service_account_json',
+              configured: false,
+            },
+      );
+    }
     const secretName = defaultProviderSecretName(item.scope, item.provider.providerId);
     if (!secretName) continue;
     const userRow = userByKey.get(statusKey(item.scope, item.provider.providerId, secretName));
@@ -197,7 +221,12 @@ export function applyProviderSecretStatusesToCatalog(
   );
   const apply = (scope: ProviderSettingsScope, provider: ProviderCatalogItem): ProviderCatalogItem => {
     const secretName = defaultProviderSecretName(scope, provider.providerId);
-    const status = secretName ? byKey.get(statusKey(scope, provider.providerId, secretName)) : undefined;
+    const jsonStatus = byKey.get(statusKey(scope, provider.providerId, 'service_account_json'));
+    const status = jsonStatus?.configured
+      ? jsonStatus
+      : secretName
+        ? byKey.get(statusKey(scope, provider.providerId, secretName))
+        : undefined;
     if (!status) return provider;
     return {
       ...provider,
@@ -233,6 +262,19 @@ export async function resolveProviderSecrets(
   providerId: string,
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<ResolvedProviderSecrets> {
+  if (supportsGoogleServiceAccount(scope, providerId)) {
+    const row = await loadUserProviderSecretRow(pool, config, scope, providerId, 'service_account_json');
+    if (row)
+      return {
+        serviceAccount: parseGoogleServiceAccount(
+          decryptProviderSecret(
+            loadProviderSecretMasterKey(config, env),
+            row,
+            secretAad(config.defaultUserId, scope, providerId, 'service_account_json'),
+          ),
+        ),
+      };
+  }
   const secretName = defaultProviderSecretName(scope, providerId);
   if (!secretName) return {};
   const userRow = await loadUserProviderSecretRow(pool, config, scope, providerId, secretName);
@@ -332,7 +374,7 @@ function userSecretStatusFromRow(row: ProviderSecretRow): ProviderSecretStatus {
 }
 
 function secretStatusExposesValueHint(secretName: ProviderSecretName): boolean {
-  return secretName !== 'credential_path' && secretName !== 'endpoint_url';
+  return secretName !== 'credential_path' && secretName !== 'endpoint_url' && secretName !== 'service_account_json';
 }
 
 export function loadProviderSecretMasterKey(config: ServerConfig, env: NodeJS.ProcessEnv): Buffer {

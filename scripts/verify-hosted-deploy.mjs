@@ -19,10 +19,10 @@ const files = {
   composeSuwayomi: read('compose.suwayomi.yaml'),
   readme: read('README.md'),
   dockerignore: read('.dockerignore'),
-  localTTSDockerfile: read('deploy/local-tts.Dockerfile'),
+  localTTSDockerfile: read('deploy/plain-tts.Dockerfile'),
   metadataCollectorDockerfile: read('deploy/metadata-collector.Dockerfile'),
   metadataCollectorAuthDockerfile: read('deploy/metadata-collector-auth.Dockerfile'),
-  localTTSServer: read('deploy/local-tts/server.py'),
+  localTTSServer: read('deploy/plain-tts/server.py'),
   webDockerfile: read('deploy/web.Dockerfile'),
   webRuntimeConfig: read('deploy/web-runtime-config.sh'),
   serverDockerfile: read('deploy/server.Dockerfile'),
@@ -419,10 +419,15 @@ for (const [name, guide] of [
     !includes(guide, 'compose.local-tts.yaml up -d --build'),
   );
 }
-check('local TTS Dockerfile pins MeloTTS source', includes(files.localTTSDockerfile, 'ARG MELOTTS_COMMIT='));
+check(
+  'local TTS uses the lightweight Supertonic runtime',
+  includes(localTTS, 'deploy/plain-tts.Dockerfile') &&
+    includes(files.localTTSDockerfile, 'onnxruntime==') &&
+    !includes(files.localTTSDockerfile, 'torch'),
+);
 check('local TTS Dockerfile runs as non-root', includes(files.localTTSDockerfile, 'USER localtts'));
-check('local TTS adapter implements voices', includes(files.localTTSServer, 'if self.path == "/voices"'));
-check('local TTS adapter implements synthesis', includes(files.localTTSServer, 'if self.path != "/synthesize"'));
+check('local TTS adapter implements voices', includes(files.localTTSServer, "if self.path == '/voices'"));
+check('local TTS adapter implements synthesis', includes(files.localTTSServer, "if self.path != '/synthesize'"));
 
 check('metadata collector overlay declares its internal service', Boolean(metadataCollector));
 check(
@@ -669,7 +674,7 @@ for (const key of [
   'VERTEX_CREDENTIALS_HOST_DIR',
   'LOCAL_TTS_PROVIDER_DEFAULT',
   'LOCAL_TTS_PROVIDER_ENABLED',
-  'MELOTTS_COMMIT',
+  'TTS_LOCAL_ENDPOINT_MODEL_ID',
   'METADATA_COLLECTOR_MEMORY_LIMIT',
   'METADATA_COLLECTOR_AUTH_MEMORY_LIMIT',
   'VITE_READER_BACKEND',

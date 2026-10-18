@@ -29,6 +29,7 @@ export interface GoogleDrivePickedDocument {
 }
 
 export interface GoogleDrivePickerRequest {
+  readonly signal?: AbortSignal;
   readonly clientId: string;
   readonly appId: string;
   readonly developerKey: string;
@@ -75,7 +76,9 @@ export class GoogleDriveWebPicker implements GoogleDrivePickerPort {
     if (typeof document === 'undefined' || typeof window === 'undefined') {
       throw new Error('Google Drive 파일 선택은 Web 화면에서만 사용할 수 있습니다.');
     }
+    request.signal?.throwIfAborted();
     await import('@googleworkspace/drive-picker-element');
+    request.signal?.throwIfAborted();
 
     return new Promise((resolve, reject) => {
       const picker = document.createElement('drive-picker') as DrivePickerElement;
@@ -83,7 +86,9 @@ export class GoogleDriveWebPicker implements GoogleDrivePickerPort {
       let settled = false;
       let tokenTask: Promise<void> = Promise.resolve();
 
+      const abort = () => finish(undefined, new DOMException('Account session ended', 'AbortError'));
       const cleanup = () => {
+        request.signal?.removeEventListener('abort', abort);
         picker.removeEventListener('picker-oauth-response', onOauthResponse);
         picker.removeEventListener('picker-oauth-error', onOauthError);
         picker.removeEventListener('picker-picked', onPicked);
@@ -139,6 +144,7 @@ export class GoogleDriveWebPicker implements GoogleDrivePickerPort {
       };
       const onPickerError = () => finish(undefined, new Error('Google Drive 파일 선택기를 열지 못했습니다.'));
 
+      request.signal?.addEventListener('abort', abort, { once: true });
       picker.addEventListener('picker-oauth-response', onOauthResponse);
       picker.addEventListener('picker-oauth-error', onOauthError);
       picker.addEventListener('picker-picked', onPicked);

@@ -31,9 +31,10 @@ export class DiscoverySettingsStore {
     scope: string,
     private readonly client?: Client,
     private readonly storage: Storage = localStorage,
+    allowLegacyImport = true,
   ) {
     this.key = configKey(scope);
-    this.legacy = read(storage, this.key);
+    this.legacy = allowLegacyImport ? read(storage, this.key) : undefined;
     this.snapshot = {
       config: (client && read(storage, `${this.key}:account-cache`)) || this.legacy || emptyConfig(),
       ready: !client,

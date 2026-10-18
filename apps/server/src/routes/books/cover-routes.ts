@@ -1,3 +1,4 @@
+import { requestOwnerConfig } from '../../services/owner-context.js';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import pg from 'pg';
 import { detectCoverContentType } from '@boaa/text-core/image-format';
@@ -115,7 +116,10 @@ export async function registerBookCoverRoutes(
   pool: pg.Pool,
   config: ServerConfig,
 ): Promise<void> {
+  const deploymentConfig = config;
   app.get<{ Params: { bookId: string } }>('/api/books/:bookId/cover/metadata', async (request, reply) => {
+    const config = requestOwnerConfig(deploymentConfig, request);
+
     const cover = await coverRow(pool, config.defaultUserId, request.params.bookId);
     return cover ? { cover } : reply.code(404).send({ error: 'cover not found' });
   });
@@ -123,6 +127,8 @@ export async function registerBookCoverRoutes(
   app.get<{ Params: { bookId: string }; Querystring: { v?: string } }>(
     '/api/books/:bookId/cover',
     async (request, reply) => {
+      const config = requestOwnerConfig(deploymentConfig, request);
+
       const cover = await coverRow(pool, config.defaultUserId, request.params.bookId);
       if (!cover) return reply.code(404).send({ error: 'cover not found' });
       const revision = `${cover.id}:${cover.content_hash}`;
@@ -329,6 +335,8 @@ export async function registerBookCoverRoutes(
     '/api/books/:bookId/cover',
     { bodyLimit: 10 * 1024 * 1024 },
     async (request, reply) => {
+      requestOwnerConfig(deploymentConfig, request);
+
       if (header(request.headers['x-cover-provenance']) === 'approved_enrichment') {
         return reply.code(400).send({ error: 'approved enrichment covers require the dedicated endpoint' });
       }
@@ -340,6 +348,8 @@ export async function registerBookCoverRoutes(
     '/api/books/:bookId/cover/approved-enrichment',
     { bodyLimit: 10 * 1024 * 1024 },
     async (request, reply) => {
+      requestOwnerConfig(deploymentConfig, request);
+
       if (expectedRevision(header(request.headers['x-expected-metadata-revision'])) === undefined) {
         return reply.code(400).send({ error: 'approved enrichment cover requires an expected metadata revision' });
       }
@@ -350,6 +360,8 @@ export async function registerBookCoverRoutes(
   app.post<{ Params: { bookId: string }; Body: ApprovedEnrichmentCoverRestoreBody }>(
     '/api/books/:bookId/cover/approved-enrichment/restore',
     async (request, reply) => {
+      const config = requestOwnerConfig(deploymentConfig, request);
+
       const body = request.body ?? {};
       const completePreviousReference = Boolean(body.previousAssetId) === Boolean(body.previousContentHash);
       if (
@@ -510,6 +522,8 @@ export async function registerBookCoverRoutes(
   app.delete<{ Params: { bookId: string }; Body: { expectedRevision?: number } }>(
     '/api/books/:bookId/cover',
     async (request, reply) => {
+      const config = requestOwnerConfig(deploymentConfig, request);
+
       const client = await pool.connect();
       let storageKey: string | undefined;
       try {

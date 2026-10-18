@@ -24,6 +24,9 @@ const source = `globalThis.boaaExtension=async (method,input,host)=>{
 describe('authenticated installed source HTTP flow', () => {
   it('inspects without execution, installs after review, downloads raw text, then fences stale/removal requests', async () => {
     const app = Fastify();
+    app.addHook('onRequest', async (request) => {
+      request.principal = { userId: 'fixture-admin', role: 'admin', authMethod: 'legacy-token' };
+    });
     const store = new IndexedDbPackageInstallStore(`boaa-route-test-${crypto.randomUUID()}`);
     const execution = createNodePackageExecution();
     execution.prepare = vi.fn(execution.prepare);
@@ -89,6 +92,9 @@ describe('authenticated installed source HTTP flow', () => {
 
   it('rejects mismatched approval and suppresses raw preparation errors', async () => {
     const app = Fastify();
+    app.addHook('onRequest', async (request) => {
+      request.principal = { userId: 'fixture-admin', role: 'admin', authMethod: 'legacy-token' };
+    });
     const store = new IndexedDbPackageInstallStore(`boaa-route-test-${crypto.randomUUID()}`);
     const execution = createNodePackageExecution();
     execution.prepare = async () => {

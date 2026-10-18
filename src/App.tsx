@@ -1,10 +1,22 @@
+import { TTSContentIdentity } from './providers/tts-content-identity';
+import { useSpokenTextFilters } from './features/tts/use-spoken-text-filters';
+import { createAccountReaderDb } from './storage/reader-database';
+import { prepareNextTTSChapter, type PreparedTTSChapter } from './features/tts/next-tts-chapter';
+import { externalItemSectionId } from './features/external-sources/serial-work-projection';
+import { estimatedPlainTTSParagraph } from './providers/plain-tts-progress';
+import { loadSharedParagraphPage } from './features/reader/shared-paragraph-pages';
+import { PARAGRAPHS_PER_PAGE } from './repositories/reader-defaults';
+import { preparePlainTTSChapterOpening, paragraphAtPlaybackIndex } from './providers/plain-tts-chapter-opening';
+import { useReaderWakeLockOwner } from './features/reader-settings/use-reader-device-controls';
+import { createDocumentTextStore } from './storage/document-text-store';
+import { createHostedTTSOfflineStore } from './storage/hosted-tts-offline-cache';
 import { readBrandStorage, writeBrandStorage } from '@boaa/extension-contracts/brand-compat';
 import { fixedDocumentOffset } from './features/fixed-document/fixed-document-position';
 import { sourceLibraryOutline } from './features/external-sources/source-library-outline';
 import { openSourceLibraryChapter } from './features/external-sources/source-library-reader-model';
 import { uiNextAppClass, usesAppHistory } from './ui-next/app-presentation';
 import { usePlainTTS } from './features/tts/usePlainTTS';
-import { buildPlainTTSItems } from './providers/plain-tts';
+import { buildPlainTTSItems, preparePlainTTSBatch } from './providers/plain-tts';
 import { useFixedDocumentTTSPreparation } from './features/tts/useFixedDocumentTTSPreparation';
 import { useTTSWarmupController } from './features/tts/useTTSWarmupController';
 import { useOfflineTTSDownloads } from './features/tts/useOfflineTTSDownloads';
@@ -187,7 +199,7 @@ import type { TTSStatus, TTSVoice } from './providers/tts';
 import { voiceApprovalForProfile, type VoiceProductStateV1 } from './providers/voice-product';
 import type { PlayableTtsSegment } from './providers/tts-playback';
 import { BrowserAudioSession } from './providers/browser-audio-session';
-import { BookPlaybackCoordinator, nextPlaybackChapter } from './providers/book-playback-coordinator';
+import { BookPlaybackCoordinator, deferChapterPlayback } from './providers/book-playback-coordinator';
 import {
   returnToSourceSeriesDetails,
   shouldOpenSourceSeriesDetails,
@@ -279,8 +291,7 @@ import {
   getListeningPosition,
   saveListeningPosition,
 } from './storage/listening-position-store';
-import { IndexedDbDocumentTextRepository } from './storage/document-text-store';
-import { IndexedDbHostedTTSOfflineCache } from './storage/hosted-tts-offline-cache';
+
 import type { AiTtsSyncRemoteSnapshot } from './sync/ai-tts-sync-diff';
 import { aiTtsRemoteSnapshotApplyAvailable } from './sync/ai-tts-sync-apply';
 import { loadAiTtsRemoteSnapshot } from './sync/ai-tts-remote-snapshot';
@@ -369,12 +380,15 @@ export default function App() {
     extensionRuntime,
     ttsCacheGateway,
     platformRuntime,
+    sourceApiClient: dedicatedSourceApiClient,
     providerApiClient,
     providerControlClient,
     providerExecutionRuntime,
     readerRuntime,
   } = useAppRuntime();
   const localStatic = product?.kind === 'local-static';
+  const canUseProviders = readerRuntime.session?.context.capabilities.useProviders !== false;
+  const sourceApiClient = dedicatedSourceApiClient ?? providerApiClient;
   const [desktopSourceTarget, setDesktopSourceTarget] = useState<'device' | 'server'>(() => {
     try {
       return readBrandStorage(globalThis.localStorage, 'boaa.desktopSourceTarget.v1') === 'server'
@@ -385,15 +399,15 @@ export default function App() {
     }
   });
   const canChooseDesktopSourceTarget =
-    platformRuntime.kind === 'tauri-desktop' && readerRuntime.mode === 'local' && Boolean(providerApiClient);
+    platformRuntime.kind === 'tauri-desktop' && readerRuntime.mode === 'local' && Boolean(sourceApiClient);
   const installedExtensions = useMemo<InstalledExtensionManager | undefined>(
     () =>
-      providerApiClient && (!canChooseDesktopSourceTarget || desktopSourceTarget === 'server')
-        ? new RemoteInstalledExtensions(providerApiClient)
+      sourceApiClient && (!canChooseDesktopSourceTarget || desktopSourceTarget === 'server')
+        ? new RemoteInstalledExtensions(sourceApiClient)
         : platformRuntime.kind === 'tauri-desktop'
           ? new LocalInstalledExtensions(new NativePackageExecution())
           : undefined,
-    [providerApiClient, platformRuntime.kind, canChooseDesktopSourceTarget, desktopSourceTarget],
+    [sourceApiClient, platformRuntime.kind, canChooseDesktopSourceTarget, desktopSourceTarget],
   );
   const installedSnapshot = useSyncExternalStore(
     installedExtensions?.subscribe ?? (() => () => {}),
@@ -447,8 +461,14 @@ export default function App() {
   const isDesktopProviderRuntime = providerExecutionRuntime === 'desktop';
   const localDeviceId = useMemo(() => getOrCreateRemoteDeviceId(), []);
   const documentIo = useMemo(() => createPlatformDocumentIo(platformRuntime), [platformRuntime]);
-  const libraryFolderState = useMemo(() => new LibraryFolderLocalStateStore(), []);
-  const externalSourceState = useMemo(() => new ExternalSourceLocalStateStore(), []);
+  const libraryFolderState = useMemo(
+    () => new LibraryFolderLocalStateStore(readerRuntime.session?.storageScope, readerRuntime.session?.signal),
+    [readerRuntime.session],
+  );
+  const externalSourceState = useMemo(
+    () => new ExternalSourceLocalStateStore(readerRuntime.session?.storageScope, readerRuntime.session?.signal),
+    [readerRuntime.session],
+  );
   const libraryFolderIo = useMemo(
     () => createPlatformLibraryFolderIo(platformRuntime, libraryFolderState),
     [libraryFolderState, platformRuntime],
@@ -456,9 +476,28 @@ export default function App() {
   const dropboxExternalSourceAppKey =
     appPublicRuntimeConfig.dropbox.sourceAppKey ?? appPublicRuntimeConfig.dropbox.appKey;
   const dropboxCloudVaultAppKey = appPublicRuntimeConfig.dropbox.appKey ?? appPublicRuntimeConfig.dropbox.sourceAppKey;
+  const allowSharedSourceIntegrations =
+    !readerRuntime.session || readerRuntime.session.context.account.role === 'admin';
+  const externalAccountFetch = useMemo<typeof fetch>(() => {
+    const lifetime = readerRuntime.session?.signal;
+    return async (input, init) => {
+      lifetime?.throwIfAborted();
+      const signal = lifetime ? AbortSignal.any([lifetime, ...(init?.signal ? [init.signal] : [])]) : init?.signal;
+      const response = await fetch(input, { ...init, signal });
+      lifetime?.throwIfAborted();
+      return response;
+    };
+  }, [readerRuntime.session]);
   const dropboxExternalSourceBroker = useMemo(
-    () => new DropboxSourceAccountBroker(DROPBOX_EXTERNAL_SOURCE_ID, dropboxExternalSourceAppKey, externalSourceState),
-    [dropboxExternalSourceAppKey, externalSourceState],
+    () =>
+      new DropboxSourceAccountBroker(
+        DROPBOX_EXTERNAL_SOURCE_ID,
+        dropboxExternalSourceAppKey,
+        externalSourceState,
+        externalAccountFetch,
+        readerRuntime.session,
+      ),
+    [dropboxExternalSourceAppKey, externalSourceState, externalAccountFetch, readerRuntime.session],
   );
   const googleDriveExternalSourceConfig = appPublicRuntimeConfig.googleDrive;
   const googleDriveExternalSourceBroker = useMemo(
@@ -467,15 +506,20 @@ export default function App() {
         GOOGLE_DRIVE_EXTERNAL_SOURCE_ID,
         googleDriveExternalSourceConfig,
         externalSourceState,
+        undefined,
+        externalAccountFetch,
+        readerRuntime.session?.signal,
       ),
-    [externalSourceState, googleDriveExternalSourceConfig],
+    [externalSourceState, googleDriveExternalSourceConfig, externalAccountFetch, readerRuntime.session?.signal],
   );
   const suwayomiExternalSourceBroker = useMemo(
     () =>
       new SuwayomiSourceAccountBroker(SUWAYOMI_EXTERNAL_SOURCE_ID, externalSourceState, {
-        defaultBaseUrl: appPublicRuntimeConfig.suwayomi.defaultBaseUrl,
+        defaultBaseUrl: allowSharedSourceIntegrations ? appPublicRuntimeConfig.suwayomi.defaultBaseUrl : undefined,
+        fetchImpl: externalAccountFetch,
+        signal: readerRuntime.session?.signal,
       }),
-    [externalSourceState],
+    [externalSourceState, allowSharedSourceIntegrations, externalAccountFetch, readerRuntime.session?.signal],
   );
   const [externalSourceBrokerRevision, setExternalSourceBrokerRevision] = useState(0);
   const textServerExternalSourceBroker = useMemo(
@@ -493,7 +537,9 @@ export default function App() {
     void Promise.allSettled([
       dropboxExternalSourceBroker.initialize(),
       googleDriveExternalSourceBroker.initialize(),
-      ...(localStatic ? [] : [suwayomiExternalSourceBroker.initialize(), textServerExternalSourceBroker.initialize()]),
+      ...(localStatic || !allowSharedSourceIntegrations
+        ? []
+        : [suwayomiExternalSourceBroker.initialize(), textServerExternalSourceBroker.initialize()]),
     ]).finally(() => {
       if (!cancelled) setExternalSourceBrokerRevision((value) => value + 1);
     });
@@ -507,6 +553,30 @@ export default function App() {
     googleDriveExternalSourceBroker,
     suwayomiExternalSourceBroker,
     textServerExternalSourceBroker,
+    allowSharedSourceIntegrations,
+  ]);
+  useEffect(() => {
+    const dispose = () => {
+      externalSourceState.dispose();
+      suwayomiExternalSourceBroker.dispose();
+      dropboxExternalSourceBroker.dispose();
+      googleDriveExternalSourceBroker.dispose();
+      textServerExternalSourceBroker.dispose();
+      installedExtensions?.releaseCovers?.();
+    };
+    readerRuntime.session?.signal.addEventListener('abort', dispose, { once: true });
+    return () => {
+      readerRuntime.session?.signal.removeEventListener('abort', dispose);
+      dispose();
+    };
+  }, [
+    readerRuntime.session,
+    externalSourceState,
+    dropboxExternalSourceBroker,
+    googleDriveExternalSourceBroker,
+    textServerExternalSourceBroker,
+    installedExtensions,
+    suwayomiExternalSourceBroker,
   ]);
   const externalSourceHostContext = useMemo<TrustedExternalSourceHostContext>(
     () => ({
@@ -514,7 +584,7 @@ export default function App() {
         get: (brokerId) => {
           if (brokerId === DROPBOX_EXTERNAL_SOURCE_BROKER_ID) return dropboxExternalSourceBroker;
           if (brokerId === GOOGLE_DRIVE_EXTERNAL_SOURCE_BROKER_ID) return googleDriveExternalSourceBroker;
-          if (localStatic) return undefined;
+          if (localStatic || !allowSharedSourceIntegrations) return undefined;
           if (brokerId === SUWAYOMI_EXTERNAL_SOURCE_BROKER_ID) return suwayomiExternalSourceBroker;
           if (brokerId === TEXT_SERVER_EXTERNAL_SOURCE_BROKER_ID) return textServerExternalSourceBroker;
           return undefined;
@@ -527,6 +597,7 @@ export default function App() {
       googleDriveExternalSourceBroker,
       suwayomiExternalSourceBroker,
       textServerExternalSourceBroker,
+      allowSharedSourceIntegrations,
     ],
   );
   const externalSourceRegistry = useMemo(
@@ -535,13 +606,15 @@ export default function App() {
         [
           dropboxBuiltInExternalSource,
           googleDriveBuiltInExternalSource,
-          ...(localStatic ? [] : [suwayomiBuiltInExternalSource, textServerBuiltInExternalSource]),
+          ...(localStatic || !allowSharedSourceIntegrations
+            ? []
+            : [suwayomiBuiltInExternalSource, textServerBuiltInExternalSource]),
         ],
         installedExtensions
           ? compositeSourceRegistry(extensionRuntime.trustedExtensions, installedExtensions)
           : extensionRuntime.trustedExtensions,
       ),
-    [extensionRuntime.trustedExtensions, localStatic, installedExtensions],
+    [extensionRuntime.trustedExtensions, localStatic, installedExtensions, allowSharedSourceIntegrations],
   );
   const desktopLocalLLMProviderIds = useMemo(
     () => new Set<string>(nativeLocalLLMProviderIds(platformRuntime.kind)),
@@ -605,6 +678,7 @@ export default function App() {
     selectedNovel,
     view,
   } = bookWorkspaceState;
+  useReaderWakeLockOwner(view === 'reader' || view === 'document');
   const { replaceSelection, setNovels, setRemoteReadingPosition, setSelectedNovel } = bookWorkspace;
   const graphKnowledgeController = useCharacterGraphKnowledgeController({
     repository: readerRepository,
@@ -702,7 +776,9 @@ export default function App() {
     syncPanelOpen || settingsOpen,
     `${syncState?.updatedAt}:${syncState?.nextSequence}:${syncState?.pendingCount}`,
   );
-  const downloadSettingsScope = `${remoteApiClient?.readerSettingsScope ?? 'local'}:${selfHostAuth?.account.username ?? 'local'}`;
+  const downloadSettingsScope =
+    readerRuntime.session?.storageScope ??
+    `${remoteApiClient?.readerSettingsScope ?? 'local'}:${readerRuntime.session?.storageScope ?? selfHostAuth?.account.username ?? 'local'}`;
   const legacyDownloads = useMemo(() => legacyDownloadPolicy(downloadSettingsScope), [downloadSettingsScope]);
   useEffect(() => {
     if (!remoteApiClient) return;
@@ -798,25 +874,28 @@ export default function App() {
     [selectedNovel?.id, settings],
   );
   const ttsAudioSession = useMemo(() => new BrowserAudioSession(), []);
-  const fixedDocumentTextRepository = useMemo(() => new IndexedDbDocumentTextRepository(), []);
-  const hostedTTSOfflineCache = useMemo(() => new IndexedDbHostedTTSOfflineCache(), []);
+  const fixedDocumentTextRepository = useMemo(
+    () => new (createDocumentTextStore(readerRuntime.auxiliaryDatabase).IndexedDbDocumentTextRepository)(),
+    [readerRuntime.auxiliaryDatabase],
+  );
+  const hostedTTSOfflineCache = useMemo(
+    () => new (createHostedTTSOfflineStore(readerRuntime.auxiliaryDatabase).IndexedDbHostedTTSOfflineCache)(),
+    [readerRuntime.auxiliaryDatabase],
+  );
   const ttsControllerChapterId =
     view === 'document' && selectedNovel ? `fixed_document_${selectedNovel.id}` : currentChapter?.id;
+  const ttsAccountScope = readerRuntime.session?.storageScope ?? selfHostAuth?.account.username;
+  const ttsContentIdentity = useRef(new TTSContentIdentity());
+  const ttsContentOwner = ttsContentIdentity.current.update(selectedNovel, currentChapter);
   const ttsSessionOwner = useMemo(
     () => ({
       runtime: readerRuntime,
-      account: selfHostAuth?.account.username,
-      revision: selectedNovel?.activeContentRevisionId,
+      account: ttsAccountScope,
+      revision: ttsContentOwner,
       gateway: ttsCacheGateway,
       client: providerApiClient,
     }),
-    [
-      readerRuntime,
-      selfHostAuth?.account.username,
-      selectedNovel?.activeContentRevisionId,
-      ttsCacheGateway,
-      providerApiClient,
-    ],
+    [readerRuntime, ttsAccountScope, ttsContentOwner, ttsCacheGateway, providerApiClient],
   );
   const ttsExecutionController = useTTSExecutionController({
     sessionOwner: ttsSessionOwner,
@@ -860,7 +939,7 @@ export default function App() {
     bookId: selectedNovel?.id,
     contentRevision: selectedNovel?.activeContentRevisionId,
     runtime: readerRuntime,
-    accountKey: selfHostAuth?.account.username,
+    accountKey: readerRuntime.session?.storageScope ?? selfHostAuth?.account.username,
     mobile: platformRuntime.kind === 'tauri-mobile',
     cache: hostedTTSOfflineCache,
     gateway: ttsCacheGateway,
@@ -1170,10 +1249,6 @@ export default function App() {
     (paragraphId: string) => readerScreenHandle.getCachedParagraphById(paragraphId),
     [readerScreenHandle],
   );
-  const getParagraphAtIndex = useCallback(
-    (index: number) => readerScreenHandle.getParagraphAtIndex(index),
-    [readerScreenHandle],
-  );
   const scrollToParagraph = useCallback(
     (paragraphId: string) => readerScreenHandle.scrollToParagraph(paragraphId),
     [readerScreenHandle],
@@ -1239,12 +1314,14 @@ export default function App() {
   });
   const webNovelMetadataCollector = extensionRuntime.webNovelMetadataCollector;
   const waitForSourceReadingHistory = useSelfHostIntegrationSettings({
+    allowLegacyImport: !readerRuntime.session || readerRuntime.session.context.legacyDataOwner,
+    signal: readerRuntime.session?.signal,
     enabled: readerRuntime.mode === 'remote',
     client: remoteApiClient,
     extensionManager: extensionRuntime.manager,
     metadataCollector: webNovelMetadataCollector,
     externalSourceState,
-    sourceBrokers: [suwayomiExternalSourceBroker, textServerExternalSourceBroker],
+    sourceBrokers: allowSharedSourceIntegrations ? [suwayomiExternalSourceBroker, textServerExternalSourceBroker] : [],
     onApplied: () => setExternalSourceBrokerRevision((value) => value + 1),
     notify: showToast,
   });
@@ -1357,7 +1434,7 @@ export default function App() {
     notify: showToast,
     confirm: (message) => window.confirm(message),
     dropboxAppKey: dropboxCloudVaultAppKey,
-    externalProvider: product?.cloudVaultProvider ?? platformCloudVaultProvider,
+    externalProvider: readerRuntime.session ? undefined : (product?.cloudVaultProvider ?? platformCloudVaultProvider),
     localMutationRevisions: cloudVaultMutationRevisions,
   });
 
@@ -2104,7 +2181,11 @@ export default function App() {
       refresh: refreshNovels,
       notify: showToast,
     },
-    { runtime: readerRuntime, account: selfHostAuth?.account.username, settingsScope: downloadSettingsScope },
+    {
+      runtime: readerRuntime,
+      account: ttsAccountScope,
+      settingsScope: downloadSettingsScope,
+    },
   );
 
   const correctionReviewItems = useMemo(() => buildLabelCorrectionReviewItems({ segments }), [segments]);
@@ -2178,7 +2259,8 @@ export default function App() {
     : true;
   const ttsBookOverrideEnabled = hasBookTTSPlaybackOverride(settings, selectedNovel?.id);
   const changeTTSPlaybackSettings = (patch: TTSPlaybackSettingsOverride) => {
-    if ('mode' in patch || 'voiceSource' in patch || 'serverVoiceId' in patch) ttsExecutionController.stopAll();
+    if ('mode' in patch || 'voiceSource' in patch || 'serverVoiceId' in patch || 'plainChunking' in patch)
+      ttsExecutionController.stopAll();
     updateSettings((previous) =>
       selectedNovel && hasBookTTSPlaybackOverride(previous, selectedNovel.id)
         ? updateBookTTSPlaybackOverride(
@@ -2328,6 +2410,20 @@ export default function App() {
     ? voiceProfiles.filter((profile) => profile.providerId === selectedHostedTTSProvider.providerId)
     : [];
   const voiceSampleAudioSession = useMemo(() => new BrowserAudioSession(), []);
+  useEffect(() => {
+    const stop = () => {
+      ttsAudioSession.stop(false);
+      voiceSampleAudioSession.stop(false);
+      bookPlaybackCoordinator.cancel();
+      mediaSession.clear();
+    };
+    readerRuntime.session?.signal.addEventListener('abort', stop, { once: true });
+    return () => {
+      readerRuntime.session?.signal.removeEventListener('abort', stop);
+      stop();
+    };
+  }, [readerRuntime.session, ttsAudioSession, voiceSampleAudioSession, bookPlaybackCoordinator, mediaSession]);
+
   const voiceProductStateRef = useRef<VoiceProductStateV1 | undefined>(undefined);
   const playVoiceProductSample = useCallback(
     async (profile: VoiceProfile, text: string, kind: 'neutral' | 'in_context'): Promise<boolean> => {
@@ -2424,7 +2520,7 @@ export default function App() {
   );
   const voiceProductController = useVoiceProductController({
     repository: readerRepository,
-    novelId: selectedNovel?.id,
+    novelId: canUseProviders ? selectedNovel?.id : undefined,
     contentRevisionId: selectedNovel?.activeContentRevisionId,
     characters,
     voiceProfiles,
@@ -2464,45 +2560,30 @@ export default function App() {
         })),
     [selectedNovel?.id, voiceProductController.state?.pronunciationProfile],
   );
-  const [customSpokenTextRules, setCustomSpokenTextRules] = useState<SpokenTextRule[]>([]);
-  useEffect(() => {
-    let active = true;
-    void import('./storage/spoken-text-rule-store')
-      .then((store) => store.listSpokenTextRules(selectedNovel?.id))
-      .then((rules) => {
-        if (active) setCustomSpokenTextRules(rules);
-      })
-      .catch(() => {
-        if (active) setCustomSpokenTextRules([]);
-      });
-    return () => {
-      active = false;
-    };
-  }, [selectedNovel?.id]);
+  const spokenFilterDb = useMemo(
+    () =>
+      readerRuntime.session?.storageScope
+        ? createAccountReaderDb(readerRuntime.session.storageScope, readerRuntime.session.signal)
+        : undefined,
+    [readerRuntime.session],
+  );
+  const spokenFilters = useSpokenTextFilters({
+    bookId: selectedNovel?.id,
+    openDb: spokenFilterDb,
+    onError: (message) => showToast(message, 'warning'),
+    onChanged: () => {
+      bookPlaybackCoordinator.cancel();
+      ttsExecutionController.stopAll();
+      showToast('낭독 필터를 저장했어요. 재생하면 새 규칙으로 읽어요.', 'success');
+    },
+  });
+  const customSpokenTextRules = spokenFilters.rules;
   const spokenTextRules = useMemo(
     () => [...pronunciationSpokenTextRules, ...customSpokenTextRules],
     [customSpokenTextRules, pronunciationSpokenTextRules],
   );
-  const saveSpokenTextSkipRule = async (
-    pattern: string,
-    kind: Extract<SpokenTextRule['kind'], 'skip_line' | 'skip_prefix' | 'skip_suffix'>,
-  ) => {
-    const store = await import('./storage/spoken-text-rule-store');
-    const rule = await store.saveSpokenTextRule({
-      scope: selectedNovel ? 'book' : 'global',
-      bookId: selectedNovel?.id,
-      kind,
-      pattern,
-      enabled: true,
-      priority: customSpokenTextRules.length,
-    });
-    setCustomSpokenTextRules((current) => [...current.filter((item) => item.id !== rule.id), rule]);
-  };
-  const removeSpokenTextSkipRule = async (id: string) => {
-    const store = await import('./storage/spoken-text-rule-store');
-    await store.deleteSpokenTextRule(id);
-    setCustomSpokenTextRules((current) => current.filter((item) => item.id !== id));
-  };
+  const saveSpokenTextSkipRule = spokenFilters.saveSkip;
+  const removeSpokenTextSkipRule = spokenFilters.remove;
   const previewSpokenTextRuleImpact = useCallback(
     async (signal: AbortSignal) => {
       if (!selectedNovel) throw new Error('책을 먼저 열어주세요.');
@@ -3519,7 +3600,7 @@ export default function App() {
   };
 
   const runMockAnalysis = async () => {
-    if (!selectedNovel || !currentChapter) return;
+    if (!canUseProviders || !selectedNovel || !currentChapter) return;
     const analysisParagraphs = await import('./features/ai/analysis-paragraph-source').then((module) =>
       module.loadPinnedAnalysisParagraphs(
         readerRepository,
@@ -4150,11 +4231,46 @@ export default function App() {
     await voiceProductController.playAndRecordSample(profile, kind, text.slice(0, 240), segment?.id);
   };
 
-  const speakAt = async (index: number, sessionId: number, startQueueItemFingerprint?: string) => {
+  const ttsSourceReaderRef = useRef(externalSourceFeature.libraryReader);
+  ttsSourceReaderRef.current = externalSourceFeature.libraryReader;
+
+  const runTTSAt = async (index: number, sessionId: number, startQueueItemFingerprint?: string) => {
     const chapter = currentChapter;
     const sessionSignal = ttsExecutionController.sessionSignal(sessionId);
     if (!sessionSignal) return;
+    const prepareNext = async () => {
+      if (!chapter || !selectedNovel || !ttsExecutionController.isSessionCurrent(sessionId)) return;
+      const source = ttsSourceReaderRef.current;
+      const prepared = await prepareNextTTSChapter({
+        novel: selectedNovel,
+        current: chapter,
+        listChapters: (bookId) => readerRepository.listChapters(bookId),
+        source: source
+          ? {
+              novelId: source.novelId,
+              items: source.items.map((item) => ({
+                sectionId: externalItemSectionId(item),
+                prepare: () => source.prepare?.(item) ?? Promise.resolve(undefined),
+              })),
+            }
+          : undefined,
+      });
+      return ttsExecutionController.isSessionCurrent(sessionId) ? prepared : undefined;
+    };
     let paragraphCount = chapter?.paragraphCount ?? 0;
+    // Audio must not depend on mounting/measuring the visual viewport in a background tab.
+    const getPlaybackParagraph = async (paragraphIndex: number) => {
+      if (!chapter || !selectedNovel || !ttsExecutionController.isSessionCurrent(sessionId)) return;
+      const page = await loadSharedParagraphPage(
+        readerRepository,
+        selectedNovel.activeContentRevisionId ??
+          `${selectedNovel.id}:${chapter.id}:${chapter.textHash}:${chapter.paragraphCount}`,
+        chapter.id,
+        Math.floor(paragraphIndex / PARAGRAPHS_PER_PAGE),
+      );
+      if (!ttsExecutionController.isSessionCurrent(sessionId)) return;
+      return paragraphAtPlaybackIndex(page, paragraphIndex);
+    };
     const [playbackSession, playbackRunner, playbackBuilder, footnotePlanner] = await Promise.all([
       import('./providers/tts-playback-session'),
       import('./providers/tts-playback-session-runner'),
@@ -4205,16 +4321,31 @@ export default function App() {
       paragraphCount,
       getParagraph: plannedParagraphs
         ? async (playbackIndex) => plannedParagraphs?.[playbackIndex]
-        : getParagraphAtIndex,
+        : getPlaybackParagraph,
       sourceParagraphIndex: sourceIndexByParagraphId
         ? (paragraph, playbackIndex) => sourceIndexByParagraphId?.get(paragraph.id) ?? playbackIndex
         : undefined,
+      prepareParagraph:
+        plainServerSelected && ttsPlaybackSettings.plainChunking === 'batch'
+          ? (index, paragraph) =>
+              preparePlainTTSBatch({
+                index,
+                paragraph,
+                paragraphCount,
+                getParagraph: plannedParagraphs ? async (i) => plannedParagraphs?.[i] : getPlaybackParagraph,
+                language: selectedNovel?.language,
+                rules: spokenTextRules,
+                rate: ttsPlaybackSettings.rate,
+                shouldContinue: () => ttsExecutionController.isSessionCurrent(sessionId),
+              })
+          : undefined,
       buildPlayableSegments: (paragraph) => {
         if (plainMode)
           return buildPlainTTSItems({
             paragraph,
             language: selectedNovel?.language,
             rules: spokenTextRules,
+            chunking: ttsPlaybackSettings.voiceSource === 'server' ? ttsPlaybackSettings.plainChunking : 'sentence',
             rate: ttsPlaybackSettings.rate,
             voiceURI: settings.ttsVoiceURI,
           });
@@ -4244,7 +4375,29 @@ export default function App() {
       waitForResume: () => ttsExecutionController.waitForResume(sessionId),
       allowSystemFallback: !plainServerSelected,
       playHostedSegment: plainServerSelected
-        ? (playable, paragraph) => plainTTS.play(playable, paragraph, sessionId)
+        ? (playable, paragraph) => {
+            let followedParagraphId = paragraph.id;
+            return plainTTS.play(playable, paragraph, sessionId, (fraction) => {
+              const target = estimatedPlainTTSParagraph(playable, fraction);
+              if (
+                !target ||
+                target.paragraphId === followedParagraphId ||
+                !ttsExecutionController.isSessionCurrent(sessionId)
+              )
+                return;
+              followedParagraphId = target.paragraphId;
+              ttsExecutionController.setParagraph(sessionId, target.paragraphIndex);
+              ttsExecutionController.setActivePlayback(sessionId, {
+                paragraphId: target.paragraphId,
+                speakerLabel: playable.speakerLabel,
+                segmentIds: playable.sourceSegmentIds,
+                ranges: playable.sourceRanges
+                  .filter((range) => range.paragraphId === target.paragraphId)
+                  .map((range) => ({ start: range.startOffset, end: range.endOffset })),
+              });
+              if (document.visibilityState === 'visible') void scrollToParagraph(target.paragraphId);
+            });
+          }
         : !plainMode && hostedTTSPlaybackReady
           ? (playable, paragraph) => playHostedTtsSegment(playable, paragraph, sessionId)
           : undefined,
@@ -4262,11 +4415,52 @@ export default function App() {
                 ? plainTTS.prefetch(playable, paragraph, sessionId)
                 : prefetchHostedTtsSegment(playable, paragraph, sessionId)
           : undefined,
+      prefetchNextChapter:
+        plainServerSelected && !ttsPlaybackSettings.offlineOnly && ttsPlaybackSettings.chapterEndBehavior === 'continue'
+          ? async () => {
+              if (!chapter || !selectedNovel || ttsExecutionController.shouldStopAtChapterEnd()) return;
+              const preparedNext = await prepareNext();
+              const next = preparedNext?.chapter;
+              if (!next || !ttsExecutionController.isSessionCurrent(sessionId)) return;
+              const openingParagraphs: Paragraph[] = [];
+              for await (const page of readerRepository.iterateParagraphPages({
+                chapterId: next.id,
+                signal: sessionSignal,
+                batchSize: selectedNovel.format === 'epub' ? 20 : 1,
+              })) {
+                if (!ttsExecutionController.isSessionCurrent(sessionId)) return;
+                openingParagraphs.push(...page.paragraphs);
+                // EPUB's existing footnote planner needs the chapter, other formats only its opening page.
+                if (selectedNovel.format !== 'epub') break;
+              }
+              const opening = await preparePlainTTSChapterOpening({
+                paragraphs: openingParagraphs,
+                epub: selectedNovel.format === 'epub',
+                settings: ttsPlaybackSettings,
+                rules: spokenTextRules,
+                language: selectedNovel.language,
+                shouldContinue: () => ttsExecutionController.isSessionCurrent(sessionId),
+              });
+              if (
+                !opening ||
+                !ttsExecutionController.isSessionCurrent(sessionId) ||
+                ttsExecutionController.shouldStopAtChapterEnd() ||
+                ttsExecutionController.shouldStopAfterItem()
+              )
+                return;
+              await plainTTS.prefetch(
+                opening.playable,
+                opening.paragraph,
+                sessionId,
+                preparedNext?.novel.activeContentRevisionId,
+              );
+            }
+          : undefined,
       hostedPrefetchDepth:
         !ttsPlaybackSettings.offlineOnly && selectedTTSPlaybackReady
           ? (playable) =>
               plainServerSelected
-                ? 2
+                ? 1
                 : playbackSession.adaptiveHostedTTSPrefetchDepth({
                     averageResolveLatencyMs: hostedTtsPrefetchMetricsRef.current.averageResolveLatencyMs,
                     consecutiveFailures: hostedTtsPrefetchMetricsRef.current.consecutiveFailures,
@@ -4311,7 +4505,7 @@ export default function App() {
           saveTTSPlaybackResume(resumeRecord);
           setTTSResumeRecord(resumeRecord);
         }
-        void scrollToParagraph(paragraph.id);
+        if (document.visibilityState === 'visible') void scrollToParagraph(paragraph.id);
       },
       onPlayableStart: async (_playableIndex, playable, paragraphIndex, paragraph) => {
         if (!selectedNovel?.activeContentRevisionId) return;
@@ -4361,8 +4555,21 @@ export default function App() {
       return;
     }
     if (!result.completed) return;
-    const nextChapter = nextPlaybackChapter(chapters, chapter.id);
     const stopAtChapterEnd = ttsExecutionController.shouldStopAtChapterEnd();
+    let preparedNext: PreparedTTSChapter | undefined;
+    if (!stopAtChapterEnd && ttsPlaybackSettings.chapterEndBehavior === 'continue') {
+      try {
+        preparedNext = await prepareNext();
+      } catch (error) {
+        if (ttsExecutionController.isSessionCurrent(sessionId)) {
+          ttsExecutionController.finishSession(sessionId, { preserveIndex: true });
+          showToast(error instanceof Error ? error.message : '다음 화를 준비하지 못했습니다.', 'warning');
+        }
+        return;
+      }
+      if (!ttsExecutionController.isSessionCurrent(sessionId)) return;
+    }
+    const nextChapter = preparedNext?.chapter;
     if (stopAtChapterEnd || ttsPlaybackSettings.chapterEndBehavior === 'stop' || !nextChapter) {
       ttsExecutionController.finishSession(sessionId);
       clearTTSPlaybackResume(chapter.novelId);
@@ -4384,10 +4591,23 @@ export default function App() {
     bookPlaybackCoordinator.schedule({ bookId: chapter.novelId, chapterId: nextChapter.id, startIndex: 0 });
     ttsExecutionController.finishSession(sessionId, { preserveSleepTimer: true });
     await bookWorkspace.openChapter(nextChapter, {
-      novel: selectedNovel,
+      novel: preparedNext?.novel ?? selectedNovel,
+      chapters: preparedNext?.chapters,
       initialMode: 'listen',
       preserveTTS: true,
     });
+  };
+
+  const speakAt = async (index: number, sessionId: number, fingerprint?: string) => {
+    try {
+      await runTTSAt(index, sessionId, fingerprint);
+    } catch (error) {
+      if (!ttsExecutionController.isSessionCurrent(sessionId)) return;
+      const message = error instanceof Error ? error.message : '낭독을 준비하지 못했습니다. 다시 재생해 주세요.';
+      bookPlaybackCoordinator.cancel();
+      ttsExecutionController.finishSession(sessionId, { preserveIndex: true, errorMessage: message });
+      showToast(message, 'warning');
+    }
   };
 
   const startTTS = async (
@@ -4396,6 +4616,10 @@ export default function App() {
   ) => {
     const chapter = currentChapter;
     if (!chapter?.paragraphCount) return;
+    if (!spokenFilters.ready) {
+      showToast('낭독 필터를 불러오는 중이에요. 잠시 후 재생해 주세요.', 'info');
+      return;
+    }
     plainTTS.stopPreview();
     stopProviderSamples();
     if (plainServerSelected && !plainTTS.ready) {
@@ -4788,15 +5012,12 @@ export default function App() {
 
   useEffect(() => {
     if (!selectedNovel || !currentChapter) return;
-    const pending = bookPlaybackCoordinator.take(selectedNovel.id, currentChapter.id);
-    if (!pending) return;
-    const timeout = window.setTimeout(() => {
+    return deferChapterPlayback(bookPlaybackCoordinator, selectedNovel.id, currentChapter.id, (pending) => {
       void startTTSRef.current(pending.startIndex, {
         preserveSleepTimer: true,
         queueItemFingerprint: pending.queueItemFingerprint,
       });
-    }, 0);
-    return () => window.clearTimeout(timeout);
+    });
   }, [bookPlaybackCoordinator, currentChapter, selectedNovel]);
 
   useEffect(() => {
@@ -4817,8 +5038,8 @@ export default function App() {
       next: () => void ttsMediaActionsRef.current.jump(1),
     });
     mediaSession.setPlaybackState(ttsPlaying ? (ttsPaused ? 'paused' : 'playing') : 'none');
-    return () => mediaSession.clear();
   }, [currentChapter, mediaSession, selectedNovel, ttsPaused, ttsPlaying]);
+  useEffect(() => () => mediaSession.clear(), [mediaSession]);
 
   const appBackLayers: readonly AppBackLayer[] = [
     { id: 'import', open: importFeature.isOpen, dismiss: importFeature.close },
@@ -5489,6 +5710,9 @@ export default function App() {
                 offlineDownloadError={offlineTTSDownloadError}
                 offlineDownloadPolicy={platformRuntime.kind === 'tauri-mobile' ? offlineTTSRecoveryPolicy : undefined}
                 hostedOfflineCacheStatus={hostedProviderMode ? hostedOfflineCacheStatus : undefined}
+                currentParagraphText={
+                  activeTTSPlayback ? cachedParagraphById(activeTTSPlayback.paragraphId)?.text : undefined
+                }
                 activePlayback={activeTTSPlayback}
                 providers={ttsSynthesisProviders}
                 providerDraft={ttsSynthesisDraft}
@@ -5533,6 +5757,8 @@ export default function App() {
                 decideVoice={voiceProductController.decide}
                 savePronunciationRule={voiceProductController.savePronunciationRule}
                 deletePronunciationRule={voiceProductController.deletePronunciationRule}
+                saveSpokenTextFilter={spokenFilters.save}
+                importSpokenTextFilters={spokenFilters.saveMany}
                 saveSpokenTextSkipRule={saveSpokenTextSkipRule}
                 deleteSpokenTextSkipRule={removeSpokenTextSkipRule}
                 previewSpokenTextRuleImpact={previewSpokenTextRuleImpact}

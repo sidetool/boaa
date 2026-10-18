@@ -30,8 +30,9 @@ export function readerPageMapId(identity: ReaderPageMapIdentity): string {
 export async function loadReaderPageMap(
   identity: ReaderPageMapIdentity,
   now = new Date().toISOString(),
+  openDatabase: () => Promise<IDBDatabase> = openReaderDb,
 ): Promise<StoredReaderPageMap | undefined> {
-  const db = await openReaderDb();
+  const db = await openDatabase();
   const tx = db.transaction(READER_PAGE_MAP_STORE, 'readwrite');
   const store = tx.objectStore(READER_PAGE_MAP_STORE);
   const record = await requestToPromise<StoredReaderPageMap | undefined>(store.get(readerPageMapId(identity)));
@@ -49,8 +50,9 @@ export async function saveReaderPageMap(
   identity: ReaderPageMapIdentity,
   boundaries: readonly ReaderPageBoundary[],
   now = new Date().toISOString(),
+  openDatabase: () => Promise<IDBDatabase> = openReaderDb,
 ): Promise<StoredReaderPageMap> {
-  const db = await openReaderDb();
+  const db = await openDatabase();
   const tx = db.transaction(READER_PAGE_MAP_STORE, 'readwrite');
   const store = tx.objectStore(READER_PAGE_MAP_STORE);
   const id = readerPageMapId(identity);
@@ -67,8 +69,11 @@ export async function saveReaderPageMap(
   return record;
 }
 
-export async function pruneReaderPageMaps(maxLayouts = 24): Promise<number> {
-  const db = await openReaderDb();
+export async function pruneReaderPageMaps(
+  maxLayouts = 24,
+  openDatabase: () => Promise<IDBDatabase> = openReaderDb,
+): Promise<number> {
+  const db = await openDatabase();
   const tx = db.transaction(READER_PAGE_MAP_STORE, 'readwrite');
   const store = tx.objectStore(READER_PAGE_MAP_STORE);
   const records = await requestToPromise<StoredReaderPageMap[]>(store.getAll());

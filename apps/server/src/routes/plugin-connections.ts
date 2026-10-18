@@ -1,3 +1,4 @@
+import { requireUserId } from '../auth.js';
 import { randomUUID, randomBytes, createCipheriv, createDecipheriv } from 'node:crypto';
 import type pg from 'pg';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
@@ -48,7 +49,7 @@ export function registerPluginConnectionRoutes(app: FastifyInstance, config: Ser
     assert(req.headers.origin === config.pluginOrigin && req.headers['x-boaa-plugin-host'] === '1');
     const token = requestCookie(req, SELF_HOST_SESSION_COOKIE);
     assert(token && token.length <= 512);
-    const scope = await pluginScope(pool, token!, config.defaultUserId);
+    const scope = await pluginScope(pool, token!, requireUserId(req));
     assert(scope);
     return scope!;
   };

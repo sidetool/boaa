@@ -33,6 +33,7 @@ export function ttsPlaybackSettingsFingerprint(input: {
     mode: input.settings.mode ?? 'plain',
     voiceSource: input.settings.voiceSource ?? 'system',
     serverVoiceId: input.settings.serverVoiceId,
+    plainChunking: input.settings.plainChunking ?? 'sentence',
     rate: input.settings.rate,
     pitch: input.settings.pitch,
     skippedContentTypes: [...input.settings.skippedContentTypes].sort(),

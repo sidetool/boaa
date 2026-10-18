@@ -1,3 +1,4 @@
+import { requestOwnerConfig } from '../../services/owner-context.js';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import pg from 'pg';
 import type { ServerConfig } from '../../config.js';
@@ -138,6 +139,7 @@ export async function registerBookCatalogRoutes(
   pool: pg.Pool,
   config: ServerConfig,
 ): Promise<void> {
+  const deploymentConfig = config;
   app.get<{
     Querystring: {
       shelfId?: string;
@@ -149,6 +151,8 @@ export async function registerBookCatalogRoutes(
       includeTrash?: string;
     };
   }>('/api/books', async (request, reply) => {
+    const config = requestOwnerConfig(deploymentConfig, request);
+
     const query = request.query ?? {};
     const cursor = Math.max(0, Number.parseInt(query.cursor ?? '0', 10) || 0);
     const limit = Math.max(1, Math.min(1_000, Number.parseInt(query.limit ?? '1000', 10) || 1_000));
@@ -208,7 +212,9 @@ export async function registerBookCatalogRoutes(
     };
   });
 
-  app.get('/api/trash/books', async () => {
+  app.get('/api/trash/books', async (request) => {
+    const config = requestOwnerConfig(deploymentConfig, request);
+
     const result = await pool.query(
       `${catalogSelect}
        where b.user_id = $1 and b.deleted_at is not null
@@ -219,6 +225,8 @@ export async function registerBookCatalogRoutes(
   });
 
   app.get<{ Params: { bookId: string } }>('/api/books/:bookId/source/metadata', async (request, reply) => {
+    const config = requestOwnerConfig(deploymentConfig, request);
+
     const result = await pool.query(
       `
         select o.id, b.id as book_id, b.active_content_revision_id as content_revision_id,
@@ -235,6 +243,8 @@ export async function registerBookCatalogRoutes(
   });
 
   app.get<{ Params: { bookId: string } }>('/api/books/:bookId/source', async (request, reply) => {
+    const config = requestOwnerConfig(deploymentConfig, request);
+
     const result = await pool.query(
       `
         select o.storage_key, o.file_name, o.content_type, o.size_bytes, o.raw_text_hash
@@ -281,6 +291,8 @@ export async function registerBookCatalogRoutes(
     '/api/books/:bookId/source',
     { bodyLimit: config.maxUploadBytes },
     async (request, reply) => {
+      const config = requestOwnerConfig(deploymentConfig, request);
+
       if (!Buffer.isBuffer(request.body) || request.body.byteLength === 0) {
         return reply.code(400).send({ error: 'source body is missing' });
       }
@@ -317,20 +329,20 @@ export async function registerBookCatalogRoutes(
 
         const existing = await client.query(
           `select id, storage_key, file_name, content_type, size_bytes, created_at
-           from book_objects where raw_text_hash = $1`,
-          [contentHash],
+           from book_objects where raw_text_hash = $1 and user_id=$2`,
+          [contentHash, config.defaultUserId],
         );
         let objectId: string;
         if (existing.rows[0]) {
           objectId = String(existing.rows[0].id);
         } else {
-          objectId = persistentId128('object', [contentHash]);
+          objectId = persistentId128('object', [config.defaultUserId, contentHash]);
           uploadedKey = `${config.defaultUserId}/${objectId}/${fileName}`;
           await putRawBookObject(s3, config, uploadedKey, request.body, contentType);
           await client.query(
-            `insert into book_objects (id, raw_text_hash, storage_key, file_name, content_type, size_bytes)
-             values ($1, $2, $3, $4, $5, $6)`,
-            [objectId, contentHash, uploadedKey, fileName, contentType, request.body.byteLength],
+            `insert into book_objects (id, raw_text_hash, storage_key, file_name, content_type, size_bytes, user_id)
+             values ($1, $2, $3, $4, $5, $6, $7)`,
+            [objectId, contentHash, uploadedKey, fileName, contentType, request.body.byteLength, config.defaultUserId],
           );
         }
         await client.query(
@@ -378,6 +390,8 @@ export async function registerBookCatalogRoutes(
   );
 
   app.patch<{ Params: { bookId: string }; Body: BookPatchBody }>('/api/books/:bookId', async (request, reply) => {
+    const config = requestOwnerConfig(deploymentConfig, request);
+
     const parsed = validateBookPatchBody(request.body);
     if (!parsed.ok) return reply.code(400).send({ error: parsed.error });
     const value = parsed.value;
@@ -486,6 +500,8 @@ export async function registerBookCatalogRoutes(
   });
 
   app.delete<{ Params: { bookId: string }; Body: LifecycleBody }>('/api/books/:bookId', async (request, reply) => {
+    const config = requestOwnerConfig(deploymentConfig, request);
+
     const client = await pool.connect();
     try {
       await client.query('begin');
@@ -540,6 +556,8 @@ export async function registerBookCatalogRoutes(
   app.post<{ Params: { bookId: string }; Body: LifecycleBody }>(
     '/api/trash/books/:bookId/restore',
     async (request, reply) => {
+      const config = requestOwnerConfig(deploymentConfig, request);
+
       const client = await pool.connect();
       try {
         await client.query('begin');
@@ -585,6 +603,8 @@ export async function registerBookCatalogRoutes(
   app.delete<{ Params: { bookId: string }; Body: LifecycleBody }>(
     '/api/trash/books/:bookId',
     async (request, reply) => {
+      const config = requestOwnerConfig(deploymentConfig, request);
+
       const client = await pool.connect();
       const storageKeys: string[] = [];
       try {
@@ -647,7 +667,9 @@ export async function registerBookCatalogRoutes(
     },
   );
 
-  app.delete('/api/trash/books', async () => {
+  app.delete('/api/trash/books', async (request) => {
+    const config = requestOwnerConfig(deploymentConfig, request);
+
     const client = await pool.connect();
     const storageKeys: string[] = [];
     let purged: number | undefined;

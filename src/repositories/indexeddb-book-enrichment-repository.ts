@@ -1,60 +1,53 @@
 import type { BookEnrichmentRepository } from './book-enrichment-repository';
-import {
-  getBookEnrichmentCandidate,
-  getBookEnrichmentReceipt,
-  listBookEnrichmentCandidates,
-  listBookEnrichmentReceipts,
-  reconcileBookEnrichmentCandidatesAfterApproval,
-  recordBookEnrichmentApproval,
-  recordBookEnrichmentUndo,
-  replacePendingBookEnrichmentCandidates,
-  resolveBookEnrichmentApprovalIntent,
-  stageBookEnrichmentApprovalIntent,
-  updateBookEnrichmentCandidateStatus,
-} from '../storage/book-enrichment-store';
+import { createBookEnrichmentStore } from '../storage/book-enrichment-store';
+import { openReaderDb } from '../storage/reader-database';
 
 export class IndexedDbBookEnrichmentRepository implements BookEnrichmentRepository {
+  private readonly store;
+  constructor(openDatabase: () => Promise<IDBDatabase> = openReaderDb) {
+    this.store = createBookEnrichmentStore(openDatabase);
+  }
   listCandidates(bookId: string) {
-    return listBookEnrichmentCandidates(bookId);
+    return this.store.listBookEnrichmentCandidates(bookId);
   }
 
   listReceipts(bookId: string) {
-    return listBookEnrichmentReceipts(bookId);
+    return this.store.listBookEnrichmentReceipts(bookId);
   }
 
   getReceipt(receiptId: string) {
-    return getBookEnrichmentReceipt(receiptId);
+    return this.store.getBookEnrichmentReceipt(receiptId);
   }
 
   getCandidate(candidateId: string) {
-    return getBookEnrichmentCandidate(candidateId);
+    return this.store.getBookEnrichmentCandidate(candidateId);
   }
 
   replacePendingCandidates(...args: Parameters<BookEnrichmentRepository['replacePendingCandidates']>) {
-    return replacePendingBookEnrichmentCandidates(...args);
+    return this.store.replacePendingBookEnrichmentCandidates(...args);
   }
 
   updateCandidateStatus(...args: Parameters<BookEnrichmentRepository['updateCandidateStatus']>) {
-    return updateBookEnrichmentCandidateStatus(...args);
+    return this.store.updateBookEnrichmentCandidateStatus(...args);
   }
 
   stageApprovalIntent(...args: Parameters<BookEnrichmentRepository['stageApprovalIntent']>) {
-    return stageBookEnrichmentApprovalIntent(...args);
+    return this.store.stageBookEnrichmentApprovalIntent(...args);
   }
 
   resolveApprovalIntent(...args: Parameters<BookEnrichmentRepository['resolveApprovalIntent']>) {
-    return resolveBookEnrichmentApprovalIntent(...args);
+    return this.store.resolveBookEnrichmentApprovalIntent(...args);
   }
 
   recordApproval(...args: Parameters<BookEnrichmentRepository['recordApproval']>) {
-    return recordBookEnrichmentApproval(...args);
+    return this.store.recordBookEnrichmentApproval(...args);
   }
 
   recordUndo(...args: Parameters<BookEnrichmentRepository['recordUndo']>) {
-    return recordBookEnrichmentUndo(...args);
+    return this.store.recordBookEnrichmentUndo(...args);
   }
 
   reconcileCandidatesAfterApproval(...args: Parameters<BookEnrichmentRepository['reconcileCandidatesAfterApproval']>) {
-    return reconcileBookEnrichmentCandidatesAfterApproval(...args);
+    return this.store.reconcileBookEnrichmentCandidatesAfterApproval(...args);
   }
 }

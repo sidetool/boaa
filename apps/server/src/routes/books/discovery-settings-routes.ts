@@ -1,3 +1,4 @@
+import { requestOwnerConfig } from '../../services/owner-context.js';
 import type { FastifyInstance } from 'fastify';
 import type pg from 'pg';
 import type { ServerConfig } from '../../config.js';
@@ -5,7 +6,10 @@ import { defaultSettings } from '@boaa/reader-core/settings';
 import { normalizeDiscoveryConfig, type DiscoverySettings } from '@boaa/reader-core/discovery-settings';
 
 export function registerDiscoverySettingsRoutes(app: FastifyInstance, pool: pg.Pool, config: ServerConfig) {
-  app.get('/api/discovery-settings', async () => {
+  const deploymentConfig = config;
+  app.get('/api/discovery-settings', async (request) => {
+    const config = requestOwnerConfig(deploymentConfig, request);
+
     const result = await pool.query(
       "select settings -> '_boaaDiscovery' as discovery_settings from reader_settings where user_id = $1",
       [config.defaultUserId],
@@ -16,6 +20,8 @@ export function registerDiscoverySettingsRoutes(app: FastifyInstance, pool: pg.P
   app.put<{ Body: { config?: unknown; expectedRevision?: unknown } }>(
     '/api/discovery-settings',
     async (request, reply) => {
+      const config = requestOwnerConfig(deploymentConfig, request);
+
       const layout = normalizeDiscoveryConfig(request.body?.config);
       const expectedRevision = request.body?.expectedRevision;
       if (

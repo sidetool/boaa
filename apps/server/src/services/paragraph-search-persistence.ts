@@ -82,6 +82,7 @@ function insertRows(
             text_lower = excluded.text_lower,
             paragraph = excluded.paragraph,
             updated_at = now()
+      where paragraph_search.book_id = excluded.book_id and paragraph_search.chapter_id = excluded.chapter_id
     `,
     values,
   );
@@ -99,7 +100,9 @@ export async function insertParagraphSearchBatch(
   );
 
   for (let start = 0; start < paragraphs.length; start += MAX_PARAGRAPH_SEARCH_ROWS_PER_INSERT) {
-    await insertRows(client, paragraphs.slice(start, start + MAX_PARAGRAPH_SEARCH_ROWS_PER_INSERT));
+    const batch = paragraphs.slice(start, start + MAX_PARAGRAPH_SEARCH_ROWS_PER_INSERT);
+    const result = await insertRows(client, batch);
+    if (result.rowCount !== batch.length) throw new Error('paragraph_search_parent_conflict');
   }
 
   return paragraphs.length;

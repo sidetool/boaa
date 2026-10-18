@@ -101,6 +101,27 @@ jobs:
           RELEASE_PRIVATE_KEY: ${{ secrets.BOAA_RELEASE_PRIVATE_KEY }}
         run: node scripts/release/preflight.mjs
       - run: pnpm check:web-server
+      - name: Account isolation and TTS regression tests
+        run: >-
+          pnpm exec vitest run src/features/auth src/storage/account-isolation.test.ts
+          apps/server/src/db/multi-account-data.integration.test.ts
+          apps/server/src/db/account-boundary-regressions.integration.test.ts
+          apps/server/src/routes/auth.test.ts apps/server/src/routes/admin-sources.test.ts
+          apps/server/src/routes/member-source-policy.test.ts
+          apps/server/src/extensions/owner-runtime-registry.test.ts
+          apps/server/src/extensions/owner-source-state.test.ts
+          src/features/tts src/providers src/ui-next/reader src/features/providers
+          packages/text-core/spoken-text-filter.test.ts
+          apps/server/src/providers apps/server/src/routes/ai/plain-tts-routes.test.ts
+          --maxWorkers=2
+      - name: Real account invitation and two-tab browser acceptance
+        run: |
+          docker pull postgres:16-alpine
+          docker pull redis:7-alpine
+          pnpm exec playwright-core install --with-deps chromium
+          env -i HOME="$HOME" PATH="$PATH" BOAA_APK_RUNTIME_ENABLED=0 \
+            BOAA_CHROMIUM_PATH="$(node --input-type=module -e "import {chromium} from 'playwright-core';console.log(chromium.executablePath())")" \
+            node apps/server/node_modules/tsx/dist/cli.mjs scripts/smoke-multi-account-browser.mjs
       # The global desktop/mobile binary gate remains closed. This release has its own
       # fail-closed, final-image evidence verifier, executed for every native child below.
       - run: pnpm check:licenses:source-release

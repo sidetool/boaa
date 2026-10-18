@@ -25,13 +25,18 @@ export class DiscoverySession {
   private pending = new Map<string, Promise<ExternalItemPage>>();
   private running = 0;
   private queue: Array<() => void> = [];
-  private readonly storage = new ExternalSourceLocalStateStore();
+  private readonly storage: ExternalSourceLocalStateStore;
   private lifetime = new AbortController();
   constructor(
     readonly registry: ExternalSourceRegistryPort,
     readonly context: TrustedExternalSourceHostContext,
     readonly scope = 'local',
-  ) {}
+    storage?: ExternalSourceLocalStateStore,
+  ) {
+    this.storage =
+      storage ??
+      new ExternalSourceLocalStateStore(scope.startsWith('hosted-account:') ? scope : undefined, this.lifetime.signal);
+  }
   key(source: string, input: ExternalSourceListInput) {
     const status = this.registry.getExternalSourceStatus(source as ExtensionContributionId, this.context);
     return JSON.stringify([
@@ -46,7 +51,12 @@ export class DiscoverySession {
   peek(source: string, input: ExternalSourceListInput) {
     const key = this.key(source, input);
     const cached = this.cache.get(key);
-    if (cached && cached.time + sourceCachePolicy(input).keep <= Date.now()) {
+    if (
+      cached &&
+      cached.time +
+        sourceCachePolicy(input, false, this.scope.startsWith('hosted-account:') ? this.scope : undefined).keep <=
+        Date.now()
+    ) {
       this.cache.delete(key);
       return undefined;
     }
@@ -109,7 +119,13 @@ export class DiscoverySession {
       if (this.lifetime.signal.aborted || key !== this.key(source, input)) return undefined;
       const newer = this.peek(source, input);
       if (newer) return newer.page;
-      if (!saved || Date.parse(saved.fetchedAt) + sourceCachePolicy(input).keep <= Date.now()) return undefined;
+      if (
+        !saved ||
+        Date.parse(saved.fetchedAt) +
+          sourceCachePolicy(input, false, this.scope.startsWith('hosted-account:') ? this.scope : undefined).keep <=
+          Date.now()
+      )
+        return undefined;
       const page = restoredSourcePage(saved);
       this.remember(key, page);
       return page;
@@ -138,7 +154,11 @@ export class DiscoverySession {
   async list(source: string, input: ExternalSourceListInput, refresh = false): Promise<ExternalItemPage> {
     const key = this.key(source, input);
     const cached = this.peek(source, input);
-    const ttl = sourceCachePolicy(input).fresh;
+    const ttl = sourceCachePolicy(
+      input,
+      false,
+      this.scope.startsWith('hosted-account:') ? this.scope : undefined,
+    ).fresh;
     if (!refresh && cached && !cached.page.cache?.stale && Date.now() - cached.time < ttl) return cached.page;
     const pending = this.pending.get(key);
     if (pending) return pending;

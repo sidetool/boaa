@@ -25,6 +25,8 @@ import { PortableSourceVault } from '../../features/extensions/PortableSourceVau
 import { SourceExtensionManagerPanel } from '../../features/extensions/SourceExtensionManagerPanel';
 import type { PackageReview } from '../../extensions/packages/installed-extension-manager';
 import { packageOperationMessage } from '../../extensions/packages/package-operation-error';
+import { useSelfHostCapability } from '../../features/auth/self-host-account-api';
+import { Notice } from '../components/prefs';
 import { cx, Segmented, Switch } from '../components/primitives';
 import { ExtensionAvatar } from './ExtensionAvatar';
 import { SourceNetworkSettings } from './SourceNetworkSettings';
@@ -68,7 +70,9 @@ export function UiNextExtensionsPanel({
   updatesRequest = 0,
 }: Props) {
   const snapshot = useSyncExternalStore(manager.subscribe, manager.getSnapshot, manager.getSnapshot);
-  const [tab, setTab] = useState<Tab>(updatesRequest > 0 ? 'updates' : 'installed');
+  /** Members use the sources an administrator allowed; installing, updating and removing code is the administrator's. */
+  const manage = useSelfHostCapability('manageExtensions');
+  const [tabChoice, setTab] = useState<Tab>(updatesRequest > 0 ? 'updates' : 'installed');
   const kinds: Kind[] = [
     ...(manager.listRepositories ? (['boaa'] as const) : []),
     ...(manager.mangayomi ? (['mangayomi'] as const) : []),
@@ -79,6 +83,8 @@ export function UiNextExtensionsPanel({
   const activeKind = kind && kinds.includes(kind) ? kind : kinds[0];
   const [routedRepository, setRoutedRepository] = useState<{ kind: Kind; url: string }>();
   const [installedView, setInstalledView] = useState(false);
+  // Members reach the APK/JS installed lists through 'add', which then shows only their installed sources.
+  const tab: Tab = manage ? tabChoice : tabChoice === 'add' && installedView ? 'add' : 'installed';
   const [review, setReview] = useState<Review>();
   const [reviewLocation, setReviewLocation] = useState<string>();
   const [acceptedChange, setAcceptedChange] = useState(false);
@@ -354,7 +360,7 @@ export function UiNextExtensionsPanel({
                   />
                 ))}
                 <div className="un-ext-item-actions">
-                  {manifest.updates && manager.checkUpdate && (
+                  {manage && manifest.updates && manager.checkUpdate && (
                     <button
                       type="button"
                       className="un-btn is-ghost is-sm"
@@ -373,7 +379,7 @@ export function UiNextExtensionsPanel({
                       업데이트 확인
                     </button>
                   )}
-                  {pkg.previous && (
+                  {manage && pkg.previous && (
                     <button
                       type="button"
                       className="un-btn is-ghost is-sm"
@@ -383,7 +389,7 @@ export function UiNextExtensionsPanel({
                       이전 버전 복원
                     </button>
                   )}
-                  {confirmRemove === pkg.id ? (
+                  {!manage ? null : confirmRemove === pkg.id ? (
                     <span className="un-ext-confirm">
                       <small>받은 작품은 그대로 남아요.</small>
                       <button
@@ -483,14 +489,16 @@ export function UiNextExtensionsPanel({
         >
           <RefreshCw size={18} className={cx(busy && 'un-ext-spin')} />
         </button>
-        <button
-          type="button"
-          className="un-btn is-ghost is-sm"
-          disabled={busy || !snapshot.available}
-          onClick={() => fileInput.current?.click()}
-        >
-          <FilePlus2 size={16} aria-hidden="true" /> 파일로 설치
-        </button>
+        {manage && (
+          <button
+            type="button"
+            className="un-btn is-ghost is-sm"
+            disabled={busy || !snapshot.available}
+            onClick={() => fileInput.current?.click()}
+          >
+            <FilePlus2 size={16} aria-hidden="true" /> 파일로 설치
+          </button>
+        )}
         <input
           ref={fileInput}
           type="file"
@@ -511,19 +519,34 @@ export function UiNextExtensionsPanel({
         />
       </header>
 
-      <Segmented
-        label="확장 보기"
-        value={tab}
-        options={[
-          { value: 'installed', label: installedTotal ? `설치됨 ${installedTotal}` : '설치됨' },
-          { value: 'add', label: '추가하기' },
-          { value: 'updates', label: '업데이트' },
-        ]}
-        onChange={(next) => {
-          setTab(next);
-          setInstalledView(false);
-        }}
-      />
+      {!manage && (
+        <Notice>
+          관리자가 허용한 소스를 쓸 수 있어요. 켜고 끄기, 로그인, 옵션은 내 계정에만 적용돼요. 소스를 더 쓰고 싶으면
+          관리자에게 부탁해 주세요.
+        </Notice>
+      )}
+
+      {manage && (
+        <Segmented
+          label="확장 보기"
+          value={tab}
+          options={[
+            { value: 'installed', label: installedTotal ? `설치됨 ${installedTotal}` : '설치됨' },
+            { value: 'add', label: '추가하기' },
+            { value: 'updates', label: '업데이트' },
+          ]}
+          onChange={(next) => {
+            setTab(next);
+            setInstalledView(false);
+          }}
+        />
+      )}
+
+      {!manage && tab === 'add' && (
+        <button type="button" className="un-btn is-text is-sm un-ext-back" onClick={() => setTab('installed')}>
+          ← 허용된 소스 목록
+        </button>
+      )}
 
       {status}
       {!reviewLocation && reviewCard}
@@ -531,18 +554,23 @@ export function UiNextExtensionsPanel({
       {tab === 'installed' &&
         (installedTotal || !snapshot.available
           ? installedList
-          : !review && (
+          : !review &&
+            (!manage ? (
+              <Empty icon={<PackageOpen size={26} />} title="아직 허용된 소스가 없어요">
+                <p>관리자가 소스를 허용하면 여기에 나타나고, 탐색에서 쓸 수 있어요.</p>
+              </Empty>
+            ) : (
               <Empty icon={<PackageOpen size={26} />} title="아직 설치한 확장이 없어요">
                 <p>저장소 주소를 넣거나 확장 파일을 고르면 탐색에서 쓸 소스가 생겨요.</p>
                 <button type="button" className="un-btn is-primary is-sm" onClick={() => setTab('add')}>
                   <ListPlus size={16} aria-hidden="true" /> 확장 추가하기
                 </button>
               </Empty>
-            ))}
+            )))}
 
       {tab === 'add' && (
         <div className="un-ext-add">
-          {kinds.length > 1 && (
+          {manage && kinds.length > 1 && (
             <div className="un-ext-kinds" role="tablist" aria-label="확장 형식">
               {kinds.map((value) => (
                 <button
@@ -558,7 +586,7 @@ export function UiNextExtensionsPanel({
               ))}
             </div>
           )}
-          {activeKind === 'boaa' && (
+          {manage && activeKind === 'boaa' && (
             <UiNextRepositoryCatalog
               manager={manager}
               snapshot={snapshot}
@@ -587,6 +615,7 @@ export function UiNextExtensionsPanel({
               format="mangayomi-js"
               target={manager.target}
               initialInstalledOnly={installedView}
+              manage={manage}
               initialRepository={routedRepository?.kind === 'mangayomi' ? routedRepository.url : undefined}
               autoAddInitialRepository
             />
@@ -597,11 +626,12 @@ export function UiNextExtensionsPanel({
               manager={manager.apk}
               target={manager.target}
               initialInstalledOnly={installedView}
+              manage={manage}
               initialRepository={routedRepository?.kind === 'apk' ? routedRepository.url : undefined}
               autoAddInitialRepository
             />
           )}
-          {activeKind === 'suwayomi' && suwayomi && (
+          {manage && activeKind === 'suwayomi' && suwayomi && (
             <SourceExtensionManagerPanel
               manager={suwayomi}
               initialRepository={routedRepository?.kind === 'suwayomi' ? routedRepository.url : undefined}
@@ -615,19 +645,21 @@ export function UiNextExtensionsPanel({
         </div>
       )}
 
-      {tab === 'updates' && (
+      {manage && tab === 'updates' && (
         <ExtensionUpdatesPanel manager={manager} suwayomi={suwayomi} autoCheck={updatesRequest > 0} />
       )}
 
-      <details className="un-ext-advanced">
-        <summary>
-          고급
-          <small>소스 보관소 · 연결 방식 · 기본 프록시</small>
-          <ChevronDown size={18} className="un-ext-chevron" aria-hidden="true" />
-        </summary>
-        <PortableSourceVault manager={manager} />
-        <SourceNetworkSettings manager={manager} />
-      </details>
+      {manage && (
+        <details className="un-ext-advanced">
+          <summary>
+            고급
+            <small>소스 보관소 · 연결 방식 · 기본 프록시</small>
+            <ChevronDown size={18} className="un-ext-chevron" aria-hidden="true" />
+          </summary>
+          <PortableSourceVault manager={manager} />
+          <SourceNetworkSettings manager={manager} />
+        </details>
+      )}
     </section>
   );
 }

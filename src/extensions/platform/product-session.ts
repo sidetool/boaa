@@ -32,10 +32,14 @@ export function validatePluginDeployment(value: unknown, origin: string): Plugin
     throw Error('PLUGIN_DEPLOYMENT_MISMATCH');
   return value as unknown as PluginDeployment;
 }
-export async function loadPluginDeployment(apiBase: string, signal: AbortSignal): Promise<PluginDeployment> {
+export async function loadPluginDeployment(
+  apiBase: string,
+  signal: AbortSignal,
+  transport: typeof fetch = fetch,
+): Promise<PluginDeployment> {
   const base = new URL(apiBase.replace(/\/$/, '') + '/', location.href);
   if (base.origin !== location.origin) throw Error('PLUGIN_SAME_ORIGIN_REQUIRED');
-  const response = await fetch(new URL('plugins/context', base), {
+  const response = await transport(new URL('plugins/context', base), {
     credentials: 'same-origin',
     cache: 'no-store',
     signal,
@@ -67,6 +71,7 @@ export class ProductPluginSession {
   constructor(
     readonly deployment: PluginDeployment,
     win: Window,
+    transport: typeof fetch = fetch,
   ) {
     requireEnvironment(win, 'self-host', true);
     this.off = new URL(win.location.href).searchParams.getAll('plugins').includes('off');
@@ -93,7 +98,7 @@ export class ProductPluginSession {
           deployment.libraryId,
         ]),
     });
-    this.http = new PluginHttp(this.store, pluginProfileId(win.localStorage), this.signal);
+    this.http = new PluginHttp(this.store, pluginProfileId(win.localStorage), this.signal, transport);
     this.service = new PluginService(this.store, {
       ...this.workerOptions,
       off: this.off,

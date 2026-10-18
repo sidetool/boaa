@@ -2,7 +2,7 @@ import type { ComicReadingProfile } from '../domain/types';
 import { DEFAULT_COMIC_READING_PROFILE } from '../features/fixed-document/comic-layout';
 import { DOCUMENT_LISTENING_STORES } from './document-listening-schema';
 import { openReaderDb } from './reader-database';
-import { getByIndex, putItem, requestToPromise, transactionDone } from './indexeddb-transaction';
+import { createIndexedDbTransactions, requestToPromise, transactionDone } from './indexeddb-transaction';
 
 const GLOBAL_COMIC_PROFILE_BOOK_ID = '__moya_global_comic_profile__';
 
@@ -35,11 +35,20 @@ function sanitizedPageCrops(value: ComicReadingProfile['pageCrops']): ComicReadi
 }
 
 export class IndexedDbComicReadingProfileRepository {
+  private readonly transactions;
+  constructor(private readonly openDatabase: () => Promise<IDBDatabase> = openReaderDb) {
+    this.transactions = createIndexedDbTransactions(openDatabase);
+  }
+
   /** Includes the global user preference: automatic defaults must never replace it. */
   async hasSaved(bookId: string): Promise<boolean> {
     const records = await Promise.all([
-      getByIndex<StoredComicReadingProfile>(DOCUMENT_LISTENING_STORES.comicProfiles, 'bookId', bookId),
-      getByIndex<StoredComicReadingProfile>(
+      this.transactions.getByIndex<StoredComicReadingProfile>(
+        DOCUMENT_LISTENING_STORES.comicProfiles,
+        'bookId',
+        bookId,
+      ),
+      this.transactions.getByIndex<StoredComicReadingProfile>(
         DOCUMENT_LISTENING_STORES.comicProfiles,
         'bookId',
         GLOBAL_COMIC_PROFILE_BOOK_ID,
@@ -54,13 +63,21 @@ export class IndexedDbComicReadingProfileRepository {
     cropBookId = bookId,
   ): Promise<ComicReadingProfile> {
     const [globalProfile, bookProfile, cropProfile] = await Promise.all([
-      getByIndex<StoredComicReadingProfile>(
+      this.transactions.getByIndex<StoredComicReadingProfile>(
         DOCUMENT_LISTENING_STORES.comicProfiles,
         'bookId',
         GLOBAL_COMIC_PROFILE_BOOK_ID,
       ),
-      getByIndex<StoredComicReadingProfile>(DOCUMENT_LISTENING_STORES.comicProfiles, 'bookId', bookId),
-      getByIndex<StoredComicReadingProfile>(DOCUMENT_LISTENING_STORES.comicProfiles, 'bookId', cropBookId),
+      this.transactions.getByIndex<StoredComicReadingProfile>(
+        DOCUMENT_LISTENING_STORES.comicProfiles,
+        'bookId',
+        bookId,
+      ),
+      this.transactions.getByIndex<StoredComicReadingProfile>(
+        DOCUMENT_LISTENING_STORES.comicProfiles,
+        'bookId',
+        cropBookId,
+      ),
     ]);
     const stored = globalProfile
       ? { ...globalProfile, pageCrops: cropProfile?.pageCrops }
@@ -94,7 +111,7 @@ export class IndexedDbComicReadingProfileRepository {
 
   /** Work-only automatic default; atomically yields to an existing user or automatic profile. */
   async saveAutomatic(bookId: string, profile: ComicReadingProfile): Promise<void> {
-    const db = await openReaderDb();
+    const db = await this.openDatabase();
     const tx = db.transaction(DOCUMENT_LISTENING_STORES.comicProfiles, 'readwrite');
     const done = transactionDone(tx);
     const store = tx.objectStore(DOCUMENT_LISTENING_STORES.comicProfiles);
@@ -116,7 +133,7 @@ export class IndexedDbComicReadingProfileRepository {
   async save(bookId: string, profile: ComicReadingProfile, cropBookId = bookId): Promise<void> {
     const updatedAt = new Date().toISOString();
     await Promise.all([
-      putItem(DOCUMENT_LISTENING_STORES.comicProfiles, {
+      this.transactions.putItem(DOCUMENT_LISTENING_STORES.comicProfiles, {
         ...profile,
         automatic: false,
         pageCrops: undefined,
@@ -124,7 +141,7 @@ export class IndexedDbComicReadingProfileRepository {
         bookId: GLOBAL_COMIC_PROFILE_BOOK_ID,
         updatedAt,
       } satisfies StoredComicReadingProfile),
-      putItem(DOCUMENT_LISTENING_STORES.comicProfiles, {
+      this.transactions.putItem(DOCUMENT_LISTENING_STORES.comicProfiles, {
         ...profile,
         pageCrops: cropBookId === bookId ? profile.pageCrops : undefined,
         automatic: false,
@@ -135,7 +152,7 @@ export class IndexedDbComicReadingProfileRepository {
       ...(cropBookId === bookId
         ? []
         : [
-            putItem(DOCUMENT_LISTENING_STORES.comicProfiles, {
+            this.transactions.putItem(DOCUMENT_LISTENING_STORES.comicProfiles, {
               ...profile,
               automatic: true,
               id: `comic_profile_${cropBookId}`,

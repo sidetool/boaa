@@ -1,6 +1,8 @@
+import { requireAdmin, requirePrincipal } from '../auth.js';
+import { requestOwnerConfig } from '../services/owner-context.js';
 import { requestProgress } from './request-progress.js';
 import { Readable } from 'node:stream';
-import { randomBytes } from 'node:crypto';
+import { randomBytes, createHash } from 'node:crypto';
 import path from 'node:path';
 import { BackupStaging } from '../services/backup-staging.js';
 import type { FastifyInstance } from 'fastify';
@@ -46,26 +48,56 @@ function restoreOptions(headers: Record<string, string | string[] | undefined>):
 }
 
 export async function registerBackupRoutes(app: FastifyInstance, pool: pg.Pool, config: ServerConfig): Promise<void> {
-  const staging = new BackupStaging(path.join(config.dataDir, 'backup-staging'), config.defaultUserId);
-  const tickets = new Map<string, number>();
+  const stages = new Map<string, BackupStaging>();
+  function ownerStaging(userId: string) {
+    let staging = stages.get(userId);
+    if (!staging) {
+      staging = new BackupStaging(
+        path.join(config.dataDir, 'backup-staging', createHash('sha256').update(userId).digest('hex')),
+        userId,
+      );
+      stages.set(userId, staging);
+    }
+    return staging;
+  }
+  const tickets = new Map<
+    string,
+    { expires: number; userId: string; sessionContext?: string; authMethod: 'session' | 'legacy-token' }
+  >();
+  const deploymentConfig = config;
   const track = requestProgress(app, '/api/backups/progress/:progressId');
   app.addHook('onClose', async () => {
     tickets.clear();
-    await staging.close();
+    await Promise.all([...stages.values()].map((staging) => staging.close()));
   });
-  app.post('/api/backups/download', async (_request, reply) => {
+  app.post('/api/backups/download', async (request, reply) => {
+    const principal = requirePrincipal(request);
     const now = Date.now();
-    for (const [id, expires] of tickets) if (expires <= now) tickets.delete(id);
+    for (const [id, value] of tickets) if (value.expires <= now) tickets.delete(id);
     if (tickets.size >= 8) return reply.code(429).send({ error: '잠시 후 다시 시도해 주세요.' });
     const ticket = randomBytes(32).toString('base64url');
-    tickets.set(ticket, now + 60_000);
+    tickets.set(ticket, {
+      expires: now + 60_000,
+      userId: principal.userId,
+      sessionContext: principal.sessionContext,
+      authMethod: principal.authMethod,
+    });
     return reply.header('Cache-Control', 'no-store').send({ ticket });
   });
-  let exporting = false;
+  const exporting = new Set<string>();
   let restoring = false;
-  async function sendExport(reply: import('fastify').FastifyReply, bufferedClient = false) {
-    if (exporting) return reply.code(409).send({ error: '백업 다운로드가 이미 진행 중입니다.' });
-    exporting = true;
+  async function sendExport(
+    request: import('fastify').FastifyRequest,
+    reply: import('fastify').FastifyReply,
+    bufferedClient = false,
+    ticketOwner?: string,
+  ) {
+    const config = ticketOwner
+      ? Object.freeze({ ...deploymentConfig, defaultUserId: ticketOwner })
+      : requestOwnerConfig(deploymentConfig, request);
+    if (exporting.has(config.defaultUserId))
+      return reply.code(409).send({ error: '백업 다운로드가 이미 진행 중입니다.' });
+    exporting.add(config.defaultUserId);
     const abort = new AbortController();
     reply.raw.once('close', () => abort.abort());
     try {
@@ -73,7 +105,7 @@ export async function registerBackupRoutes(app: FastifyInstance, pool: pg.Pool, 
       void result.completion
         .catch((error) => app.log.error({ error }, 'hosted backup stream failed'))
         .finally(() => {
-          exporting = false;
+          exporting.delete(config.defaultUserId);
         });
       return reply
         .header('Content-Type', 'application/zip')
@@ -86,23 +118,36 @@ export async function registerBackupRoutes(app: FastifyInstance, pool: pg.Pool, 
         )
         .send(Readable.fromWeb(result.readable as never));
     } catch (error) {
-      exporting = false;
+      exporting.delete(config.defaultUserId);
       throw error;
     }
   }
-  app.get('/api/backups/export', async (_request, reply) => sendExport(reply, true));
+  app.get('/api/backups/export', async (request, reply) => sendExport(request, reply, true));
   app.get<{ Params: { ticket: string } }>('/api/backups/download/:ticket', async (request, reply) => {
-    const expires = tickets.get(request.params.ticket);
-    tickets.delete(request.params.ticket);
-    if (!expires || expires <= Date.now())
+    const ticket = tickets.get(request.params.ticket);
+    const principal = request.principal;
+    if (
+      !ticket ||
+      (principal
+        ? ticket.userId !== principal.userId || ticket.sessionContext !== principal.sessionContext
+        : ticket.authMethod !== 'legacy-token' || ticket.userId !== deploymentConfig.defaultUserId) ||
+      ticket.expires <= Date.now()
+    )
       return reply.code(410).send({ error: '다운로드 주소가 만료되었습니다. 다시 눌러 주세요.' });
-    return sendExport(reply);
+    tickets.delete(request.params.ticket);
+    return sendExport(request, reply, false, ticket.userId);
   });
   app.delete<{ Params: { id: string } }>('/api/backups/staged/:id', async (request) => {
+    requireAdmin(request);
+    const config = requestOwnerConfig(deploymentConfig, request);
+    const staging = ownerStaging(config.defaultUserId);
     await staging.discard(request.params.id);
     return { ok: true };
   });
   app.post<{ Params: { id: string } }>('/api/backups/staged/:id/restore', async (request, reply) => {
+    requireAdmin(request);
+    const config = requestOwnerConfig(deploymentConfig, request);
+    const staging = ownerStaging(config.defaultUserId);
     if (restoring) return reply.code(409).send({ error: '다른 백업을 복원 중입니다. 완료 후 다시 시도해 주세요.' });
     // Validate choices before claiming the inspected archive.
     let options: HostedBackupRestoreOptions;
@@ -118,7 +163,7 @@ export async function registerBackupRoutes(app: FastifyInstance, pool: pg.Pool, 
       return reply.code(410).send({ error: error instanceof Error ? error.message : 'Backup expired' });
     }
     restoring = true;
-    const progress = track(request.query);
+    const progress = track(request.query, requirePrincipal(request).userId);
     try {
       return await restoreHostedBackup(pool, config, stage.parsed, options, undefined, progress);
     } catch (error) {
@@ -138,6 +183,9 @@ export async function registerBackupRoutes(app: FastifyInstance, pool: pg.Pool, 
     }
     for (const mode of ['inspect', 'restore'] as const) {
       scope.post(`/api/backups/${mode}`, async (request, reply) => {
+        requireAdmin(request);
+        const config = requestOwnerConfig(deploymentConfig, request);
+        const staging = ownerStaging(config.defaultUserId);
         if (!(request.body instanceof Readable))
           return reply.code(400).send({ error: 'Backup archive body is missing' });
         const abort = new AbortController();
@@ -148,7 +196,7 @@ export async function registerBackupRoutes(app: FastifyInstance, pool: pg.Pool, 
         };
         reply.raw.once('close', disconnected);
         let stagedId: string | undefined;
-        const progress = track(request.query);
+        const progress = track(request.query, requirePrincipal(request).userId);
         try {
           const options = mode === 'restore' ? restoreOptions(request.headers) : undefined;
           const received = await staging.receive(

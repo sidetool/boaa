@@ -388,13 +388,17 @@ export class SuwayomiSourceAccountBroker implements ExternalSourceBroker {
   private readonly thumbnailObjectUrls = new Map<string, string>();
   private readonly fetchImpl: typeof fetch;
   private readonly defaultBaseUrl: string;
+  private readonly lifetime?: AbortSignal;
 
   constructor(
     private readonly connectorId: string,
     private readonly state: ExternalSourceLocalState,
-    fetchOrOptions: typeof fetch | { readonly fetchImpl?: typeof fetch; readonly defaultBaseUrl?: string } = {},
+    fetchOrOptions:
+      | typeof fetch
+      | { readonly fetchImpl?: typeof fetch; readonly defaultBaseUrl?: string; readonly signal?: AbortSignal } = {},
   ) {
     const options = typeof fetchOrOptions === 'function' ? { fetchImpl: fetchOrOptions } : fetchOrOptions;
+    this.lifetime = options.signal;
     this.fetchImpl = options.fetchImpl ?? globalThis.fetch.bind(globalThis);
     this.defaultBaseUrl = normalizeBaseUrl(options.defaultBaseUrl);
   }
@@ -565,6 +569,20 @@ export class SuwayomiSourceAccountBroker implements ExternalSourceBroker {
       serverVersion: info.aboutServer?.version?.trim() || undefined,
     };
     await this.persistCredential(credential, sessionBasicAuthorization);
+  }
+
+  dispose(): void {
+    this.extensionConnectionEpoch += 1;
+    this.extensionManagement = undefined;
+    this.record = undefined;
+    this.sharedConnection = undefined;
+    this.credential = undefined;
+    this.credentialKey = undefined;
+    this.client = undefined;
+    this.basicAuthorization = undefined;
+    this.sources.clear();
+    this.mangas.clear();
+    this.clearThumbnailObjectUrls();
   }
 
   async disconnect(): Promise<void> {
@@ -806,6 +824,7 @@ export class SuwayomiSourceAccountBroker implements ExternalSourceBroker {
       const contentType = (blob.type || response.headers.get('Content-Type') || '').toLowerCase();
       if (!contentType.startsWith('image/') || blob.size === 0 || blob.size > MAX_THUMBNAIL_BYTES) return undefined;
       if (typeof URL.createObjectURL !== 'function') return undefined;
+      this.lifetime?.throwIfAborted();
       const objectUrl = URL.createObjectURL(blob);
       this.thumbnailObjectUrls.set(absoluteUrl, objectUrl);
       return objectUrl;
@@ -909,6 +928,7 @@ export class SuwayomiSourceAccountBroker implements ExternalSourceBroker {
     this.extensionConnectionEpoch += 1;
     this.extensionManagement = undefined;
     this.clearThumbnailObjectUrls();
+    this.lifetime?.throwIfAborted();
     this.credential = credential;
     this.credentialKey = key;
     this.client = new SuwayomiGraphqlClient(
@@ -935,6 +955,7 @@ export class SuwayomiSourceAccountBroker implements ExternalSourceBroker {
       updatedAt: nowIso(),
     };
     await this.state.saveCredential(record);
+    this.lifetime?.throwIfAborted();
     this.credential = credential;
     this.record = record;
   }

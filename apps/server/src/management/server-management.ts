@@ -1,3 +1,4 @@
+import { requireAdmin } from '../auth.js';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { randomUUID } from 'node:crypto';
 import { link, unlink } from 'node:fs/promises';
@@ -120,10 +121,14 @@ export async function registerServerManagement(
     });
   }
   app.get('/api/admin/system', async (_request, reply) => {
+    requireAdmin(_request);
+
     reply.header('Cache-Control', 'no-store');
     return status();
   });
   app.post('/api/admin/system/requests', { bodyLimit: 1024 }, async (request, reply) => {
+    requireAdmin(request);
+
     reply.header('Cache-Control', 'no-store');
     let input;
     try {

@@ -1,3 +1,4 @@
+import type { SelfHostSession } from '../../features/auth/self-host-session';
 import { integrityHash } from '../../domain/id-hash-contract';
 import type { PlainTTSRequest, PlainTTSVoices } from '../../providers/plain-tts';
 import { RemoteImportTransport, type RemoteImportJob } from './remote-import-transport';
@@ -367,6 +368,7 @@ export function mapServerVoiceProfile(row: JsonRecord): VoiceProfile {
 }
 
 export interface RemoteApiClientOptions {
+  session?: SelfHostSession;
   getAuthToken?: () => string | undefined;
   onUnauthorized?: () => void;
   requestTimeoutMs?: number;
@@ -377,9 +379,11 @@ export const DEFAULT_REMOTE_LARGE_UPLOAD_TIMEOUT_MS = 15 * 60_000;
 
 export class RemoteApiClient {
   get coverCacheScope(): string {
+    if (this.options.session) return this.options.session.storageScope;
     return `${this.readerSettingsScope}:${integrityHash(new TextEncoder().encode(this.options.getAuthToken?.()?.trim() ?? 'cookie-session'))}`;
   }
   get readerSettingsScope(): string {
+    if (this.options.session) return this.options.session.storageScope;
     return `hosted:${this.baseUrl.replace(/\/$/, '')}`;
   }
   private readonly importTransport: RemoteImportTransport;
@@ -405,6 +409,10 @@ export class RemoteApiClient {
     this.syncTransport = new RemoteSyncTransport({ request });
   }
 
+  private fetchOwned(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+    return this.options.session ? this.options.session.fetch(input, init) : fetch(input, init);
+  }
+
   /** The text-source broker owns bounded body consumption and keeps this signal alive until it finishes. */
   async fetchTextSourceGateway(path: string, signal: AbortSignal): Promise<Response> {
     if (
@@ -416,14 +424,14 @@ export class RemoteApiClient {
     }
     signal.throwIfAborted();
     const token = this.options.getAuthToken?.()?.trim();
-    const response = await fetch(`${this.baseUrl}/integrations/text-sources${path}`, {
+    const response = await this.fetchOwned(`${this.baseUrl}/integrations/text-sources${path}`, {
       method: 'GET',
       credentials: 'same-origin',
       redirect: 'error',
       signal,
       headers: token ? { Authorization: `Bearer ${token}` } : undefined,
     });
-    if (response.status === 401) this.options.onUnauthorized?.();
+    if (response.status === 401 && !this.options.session) this.options.onUnauthorized?.();
     return response;
   }
 
@@ -448,7 +456,7 @@ export class RemoteApiClient {
       controller.abort();
     }, timeoutMs);
     try {
-      const response = await fetch(`${this.baseUrl}${path}`, {
+      const response = await this.fetchOwned(`${this.baseUrl}${path}`, {
         credentials: 'same-origin',
         ...init,
         signal: controller.signal,
@@ -457,6 +465,7 @@ export class RemoteApiClient {
       // The existing request timeout still covers response headers only.
       globalThis.clearTimeout(timer);
       await consumeResponse?.(response);
+      this.options.session?.signal.throwIfAborted();
       return response;
     } catch (error) {
       if (timedOut && !callerSignal?.aborted) throw new RemoteApiRequestTimeoutError(timeoutMs);
@@ -483,7 +492,7 @@ export class RemoteApiClient {
       timeoutMs,
       async (response) => {
         if (!response.ok) {
-          if (response.status === 401) this.options.onUnauthorized?.();
+          if (response.status === 401 && !this.options.session) this.options.onUnauthorized?.();
           throw await remoteError(response);
         }
         if (response.status !== 204) result = (await response.json()) as T;
@@ -512,7 +521,7 @@ export class RemoteApiClient {
       timeoutMs,
       async (download) => {
         if (!download.ok) {
-          if (download.status === 401) this.options.onUnauthorized?.();
+          if (download.status === 401 && !this.options.session) this.options.onUnauthorized?.();
           throw await remoteError(download);
         }
         if (!onProgress || !download.body) {
@@ -1472,7 +1481,7 @@ export class RemoteApiClient {
       headers: authToken ? { Authorization: `Bearer ${authToken}` } : undefined,
     });
     if (!response.ok) {
-      if (response.status === 401) this.options.onUnauthorized?.();
+      if (response.status === 401 && !this.options.session) this.options.onUnauthorized?.();
       throw await remoteError(response);
     }
     return response.blob();

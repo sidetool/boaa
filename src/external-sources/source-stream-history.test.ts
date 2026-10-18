@@ -36,3 +36,14 @@ describe('streaming reading history', () => {
     expect(readSourceStreamPosition('a')).toBeUndefined();
   });
 });
+
+it('a hosted account retention sweep never evicts another account or legacy history', () => {
+  storage();
+  const position = { page: 0, count: 1, fraction: 0, ratio: 1 };
+  const b = JSON.stringify(['hosted-account:B', 'same-episode']);
+  saveSourceStreamPosition(b, position);
+  saveSourceStreamPosition('legacy', position);
+  for (let i = 0; i < 205; i++) saveSourceStreamPosition(JSON.stringify(['hosted-account:A', String(i)]), position);
+  expect(readSourceStreamPosition(b)).toMatchObject(position);
+  expect(readSourceStreamPosition('legacy')).toMatchObject(position);
+});

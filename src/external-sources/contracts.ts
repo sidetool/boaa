@@ -239,6 +239,10 @@ export interface ExternalSourceLink {
     readonly stagedAt: string;
     readonly hadExistingLink: boolean;
     readonly previousActiveContentRevisionId?: string;
+    /** Hosted first imports may assign an owner-specific ID; missing results are not proof of failure. */
+    readonly bookIdMayChange?: boolean;
+    /** Importer-confirmed identity, checkpointed before clearing the pending operation. */
+    readonly resolvedLocalBookId?: string;
     /** Exact source hash expected after activation, or the uploaded delta hash when resolved by the importer. */
     readonly expectedActiveSourceContentHash: string;
     /**

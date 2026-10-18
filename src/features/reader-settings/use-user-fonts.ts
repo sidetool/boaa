@@ -38,9 +38,9 @@ export function useUserFonts({ repository, activeFontId, selectFont }: UserFonts
       phase = 'load';
       await verifyFontCanLoad(prepared.asset, prepared.blob);
       phase = 'save';
-      await repository.installUserFont(prepared);
+      const installed = await repository.installUserFont(prepared);
       await refresh();
-      selectFont(prepared.asset.id);
+      selectFont(installed.id);
     } catch (cause) {
       const code = cause instanceof Error ? cause.message : '';
       setError(
@@ -76,7 +76,7 @@ export function useUserFonts({ repository, activeFontId, selectFont }: UserFonts
     if (!repository) return;
     setOperationError(undefined);
     if (activeFontId === id) selectFont('builtin-serif');
-    unloadUserFont(id);
+    unloadUserFont(id, repository);
     try {
       await repository.deleteUserFont(id);
       await refresh();

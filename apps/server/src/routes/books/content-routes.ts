@@ -1,3 +1,4 @@
+import { requestOwnerConfig } from '../../services/owner-context.js';
 import type { FastifyInstance } from 'fastify';
 import pg from 'pg';
 import type { ServerConfig } from '../../config.js';
@@ -8,7 +9,10 @@ export async function registerBookContentRoutes(
   pool: pg.Pool,
   config: ServerConfig,
 ): Promise<void> {
+  const deploymentConfig = config;
   app.get<{ Params: { bookId: string } }>('/api/books/:bookId/manifest', async (request, reply) => {
+    const config = requestOwnerConfig(deploymentConfig, request);
+
     const book = await pool.query(
       `
         select b.id, b.active_content_revision_id, b.format, b.title, b.author, b.series_title, b.series_index, b.tags,
@@ -60,6 +64,8 @@ export async function registerBookContentRoutes(
   });
 
   app.get<{ Params: { bookId: string } }>('/api/books/:bookId/chapters', async (request, reply) => {
+    const config = requestOwnerConfig(deploymentConfig, request);
+
     const exists = await pool.query(
       'select id from library_books where id = $1 and user_id = $2 and deleted_at is null',
       [request.params.bookId, config.defaultUserId],
@@ -87,6 +93,8 @@ export async function registerBookContentRoutes(
   });
 
   app.get<{ Params: { chapterId: string } }>('/api/chapters/:chapterId', async (request, reply) => {
+    const config = requestOwnerConfig(deploymentConfig, request);
+
     const result = await pool.query(
       `
         select c.id, c.book_id, c.chapter_index, c.title, c.text_hash, c.raw_start_offset,
@@ -111,6 +119,8 @@ export async function registerBookContentRoutes(
   app.get<{ Params: { chapterId: string }; Querystring: { from?: string; count?: string } }>(
     '/api/chapters/:chapterId/pages',
     async (request, reply) => {
+      const config = requestOwnerConfig(deploymentConfig, request);
+
       const from = Math.max(0, Number.parseInt(request.query.from ?? '0', 10) || 0);
       const count = Math.min(20, Math.max(1, Number.parseInt(request.query.count ?? '5', 10) || 5));
       const result = await pool.query(
@@ -142,6 +152,8 @@ export async function registerBookContentRoutes(
   );
 
   app.get<{ Params: { paragraphId: string } }>('/api/paragraphs/:paragraphId', async (request, reply) => {
+    const config = requestOwnerConfig(deploymentConfig, request);
+
     const result = await pool.query(
       `
           select ps.paragraph

@@ -1,3 +1,4 @@
+import { requestOwnerConfig } from '../../services/owner-context.js';
 import type { FastifyInstance } from 'fastify';
 import pg from 'pg';
 import type { ServerConfig } from '../../config.js';
@@ -13,7 +14,10 @@ import {
 } from './sync-contract-translation.js';
 
 export function registerSyncPullRoute(app: FastifyInstance, pool: pg.Pool, config: ServerConfig): void {
+  const deploymentConfig = config;
   app.get<{ Querystring: PullSyncQuery }>('/api/sync', async (request, reply) => {
+    const config = requestOwnerConfig(deploymentConfig, request);
+
     const since = parseSyncCursor(request.query.since);
     let requestedContract;
     try {

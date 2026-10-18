@@ -23,6 +23,7 @@ const sourcePattern = /\.tsx?$/;
 const testPattern = /(?:^|[\\/])(?:test|tests)(?:[\\/]|$)|\.(?:test|spec)\.tsx?$/;
 const textCorePublicSubpaths = new Set([
   '@boaa/text-core/hash',
+  '@boaa/text-core/spoken-text-filter',
   '@boaa/text-core/legacy-hash',
   '@boaa/text-core/normalization',
   '@boaa/text-core/chapter-structure',
@@ -138,6 +139,7 @@ for (const file of collectFiles(textCoreRoot)) {
     }
     if (
       !specifier.startsWith('@noble/hashes/') &&
+      specifier !== 're2js' && // Pure JS, bounded-pattern linear matcher; shared browser/server projection.
       !['#korean-decoder', '@kayahr/text-encoding/no-encodings', '@kayahr/text-encoding/encodings/euc-kr'].includes(
         specifier,
       )

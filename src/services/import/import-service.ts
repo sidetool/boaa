@@ -78,6 +78,7 @@ export interface ImportController {
 }
 
 export interface ImportService {
+  readonly mayChangeBookId?: boolean;
   importPrepared?(
     source: import('./hosted-image-import').PreparedServerImport,
     onProgress: (progress: ImportProgress) => void,

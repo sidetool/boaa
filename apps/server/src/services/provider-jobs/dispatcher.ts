@@ -36,6 +36,14 @@ export async function processProviderJob(
   deps: ProviderJobServiceDeps = {},
   execution?: ProviderJobExecutionIdentity,
 ): Promise<void> {
+  const owner = await pool.query<{ user_id: string }>(
+    `select j.user_id from provider_jobs j where j.id=$1
+      and not exists (select 1 from self_host_accounts a where a.user_id=j.user_id and a.status<>'active')`,
+    [jobId],
+  );
+  if (!owner.rows[0]) return;
+  // Member provider execution is unavailable in V1; never inherit operator environment credentials.
+  if (owner.rows[0].user_id !== config.defaultUserId) return;
   const job = await claimProviderJob(pool, jobId, config.defaultUserId, execution);
   if (!job) return;
 

@@ -18,6 +18,9 @@ describe('versioned book artwork', () => {
     };
     const query = vi.fn(async (_sql: string, _params: unknown[]) => ({ rows: [cover] }));
     const app = Fastify();
+    app.addHook('onRequest', async (request) => {
+      request.principal = { userId: 'user', role: 'admin', authMethod: 'legacy-token' };
+    });
     await registerBookCoverRoutes(app, { query } as unknown as pg.Pool, { defaultUserId: 'user' } as ServerConfig);
     try {
       const first = await app.inject('/api/books/book/cover?v=asset-1%3Asha256%3Afirst');

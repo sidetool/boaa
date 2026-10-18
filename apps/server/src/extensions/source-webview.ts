@@ -60,6 +60,18 @@ export interface SourceWebViewScope {
 }
 
 /** A warm browser shared by jobs, with separate, short-lived contexts for each source invocation. */
+const browserVaultIds = new WeakMap<SourceCredentialVault, number>();
+let browserVaultSequence = 0;
+function browserAdmissionKey(scope: SourceWebViewScope): string {
+  if (!scope.vault) return `anonymous:${scope.key}`;
+  let id = browserVaultIds.get(scope.vault);
+  if (!id) {
+    id = ++browserVaultSequence;
+    browserVaultIds.set(scope.vault, id);
+  }
+  return `${id}:${scope.key}`;
+}
+
 export class SourceWebViewHost {
   private browsers = new Map<string, Promise<Browser>>();
   private idle?: ReturnType<typeof setTimeout>;
@@ -106,6 +118,7 @@ export class SourceWebViewHost {
   }
 
   async evaluate(input: SourceWebViewRequest, scope: SourceWebViewScope, signal: AbortSignal): Promise<unknown> {
+    const admissionKey = browserAdmissionKey(scope);
     if (!validSourceWebViewRequest(input)) throw new Error('invalid_source_invocation');
     const permitted = (raw: string) => {
       const url = new URL(raw);
@@ -150,9 +163,9 @@ export class SourceWebViewHost {
           if (deadline.aborted) {
             cleanup();
             reject(new Error(signal.aborted ? 'cancelled' : 'source_request_timeout'));
-          } else if (this.active < 2 && !this.scopes.has(scope.key)) {
+          } else if (this.active < 2 && !this.scopes.has(admissionKey)) {
             this.active++;
-            this.scopes.add(scope.key);
+            this.scopes.add(admissionKey);
             admitted = true;
             cleanup();
             resolve();
@@ -312,7 +325,7 @@ export class SourceWebViewHost {
       this.pending--;
       if (admitted) {
         this.active--;
-        this.scopes.delete(scope.key);
+        this.scopes.delete(admissionKey);
       }
       notify();
       if (!this.pending) {

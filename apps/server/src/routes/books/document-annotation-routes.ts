@@ -1,3 +1,4 @@
+import { requestOwnerConfig } from '../../services/owner-context.js';
 import type { FastifyInstance } from 'fastify';
 import type pg from 'pg';
 import type { DocumentAnnotation } from '@boaa/contracts';
@@ -28,7 +29,10 @@ function mapRow(row: Record<string, unknown>): DocumentAnnotation {
 }
 
 export async function registerDocumentAnnotationRoutes(app: FastifyInstance, pool: pg.Pool, config: ServerConfig) {
+  const deploymentConfig = config;
   app.get<{ Params: { bookId: string } }>('/api/books/:bookId/document-annotations', async (request, reply) => {
+    const config = requestOwnerConfig(deploymentConfig, request);
+
     const book = await pool.query('select 1 from library_books where id = $1 and user_id = $2 and deleted_at is null', [
       request.params.bookId,
       config.defaultUserId,
@@ -48,6 +52,8 @@ export async function registerDocumentAnnotationRoutes(app: FastifyInstance, poo
   app.put<{ Params: { bookId: string; annotationId: string }; Body: unknown }>(
     '/api/books/:bookId/document-annotations/:annotationId',
     async (request, reply) => {
+      const config = requestOwnerConfig(deploymentConfig, request);
+
       const body = request.body;
       const candidate =
         body && typeof body === 'object' && !Array.isArray(body) ? (body as Record<string, unknown>) : {};
@@ -148,6 +154,8 @@ export async function registerDocumentAnnotationRoutes(app: FastifyInstance, poo
   app.delete<{ Params: { bookId: string; annotationId: string } }>(
     '/api/books/:bookId/document-annotations/:annotationId',
     async (request, reply) => {
+      const config = requestOwnerConfig(deploymentConfig, request);
+
       const deletedAt = new Date().toISOString();
       const result = await withTransaction(pool, async (db) => {
         if (!(await lockBookResource(db, config.defaultUserId, request.params.bookId))) return false;

@@ -1,5 +1,6 @@
 import { SettingsTabContent, type SettingsTabContentProps } from '../../features/reader-settings/SettingsTabContent';
 import { WEBNOVEL_METADATA_ENRICHMENT_EXTENSION_ID } from '../../extensions/builtin/webnovel-metadata-enrichment-extension';
+import { AccountPage } from './pages/AccountPage';
 import { AppInfoPage } from './pages/AppInfoPage';
 import { ExtensionsPage } from './pages/ExtensionsPage';
 import { GesturePage } from './pages/GesturePage';
@@ -15,6 +16,8 @@ import './pages/pages.css';
 /** Settings pages rebuilt for ui-next; tabs not moved yet still render the shared bodies. */
 export function UiNextSettingsTabContent(props: SettingsTabContentProps) {
   switch (props.tab) {
+    case 'account':
+      return <AccountPage />;
     case 'appearance':
       return <StartupPage controller={props.controller} shelves={props.startupShelves} tabs={props.startupTabs} />;
     case 'layout':
@@ -76,8 +79,6 @@ export function UiNextSettingsTabContent(props: SettingsTabContentProps) {
         <AppInfoPage
           platformRuntime={props.platformRuntime}
           providerExecutionRuntime={props.providerExecutionRuntime}
-          selfHostAccount={props.selfHostAccount}
-          logoutSelfHostAccount={props.logoutSelfHostAccount}
         />
       );
     default:

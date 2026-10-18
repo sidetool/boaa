@@ -23,6 +23,7 @@ export interface ServerTTSProviderFactoryInput {
   readonly cwd?: string;
   readonly fetchImpl?: typeof fetch;
   readonly secrets?: ResolvedProviderSecrets;
+  readonly providerOptions?: Record<string, unknown>;
 }
 
 interface ResolvedServerTTSProviderFactoryInput extends ServerTTSProviderFactoryInput {
@@ -43,9 +44,8 @@ export function modelIdForTTSProvider(
   if (requestedModelId?.trim()) return requestedModelId.trim();
   if (providerId === 'openai-tts') return env.TTS_OPENAI_MODEL_ID?.trim() || undefined;
   if (providerId === 'elevenlabs') return env.TTS_ELEVENLABS_MODEL_ID?.trim() || 'eleven_flash_v2_5';
-  if (providerId === 'gemini-tts') return env.TTS_GEMINI_MODEL_ID?.trim() || 'gemini-3.1-flash-tts-preview';
-  if (providerId === 'gemini-vertex-tts')
-    return env.TTS_GEMINI_VERTEX_MODEL_ID?.trim() || 'gemini-3.1-flash-tts-preview';
+  if (providerId === 'gemini-tts') return env.TTS_GEMINI_MODEL_ID?.trim() || 'gemini-3.8-flash-lite-tts';
+  if (providerId === 'gemini-vertex-tts') return env.TTS_GEMINI_VERTEX_MODEL_ID?.trim() || 'gemini-3.8-flash-lite-tts';
   if (providerId === 'google-cloud-tts') return env.TTS_GOOGLE_CLOUD_MODEL_ID?.trim() || 'gemini-3.1-flash-tts-preview';
   if (providerId === 'local-endpoint') return env.TTS_LOCAL_ENDPOINT_MODEL_ID?.trim() || undefined;
   return undefined;
@@ -77,6 +77,7 @@ export const serverTTSProviderTransportRegistry = new ServerProviderTransportReg
         modelId: input.modelId,
         defaultVoice: input.env.TTS_OPENAI_VOICE_ID,
         fetchImpl: input.fetchImpl,
+        providerOptions: input.providerOptions,
       });
     },
   },
@@ -89,6 +90,7 @@ export const serverTTSProviderTransportRegistry = new ServerProviderTransportReg
         baseUrl: input.env.TTS_ELEVENLABS_BASE_URL,
         modelId: input.modelId ?? 'eleven_flash_v2_5',
         fetchImpl: input.fetchImpl,
+        providerOptions: input.providerOptions,
       }),
   },
   {
@@ -98,8 +100,9 @@ export const serverTTSProviderTransportRegistry = new ServerProviderTransportReg
       new GeminiTTSProvider({
         apiKey: input.secrets?.apiKey ?? (input.env.GEMINI_API_KEY || input.env.GOOGLE_API_KEY),
         baseUrl: input.env.TTS_GEMINI_BASE_URL,
-        modelId: input.modelId ?? 'gemini-3.1-flash-tts-preview',
+        modelId: input.modelId ?? 'gemini-3.8-flash-lite-tts',
         fetchImpl: input.fetchImpl,
+        providerOptions: input.providerOptions,
       }),
   },
   {
@@ -108,10 +111,20 @@ export const serverTTSProviderTransportRegistry = new ServerProviderTransportReg
     create: (input) => {
       const aiSettings = loadServerAISettings(input.env, input.cwd);
       return new GeminiVertexTTSProvider({
-        project: input.env.GOOGLE_CLOUD_PROJECT?.trim() || aiSettings.geminiVertex.project,
-        location: input.env.TTS_GEMINI_VERTEX_LOCATION?.trim() || input.env.GOOGLE_CLOUD_LOCATION?.trim() || 'global',
+        project:
+          googleOption(input, 'project') ||
+          input.secrets?.serviceAccount?.project_id ||
+          input.env.GOOGLE_CLOUD_PROJECT?.trim() ||
+          aiSettings.geminiVertex.project,
+        location:
+          googleOption(input, 'location') ||
+          input.env.TTS_GEMINI_VERTEX_LOCATION?.trim() ||
+          input.env.GOOGLE_CLOUD_LOCATION?.trim() ||
+          'global',
         credentialsPath: input.secrets?.credentialsPath ?? aiSettings.geminiVertex.credentialsPath,
-        modelId: input.modelId ?? 'gemini-3.1-flash-tts-preview',
+        serviceAccount: input.secrets?.serviceAccount,
+        modelId: input.modelId ?? 'gemini-3.8-flash-lite-tts',
+        providerOptions: input.providerOptions,
       });
     },
   },
@@ -121,15 +134,28 @@ export const serverTTSProviderTransportRegistry = new ServerProviderTransportReg
     create: (input) => {
       const aiSettings = loadServerAISettings(input.env, input.cwd);
       return new GoogleCloudTTSProvider({
-        project: input.env.GOOGLE_CLOUD_PROJECT?.trim() || aiSettings.geminiVertex.project,
-        location: input.env.TTS_GOOGLE_CLOUD_LOCATION?.trim() || input.env.GOOGLE_CLOUD_LOCATION?.trim() || 'global',
+        project:
+          googleOption(input, 'project') ||
+          input.secrets?.serviceAccount?.project_id ||
+          input.env.GOOGLE_CLOUD_PROJECT?.trim() ||
+          aiSettings.geminiVertex.project,
+        location:
+          googleOption(input, 'location') ||
+          input.env.TTS_GOOGLE_CLOUD_LOCATION?.trim() ||
+          input.env.GOOGLE_CLOUD_LOCATION?.trim() ||
+          'global',
         credentialsPath: input.secrets?.credentialsPath ?? aiSettings.geminiVertex.credentialsPath,
-        accessToken:
-          input.secrets?.accessToken ??
-          (input.env.TTS_GOOGLE_CLOUD_ACCESS_TOKEN?.trim() || input.env.GOOGLE_CLOUD_ACCESS_TOKEN?.trim() || undefined),
+        serviceAccount: input.secrets?.serviceAccount,
+        accessToken: input.secrets?.serviceAccount
+          ? undefined
+          : (input.secrets?.accessToken ??
+            (input.env.TTS_GOOGLE_CLOUD_ACCESS_TOKEN?.trim() ||
+              input.env.GOOGLE_CLOUD_ACCESS_TOKEN?.trim() ||
+              undefined)),
         baseUrl: input.env.TTS_GOOGLE_CLOUD_BASE_URL,
         modelId: input.modelId ?? 'gemini-3.1-flash-tts-preview',
         fetchImpl: input.fetchImpl,
+        providerOptions: input.providerOptions,
       });
     },
   },
@@ -142,6 +168,7 @@ export const serverTTSProviderTransportRegistry = new ServerProviderTransportReg
         modelId: input.modelId,
         allowedHosts: localTTSAllowedHosts(input.env),
         fetchImpl: input.fetchImpl,
+        providerOptions: input.providerOptions,
       }),
   },
 ]);
@@ -159,4 +186,13 @@ export function createServerTTSSynthesisProvider(input: ServerTTSProviderFactory
     env,
     modelId: modelIdForTTSProvider(providerId, input.modelId, env),
   });
+}
+
+function googleOption(input: ServerTTSProviderFactoryInput, key: 'project' | 'location'): string | undefined {
+  const value = input.providerOptions?.[key];
+  if (value === undefined || value === '') return undefined;
+  if (typeof value !== 'string' || !/^[a-z0-9][a-z0-9-]{0,62}$/.test(value.trim())) {
+    throw new Error(`Invalid Google Cloud ${key}`);
+  }
+  return value.trim();
 }

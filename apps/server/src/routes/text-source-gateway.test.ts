@@ -9,6 +9,9 @@ afterEach(async () => {
 });
 async function create(fetchImpl: typeof fetch, configured = true, timeoutMs = 200) {
   const app = Fastify();
+  app.addHook('onRequest', async (request) => {
+    request.principal = { userId: 'fixture-admin', role: 'admin', authMethod: 'legacy-token' };
+  });
   apps.push(app);
   await registerTextSourceGateway(
     app,

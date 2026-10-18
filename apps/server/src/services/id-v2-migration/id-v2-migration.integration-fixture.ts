@@ -135,9 +135,9 @@ export async function seedLegacyBook(
     );
     await client.query(
       `insert into book_objects (
-         id, raw_text_hash, storage_key, file_name, content_type, size_bytes, id_contract, hash_contract
-       ) values ($1, $2, $3, $4, 'text/plain', $5, 'v1-legacy', 'v1-legacy')`,
-      [sourceObjectId, rawTextHash, `books/${suffix}`, fileName, body.byteLength],
+         id, raw_text_hash, storage_key, file_name, content_type, size_bytes, id_contract, hash_contract, user_id
+       ) values ($1, $2, $3, $4, 'text/plain', $5, 'v1-legacy', 'v1-legacy', $6)`,
+      [sourceObjectId, rawTextHash, `books/${suffix}`, fileName, body.byteLength, userId],
     );
     await client.query(
       `insert into library_books (

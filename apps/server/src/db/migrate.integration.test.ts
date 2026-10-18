@@ -400,6 +400,69 @@ describeWithPostgres('versioned PostgreSQL migrations', () => {
     // 10s hook deadline can expire during successful cleanup on a busy disk.
   }, 45_000);
 
+  test('preserves owner sessions and plugin identity while enabling atomic invited member lifecycle', async () => {
+    await withIsolatedSchema(postgres, 'accounts', async (pool) => {
+      const migrations = await loadMigrations();
+      const previous = await temporaryMigrations(
+        Object.fromEntries(migrations.filter((m) => Number(m.version) <= 58).map((m) => [m.fileName, m.sql])),
+      );
+      await migrateDatabase(pool, { migrationsDirectory: previous });
+      await pool.query(`insert into users(id,email,display_name) values('owner','owner@example.test','Owner');
+        insert into self_host_accounts(singleton_key,user_id,username,normalized_username,display_name,password_scheme,password_salt,password_digest) values(1,'owner','owner','owner','Owner','scrypt-v1','c2FsdA==','ZGlnZXN0');
+        insert into self_host_sessions(token_hash,user_id,expires_at) values('preserved','owner',now()+interval '1 day');
+        insert into plugin_deployment_identity values(1,'11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222');
+        insert into plugin_account_identity(user_id,account_id) values('owner','33333333-3333-4333-8333-333333333333');`);
+      await migrateDatabase(pool);
+      expect(
+        (await pool.query(`select role,password_digest from self_host_accounts where user_id='owner'`)).rows[0],
+      ).toEqual({ role: 'admin', password_digest: 'ZGlnZXN0' });
+      expect(
+        (await pool.query(`select session_context,auth_version from self_host_sessions where token_hash='preserved'`))
+          .rows[0],
+      ).toMatchObject({ auth_version: 1, session_context: expect.any(String) });
+      expect((await pool.query('select account_id from plugin_account_identity')).rows[0].account_id).toBe(
+        '33333333-3333-4333-8333-333333333333',
+      );
+      const { PostgresSelfHostAuthStore, SelfHostAuthService } = await import('../services/self-host-auth-service.js');
+      const service = new SelfHostAuthService(new PostgresSelfHostAuthStore(pool), 'owner');
+      const invite = await service.invite('owner', 'member', 'Member');
+      const results = await Promise.allSettled([
+        service.redeem(invite.token, 'a secure member password', 'invite', 'one'),
+        service.redeem(invite.token, 'a secure member password', 'invite', 'two'),
+      ]);
+      expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
+      const session = await service.login({
+        username: 'member',
+        password: 'a secure member password',
+        throttleKey: 'member',
+      });
+      expect(await service.authenticateSession(session.token)).toMatchObject({
+        userId: invite.account.userId,
+        role: 'member',
+        sessionContext: expect.any(String),
+      });
+      await service.updateAccount(invite.account.userId, { enabled: false });
+      expect(await service.authenticateSession(session.token)).toBeUndefined();
+      await service.updateAccount(invite.account.userId, { enabled: true });
+      expect(await service.authenticateSession(session.token)).toBeUndefined();
+      await expect(service.updateAccount('owner', { enabled: false })).rejects.toMatchObject({
+        code: 'protected_account',
+      });
+      const reset = await service.issueAccountToken('owner', invite.account.userId, 'password-reset');
+      await service.redeem(reset.token, 'new secure member password', 'password-reset', 'reset');
+      await expect(
+        service.login({ username: 'member', password: 'a secure member password', throttleKey: 'old' }),
+      ).rejects.toMatchObject({ code: 'invalid_credentials' });
+      expect(
+        (await service.login({ username: 'member', password: 'new secure member password', throttleKey: 'new' }))
+          .account.userId,
+      ).toBe(invite.account.userId);
+      await expect(
+        pool.query(`update self_host_accounts set role='member' where user_id='owner'`),
+      ).rejects.toMatchObject({ code: '23514' });
+    });
+  });
+
   test('applies a clean install in numbered order', async () => {
     await withIsolatedSchema(postgres, 'clean', async (pool) => {
       const messages: string[] = [];

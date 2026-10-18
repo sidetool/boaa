@@ -99,7 +99,7 @@ export type ReaderStoreName =
   | (typeof BOOK_ENRICHMENT_STORES)[keyof typeof BOOK_ENRICHMENT_STORES];
 
 const LOCAL_DEVICE_ID = 'device_local';
-let dbPromise: Promise<IDBDatabase> | undefined;
+const readerDatabases = new Map<string, Promise<IDBDatabase>>();
 
 function createStore(db: IDBDatabase, name: ReaderStoreName): IDBObjectStore {
   return db.createObjectStore(name, { keyPath: 'id' });
@@ -347,19 +347,20 @@ function upgrade(db: IDBDatabase, transaction: IDBTransaction, oldVersion: numbe
   if (oldVersion > 0 && oldVersion < 9) backfillParagraphSearchRows(transaction);
 }
 
-export function openReaderDb(): Promise<IDBDatabase> {
+function openNamedReaderDb(dbName: string): Promise<IDBDatabase> {
+  const dbPromise = readerDatabases.get(dbName);
   if (dbPromise) return dbPromise;
 
-  const opening = prepareBrandDatabase(indexedDB, READER_DB_NAME)
+  const opening = (dbName === READER_DB_NAME ? prepareBrandDatabase(indexedDB, READER_DB_NAME) : Promise.resolve())
     .then(
       () =>
         new Promise<IDBDatabase>((resolve, reject) => {
-          const request = indexedDB.open(READER_DB_NAME, READER_DB_VERSION);
+          const request = indexedDB.open(dbName, READER_DB_VERSION);
           let blocked = false;
           request.onupgradeneeded = (event) => upgrade(request.result, request.transaction!, event.oldVersion);
           request.onblocked = () => {
             blocked = true;
-            if (dbPromise === opening) dbPromise = undefined;
+            if (readerDatabases.get(dbName) === opening) readerDatabases.delete(dbName);
             reject(new Error('IndexedDB upgrade blocked by another open reader window'));
           };
           request.onsuccess = async () => {
@@ -370,7 +371,7 @@ export function openReaderDb(): Promise<IDBDatabase> {
             }
             db.onversionchange = () => {
               db.close();
-              if (dbPromise === opening) dbPromise = undefined;
+              if (readerDatabases.get(dbName) === opening) readerDatabases.delete(dbName);
             };
             try {
               // Reads remain blocked until a pending book-level cutover finishes, while the progress store stays observable.
@@ -381,31 +382,48 @@ export function openReaderDb(): Promise<IDBDatabase> {
               resolve(db);
             } catch (error) {
               db.close();
-              if (dbPromise === opening) dbPromise = undefined;
+              if (readerDatabases.get(dbName) === opening) readerDatabases.delete(dbName);
               reject(error);
             }
           };
           request.onerror = () => {
-            if (dbPromise === opening) dbPromise = undefined;
+            if (readerDatabases.get(dbName) === opening) readerDatabases.delete(dbName);
             reject(request.error);
           };
         }),
     )
     .catch((error: unknown) => {
-      dbPromise = undefined;
+      readerDatabases.delete(dbName);
       throw error;
     });
-  dbPromise = opening;
+  readerDatabases.set(dbName, opening);
   return opening;
+}
+
+export function openReaderDb(): Promise<IDBDatabase> {
+  return openNamedReaderDb(READER_DB_NAME);
+}
+export function createAccountReaderDb(scope: string, signal?: AbortSignal): () => Promise<IDBDatabase> {
+  const name = `${READER_DB_NAME}:account:${scope}`;
+  return async () => {
+    signal?.throwIfAborted();
+    const db = await openNamedReaderDb(name);
+    signal?.throwIfAborted();
+    return db;
+  };
 }
 
 export async function resetReaderDbForTests(): Promise<void> {
   resetIdV2MigrationProgressForTests();
-  if (dbPromise) {
-    const db = await dbPromise;
-    db.close();
-    dbPromise = undefined;
-  }
+  await Promise.all([...readerDatabases.values()].map(async (promise) => (await promise).close()));
+  const names = [...readerDatabases.keys()];
+  readerDatabases.clear();
+  for (const name of names.filter((name) => name !== READER_DB_NAME))
+    await new Promise<void>((resolve, reject) => {
+      const request = indexedDB.deleteDatabase(name);
+      request.onsuccess = () => resolve();
+      request.onerror = () => reject(request.error);
+    });
 
   await new Promise<void>((resolve, reject) => {
     const request = indexedDB.deleteDatabase(READER_DB_NAME);

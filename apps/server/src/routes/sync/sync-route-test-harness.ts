@@ -416,6 +416,9 @@ export function deletedEvent(
 
 export async function appWithSync(pool: pg.Pool) {
   const app = Fastify({ logger: false });
+  app.addHook('onRequest', async (request) => {
+    request.principal = { userId: 'user_test', role: 'admin', authMethod: 'legacy-token' };
+  });
   await registerSyncRoutes(app, pool, testConfig());
   return app;
 }

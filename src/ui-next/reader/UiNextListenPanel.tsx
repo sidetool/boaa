@@ -9,6 +9,8 @@ import {
   RefreshCw,
   RotateCcw,
   SkipBack,
+  Server,
+  SpellCheck,
   SkipForward,
   SlidersHorizontal,
   Square,
@@ -17,14 +19,34 @@ import {
   Volume2,
 } from 'lucide-react';
 import { useEffect, useState, type ReactNode } from 'react';
+import { useSelfHostCapability } from '../../features/auth/self-host-account-api';
 import { useOptionalAppRuntime } from '../../app/runtime/RuntimeProvider';
 import type { TTSPlaybackSettings } from '../../domain/types';
+import ProviderSettingsPanel from '../../features/providers/ProviderSettingsPanel';
 import { SettingsSlider } from '../../features/reader-settings/SettingsSlider';
 import TTSAddonPanel, { type TTSAddonPanelProps } from '../../features/tts/TTSAddonPanel';
+import UiNextSpokenTextFilters from './UiNextSpokenTextFilters';
+import type { TTSVoice } from '../../providers/tts';
 import { cx, Segmented, Switch } from '../components/primitives';
 import './listen.css';
 
-type Page = 'main' | 'details' | 'advanced';
+type Page = 'main' | 'details' | 'advanced' | 'engines' | 'filters';
+// Plain catalog entries may name the engine they run on; ids stay opaque and are saved as-is.
+type EngineVoice = TTSVoice & { providerId?: string; providerName?: string; modelId?: string; paid?: boolean };
+interface EngineStatus {
+  id: string;
+  name: string;
+  modelId?: string;
+  available: boolean;
+  paid: boolean;
+  message?: string;
+}
+const PAGE_TITLE: Record<Exclude<Page, 'main'>, string> = {
+  details: '세부 청취 설정',
+  advanced: '화자·고급 설정',
+  engines: 'TTS 엔진 연결',
+  filters: '발음·문자 필터',
+};
 type SleepValue = TTSPlaybackSettings['sleepTimerDefault'];
 type SkipKind = 'skip_line' | 'skip_prefix' | 'skip_suffix';
 
@@ -48,6 +70,15 @@ const SKIP_KIND_LABEL: Record<SkipKind, string> = {
   skip_line: '문장 전체 일치',
 };
 
+// 'batch' joins short paragraphs of one chapter (≤700자, ≤16문단) so rate-limited engines get fewer requests.
+type PlainChunking = NonNullable<TTSPlaybackSettings['plainChunking']>;
+const CHUNKING_HINT: Record<PlainChunking, string> = {
+  sentence: '첫 소리가 빠르고 문장마다 따라 표시돼요. 재생 중 자주 끊기면 문단이나 묶음을 써 보세요.',
+  paragraph: '요청이 줄어 끊김이 덜할 수 있어요. 첫 소리가 늦고 문단 단위로 표시돼요. 700자가 넘는 문단은 나눠 읽어요.',
+  batch:
+    '짧은 문단을 700자까지 한 번에 합성해 요청이 가장 적어요. 첫 소리가 더 늦고, 화면은 재생 진행에 맞춰 문단을 대략 따라가요. 이어듣기는 묶음 첫 문단부터이고, 묶음 안에서는 문장·문단 쉬는 간격이 적용되지 않아요.',
+};
+
 const clampSpeed = (value: number) => Math.round(Math.min(1.8, Math.max(0.6, value)) * 10) / 10;
 
 function Group({ title, children, aside }: { title: string; children: ReactNode; aside?: ReactNode }) {
@@ -65,17 +96,43 @@ function Group({ title, children, aside }: { title: string; children: ReactNode;
 /** ui-next 듣기 tab: a player first, then the few choices people change while listening. */
 export default function UiNextListenPanel(props: TTSAddonPanelProps) {
   const localStatic = useOptionalAppRuntime()?.product?.kind === 'local-static';
+  // Server voices and per-speaker casting run on server providers; members listen with this device's voices.
+  const providers = useSelfHostCapability('useProviders');
   const [page, setPage] = useState<Page>('main');
   const settings = props.playbackSettings;
-  const plainMode = settings.mode !== 'cast';
-  const serverPlain = plainMode && settings.voiceSource === 'server';
-  const serverVoices = props.plainVoices?.voices ?? [];
-  const serverVoiceId = settings.serverVoiceId ?? '';
-  const serverVoiceMissing = Boolean(serverVoiceId && !serverVoices.some((voice) => voice.id === serverVoiceId));
+  const plainMode = !providers || settings.mode !== 'cast';
+  const { changePlaybackSettings } = props;
+  useEffect(() => {
+    if (!providers && (settings.mode === 'cast' || settings.voiceSource === 'server'))
+      changePlaybackSettings({ mode: 'plain', voiceSource: 'system' });
+  }, [providers, settings.mode, settings.voiceSource, changePlaybackSettings]);
+  const serverPlain = providers && plainMode && settings.voiceSource === 'server';
+  const serverVoices: readonly EngineVoice[] = props.plainVoices?.voices ?? [];
+  const catalog = props.plainVoices as { providers?: readonly EngineStatus[]; defaultVoiceId?: string } | undefined;
+  const engines: readonly EngineStatus[] = catalog?.providers ?? [];
   const serverReady = Boolean(props.plainVoices?.available && serverVoices.length);
+  const serverVoiceId = settings.serverVoiceId ?? '';
+  // Same resolution as playback: the server names its default ('' = not ready); older servers mean the first voice.
+  const defaultVoiceId = catalog?.defaultVoiceId ?? serverVoices[0]?.id ?? '';
+  const effectiveVoiceId = serverVoiceId || defaultVoiceId;
+  const selectedVoice = serverVoices.find((voice) => voice.id === effectiveVoiceId);
+  const serverVoiceMissing = Boolean(serverVoiceId && !selectedVoice);
+  // No default yet: never borrow another (possibly paid) engine's voice for the listener.
+  const defaultUnavailable = serverReady && !serverVoiceId && !selectedVoice;
+  const selectedEngine = selectedVoice?.providerId
+    ? engines.find((engine) => engine.id === selectedVoice.providerId)
+    : undefined;
+  // A broken engine blocks its own voices only; we never swap in another engine behind the listener's back.
+  const selectedEngineDown = selectedEngine?.available === false;
+  // Voice labels like "한국어 여성1" don't say which engine speaks them; name it beside the picker.
+  const selectedEngineName = selectedEngine?.name ?? selectedVoice?.providerName;
+  const selectedModel = selectedEngine?.modelId ?? selectedVoice?.modelId ?? props.plainVoices?.modelId;
+  const selectedPaid = Boolean(selectedVoice?.paid ?? selectedEngine?.paid);
+  const voiceGroups = groupByEngine(serverVoices, engines);
+  const enginesDown = engines.filter((engine) => !engine.available);
   const playbackUnavailable = plainMode
     ? serverPlain
-      ? !serverReady || serverVoiceMissing
+      ? !serverReady || serverVoiceMissing || defaultUnavailable || selectedEngineDown
       : props.unavailable
     : props.unavailable && !props.hostedPlaybackReady;
   const rateUnavailable = props.unavailable && !props.hostedPlaybackReady && !serverReady;
@@ -90,13 +147,44 @@ export default function UiNextListenPanel(props: TTSAddonPanelProps) {
   if (page !== 'main') {
     return (
       <div className="un-listen">
-        <button type="button" className="un-listen-back" onClick={() => setPage('main')}>
+        <button
+          type="button"
+          className="un-listen-back"
+          onClick={() => {
+            // Engine keys or models may have changed; reload the voice list the player picks from.
+            if (page === 'engines') props.refreshPlainVoices?.();
+            setPage('main');
+          }}
+        >
           <ChevronLeft size={20} aria-hidden="true" />
           듣기
         </button>
-        <h3 className="un-listen-page-title">{page === 'details' ? '세부 청취 설정' : '화자·고급 설정'}</h3>
+        <h3 className="un-listen-page-title">{PAGE_TITLE[page]}</h3>
         {page === 'details' ? (
           <ListenDetails {...props} serverPlain={serverPlain} />
+        ) : page === 'filters' && props.saveSpokenTextFilter ? (
+          <UiNextSpokenTextFilters
+            rules={props.spokenTextRules}
+            language={props.bookLanguage}
+            currentParagraphText={props.currentParagraphText}
+            requestedText={props.spokenPreviewRequest?.text}
+            save={props.saveSpokenTextFilter}
+            importFilters={props.importSpokenTextFilters}
+            remove={props.deleteSpokenTextSkipRule}
+          />
+        ) : page === 'engines' ? (
+          <>
+            <p className="un-listen-note">
+              연결한 엔진의 목소리는 듣기 탭의 서버 목소리에 바로 나타나요. 화자 분석이나 승인 없이 쓸 수 있어요.
+            </p>
+            <ProviderSettingsPanel
+              scope="tts_synthesis"
+              title="TTS 엔진"
+              providers={props.providers}
+              draft={props.providerDraft}
+              controller={props.providerController}
+            />
+          </>
         ) : (
           <TTSAddonPanel {...props} view="advanced" />
         )}
@@ -204,6 +292,13 @@ export default function UiNextListenPanel(props: TTSAddonPanelProps) {
             {props.resumeLabel}
           </button>
         )}
+        {props.playing && props.saveSpokenTextFilter && (
+          // Heard something wrong? Jump straight to the filter with this paragraph in the preview.
+          <button type="button" className="un-listen-resume" onClick={() => setPage('filters')}>
+            <SpellCheck size={15} aria-hidden="true" />
+            발음 고치기
+          </button>
+        )}
       </section>
 
       <Group title="재생">
@@ -276,18 +371,20 @@ export default function UiNextListenPanel(props: TTSAddonPanelProps) {
       </Group>
 
       <Group title="목소리">
-        <Segmented
-          label="낭독 방식"
-          value={plainMode ? 'plain' : 'cast'}
-          options={[
-            { value: 'plain', label: '기본 목소리' },
-            { value: 'cast', label: '화자별 목소리' },
-          ]}
-          onChange={(mode) => props.changePlaybackSettings({ mode })}
-        />
+        {providers && (
+          <Segmented
+            label="낭독 방식"
+            value={plainMode ? 'plain' : 'cast'}
+            options={[
+              { value: 'plain', label: '기본 목소리' },
+              { value: 'cast', label: '화자별 목소리' },
+            ]}
+            onChange={(mode) => props.changePlaybackSettings({ mode })}
+          />
+        )}
         {plainMode ? (
           <>
-            {!localStatic && (
+            {!localStatic && providers && (
               <div className="un-listen-row">
                 <span className="un-listen-label">음성</span>
                 <Segmented
@@ -309,13 +406,26 @@ export default function UiNextListenPanel(props: TTSAddonPanelProps) {
                   disabled={!props.plainVoices?.available || serverVoices.length === 0}
                   onChange={(event) => props.changePlaybackSettings({ serverVoiceId: event.target.value })}
                 >
-                  <option value="">서버 기본 목소리</option>
+                  <option value="">
+                    서버 기본 목소리
+                    {selectedVoice && !serverVoiceId
+                      ? ` · ${selectedVoice.label}`
+                      : defaultUnavailable
+                        ? ' · 준비 안 됨'
+                        : ''}
+                  </option>
                   {serverVoiceMissing && <option value={serverVoiceId}>저장된 목소리 없음 · {serverVoiceId}</option>}
-                  {serverVoices.map((voice) => (
-                    <option key={voice.id} value={voice.id}>
-                      {voice.label}
-                    </option>
-                  ))}
+                  {voiceGroups.length > 1
+                    ? voiceGroups.map((group) => (
+                        <optgroup key={group.key} label={group.label}>
+                          {group.voices.map((voice) => (
+                            <VoiceOption key={voice.id} voice={voice} engine={group.engine} />
+                          ))}
+                        </optgroup>
+                      ))
+                    : serverVoices.map((voice) => (
+                        <VoiceOption key={voice.id} voice={voice} engine={voiceGroups[0]?.engine} />
+                      ))}
                 </select>
               ) : (
                 <select
@@ -341,7 +451,7 @@ export default function UiNextListenPanel(props: TTSAddonPanelProps) {
                   !props.previewPlainVoice ||
                   props.plainPreviewBusy ||
                   playbackUnavailable ||
-                  (serverPlain && serverVoiceMissing)
+                  (serverPlain && (serverVoiceMissing || defaultUnavailable || selectedEngineDown))
                 }
                 aria-busy={props.plainPreviewBusy}
                 aria-label="목소리 미리듣기"
@@ -350,20 +460,48 @@ export default function UiNextListenPanel(props: TTSAddonPanelProps) {
                 <span>{props.plainPreviewBusy ? '듣는 중' : '미리듣기'}</span>
               </button>
             </div>
+            {serverPlain && selectedVoice && (selectedEngineName || selectedModel) && (
+              <p className="un-listen-engine-tag">
+                엔진 <b>{selectedEngineName ?? selectedModel}</b>
+                {selectedEngineName && selectedModel && selectedModel !== selectedEngineName
+                  ? ` · ${selectedModel}`
+                  : ''}
+                {!serverVoiceId ? ' · 서버 기본' : ''}
+              </p>
+            )}
+            {serverPlain && selectedPaid && !serverVoiceMissing && (
+              <p className="un-listen-note is-paid" role="note">
+                <b>외부 API 목소리</b> · 재생과 미리듣기마다{' '}
+                {selectedEngine?.name ?? selectedVoice?.providerName ?? '외부'} API 사용량(요금)이 발생할 수 있어요.
+              </p>
+            )}
             {serverPlain && (
               <p className="un-listen-note">
                 {serverVoiceMissing
                   ? '저장된 목소리를 찾을 수 없습니다. 사용할 목소리를 다시 선택하세요.'
-                  : (props.plainVoices?.message ??
-                    (serverReady
-                      ? `${serverVoices.length}개 서버 목소리를 쓸 수 있어요.`
-                      : '사용 가능한 서버 목소리를 불러오세요.'))}{' '}
+                  : defaultUnavailable
+                    ? '기본 엔진이 준비되지 않았어요. 다른 엔진을 쓰려면 목소리를 직접 고르세요.'
+                    : selectedEngineDown
+                      ? `${selectedEngine?.name ?? '선택한 엔진'}에 연결할 수 없어요${selectedEngine?.message ? ` (${selectedEngine.message})` : ''}. 다른 엔진은 자동으로 대신하지 않으니 목소리를 직접 고르세요.`
+                      : (props.plainVoices?.message ??
+                        (serverReady
+                          ? `${serverVoices.length}개 서버 목소리를 쓸 수 있어요.`
+                          : '사용 가능한 서버 목소리를 불러오세요.'))}{' '}
                 {props.refreshPlainVoices && (
                   <button type="button" className="un-listen-link" onClick={() => props.refreshPlainVoices?.()}>
                     새로고침
                   </button>
                 )}
               </p>
+            )}
+            {serverPlain && enginesDown.length > 0 && !selectedEngineDown && (
+              <ul className="un-listen-engines" aria-label="연결 안 된 엔진">
+                {enginesDown.map((engine) => (
+                  <li key={engine.id}>
+                    <b>{engine.name}</b> 연결 안 됨{engine.message ? ` · ${engine.message}` : ''}
+                  </li>
+                ))}
+              </ul>
             )}
           </>
         ) : (
@@ -389,11 +527,23 @@ export default function UiNextListenPanel(props: TTSAddonPanelProps) {
       </div>
 
       <nav className="un-listen-links" aria-label="더 많은 청취 설정">
+        {props.saveSpokenTextFilter && (
+          <button type="button" onClick={() => setPage('filters')}>
+            <SpellCheck size={19} aria-hidden="true" />
+            <span>
+              <b>발음·문자 필터</b>
+              <small>찾을 말을 읽을 말로 바꾸기, 정규식, .ttsfilter 가져오기</small>
+            </span>
+            <ChevronRight size={18} aria-hidden="true" />
+          </button>
+        )}
         <button type="button" onClick={() => setPage('details')}>
           <SlidersHorizontal size={19} aria-hidden="true" />
           <span>
             <b>세부 청취 설정</b>
-            <small>음높이, 볼륨, 쉬는 간격, 건너뛸 내용</small>
+            <small>
+              {serverPlain ? '합성 단위, 음높이, 볼륨, 쉬는 간격, 건너뛸 내용' : '음높이, 볼륨, 쉬는 간격, 건너뛸 내용'}
+            </small>
           </span>
           <ChevronRight size={18} aria-hidden="true" />
         </button>
@@ -405,16 +555,63 @@ export default function UiNextListenPanel(props: TTSAddonPanelProps) {
           </span>
           <ChevronRight size={18} aria-hidden="true" />
         </button>
+        {providers && !localStatic && (
+          <button type="button" onClick={() => setPage('engines')}>
+            <Server size={19} aria-hidden="true" />
+            <span>
+              <b>TTS 엔진 연결</b>
+              <small>Supertonic, 외부 TTS API 키와 모델</small>
+            </span>
+            <ChevronRight size={18} aria-hidden="true" />
+          </button>
+        )}
       </nav>
     </div>
   );
 }
 
+function VoiceOption({ voice, engine }: { voice: EngineVoice; engine?: EngineStatus }) {
+  const paid = voice.paid ?? engine?.paid;
+  return (
+    <option value={voice.id} disabled={engine?.available === false}>
+      {voice.label}
+      {paid ? ' · 유료 API' : ''}
+      {engine?.available === false ? ' · 연결 안 됨' : ''}
+    </option>
+  );
+}
+
+/** Voices keep catalog order; engines appear in the order their first voice does. */
+function groupByEngine(voices: readonly EngineVoice[], engines: readonly EngineStatus[]) {
+  const groups: { key: string; label: string; engine?: EngineStatus; voices: EngineVoice[] }[] = [];
+  for (const voice of voices) {
+    const key = voice.providerId ?? '';
+    let group = groups.find((candidate) => candidate.key === key);
+    if (!group) {
+      const engine = engines.find((candidate) => candidate.id === key);
+      const name = engine?.name ?? voice.providerName ?? '서버';
+      const model = engine?.modelId ?? voice.modelId;
+      group = {
+        key,
+        label: model ? `${name} · ${model}` : name,
+        engine,
+        voices: [],
+      };
+      groups.push(group);
+    }
+    group.voices.push(voice);
+  }
+  return groups;
+}
+
 function ListenDetails(props: TTSAddonPanelProps & { serverPlain: boolean }) {
   const settings = props.playbackSettings;
+  // Server plain voices only: one request per paragraph (≤700자) trades first-sound latency for fewer requests.
+  const plainChunking: PlainChunking = settings.plainChunking ?? 'sentence';
   const [skipPattern, setSkipPattern] = useState('');
   const [skipKind, setSkipKind] = useState<SkipKind>('skip_prefix');
-  const skipRules = props.spokenTextRules.filter((rule) => rule.kind !== 'replace_literal');
+  // Replacement filters (literal and regex) live on their own page; list only skip rules here.
+  const skipRules = props.spokenTextRules.filter((rule) => rule.kind.startsWith('skip_'));
 
   return (
     <>
@@ -462,6 +659,22 @@ function ListenDetails(props: TTSAddonPanelProps & { serverPlain: boolean }) {
       </Group>
 
       <Group title="읽는 방식">
+        {props.serverPlain && (
+          <div className="un-listen-row is-stacked">
+            <span className="un-listen-label">합성 단위</span>
+            <Segmented
+              label="합성 단위"
+              value={plainChunking}
+              options={[
+                { value: 'sentence', label: '문장' },
+                { value: 'paragraph', label: '문단' },
+                { value: 'batch', label: '묶음' },
+              ]}
+              onChange={(next) => props.changePlaybackSettings({ plainChunking: next })}
+            />
+            <small className="un-listen-hint">{CHUNKING_HINT[plainChunking]}</small>
+          </div>
+        )}
         <div className="un-listen-row is-stacked">
           <span className="un-listen-label">EPUB 각주</span>
           <Segmented

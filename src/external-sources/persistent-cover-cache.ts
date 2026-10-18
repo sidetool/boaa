@@ -25,10 +25,14 @@ export class PersistentCoverCache implements CoverStorage {
     private maxBytes = COVER_DISK_MAX_BYTES,
     private maxEntries = COVER_DISK_MAX_ENTRIES,
     private databaseName = 'boaa-cover-blobs-v1',
-  ) {}
+  ) {
+    if (scope.startsWith('hosted-account:')) this.databaseName = `${databaseName}:account:${scope}`;
+  }
   private async transaction<T>(run: (store: IDBObjectStore, result: (value: T) => void) => void): Promise<T> {
     if (typeof indexedDB === 'undefined') throw new Error('cover_storage_unavailable');
-    const db = await prepareBrandDatabase(indexedDB, this.databaseName).then(
+    const db = await (
+      this.scope.startsWith('hosted-account:') ? Promise.resolve() : prepareBrandDatabase(indexedDB, this.databaseName)
+    ).then(
       () =>
         new Promise<IDBDatabase>((resolve, reject) => {
           const request = indexedDB.open(this.databaseName, 1);
@@ -91,7 +95,7 @@ export class PersistentCoverCache implements CoverStorage {
         time,
         usedAt: Date.now(),
       });
-      // Newest first: the entire database shares one budget, including inactive accounts.
+      // Newest first: this database owns its budget (hosted accounts each have a separate database).
       let bytes = 0,
         count = 0;
       const request = store.index('usedAt').openCursor(null, 'prev');

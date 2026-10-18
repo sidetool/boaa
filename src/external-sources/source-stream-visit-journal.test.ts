@@ -69,3 +69,10 @@ describe('stream visit crash recovery', () => {
     expect(await recoverSourceStreamVisits('user', repository())).toEqual([]);
   });
 });
+
+it('hosted visit journal retention is separate for each account', async () => {
+  stageSourceStreamVisit('hosted-account:B', source, 'work', readAt);
+  for (let i = 0; i < 205; i++)
+    stageSourceStreamVisit('hosted-account:A', { ...source, remoteId: String(i) }, 'work', readAt);
+  expect((await recoverSourceStreamVisits('hosted-account:B', repository()))[0]?.source.remoteId).toBe('episode');
+});

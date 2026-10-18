@@ -25,6 +25,9 @@ describeWithPostgres('self-host integration revision CAS with real PostgreSQL', 
       await pool.query("insert into users (id) values ('user_test')");
 
       const app = Fastify();
+      app.addHook('onRequest', async (request) => {
+        request.principal = { userId: 'user_test', role: 'member', authMethod: 'session', sessionContext: 'test' };
+      });
       await registerReaderStateRoutes(app, pool, { defaultUserId: 'user_test' } as ServerConfig);
       const initial = {
         schemaVersion: 1,
@@ -74,7 +77,7 @@ describeWithPostgres('self-host integration revision CAS with real PostgreSQL', 
         expect(stale.json().settings.revision).toBe(2);
 
         await pool.query(`create table sync_events (
-          id text primary key, user_id text, device_id text, type text, book_id text,
+          id text, user_id text, unique(user_id,id), device_id text, type text, book_id text,
           entity_id text, payload jsonb, revision jsonb, created_at timestamptz
         )`);
         await pool.query(`update reader_settings set settings = settings || $1::jsonb`, [

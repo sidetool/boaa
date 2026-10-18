@@ -138,7 +138,10 @@ export class RemoteInstalledExtensions implements InstalledExtensionManager {
           prefix,
           {
             method: 'POST',
-            body: JSON.stringify({ remoteId, imageMinutes: sourceReadingPreferences().imageMinutes }),
+            body: JSON.stringify({
+              remoteId,
+              imageMinutes: sourceReadingPreferences(this.api.coverCacheScope).imageMinutes,
+            }),
             signal,
           },
           150000,
@@ -242,7 +245,12 @@ export class RemoteInstalledExtensions implements InstalledExtensionManager {
     if (scope !== this.coverScope) {
       this.covers.clear();
       this.coverScope = scope;
-      this.covers = new SessionCoverCache(64 * 1024 * 1024, 400, scope ? new PersistentCoverCache(scope) : undefined);
+      this.covers = new SessionCoverCache(
+        64 * 1024 * 1024,
+        400,
+        scope ? new PersistentCoverCache(scope) : undefined,
+        scope,
+      );
     }
     return this.covers;
   }
@@ -651,7 +659,10 @@ export class RemoteInstalledExtensions implements InstalledExtensionManager {
         `/extensions/sources/${encodeURIComponent(id)}/list`,
         {
           method: 'POST',
-          body: JSON.stringify({ ...input, cacheMaxAgeMs: sourceReadingPreferences().listMinutes * 60000 }),
+          body: JSON.stringify({
+            ...input,
+            cacheMaxAgeMs: sourceReadingPreferences(this.api.coverCacheScope).listMinutes * 60000,
+          }),
           signal,
         },
         input.parentRef ? 11 * 60_000 : 60000,
@@ -716,7 +727,10 @@ export class RemoteInstalledExtensions implements InstalledExtensionManager {
       async (sharedSignal) => {
         const { blob } = await this.api.requestBlob(`/extensions/sources/${encodeURIComponent(id)}/cover`, {
           method: 'POST',
-          body: JSON.stringify({ workId: key.remoteId, coverHours: sourceReadingPreferences().coverHours }),
+          body: JSON.stringify({
+            workId: key.remoteId,
+            coverHours: sourceReadingPreferences(this.api.coverCacheScope).coverHours,
+          }),
           headers: { 'Content-Type': 'application/json' },
           signal: sharedSignal,
         });

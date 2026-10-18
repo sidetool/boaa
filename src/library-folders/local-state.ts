@@ -4,7 +4,7 @@ import type { LinkedLibraryFolder, StoredLibraryFolderEntry } from './contracts'
 const DB_NAME = 'boaa-library-folders';
 const DB_VERSION = 1;
 
-let dbPromise: Promise<IDBDatabase> | undefined;
+const folderDatabases = new Map<string, Promise<IDBDatabase>>();
 
 function requestToPromise<T>(request: IDBRequest<T>): Promise<T> {
   return new Promise((resolve, reject) => {
@@ -21,13 +21,14 @@ function transactionDone(transaction: IDBTransaction): Promise<void> {
   });
 }
 
-function openLibraryFolderDb(): Promise<IDBDatabase> {
+function openLibraryFolderDb(dbName = DB_NAME): Promise<IDBDatabase> {
+  const dbPromise = folderDatabases.get(dbName);
   if (dbPromise) return dbPromise;
-  const opening = prepareBrandDatabase(indexedDB, DB_NAME)
+  const opening = (dbName === DB_NAME ? prepareBrandDatabase(indexedDB, DB_NAME) : Promise.resolve())
     .then(
       () =>
         new Promise<IDBDatabase>((resolve, reject) => {
-          const request = indexedDB.open(DB_NAME, DB_VERSION);
+          const request = indexedDB.open(dbName, DB_VERSION);
           request.onupgradeneeded = () => {
             const db = request.result;
             if (!db.objectStoreNames.contains('folders')) db.createObjectStore('folders', { keyPath: 'id' });
@@ -40,35 +41,46 @@ function openLibraryFolderDb(): Promise<IDBDatabase> {
           };
           request.onsuccess = () => resolve(request.result);
           request.onerror = () => {
-            if (dbPromise === opening) dbPromise = undefined;
+            if (folderDatabases.get(dbName) === opening) folderDatabases.delete(dbName);
             reject(request.error);
           };
         }),
     )
     .catch((error: unknown) => {
-      dbPromise = undefined;
+      folderDatabases.delete(dbName);
       throw error;
     });
-  dbPromise = opening;
+  folderDatabases.set(dbName, opening);
   return opening;
 }
 
 export class LibraryFolderLocalStateStore {
+  constructor(
+    private readonly scope?: string,
+    private readonly signal?: AbortSignal,
+  ) {}
+  private async openDb() {
+    this.signal?.throwIfAborted();
+    const db = await openLibraryFolderDb(this.scope ? `${DB_NAME}:account:${this.scope}` : DB_NAME);
+    this.signal?.throwIfAborted();
+    return db;
+  }
+
   async listFolders(): Promise<LinkedLibraryFolder[]> {
-    const db = await openLibraryFolderDb();
+    const db = await this.openDb();
     const tx = db.transaction('folders', 'readonly');
     return requestToPromise<LinkedLibraryFolder[]>(tx.objectStore('folders').getAll());
   }
 
   async saveFolder(folder: LinkedLibraryFolder): Promise<void> {
-    const db = await openLibraryFolderDb();
+    const db = await this.openDb();
     const tx = db.transaction('folders', 'readwrite');
     tx.objectStore('folders').put(folder);
     await transactionDone(tx);
   }
 
   async deleteFolder(folderId: string): Promise<void> {
-    const db = await openLibraryFolderDb();
+    const db = await this.openDb();
     const tx = db.transaction(['folders', 'handles', 'entries'], 'readwrite');
     tx.objectStore('folders').delete(folderId);
     tx.objectStore('handles').delete(folderId);
@@ -84,27 +96,27 @@ export class LibraryFolderLocalStateStore {
   }
 
   async getDirectoryHandle(folderId: string): Promise<FileSystemDirectoryHandle | undefined> {
-    const db = await openLibraryFolderDb();
+    const db = await this.openDb();
     const tx = db.transaction('handles', 'readonly');
     return requestToPromise<FileSystemDirectoryHandle | undefined>(tx.objectStore('handles').get(folderId));
   }
 
   async saveDirectoryHandle(folderId: string, handle: FileSystemDirectoryHandle): Promise<void> {
-    const db = await openLibraryFolderDb();
+    const db = await this.openDb();
     const tx = db.transaction('handles', 'readwrite');
     tx.objectStore('handles').put(handle, folderId);
     await transactionDone(tx);
   }
 
   async clearDirectoryHandle(folderId: string): Promise<void> {
-    const db = await openLibraryFolderDb();
+    const db = await this.openDb();
     const tx = db.transaction('handles', 'readwrite');
     tx.objectStore('handles').delete(folderId);
     await transactionDone(tx);
   }
 
   async listEntries(folderId: string): Promise<StoredLibraryFolderEntry[]> {
-    const db = await openLibraryFolderDb();
+    const db = await this.openDb();
     const tx = db.transaction('entries', 'readonly');
     return requestToPromise<StoredLibraryFolderEntry[]>(
       tx.objectStore('entries').index('folderId').getAll(IDBKeyRange.only(folderId)),
@@ -113,7 +125,7 @@ export class LibraryFolderLocalStateStore {
 
   async saveEntries(entries: readonly StoredLibraryFolderEntry[]): Promise<void> {
     if (entries.length === 0) return;
-    const db = await openLibraryFolderDb();
+    const db = await this.openDb();
     const tx = db.transaction('entries', 'readwrite');
     const store = tx.objectStore('entries');
     entries.forEach((entry) => store.put(entry));
@@ -121,7 +133,7 @@ export class LibraryFolderLocalStateStore {
   }
 
   async deleteEntry(id: string): Promise<void> {
-    const db = await openLibraryFolderDb();
+    const db = await this.openDb();
     const tx = db.transaction('entries', 'readwrite');
     tx.objectStore('entries').delete(id);
     await transactionDone(tx);
@@ -129,8 +141,15 @@ export class LibraryFolderLocalStateStore {
 }
 
 export async function resetLibraryFolderLocalStateForTests(): Promise<void> {
-  dbPromise?.then((db) => db.close()).catch(() => undefined);
-  dbPromise = undefined;
+  await Promise.all([...folderDatabases.values()].map(async (promise) => (await promise).close()));
+  const names = [...folderDatabases.keys()];
+  folderDatabases.clear();
+  for (const name of names.filter((name) => name !== DB_NAME))
+    await new Promise<void>((resolve, reject) => {
+      const request = indexedDB.deleteDatabase(name);
+      request.onsuccess = () => resolve();
+      request.onerror = () => reject(request.error);
+    });
   await new Promise<void>((resolve, reject) => {
     const request = indexedDB.deleteDatabase(DB_NAME);
     request.onsuccess = () => resolve();

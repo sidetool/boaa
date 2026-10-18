@@ -1,8 +1,9 @@
+import { ApkProcessBudget } from '../../../services/apk-worker/process-budget.mjs';
 import { registerServerManagement } from './management/server-management.js';
 import { createManagedMetadataFetch } from './extensions/runtime-component-client.js';
 import { createByeDpiProcess } from './extensions/byedpi-process.js';
 import { registerPluginRuntimeRoutes } from './routes/plugin-runtime.js';
-import Fastify, { FastifyInstance, type FastifyError } from 'fastify';
+import Fastify, { FastifyInstance, type FastifyError, type FastifyRequest, type FastifyReply } from 'fastify';
 import { assertSecureServerConfig, corsAllowedOrigins, type ServerConfig } from './config.js';
 import { createPool, seedDefaultUser } from './db/pool.js';
 import { runMigrations } from './db/migrate.js';
@@ -17,10 +18,20 @@ import { registerBookRoutes } from './routes/books.js';
 import { registerAIRoutes } from './routes/ai.js';
 import { registerSyncRoutes } from './routes/sync.js';
 import { registerBackupRoutes } from './routes/backups.js';
+import { registerAdminAccountRoutes } from './routes/admin-accounts.js';
+import { registerAdminSourceRoutes } from './routes/admin-sources.js';
+import { accountIdentity } from './plugins/plugin-scope.js';
+import { requestOwnerConfig } from './services/owner-context.js';
+import { OwnerRuntimeRegistry } from './extensions/owner-runtime-registry.js';
+import { bindOwnerRuntimeSignal } from './extensions/owner-runtime-request.js';
 import { registerSelfHostAuthRoutes } from './routes/auth.js';
 import { registerWebNovelMetadataCollectorGateway } from './routes/webnovel-metadata-collector-gateway.js';
 import { registerTextSourceGateway } from './routes/text-source-gateway.js';
-import { registerExtensionPackageRoutes } from './routes/extension-packages.js';
+import {
+  registerExtensionPackageRoutes,
+  createExtensionRuntime,
+  type ExtensionRuntime,
+} from './routes/extension-packages.js';
 import { PostgresPackageInstallStore } from './extensions/postgres-package-store.js';
 import { createNodePackageExecution } from './extensions/node-package-execution.js';
 import { createConfiguredContentService } from './extensions/configured-content-service.js';
@@ -29,14 +40,14 @@ import { EncryptedSourceCredentialVault } from './extensions/source-credential-v
 import { createSourceNetworkSettings } from './extensions/source-network-settings.js';
 import { registerSourceNetworkSettingsRoutes } from './routes/source-network-settings.js';
 import { loadProviderSecretMasterKey } from './providers/server-provider-secrets.js';
-import { createHash } from 'node:crypto';
+import { createHash, createHmac } from 'node:crypto';
 import { access } from 'node:fs/promises';
 import { ApkExtensionHost, apkOwnerDirectory } from './extensions/apk-extension-host.js';
 import { registerApkExtensionRoutes } from './routes/apk-extensions.js';
 import { MangayomiExtensionHost } from './extensions/mangayomi/host.js';
 import path from 'node:path';
 import { pruneStaleUploadSessions } from './services/upload-cleanup.js';
-import { registerAuthHook } from './auth.js';
+import { registerAuthHook, requireUserId } from './auth.js';
 import { PostgresSelfHostAuthStore, SelfHostAuthService } from './services/self-host-auth-service.js';
 import { createS3Client, ensureBucket } from './services/object-storage.js';
 import {
@@ -51,6 +62,7 @@ const uploadPruneIntervalMs = 6 * 60 * 60 * 1000;
 const corsHeaders = [
   'content-type',
   'authorization',
+  'x-boaa-session-context',
   'x-request-id',
   'x-correlation-id',
   'x-backup-default-resolution',
@@ -132,7 +144,7 @@ export function registerCorsPolicy(app: FastifyInstance, config: ServerConfig): 
     reply.header('Access-Control-Allow-Methods', corsMethods.join(','));
     reply.header(
       'Access-Control-Allow-Headers',
-      'Content-Type,Authorization,Range,If-Range,X-Request-Id,X-Correlation-Id,X-Backup-Default-Resolution,X-Backup-Conflict-Resolutions,X-Source-File-Name,X-Source-Content-Type,X-Expected-Metadata-Revision,X-Cover-File-Name,X-Cover-Content-Type,X-Cover-Content-Hash,X-Cover-Width,X-Cover-Height,X-Cover-Fit,X-Cover-Position-X,X-Cover-Position-Y,X-Cover-Provenance,X-Font-Content-Type,X-Font-Content-Hash,X-Font-Family,X-Font-File-Name,X-Font-Style,X-Font-Weight,X-Font-License-Note',
+      'Content-Type,Authorization,X-BOAA-Session-Context,Range,If-Range,X-Request-Id,X-Correlation-Id,X-Backup-Default-Resolution,X-Backup-Conflict-Resolutions,X-Source-File-Name,X-Source-Content-Type,X-Expected-Metadata-Revision,X-Cover-File-Name,X-Cover-Content-Type,X-Cover-Content-Hash,X-Cover-Width,X-Cover-Height,X-Cover-Fit,X-Cover-Position-X,X-Cover-Position-Y,X-Cover-Provenance,X-Font-Content-Type,X-Font-Content-Hash,X-Font-Family,X-Font-File-Name,X-Font-Style,X-Font-Weight,X-Font-License-Note',
     );
     reply.header(
       'Access-Control-Expose-Headers',
@@ -162,7 +174,10 @@ export function registerSafeErrorHandler(app: FastifyInstance): void {
   });
 }
 
-export async function buildServer(config: ServerConfig): Promise<FastifyInstance> {
+export async function buildServer(
+  config: ServerConfig,
+  options: { readonly membersReady?: boolean } = {},
+): Promise<FastifyInstance> {
   assertSecureServerConfig(config);
 
   if (config.runMigrationsOnStart) {
@@ -199,7 +214,12 @@ export async function buildServer(config: ServerConfig): Promise<FastifyInstance
 
   const selfHostAuth = new SelfHostAuthService(new PostgresSelfHostAuthStore(pool), config.defaultUserId);
   await registerAuthHook(app, config, selfHostAuth);
-  await registerSelfHostAuthRoutes(app, selfHostAuth, config);
+  // Owner/data/source isolation and the real browser account flow are enabled together.
+  const membersReady = options.membersReady ?? true;
+  await registerSelfHostAuthRoutes(app, selfHostAuth, config, {
+    membersReady,
+    resolveIdentity: (userId) => accountIdentity(pool, userId),
+  });
   await registerServerManagement(app, [importQueue, providerQueue]);
   await registerPluginRuntimeRoutes(app, config, pool, new URL('../dist/plugin-runtime-assets/', import.meta.url));
   if (config.webRoot) await registerWebAssets(app, config.webRoot);
@@ -251,11 +271,10 @@ export async function buildServer(config: ServerConfig): Promise<FastifyInstance
   await registerAIRoutes(app, pool, config, providerQueue);
   await registerSyncRoutes(app, pool, config);
   await registerBackupRoutes(app, pool, config);
-  const contentService = createConfiguredContentService(process.env, config.defaultUserId);
-  app.addHook('onClose', () => contentService.dispose());
+  const masterKey = loadProviderSecretMasterKey(config, process.env);
   const extensionVault = new EncryptedSourceCredentialVault(
     path.join(config.dataDir, 'extension-credentials', createHash('sha256').update(config.defaultUserId).digest('hex')),
-    loadProviderSecretMasterKey(config, process.env),
+    masterKey,
   );
   const sourceNetwork = createSourceNetworkSettings(extensionVault, config.sourceOutboundProxy, createByeDpiProcess());
   await sourceNetwork.initialize();
@@ -279,68 +298,191 @@ export async function buildServer(config: ServerConfig): Promise<FastifyInstance
       process.env.MOA_APK_RUNTIME_DIR ??
       'services/apk-worker/build',
   );
-  let apk: ApkExtensionHost | undefined;
-  if (
+  const apkAvailable =
     process.env.BOAA_APK_RUNTIME_ENABLED !== '0' &&
     (await access(path.join(apkBuild, 'target', 'apk-worker-0.1.0.jar')).then(
       () => true,
       () => false,
-    ))
-  ) {
-    const java =
-      process.env.BOAA_APK_JAVA ??
-      process.env.MOYA_APK_JAVA ??
-      process.env.NOVELDESK_APK_JAVA ??
-      process.env.MOA_APK_JAVA ??
-      (process.env.JAVA_HOME ? path.join(process.env.JAVA_HOME, 'bin', 'java') : 'java');
-    try {
-      apk = await ApkExtensionHost.open(java, apkBuild, apkOwnerDirectory(config.dataDir, config.defaultUserId), {
-        resolveDefaultProxy: () => sourceNetwork.resolve(),
-      });
-    } catch {
-      app.log.warn('APK extension runtime unavailable; existing sources remain available');
+    ));
+  const java =
+    process.env.BOAA_APK_JAVA ??
+    process.env.MOYA_APK_JAVA ??
+    process.env.NOVELDESK_APK_JAVA ??
+    process.env.MOA_APK_JAVA ??
+    (process.env.JAVA_HOME ? path.join(process.env.JAVA_HOME, 'bin', 'java') : 'java');
+  const apkProcessBudget = new ApkProcessBudget(4);
+  const runtimes = new OwnerRuntimeRegistry(async (userId: string) => {
+    const legacy = userId === config.defaultUserId;
+    if (!legacy) {
+      const account = await pool.query(
+        "select user_id from self_host_accounts where user_id = $1 and status in ('active','invited')",
+        [userId],
+      );
+      if (!account.rowCount) throw Object.assign(new Error('account_disabled'), { statusCode: 403 });
     }
-  }
-  await registerApkExtensionRoutes(app, apk);
-  let mangayomi: MangayomiExtensionHost | undefined;
-  try {
-    mangayomi = await MangayomiExtensionHost.open(
-      path.join(
-        config.dataDir,
-        'mangayomi-extensions',
-        createHash('sha256').update(config.defaultUserId).digest('hex'),
-      ),
-      extensionVault,
-      undefined,
-      sourceNetwork,
-    );
-  } catch {
-    app.log.warn('Mangayomi extension state unavailable; existing sources remain available');
-  }
-  await registerApkExtensionRoutes(app, mangayomi, '/api/mangayomi-extensions');
+    const vault = legacy
+      ? extensionVault
+      : new EncryptedSourceCredentialVault(
+          path.join(config.dataDir, 'extension-credentials', createHash('sha256').update(userId).digest('hex')),
+          createHmac('sha256', masterKey).update('boaa-owner-source-v1\0').update(userId).digest(),
+        );
+    // Environment content-service credentials belong only to the preserved administrator.
+    const content = legacy ? createConfiguredContentService(process.env, userId) : undefined;
+    let apk: ApkExtensionHost | undefined;
+    let mangayomi: MangayomiExtensionHost | undefined;
+    try {
+      if (apkAvailable) {
+        try {
+          apk = await ApkExtensionHost.open(java, apkBuild, apkOwnerDirectory(config.dataDir, userId), {
+            resolveDefaultProxy: () => sourceNetwork.resolve(),
+            processBudget: apkProcessBudget,
+          });
+        } catch {
+          app.log.warn('APK extension runtime unavailable');
+        }
+      }
+      try {
+        mangayomi = await MangayomiExtensionHost.open(
+          path.join(config.dataDir, 'mangayomi-extensions', createHash('sha256').update(userId).digest('hex')),
+          vault,
+          undefined,
+          sourceNetwork,
+        );
+      } catch {
+        app.log.warn('Mangayomi extension runtime unavailable');
+      }
+      const runtime = createExtensionRuntime(
+        new PostgresPackageInstallStore(pool, userId),
+        createNodePackageExecution('self-host-gateway', {
+          vault,
+          allowPrivateNetwork: legacy,
+          allowContentService: legacy,
+          network: sourceNetwork,
+          contentResolver: content?.resolve,
+          contentConfigured: content?.configured,
+        }),
+        apk,
+        mangayomi,
+      );
+      const close = runtime.close;
+      runtime.close = async () => {
+        await close();
+        await content?.dispose();
+      };
+      return runtime;
+    } catch (error) {
+      apk?.close();
+      mangayomi?.close();
+      await content?.dispose();
+      throw error;
+    }
+  });
+  app.addHook('onClose', () => runtimes.close());
+  const replies = new WeakMap<FastifyRequest, FastifyReply>();
+  const requests = new WeakMap<FastifyRequest, Promise<Awaited<ReturnType<typeof runtimes.acquire>>>>();
+  const resolveRuntime = async (request: FastifyRequest): Promise<ExtensionRuntime> => {
+    let pending = requests.get(request);
+    if (!pending) {
+      const userId = requireUserId(request);
+      if (userId !== config.defaultUserId) {
+        const account = await pool.query(
+          "select user_id from self_host_accounts where user_id = $1 and status = 'active'",
+          [userId],
+        );
+        if (!account.rowCount) throw Object.assign(new Error('account_disabled'), { statusCode: 403 });
+      }
+      pending = runtimes.acquire(userId).then((lease) => {
+        const abort = () => replies.get(request)?.raw.destroy();
+        lease.signal.addEventListener('abort', abort, { once: true });
+        if (lease.signal.aborted) abort();
+        return {
+          ...lease,
+          release: () => {
+            lease.signal.removeEventListener('abort', abort);
+            lease.release();
+          },
+        };
+      });
+      requests.set(request, pending);
+      request.raw.once('aborted', () => {
+        void pending!.then(
+          (lease) => lease.release(),
+          () => {},
+        );
+      });
+    }
+    const lease = await pending;
+    bindOwnerRuntimeSignal(request, lease.signal);
+    return lease.value;
+  };
+  app.addHook('onRequest', async (request, reply) => {
+    replies.set(request, reply);
+    reply.raw.once('close', () => {
+      const pending = requests.get(request);
+      if (pending)
+        void pending.then(
+          (lease) => lease.release(),
+          () => {},
+        );
+    });
+  });
+  app.addHook('onResponse', async (request) => {
+    const pending = requests.get(request);
+    if (pending)
+      await pending.then(
+        (lease) => lease.release(),
+        () => {},
+      );
+  });
+  await registerAdminAccountRoutes(app, selfHostAuth, {
+    membersReady,
+    onMemberDisabled: (userId) => runtimes.dispose(userId),
+  });
+  await registerAdminSourceRoutes(app, pool, runtimes);
+  await registerApkExtensionRoutes(
+    app,
+    undefined,
+    '/api/apk-extensions',
+    async (request) => (await resolveRuntime(request)).apk,
+  );
+  await registerApkExtensionRoutes(
+    app,
+    undefined,
+    '/api/mangayomi-extensions',
+    async (request) => (await resolveRuntime(request)).mangayomi,
+  );
   const textMigration = parseInstalledTextMigration(process.env.EXTENSION_TEXT_MIGRATION);
   const documentS3 = createDocumentS3Client(config);
   app.addHook('onClose', async () => documentS3.destroy());
-  const installedCatalog = await registerExtensionPackageRoutes(
+  await registerExtensionPackageRoutes(
     app,
     new PostgresPackageInstallStore(pool, config.defaultUserId),
-    createNodePackageExecution('self-host-gateway', {
-      contentResolver: contentService.resolve,
-      contentConfigured: contentService.configured,
-      vault: extensionVault,
-      network: sourceNetwork,
-    }),
-    apk,
-    mangayomi,
+    createNodePackageExecution(),
+    undefined,
+    undefined,
     new Set(textMigration?.sources.map((source) => source.sourceId)),
-    (file, input, signal) => stageServerImport(pool, config, file, input, signal),
+    (file, input, signal, request) =>
+      stageServerImport(pool, requestOwnerConfig(config, request!), file, input, signal),
     {
-      read: createDocumentSeriesSnapshot(pool, config, documentS3),
-      stage: (file, input, signal) => stageServerImport(pool, config, file, input, signal),
+      read: (bookId, expected, signal, request) =>
+        createDocumentSeriesSnapshot(pool, requestOwnerConfig(config, request!), documentS3)(bookId, expected, signal),
+      stage: (file, input, signal, request) =>
+        stageServerImport(pool, requestOwnerConfig(config, request!), file, input, signal),
     },
+    resolveRuntime,
   );
+  // Legacy companion (including migrated installed text routes) remains administrator-only in V1.
   await registerTextSourceGateway(app, config, {
-    installedFetch: textMigration ? createInstalledTextGateway(installedCatalog, textMigration) : undefined,
+    installedFetch: textMigration
+      ? async (...args) => {
+          const lease = await runtimes.acquire(config.defaultUserId);
+          try {
+            return await createInstalledTextGateway(lease.value.catalog, textMigration)(...args);
+          } finally {
+            lease.release();
+          }
+        }
+      : undefined,
   });
 
   return app;

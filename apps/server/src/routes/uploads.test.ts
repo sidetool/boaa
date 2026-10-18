@@ -34,6 +34,9 @@ function testConfig(): ServerConfig {
 
 function appWithUploads(pool: pg.Pool, queue: Queue) {
   const app = Fastify({ logger: false });
+  app.addHook('onRequest', async (request) => {
+    request.principal = { userId: 'user_test', role: 'admin', authMethod: 'legacy-token' };
+  });
   app.addContentTypeParser('application/octet-stream', { parseAs: 'buffer' }, (_request, body, done) =>
     done(null, body),
   );
@@ -56,6 +59,9 @@ describe('upload routes', () => {
       release: vi.fn(),
     };
     const app = Fastify();
+    app.addHook('onRequest', async (request) => {
+      request.principal = { userId: 'user_test', role: 'admin', authMethod: 'legacy-token' };
+    });
     app.addContentTypeParser('application/octet-stream', { parseAs: 'buffer' }, (_request, body, done) =>
       done(null, body),
     );
@@ -688,7 +694,7 @@ describe('upload routes', () => {
       query: vi.fn(async (sql: string, params?: unknown[]) => {
         if (sql === 'begin' || sql === 'commit' || sql === 'rollback') return { rows: [] };
         if (sql.includes('from upload_sessions') && sql.includes('for update')) {
-          expect(params).toEqual(['upload_1']);
+          expect(params).toEqual(['upload_1', 'user_test']);
           return {
             rows: [
               {
@@ -883,6 +889,9 @@ it('accepts a 4GiB EPUB chunk plan but rejects larger archives and large legacy 
   const space = vi.spyOn(uploadFile, 'assertUploadDiskSpace').mockResolvedValue();
   const directory = await mkdtemp(path.join(os.tmpdir(), 'boaa-large-upload-init-'));
   const app = Fastify();
+  app.addHook('onRequest', async (request) => {
+    request.principal = { userId: 'user_test', role: 'admin', authMethod: 'legacy-token' };
+  });
   const config = {
     ...testConfig(),
     dataDir: directory,

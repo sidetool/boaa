@@ -1,6 +1,6 @@
 {
-  "version": "0.1.1-beta.3",
+  "version": "0.1.1-beta.4",
   "minimumVersion": "0.1.1-beta.3",
-  "schemaEpoch": 1,
+  "schemaEpoch": 2,
   "rollbackSafe": true
 }

@@ -54,7 +54,11 @@ export function PlatformPluginProvider({ runtime, children }: { runtime: ReaderR
       requests.add(controller);
       const timeout = setTimeout(() => controller.abort(), 5000);
       try {
-        return await loadPluginDeployment(runtime.apiBaseUrl ?? '/api', controller.signal);
+        return await loadPluginDeployment(
+          runtime.apiBaseUrl ?? '/api',
+          controller.signal,
+          runtime.session?.fetch.bind(runtime.session),
+        );
       } finally {
         clearTimeout(timeout);
         requests.delete(controller);
@@ -91,7 +95,15 @@ export function PlatformPluginProvider({ runtime, children }: { runtime: ReaderR
         if (disposed) return;
         const deployment = await fetchContext();
         if (disposed) return;
-        session = new ProductPluginSession(deployment, window);
+        const expected = runtime.session?.context;
+        if (
+          expected &&
+          (deployment.serverId !== expected.serverId ||
+            deployment.accountId !== expected.accountId ||
+            deployment.libraryId !== expected.libraryId)
+        )
+          throw new Error('PLUGIN_DEPLOYMENT_MISMATCH');
+        session = new ProductPluginSession(deployment, window, runtime.session?.fetch.bind(runtime.session));
         await session.store.finishRetirements();
         if (disposed) return;
         await session.service.startSession();
@@ -103,7 +115,9 @@ export function PlatformPluginProvider({ runtime, children }: { runtime: ReaderR
       }
     };
     const channel = typeof BroadcastChannel !== 'undefined' ? new BroadcastChannel('boaa.plugin-auth.v1') : undefined;
-    const expired = () => {
+    const expired = (event: Event) => {
+      const epoch = (event as CustomEvent<{ epoch?: string }>).detail?.epoch;
+      if (epoch && epoch !== runtime.session?.epoch) return;
       channel?.postMessage('stop');
       fail('로그인이 종료되어 플러그인을 중지했습니다.');
     };
@@ -125,7 +139,7 @@ export function PlatformPluginProvider({ runtime, children }: { runtime: ReaderR
       window.removeEventListener('pagehide', pagehide);
       window.removeEventListener('pageshow', pageshow);
     };
-  }, [runtime.apiBaseUrl, runtime.mode, runtime.managedByDesktop, account, owner, attempt]);
+  }, [runtime.apiBaseUrl, runtime.mode, runtime.managedByDesktop, account, owner, attempt, runtime.session]);
   return (
     <Context.Provider
       value={{

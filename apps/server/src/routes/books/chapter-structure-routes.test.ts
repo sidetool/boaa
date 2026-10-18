@@ -63,6 +63,9 @@ describe('chapter structure routes', () => {
     vi.mocked(applyHostedChapterStructure).mockResolvedValue(receipt);
     vi.mocked(rollbackHostedChapterStructure).mockResolvedValue({ ...receipt, status: 'rolled_back' });
     const app = Fastify({ logger: false });
+    app.addHook('onRequest', async (request) => {
+      request.principal = { userId: 'user_1', role: 'admin', authMethod: 'legacy-token' };
+    });
     await registerChapterStructureRoutes(app, pool, config);
 
     expect((await app.inject({ method: 'GET', url: '/api/books/book_1/chapter-structure' })).statusCode).toBe(200);
@@ -85,6 +88,9 @@ describe('chapter structure routes', () => {
 
   it('rejects malformed commands before the service boundary', async () => {
     const app = Fastify({ logger: false });
+    app.addHook('onRequest', async (request) => {
+      request.principal = { userId: 'user_1', role: 'admin', authMethod: 'legacy-token' };
+    });
     await registerChapterStructureRoutes(app, pool, config);
     const response = await app.inject({
       method: 'POST',

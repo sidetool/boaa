@@ -1,3 +1,4 @@
+import { requireAdmin } from '../auth.js';
 import { registerPlainTTSRoutes } from './ai/plain-tts-routes.js';
 import type { Queue } from 'bullmq';
 import type { FastifyInstance } from 'fastify';
@@ -19,14 +20,22 @@ export async function registerAIRoutes(
   config: ServerConfig,
   providerQueue?: Queue,
 ): Promise<void> {
-  await registerProviderIntegrationRoutes(app, pool, config);
-  await registerAnalysisWorkflowRoutes(app, pool, config, providerQueue);
-  await registerProviderJobRoutes(app, pool, config, providerQueue);
-  await registerLabelMutationRoutes(app, pool, config);
-  await registerTTSCacheRoutes(app, pool, config, providerQueue);
-  await registerPlainTTSRoutes(app, pool, config);
-  await registerArtifactRoutes(app, pool, config);
-  await registerCharacterGraphV2Routes(app, pool, config);
-  await registerVoiceProductRoutes(app, pool, config);
-  await registerVoiceCastingRoutes(app, pool, config);
+  // Provider and workflow adapters remain administrator-only until all execution paths are owner-bound.
+  await app.register(async (app) => {
+    app.addHook('preHandler', async (request) => {
+      const principal = requireAdmin(request);
+      if (principal.userId !== config.defaultUserId)
+        throw Object.assign(new Error('provider_capability_unavailable'), { statusCode: 403 });
+    });
+    await registerProviderIntegrationRoutes(app, pool, config);
+    await registerAnalysisWorkflowRoutes(app, pool, config, providerQueue);
+    await registerProviderJobRoutes(app, pool, config, providerQueue);
+    await registerLabelMutationRoutes(app, pool, config);
+    await registerTTSCacheRoutes(app, pool, config, providerQueue);
+    await registerPlainTTSRoutes(app, pool, config);
+    await registerArtifactRoutes(app, pool, config);
+    await registerCharacterGraphV2Routes(app, pool, config);
+    await registerVoiceProductRoutes(app, pool, config);
+    await registerVoiceCastingRoutes(app, pool, config);
+  });
 }

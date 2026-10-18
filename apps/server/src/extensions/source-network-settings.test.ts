@@ -18,6 +18,9 @@ it('persists a default, preserves legacy overrides and direct exceptions, and re
   let settings = createSourceNetworkSettings(vault(), 'http://operator:8080');
   expect(settings.resolve()).toBe('http://operator:8080/');
   const app = Fastify();
+  app.addHook('onRequest', async (request) => {
+    request.principal = { userId: 'fixture-admin', role: 'admin', authMethod: 'legacy-token' };
+  });
   await registerSourceNetworkSettingsRoutes(app, settings);
   const saved = await app.inject({
     method: 'PUT',
@@ -119,6 +122,9 @@ it('uses built-in SOCKS for inherit, keeps the user proxy, persists the switch a
 it('commits only after health succeeds, serializes concurrent revisions, and returns actionable API failures', async () => {
   const { settings, process } = networkFixture();
   const app = Fastify();
+  app.addHook('onRequest', async (request) => {
+    request.principal = { userId: 'fixture-admin', role: 'admin', authMethod: 'legacy-token' };
+  });
   await registerSourceNetworkSettingsRoutes(app, settings);
   vi.mocked(process.ensureRunning).mockRejectedValueOnce(new Error('byedpi_start_failed'));
   const failed = await app.inject({

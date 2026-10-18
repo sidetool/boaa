@@ -253,3 +253,57 @@ describe('external source link import reconciliation', () => {
     expect(acquirePendingLinks).toHaveBeenCalledWith([baseLink]);
   });
 });
+
+it.each([false, true])(
+  'adopts the importer-confirmed ID for a newly imported source (resolved=%s)',
+  async (resolved) => {
+    const staged = {
+      ...baseLink,
+      localBookId: 'provisional',
+      pendingImport: {
+        ...baseLink.pendingImport!,
+        hadExistingLink: false,
+        previousActiveContentRevisionId: undefined,
+        sourceHashResolvedByImporter: resolved,
+      },
+    };
+    const saveLinks = vi.fn(async () => undefined);
+    const state = { saveLinks } as never;
+    const result = await (resolved ? finalizeImporterResolvedExternalSourceLinks : finalizeExternalSourceLinks)(
+      state,
+      [staged],
+      { ...novel, id: 'member-book' },
+    );
+    expect(result[0]).toMatchObject({ localBookId: 'member-book', pendingImport: undefined });
+  },
+);
+it('does not move an existing revision-bound source link to another book', async () => {
+  const state = { saveLinks: vi.fn(async () => undefined) } as never;
+  await expect(finalizeExternalSourceLinks(state, [baseLink], { ...novel, id: 'other-book' })).rejects.toThrow(
+    '식별자',
+  );
+});
+
+it('retains an expired unacknowledged hosted import without guessing by equal source bytes', async () => {
+  const staged = {
+    ...baseLink,
+    localBookId: 'provisional',
+    pendingImport: {
+      ...baseLink.pendingImport!,
+      hadExistingLink: false,
+      previousActiveContentRevisionId: undefined,
+      bookIdMayChange: true,
+    },
+  };
+  const replaceLinks = vi.fn(async () => undefined);
+  const state = { replaceLinks } as never;
+  const result = await reconcilePendingExternalSourceLinks(
+    state,
+    [staged],
+    [{ ...novel, id: 'unknown-final-book' }],
+    expiredNow,
+    { catalogIncludesTrash: true },
+  );
+  expect(result).toEqual([staged]);
+  expect(replaceLinks).not.toHaveBeenCalled();
+});

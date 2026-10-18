@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { BrowserAudioSession, type BrowserAudioElement } from '../providers/browser-audio-session';
 
 class FakeAudio implements BrowserAudioElement {
+  src = '';
   onended: HTMLAudioElement['onended'] = null;
   onerror: HTMLAudioElement['onerror'] = null;
   playCalls = 0;
@@ -108,4 +109,44 @@ describe('BrowserAudioSession', () => {
     expect(created[0].loadCalls).toBe(1);
     expect(revoked).toEqual(['blob:test-1']);
   });
+});
+
+it('reuses the authorized media element across chunks and ignores a late previous rejection', async () => {
+  const { session, created, revoked } = createHarness();
+  const first = session.playBlob(blob());
+  const staleEnded = created[0].onended;
+  fireEnded(created[0]);
+  await first;
+  const second = session.playBlob(blob());
+  expect(created).toHaveLength(1);
+  expect(created[0].src).toBe('blob:test-2');
+  (staleEnded as (event: Event) => void)(new Event('ended'));
+  expect(session.hasActivePlayback).toBe(true);
+  fireEnded(created[0]);
+  await expect(second).resolves.toBe(true);
+  expect(revoked).toEqual(['blob:test-1', 'blob:test-2']);
+});
+
+it('reports real media progress and stops the old chunk from publishing after replacement', async () => {
+  const { session, created } = createHarness();
+  const progress: number[] = [];
+  const first = session.playBlob(blob(), (value) => progress.push(value));
+  const audio = created[0] as FakeAudio & {
+    currentTime: number;
+    duration: number;
+    ontimeupdate: HTMLAudioElement['ontimeupdate'];
+  };
+  audio.currentTime = 5;
+  audio.duration = 10;
+  const old = audio.ontimeupdate as (event: Event) => void;
+  old(new Event('timeupdate'));
+  expect(progress).toEqual([0.5]);
+  fireEnded(audio);
+  await first;
+  const second = session.playBlob(blob());
+  old(new Event('timeupdate'));
+  expect(progress).toEqual([0.5]);
+  fireEnded(audio);
+  await second;
+  expect(audio.ontimeupdate).toBeNull();
 });

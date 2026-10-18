@@ -17,7 +17,7 @@ it('exposes installation phase errors and preserves selection on failure', async
   const font = { id: 'font-a', contentHash: 'hash', familyLabel: 'Font', licenseNote: 'license' } as UserFontAsset;
   const repository = {
     listUserFonts: vi.fn().mockResolvedValue([]),
-    installUserFont: vi.fn(),
+    installUserFont: vi.fn().mockResolvedValue({ ...font, id: 'owner-scoped-font' }),
     updateUserFont: vi.fn(),
     deleteUserFont: vi.fn(),
   } as unknown as ReaderPersonalizationRepository;
@@ -59,7 +59,7 @@ it('exposes installation phase errors and preserves selection on failure', async
   await act(async () => {
     await model.install(file);
   });
-  expect(selectFont).toHaveBeenCalledWith(font.id);
+  expect(selectFont).toHaveBeenCalledWith('owner-scoped-font');
   expect(model.error).toBeUndefined();
   await act(async () => {
     await model.install(file);
@@ -73,7 +73,7 @@ it('exposes installation phase errors and preserves selection on failure', async
     await model.remove(font.id);
   });
   expect(selectFont).toHaveBeenLastCalledWith('builtin-serif');
-  expect(unloadUserFont).toHaveBeenCalledWith(font.id);
+  expect(unloadUserFont).toHaveBeenCalledWith(font.id, expect.anything());
   expect(repository.deleteUserFont).toHaveBeenCalledWith(font.id);
   vi.mocked(repository.updateUserFont).mockRejectedValueOnce(new Error('offline'));
   await act(async () => {

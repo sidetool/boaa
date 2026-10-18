@@ -166,3 +166,49 @@ it('revokes playback and warmup tokens when the session owner changes on the sam
   expect(controller.warmupBusy).toBe(false);
   act(() => renderer.unmount());
 });
+
+it('carries completed opening audio across automatic chapter transitions but clears on stop and owner change', async () => {
+  const systemTTS = { pause: vi.fn(), resume: vi.fn(), stop: vi.fn() };
+  let input: TTSExecutionControllerInput = { systemTTS, bookId: 'b', chapterId: 'c1', sessionOwner: {} };
+  let controller!: ReturnType<typeof useTTSExecutionController>;
+  function Harness() {
+    controller = useTTSExecutionController(input);
+    return null;
+  }
+  let renderer!: ReactTestRenderer;
+  let session!: number;
+  await act(async () => {
+    renderer = create(<Harness />);
+  });
+  await act(async () => {
+    session = controller.beginSession('b', 'c1')!;
+  });
+  const audio = { cacheKey: 'opening', blob: new Blob(['audio']) };
+  await act(async () => {
+    controller.rememberPrefetched(session, 'opening', audio);
+    controller.finishSession(session, { preserveSleepTimer: true });
+  });
+  input = { ...input, chapterId: 'c2' };
+  await act(async () => {
+    renderer.update(<Harness />);
+  });
+  await act(async () => {
+    session = controller.beginSession('b', 'c2', 0, { preserveSleepTimer: true })!;
+  });
+  expect(controller.takePrefetched('opening')).toBe(audio);
+  await act(async () => {
+    controller.rememberPrefetched(session, 'opening', audio);
+    controller.stopAll();
+  });
+  expect(controller.takePrefetched('opening')).toBeUndefined();
+  await act(async () => {
+    session = controller.beginSession('b', 'c2')!;
+    controller.rememberPrefetched(session, 'opening', audio);
+  });
+  input = { ...input, chapterId: 'c3', sessionOwner: {} };
+  await act(async () => {
+    renderer.update(<Harness />);
+  });
+  expect(controller.takePrefetched('opening')).toBeUndefined();
+  await act(async () => renderer.unmount());
+});

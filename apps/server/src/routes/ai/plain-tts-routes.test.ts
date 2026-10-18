@@ -3,9 +3,15 @@ import type pg from 'pg';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Paragraph } from '../../../../../src/domain/types';
 import type { TTSSynthesisProvider } from '../../../../../src/providers/tts';
-import { buildPlainTTSItems, plainTTSParagraphHash, PLAIN_TTS_SAMPLE } from '../../../../../src/providers/plain-tts';
+import {
+  buildPlainTTSBatch,
+  buildPlainTTSItems,
+  plainTTSParagraphHash,
+  PLAIN_TTS_SAMPLE,
+} from '../../../../../src/providers/plain-tts';
 import { loadConfig } from '../../config.js';
-import { registerPlainTTSRoutes } from './plain-tts-routes.js';
+import type { PlainTTSSource } from '../../providers/plain-tts-sources.js';
+import { classifyPlainTTSFailure, registerPlainTTSRoutes } from './plain-tts-routes.js';
 
 const apps: FastifyInstance[] = [];
 afterEach(async () => {
@@ -20,7 +26,7 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
-async function fixture(envPatch: NodeJS.ProcessEnv = {}) {
+async function fixture(envPatch: NodeJS.ProcessEnv = {}, sources?: () => Promise<PlainTTSSource[]>) {
   const paragraph: Paragraph = {
     id: 'paragraph_plain',
     novelId: 'book_plain',
@@ -37,7 +43,9 @@ async function fixture(envPatch: NodeJS.ProcessEnv = {}) {
     book_id: paragraph.novelId,
     language: 'ko',
     active_content_revision_id: 'content_1' as string | null,
+    paragraph_index: 0,
   };
+  const sourceRows = [source];
   let owner = 'user_plain';
   let deleted = false;
   const query = vi.fn(async (sql: string, params?: unknown[]) => {
@@ -48,8 +56,8 @@ async function fixture(envPatch: NodeJS.ProcessEnv = {}) {
     expect(sql).not.toMatch(/labeled_segments|character_graph|provider_jobs|voice_profiles/);
     return {
       rows:
-        params?.[0] === paragraph.chapterId && params?.[1] === paragraph.id && params?.[2] === owner && !deleted
-          ? [{ ...source }]
+        params?.[0] === paragraph.chapterId && params?.[2] === owner && !deleted
+          ? sourceRows.filter((row) => row.paragraph.id === params?.[1]).map((row) => ({ ...row }))
           : [],
     };
   });
@@ -69,6 +77,7 @@ async function fixture(envPatch: NodeJS.ProcessEnv = {}) {
   apps.push(app);
   await registerPlainTTSRoutes(app, { query } as unknown as pg.Pool, loadConfig({ DEFAULT_USER_ID: 'user_plain' }), {
     provider,
+    sources,
     env: {
       TTS_PLAIN_ENABLED: 'true',
       TTS_PLAIN_MODEL_ID: 'supertonic3',
@@ -92,6 +101,7 @@ async function fixture(envPatch: NodeJS.ProcessEnv = {}) {
   return {
     app,
     source,
+    sourceRows,
     query,
     provider,
     synthesize,
@@ -222,4 +232,206 @@ describe('plain paragraph TTS routes', () => {
     expect(f.synthesize).not.toHaveBeenCalled();
     expect(f.listVoices).not.toHaveBeenCalled();
   });
+});
+
+describe('ordinary narration across providers', () => {
+  it('reads owned source through a paid API without any cast data or local model', async () => {
+    const remote = vi
+      .fn<TTSSynthesisProvider['synthesize']>()
+      .mockResolvedValue({ audio: new Uint8Array([1, 2]).buffer, contentType: 'audio/wav' });
+    let enabled = true;
+    const f = await fixture({ TTS_PLAIN_ENABLED: 'false' }, async () =>
+      enabled
+        ? [
+            {
+              id: 'gemini-tts',
+              name: 'Gemini',
+              modelId: 'gemini-3.8-flash-lite-tts',
+              revision: 'remote-v1',
+              paid: true,
+              providerOptions: { voice: 'old', instructions: 'Calm' },
+              createProvider: async () => ({ ...f.provider, providerId: 'gemini-tts', synthesize: remote }),
+            },
+          ]
+        : [],
+    );
+    const catalog = (await f.app.inject('/api/tts/plain/voices')).json();
+    expect(catalog).toMatchObject({
+      available: true,
+      defaultVoiceId: 'gemini-tts:old',
+      voices: [{ id: 'gemini-tts:M1', paid: true }, { id: 'gemini-tts:old' }],
+    });
+    const request = { voiceId: 'gemini-tts:M1', modelRevision: catalog.revision };
+    expect((await f.request(request)).statusCode).toBe(200);
+    expect(remote).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: f.source.text,
+        providerOptions: { voice: 'M1', instructions: 'Calm' },
+        voiceProfile: expect.objectContaining({ role: 'narrator', providerId: 'gemini-tts', providerVoiceId: 'M1' }),
+      }),
+    );
+    expect(f.synthesize).not.toHaveBeenCalled();
+    expect(f.query).toHaveBeenCalledTimes(2);
+    enabled = false;
+    expect((await f.request(request)).statusCode).toBe(503);
+    expect(remote).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps the default unavailable instead of falling back to a paid engine', async () => {
+    const remote = vi
+      .fn<TTSSynthesisProvider['synthesize']>()
+      .mockResolvedValue({ audio: new Uint8Array([9]).buffer, contentType: 'audio/wav' });
+    const f = await fixture({}, async () => [
+      {
+        id: 'gemini-tts',
+        name: 'Gemini',
+        revision: 'v1',
+        paid: true,
+        createProvider: async () => ({
+          ...f.provider,
+          providerId: 'gemini-tts',
+          listVoices: async () => [{ id: 'M1', label: 'remote M1', lang: 'ko' }],
+          synthesize: remote,
+        }),
+      },
+    ]);
+    f.listVoices.mockRejectedValue(new Error('offline'));
+    const catalog = (await f.app.inject('/api/tts/plain/voices')).json();
+    expect(catalog).toMatchObject({
+      available: true,
+      defaultVoiceId: '',
+      providers: [
+        { id: 'supertonic', available: false },
+        { id: 'gemini-tts', available: true },
+      ],
+    });
+    expect((await f.request({ modelRevision: catalog.revision })).statusCode).toBe(502);
+    expect(remote).not.toHaveBeenCalled();
+    expect((await f.request({ voiceId: 'gemini-tts:M1', modelRevision: catalog.revision })).statusCode).toBe(200);
+  });
+
+  it('separates cache entries for the same voice name on different engines', async () => {
+    const remote = vi
+      .fn<TTSSynthesisProvider['synthesize']>()
+      .mockResolvedValue({ audio: new Uint8Array([9]).buffer, contentType: 'audio/wav' });
+    const f = await fixture({}, async () => [
+      {
+        id: 'openai-tts',
+        name: 'OpenAI',
+        revision: 'v1',
+        paid: true,
+        createProvider: async () => ({ ...f.provider, providerId: 'openai-tts', synthesize: remote }),
+      },
+    ]);
+    const catalog = (await f.app.inject('/api/tts/plain/voices')).json();
+    const local = await f.request({ modelRevision: catalog.revision });
+    const external = await f.request({ voiceId: 'openai-tts:M1', modelRevision: catalog.revision });
+    expect(local.statusCode).toBe(200);
+    expect(external.statusCode).toBe(200);
+    expect(local.rawPayload).not.toEqual(external.rawPayload);
+    expect(f.synthesize).toHaveBeenCalledTimes(1);
+    expect(remote).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('plain TTS failure classification', () => {
+  it('distinguishes upstream capacity, permissions, timeout, and empty audio without exposing details', () => {
+    expect(classifyPlainTTSFailure({ status: 429, message: 'private key and text' }).code).toBe('tts_rate_limited');
+    expect(classifyPlainTTSFailure({ status: 403 }).code).toBe('tts_access_denied');
+    expect(classifyPlainTTSFailure({ name: 'TimeoutError' }).code).toBe('tts_timeout');
+    expect(classifyPlainTTSFailure(new Error('Gemini Vertex TTS returned no audio data')).code).toBe('tts_no_audio');
+    expect(JSON.stringify(classifyPlainTTSFailure(new Error('secret document')))).not.toContain('secret document');
+  });
+  it('surfaces rate limits instead of a generic playback failure', async () => {
+    const f = await fixture();
+    f.synthesize.mockRejectedValue(Object.assign(new Error('private provider body'), { status: 429 }));
+    const response = await f.request();
+    expect(response.statusCode).toBe(429);
+    expect(response.json().code).toBe('tts_rate_limited');
+    expect(response.body).not.toContain('private provider body');
+  });
+  it('verifies paragraph chunks on the server and rejects unsupported units', async () => {
+    const f = await fixture();
+    f.source.text = f.source.paragraph.text = '첫 문장입니다. 다음 문장입니다.';
+    const [item] = buildPlainTTSItems({ paragraph: f.source.paragraph, rate: 1, chunking: 'paragraph' });
+    const body = {
+      paragraphHash: plainTTSParagraphHash(f.source.paragraph),
+      chunkHash: item.spokenTextFingerprint,
+      chunking: 'paragraph',
+    };
+    expect((await f.request(body)).statusCode).toBe(200);
+    expect(f.synthesize.mock.calls[0][0].text).toBe(f.source.text);
+    expect((await f.request({ ...body, chunking: 'sentence' })).statusCode).toBe(409);
+    expect((await f.request({ ...body, chunking: 'unbounded' })).statusCode).toBe(400);
+  });
+});
+
+describe('batch source verification and quota cooldown', () => {
+  it('synthesizes one batch, rejects stale secondary source and checks ownership on cache hits', async () => {
+    const f = await fixture();
+    const next = {
+      ...f.source,
+      paragraph_index: 1,
+      text: '두번째 문단입니다.',
+      paragraph: { ...f.source.paragraph, id: 'paragraph_second', index: 1, text: '두번째 문단입니다.' },
+    };
+    f.sourceRows.push(next);
+    const item = buildPlainTTSBatch({ paragraphs: f.sourceRows.map((row) => row.paragraph), rate: 1 })!;
+    const body = { chunking: 'batch', batch: item.plainBatch, chunkHash: item.spokenTextFingerprint };
+    expect((await f.request(body)).statusCode).toBe(200);
+    expect(f.synthesize).toHaveBeenCalledTimes(1);
+    expect(f.synthesize.mock.calls[0][0].text).toBe(f.source.text + '\n\n' + next.text);
+    expect((await f.request(body)).statusCode).toBe(200);
+    expect(f.synthesize).toHaveBeenCalledTimes(1);
+    next.text += ' 변경';
+    expect((await f.request(body)).statusCode).toBe(409);
+    f.setOwner('another_owner');
+    expect((await f.request(body)).statusCode).toBe(404);
+  });
+  it('blocks reversed or foreign paragraph batches before paying for synthesis', async () => {
+    const f = await fixture();
+    const next = { ...f.source, paragraph_index: -1, paragraph: { ...f.source.paragraph, id: 'p2', index: 1 } };
+    f.sourceRows.push(next);
+    const item = buildPlainTTSBatch({ paragraphs: f.sourceRows.map((row) => row.paragraph), rate: 1 })!;
+    const body = { chunking: 'batch', batch: item.plainBatch, chunkHash: item.spokenTextFingerprint };
+    expect((await f.request(body)).statusCode).toBe(400);
+    next.paragraph_index = 1;
+    next.book_id = 'foreign';
+    expect((await f.request(body)).statusCode).toBe(400);
+    expect(f.synthesize).not.toHaveBeenCalled();
+  });
+  it('shares the cooldown across distinct requests without hitting the upstream again', async () => {
+    const f = await fixture();
+    f.synthesize.mockRejectedValue({ status: 429 });
+    const first = await f.request();
+    expect(first.statusCode).toBe(429);
+    expect(first.json().retryAfterSeconds).toBe(10);
+    const second = await f.request({ rate: 1.1 });
+    expect(second.statusCode).toBe(429);
+    expect(Number(second.headers['retry-after'])).toBeGreaterThan(0);
+    expect(f.synthesize).toHaveBeenCalledTimes(1);
+  });
+});
+
+it('verifies regex-filtered speech against source and refuses unsupported regex before synthesis', async () => {
+  const f = await fixture();
+  const rules = [
+    {
+      id: 'filter',
+      scope: 'book' as const,
+      kind: 'replace_regex' as const,
+      pattern: '(서버)에서',
+      replacement: '$1로',
+      enabled: true,
+      priority: 0,
+      updatedAt: '',
+    },
+  ];
+  const item = buildPlainTTSItems({ paragraph: f.source.paragraph, language: 'ko', rate: 1, rules })[0];
+  const response = await f.request({ rules, chunkHash: item.spokenTextFingerprint });
+  expect(response.statusCode).toBe(200);
+  expect(JSON.stringify(f.synthesize.mock.calls[0])).toContain('서버로');
+  const invalid = await f.request({ rules: [{ ...rules[0], pattern: '(?=x)' }] });
+  expect(invalid.statusCode).toBe(400);
+  expect(f.synthesize).toHaveBeenCalledTimes(1);
 });

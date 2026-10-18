@@ -53,7 +53,7 @@ export async function insertServerSyncEvent(
     `
       insert into sync_events (id, user_id, device_id, type, book_id, entity_id, payload, revision, created_at)
       values ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-      on conflict (id) do nothing
+      on conflict (user_id, id) do nothing
       returning id
     `,
     [
@@ -73,7 +73,7 @@ export async function insertServerSyncEvent(
       `select user_id = $2 and device_id is not distinct from $3 and type = $4
               and book_id is not distinct from $5 and entity_id is not distinct from $6
               and payload = $7::jsonb and revision = $8::jsonb and created_at = $9::timestamptz as matches
-         from sync_events where id = $1`,
+         from sync_events where id = $1 and user_id=$2`,
       [
         id,
         userId,

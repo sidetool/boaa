@@ -1,4 +1,6 @@
+import { GEMINI_VOICES, namedVoices } from './tts-voices.js';
 import crypto from 'node:crypto';
+import type { GoogleServiceAccount } from './google-service-account.js';
 import fs from 'node:fs';
 import type { TTSSynthesisInput, TTSSynthesisProvider, TTSSynthesisResult } from '../../../../src/providers/tts';
 
@@ -6,6 +8,7 @@ export interface GoogleCloudTTSProviderOptions {
   readonly project?: string;
   readonly location?: string;
   readonly credentialsPath?: string;
+  readonly serviceAccount?: GoogleServiceAccount;
   readonly accessToken?: string;
   readonly baseUrl?: string;
   readonly modelId: string;
@@ -29,17 +32,28 @@ export class GoogleCloudTTSProvider implements TTSSynthesisProvider {
 
   constructor(private readonly options: GoogleCloudTTSProviderOptions) {}
 
+  async listVoices() {
+    return namedVoices(GEMINI_VOICES);
+  }
+
   async synthesize(input: TTSSynthesisInput): Promise<TTSSynthesisResult> {
     const fetchImpl = this.options.fetchImpl ?? fetch;
     const accessToken = await resolveAccessToken(this.options, fetchImpl, input.signal);
-    const providerOptions = mergeOptions(this.options.providerOptions, input.voiceProfile.providerOptions, input.providerOptions);
+    const providerOptions = mergeOptions(
+      this.options.providerOptions,
+      input.voiceProfile.providerOptions,
+      input.providerOptions,
+    );
     const audioEncoding = googleAudioEncoding(input.format, stringOption(providerOptions, 'audioEncoding'));
     const voiceName = stringOption(providerOptions, 'voice') ?? input.voiceProfile.providerVoiceId ?? 'Kore';
     const languageCode = stringOption(providerOptions, 'languageCode') ?? input.voiceProfile.language ?? 'ko-KR';
     const body: Record<string, unknown> = {
       input: {
         text: input.text,
-        prompt: stringOption(providerOptions, 'prompt') ?? stringOption(providerOptions, 'instructions') ?? speechPrompt(input),
+        prompt:
+          stringOption(providerOptions, 'prompt') ??
+          stringOption(providerOptions, 'instructions') ??
+          speechPrompt(input),
       },
       voice: {
         languageCode,
@@ -50,7 +64,8 @@ export class GoogleCloudTTSProvider implements TTSSynthesisProvider {
         audioEncoding,
       },
     };
-    const speed = numberOption(providerOptions, 'speakingRate') ?? numberOption(providerOptions, 'speed') ?? input.speed;
+    const speed =
+      numberOption(providerOptions, 'speakingRate') ?? numberOption(providerOptions, 'speed') ?? input.speed;
     const pitch = numberOption(providerOptions, 'pitch') ?? input.voiceProfile.pitch;
     const sampleRateHertz = integerOption(providerOptions, 'sampleRateHertz');
     const audioConfig = body.audioConfig as Record<string, unknown>;
@@ -77,7 +92,8 @@ export class GoogleCloudTTSProvider implements TTSSynthesisProvider {
     }
     const json = await response.json().catch(() => undefined);
     const audioContent = json && typeof json === 'object' ? (json as Record<string, unknown>).audioContent : undefined;
-    if (typeof audioContent !== 'string' || !audioContent.trim()) throw new Error('Google Cloud TTS returned no audioContent payload');
+    if (typeof audioContent !== 'string' || !audioContent.trim())
+      throw new Error('Google Cloud TTS returned no audioContent payload');
     const audio = Buffer.from(audioContent, 'base64');
     return {
       audio: audio.buffer.slice(audio.byteOffset, audio.byteOffset + audio.byteLength) as ArrayBuffer,
@@ -92,15 +108,24 @@ export class GoogleCloudTTSProvider implements TTSSynthesisProvider {
   }
 }
 
-async function resolveAccessToken(options: GoogleCloudTTSProviderOptions, fetchImpl: typeof fetch, signal?: AbortSignal): Promise<string> {
+async function resolveAccessToken(
+  options: GoogleCloudTTSProviderOptions,
+  fetchImpl: typeof fetch,
+  signal?: AbortSignal,
+): Promise<string> {
   if (options.accessToken?.trim()) return options.accessToken.trim();
   const credentialsPath = options.credentialsPath?.trim();
-  if (!credentialsPath) throw new Error('GOOGLE_APPLICATION_CREDENTIALS or VERTEX_CREDENTIALS_DIR is required for google-cloud-tts provider');
-  const credentials = JSON.parse(fs.readFileSync(credentialsPath, 'utf8')) as ServiceAccountCredentials;
-  const tokenUri = credentials.token_uri?.trim() || 'https://oauth2.googleapis.com/token';
+  if (!options.serviceAccount && !credentialsPath)
+    throw new Error(
+      'GOOGLE_APPLICATION_CREDENTIALS or VERTEX_CREDENTIALS_DIR is required for google-cloud-tts provider',
+    );
+  const credentials =
+    options.serviceAccount ?? (JSON.parse(fs.readFileSync(credentialsPath!, 'utf8')) as ServiceAccountCredentials);
+  const tokenUri = 'https://oauth2.googleapis.com/token';
   const clientEmail = credentials.client_email?.trim();
   const privateKey = credentials.private_key;
-  if (!clientEmail || !privateKey) throw new Error('Google Cloud service account credentials are missing client_email or private_key');
+  if (!clientEmail || !privateKey)
+    throw new Error('Google Cloud service account credentials are missing client_email or private_key');
   const now = Math.floor(Date.now() / 1000);
   const assertion = [
     base64UrlJson({ alg: 'RS256', typ: 'JWT' }),
@@ -115,6 +140,7 @@ async function resolveAccessToken(options: GoogleCloudTTSProviderOptions, fetchI
   const signature = crypto.createSign('RSA-SHA256').update(assertion).sign(privateKey);
   const response = await fetchImpl(tokenUri, {
     method: 'POST',
+    redirect: 'error',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: new URLSearchParams({
       grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer',
@@ -128,7 +154,8 @@ async function resolveAccessToken(options: GoogleCloudTTSProviderOptions, fetchI
   }
   const json = await response.json().catch(() => undefined);
   const accessToken = json && typeof json === 'object' ? (json as Record<string, unknown>).access_token : undefined;
-  if (typeof accessToken !== 'string' || !accessToken.trim()) throw new Error('Google Cloud access token response did not include access_token');
+  if (typeof accessToken !== 'string' || !accessToken.trim())
+    throw new Error('Google Cloud access token response did not include access_token');
   return accessToken.trim();
 }
 
@@ -180,8 +207,9 @@ function contentTypeForGoogleEncoding(audioEncoding: string): string {
 }
 
 function speechPrompt(input: TTSSynthesisInput): string {
-  const parts = [input.tone, input.emotion && input.emotion !== 'neutral' ? input.emotion : undefined]
-    .filter((part): part is string => Boolean(part && part.trim()));
+  const parts = [input.tone, input.emotion && input.emotion !== 'neutral' ? input.emotion : undefined].filter(
+    (part): part is string => Boolean(part && part.trim()),
+  );
   return parts.length ? `Read the text exactly with this delivery: ${parts.join(', ')}.` : 'Read the text exactly.';
 }
 

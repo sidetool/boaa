@@ -1,3 +1,4 @@
+import { hasSpokenContent } from './tts-spoken-content';
 import type { Paragraph } from '../domain/types';
 import type { SpeakInput, SpeakSequenceItemInput } from './tts';
 import type { PlayableTtsSegment } from './tts-playback';
@@ -20,6 +21,10 @@ export interface RunTTSPlaybackSessionInput {
   readonly getParagraph: (index: number) => Promise<Paragraph | undefined>;
   readonly sourceParagraphIndex?: (paragraph: Paragraph, playbackIndex: number) => number;
   readonly buildPlayableSegments: (paragraph: Paragraph) => PlayableTtsSegment[];
+  readonly prepareParagraph?: (
+    index: number,
+    paragraph: Paragraph,
+  ) => Promise<{ playables: PlayableTtsSegment[]; nextParagraphIndex: number }>;
   readonly shouldContinue: () => boolean;
   readonly signal?: AbortSignal;
   readonly waitForResume: () => Promise<boolean>;
@@ -30,6 +35,8 @@ export interface RunTTSPlaybackSessionInput {
     paragraph: Paragraph,
   ) => boolean | Promise<boolean>;
   readonly prefetchHostedSegment?: (playable: PlayableTtsSegment, paragraph: Paragraph) => void | Promise<void>;
+  /** Bounded next-chapter opening preparation, once near the end of this session. */
+  readonly prefetchNextChapter?: () => Promise<void>;
   readonly hostedPrefetchDepth?: (playable: PlayableTtsSegment) => number;
   readonly buildSystemFallbackInput: (
     playable: PlayableTtsSegment,
@@ -66,6 +73,7 @@ export async function runTTSPlaybackSession(
     return runSystemSequence(input);
   }
 
+  let nextChapterStarted = false;
   for (let paragraphIndex = input.startIndex; paragraphIndex < input.paragraphCount; paragraphIndex += 1) {
     if (!input.shouldContinue()) return stopped(paragraphIndex);
     const paragraph = await input.getParagraph(paragraphIndex);
@@ -76,10 +84,20 @@ export async function runTTSPlaybackSession(
       return { completed: true, stopped: false, lastParagraphIndex: paragraphIndex };
     }
 
+    if (!hasSpokenContent(paragraph.text)) continue;
     const sourceParagraphIndex = input.sourceParagraphIndex?.(paragraph, paragraphIndex) ?? paragraphIndex;
+    const prepared = await input.prepareParagraph?.(paragraphIndex, paragraph);
+    if (!input.shouldContinue()) return stopped(paragraphIndex);
+    const nextParagraphIndex = prepared?.nextParagraphIndex ?? paragraphIndex + 1;
+    const playableSegments = (prepared?.playables ?? input.buildPlayableSegments(paragraph)).filter((item) =>
+      hasSpokenContent(item.text),
+    );
+    if (!playableSegments.length) {
+      paragraphIndex = nextParagraphIndex - 1;
+      continue;
+    }
     await input.onParagraphStart?.(sourceParagraphIndex, paragraph);
     if (!input.shouldContinue()) return stopped(paragraphIndex);
-    const playableSegments = input.buildPlayableSegments(paragraph);
     const requestedPlayableIndex =
       paragraphIndex === input.startIndex && input.startQueueItemFingerprint && input.queueItemFingerprint
         ? playableSegments.findIndex(
@@ -94,12 +112,21 @@ export async function runTTSPlaybackSession(
       if (!input.shouldContinue()) return stopped(paragraphIndex);
       input.onActivePlayback?.(buildActiveTTSPlayback({ paragraph, playable }));
       const hostedPlayback = input.playHostedSegment?.(playable, paragraph);
+      if (!nextChapterStarted && input.prefetchNextChapter && input.paragraphCount - nextParagraphIndex <= 3) {
+        nextChapterStarted = true;
+        void input.prefetchNextChapter().catch(() => {
+          // Preparation is speculative; a failure must not stop the current chapter.
+        });
+      }
       void prefetchUpcomingPlayables({
         ...input,
         paragraph,
         paragraphIndex,
         playableIndex,
         playableSegments,
+        nextParagraphIndex,
+      }).catch(() => {
+        /* Speculative lookahead must not interrupt current audio. */
       });
 
       const hostedPlayed = await hostedPlayback;
@@ -137,6 +164,7 @@ export async function runTTSPlaybackSession(
       )
         return stopped(paragraphIndex);
     }
+    paragraphIndex = nextParagraphIndex - 1;
     if (
       paragraphIndex + 1 < input.paragraphCount &&
       !(await waitForPlaybackDelay({
@@ -171,7 +199,7 @@ async function runSystemSequence(input: RunTTSPlaybackSessionInput): Promise<TTS
     if (!input.shouldContinue()) return stopped(paragraphIndex);
     const paragraph = await input.getParagraph(paragraphIndex);
     if (!paragraph) break;
-    const playableSegments = input.buildPlayableSegments(paragraph);
+    const playableSegments = input.buildPlayableSegments(paragraph).filter((item) => hasSpokenContent(item.text));
     const requestedPlayableIndex =
       paragraphIndex === input.startIndex && input.startQueueItemFingerprint && input.queueItemFingerprint
         ? playableSegments.findIndex(
@@ -291,6 +319,7 @@ interface PrefetchInput extends RunTTSPlaybackSessionInput {
   readonly paragraphIndex: number;
   readonly playableIndex: number;
   readonly playableSegments: PlayableTtsSegment[];
+  readonly nextParagraphIndex: number;
 }
 
 async function prefetchUpcomingPlayables(input: PrefetchInput): Promise<void> {
@@ -304,16 +333,21 @@ async function prefetchUpcomingPlayables(input: PrefetchInput): Promise<void> {
     .map((playable) => ({ paragraph: input.paragraph, playable }))
     .slice(0, depth);
   for (
-    let paragraphIndex = input.paragraphIndex + 1;
+    let paragraphIndex = input.nextParagraphIndex;
     targets.length < depth && paragraphIndex < input.paragraphCount;
     paragraphIndex += 1
   ) {
     const paragraph = await input.getParagraph(paragraphIndex);
     if (!paragraph || !input.shouldContinue()) break;
-    for (const playable of input.buildPlayableSegments(paragraph)) {
+    const prepared = await input.prepareParagraph?.(paragraphIndex, paragraph);
+    if (!input.shouldContinue()) break;
+    for (const playable of (prepared?.playables ?? input.buildPlayableSegments(paragraph)).filter((item) =>
+      hasSpokenContent(item.text),
+    )) {
       targets.push({ paragraph, playable });
       if (targets.length >= depth) break;
     }
+    paragraphIndex = (prepared?.nextParagraphIndex ?? paragraphIndex + 1) - 1;
   }
   const allowedByChapter = new Map<string, Promise<boolean>>();
   await Promise.all(

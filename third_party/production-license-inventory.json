@@ -9,7 +9,7 @@
     "libc": "glibc"
   },
   "summary": {
-    "componentCount": 215,
+    "componentCount": 216,
     "byLicense": {
       "0BSD": 1,
       "Apache-2.0": 45,
@@ -18,7 +18,7 @@
       "BSD-3-Clause": 16,
       "ISC": 8,
       "LGPL-3.0-or-later": 1,
-      "MIT": 133,
+      "MIT": 134,
       "SEE LICENSE IN License.txt": 1
     }
   },
@@ -1219,6 +1219,13 @@
       "version": "0.32.0",
       "license": "MIT",
       "homepage": "https://github.com/justjake/quickjs-emscripten#readme"
+    },
+    {
+      "ecosystem": "npm",
+      "name": "re2js",
+      "version": "2.8.8",
+      "license": "MIT",
+      "homepage": "https://github.com/le0pard/re2js#readme"
     },
     {
       "ecosystem": "npm",

@@ -121,3 +121,15 @@ it('serves stale disk artwork offline without attempting revalidation', async ()
   expect(load).not.toHaveBeenCalled();
   cache.clear();
 });
+
+it('a hosted quota sweep cannot evict another hosted account', async () => {
+  const db = `covers-${crypto.randomUUID()}`;
+  const a = new PersistentCoverCache('hosted-account:A', 4, 1, db);
+  const b = new PersistentCoverCache('hosted-account:B', 4, 1, db);
+  await b.put(key('same'), blob(), Date.now());
+  await a.put(key('same'), blob(), Date.now());
+  await a.put(key('next'), blob(), Date.now());
+  expect(await b.get(key('same'))).toBeDefined();
+  await a.invalidateSource('source');
+  expect(await b.get(key('same'))).toBeDefined();
+});

@@ -4,6 +4,7 @@ import {
   sourceReadingPreferences,
   type SourceReadingPreferences,
 } from '../../external-sources/source-reading-preferences';
+import { useOptionalAppRuntime } from '../../app/runtime/RuntimeProvider';
 import { SourceDownloadRecovery } from '../../features/external-sources/SourceDownloadRecovery';
 import type { ExternalSourceController } from '../../features/external-sources/useExternalSourceController';
 import { Segmented, Switch } from '../components/primitives';
@@ -18,7 +19,9 @@ export function UiNextSourceReadingSettings({
   controller: ExternalSourceController;
   focus?: boolean;
 }) {
-  const [prefs, setPrefs] = useState(sourceReadingPreferences);
+  // Hosted accounts keep their own preferences; local mode has no session and keeps the device-wide key.
+  const scope = useOptionalAppRuntime()?.readerRuntime.session?.storageScope;
+  const [prefs, setPrefs] = useState(() => sourceReadingPreferences(scope));
   const [error, setError] = useState('');
   const sectionRef = useRef<HTMLElement>(null);
   useEffect(() => {
@@ -28,8 +31,8 @@ export function UiNextSourceReadingSettings({
   }, [focus]);
   const change = (patch: Partial<SourceReadingPreferences>) => {
     try {
-      saveSourceReadingPreferences(patch);
-      setPrefs(sourceReadingPreferences());
+      saveSourceReadingPreferences(patch, scope);
+      setPrefs(sourceReadingPreferences(scope));
       setError('');
     } catch {
       setError('설정을 저장하지 못했어요. 브라우저 저장 공간을 확인해 주세요.');

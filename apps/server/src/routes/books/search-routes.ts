@@ -1,3 +1,4 @@
+import { requestOwnerConfig } from '../../services/owner-context.js';
 import type { FastifyInstance, FastifyReply } from 'fastify';
 import pg from 'pg';
 import {
@@ -139,9 +140,12 @@ export async function registerBookSearchRoutes(
   pool: pg.Pool,
   config: ServerConfig,
 ): Promise<void> {
+  const deploymentConfig = config;
   app.get<{ Params: { bookId: string }; Querystring: SearchQuerystring }>(
     '/api/books/:bookId/search',
     async (request, reply) => {
+      const config = requestOwnerConfig(deploymentConfig, request);
+
       let search: ParsedSearchRequest;
       try {
         search = parseSearchRequest('book', request.params.bookId, request.query);
@@ -215,6 +219,8 @@ export async function registerBookSearchRoutes(
   app.get<{ Params: { chapterId: string }; Querystring: SearchQuerystring }>(
     '/api/chapters/:chapterId/search',
     async (request, reply) => {
+      const config = requestOwnerConfig(deploymentConfig, request);
+
       let search: ParsedSearchRequest;
       try {
         search = parseSearchRequest('chapter', request.params.chapterId, request.query);

@@ -78,6 +78,9 @@ describe('APK source integration', () => {
       savePreferences: ApkExtensionHost.prototype.savePreferences,
     } as unknown as ApkExtensionHost;
     const app = Fastify();
+    app.addHook('onRequest', async (request) => {
+      request.principal = { userId: 'fixture-admin', role: 'admin', authMethod: 'legacy-token' };
+    });
     await registerAuthHook(app, { host: '127.0.0.1', authToken: 'apk-fixture' } as ServerConfig);
     await registerApkExtensionRoutes(app, apk);
     await registerExtensionPackageRoutes(
@@ -195,6 +198,9 @@ describe('APK source integration', () => {
   });
   it('reports an unavailable optional worker without blocking existing server features', async () => {
     const app = Fastify();
+    app.addHook('onRequest', async (request) => {
+      request.principal = { userId: 'fixture-admin', role: 'admin', authMethod: 'legacy-token' };
+    });
     await registerApkExtensionRoutes(app);
     try {
       expect((await app.inject('/api/apk-extensions')).json()).toEqual({
@@ -209,6 +215,9 @@ describe('APK source integration', () => {
   });
   it('maps asynchronous preference failures without exposing original extension errors', async () => {
     const app = Fastify();
+    app.addHook('onRequest', async (request) => {
+      request.principal = { userId: 'fixture-admin', role: 'admin', authMethod: 'legacy-token' };
+    });
     await registerApkExtensionRoutes(app, {
       close() {},
       preferences: async () => {
@@ -229,6 +238,9 @@ describe('APK source integration', () => {
   });
   it('returns bounded review failures and discards a review synchronously', async () => {
     const app = Fastify();
+    app.addHook('onRequest', async (request) => {
+      request.principal = { userId: 'fixture-admin', role: 'admin', authMethod: 'legacy-token' };
+    });
     const discard = vi.fn(() => {});
     await registerApkExtensionRoutes(app, {
       close() {},

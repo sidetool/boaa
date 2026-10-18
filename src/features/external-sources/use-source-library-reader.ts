@@ -1,3 +1,4 @@
+import type { Chapter, Novel } from '../../domain/types';
 import type { OpenReaderChapterOptions } from '../reader/reader-screen-contract';
 import { externalDocumentReleaseSourceId } from '../../external-sources/series/document-series-identity';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -13,6 +14,11 @@ import { externalItemSectionId } from './serial-work-projection';
 import { isTextSourceItem } from './source-read-mode';
 import { prepareSourceLibraryImporter } from './prepare-source-library-importer';
 
+export interface PreparedSourceLibraryChapter {
+  readonly novel: Novel;
+  readonly chapter: Chapter;
+  readonly chapters: Chapter[];
+}
 export interface SourceLibraryReader {
   readonly novelId: string;
   readonly items: readonly ExternalSourceItemView[];
@@ -22,13 +28,14 @@ export interface SourceLibraryReader {
   /** False means the requested episode did not open; the caller must retain its overlay. */
   open(item: ExternalSourceItemView, options?: OpenReaderChapterOptions): Promise<boolean | void>;
   retry(): Promise<void>;
+  prepare?(item: ExternalSourceItemView): Promise<PreparedSourceLibraryChapter | undefined>;
 }
 /** Resolves a persisted text-series link after reload, then reuses the bounded/cached stream catalog loader. */
 export function useSourceLibraryReader(
   options: UseExternalSourceControllerOptions,
   open: (item: ExternalSourceItemView, options?: OpenReaderChapterOptions) => Promise<boolean | void>,
   opening: boolean,
-  prefetch?: (item: ExternalSourceItemView) => Promise<void>,
+  prefetch?: (item: ExternalSourceItemView) => Promise<void | PreparedSourceLibraryChapter>,
   pending?: SourceLibraryPending,
 ): SourceLibraryReader | undefined {
   const openRef = useRef(open);
@@ -123,6 +130,12 @@ export function useSourceLibraryReader(
     if (retryCatalog) await retryCatalog();
     else setSeedAttempt((value) => value + 1);
   }, [openItem, retryCatalog]);
+  const prefetchRef = useRef(prefetch);
+  prefetchRef.current = prefetch;
+  const prepare = useCallback(
+    async (candidate: ExternalSourceItemView) => (await prefetchRef.current?.(candidate)) || undefined,
+    [],
+  );
   const model = useMemo(() => {
     if (!novelId || !key) return;
     if (!item) {
@@ -135,6 +148,7 @@ export function useSourceLibraryReader(
         pending,
         open: openItem,
         retry,
+        prepare,
       };
     }
     const items = filterAndSortReleases(
@@ -155,10 +169,9 @@ export function useSourceLibraryReader(
       error: openError?.key === key ? openError.message : error,
       open: openItem,
       retry,
+      prepare,
     };
-  }, [item, novelId, pages, opening, loading, error, openError, retry, openItem, pending, key, seed]);
-  const prefetchRef = useRef(prefetch);
-  prefetchRef.current = prefetch;
+  }, [item, novelId, pages, opening, loading, error, openError, retry, openItem, pending, key, seed, prepare]);
   const index =
     model?.items.findIndex(
       (entry) =>

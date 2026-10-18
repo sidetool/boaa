@@ -1,3 +1,4 @@
+import { requireAdmin } from '../auth.js';
 import type { FastifyInstance, FastifyReply } from 'fastify';
 import type { ServerConfig } from '../config.js';
 
@@ -219,8 +220,9 @@ export async function registerWebNovelMetadataCollectorGateway(
     return false;
   };
 
-  app.get(`${GATEWAY_PREFIX}/health`, async (_request, reply) =>
-    proxyCollectorRequest({
+  app.get(`${GATEWAY_PREFIX}/health`, async (_request, reply) => {
+    requireAdmin(_request);
+    return proxyCollectorRequest({
       reply,
       baseUrl,
       path: '/health',
@@ -230,11 +232,12 @@ export async function registerWebNovelMetadataCollectorGateway(
       fetchImpl,
       transformHealth: true,
       remoteAuthEnabled,
-    }),
-  );
+    });
+  });
 
-  app.get(`${GATEWAY_PREFIX}/api/v1/resolve`, async (request, reply) =>
-    proxyCollectorRequest({
+  app.get(`${GATEWAY_PREFIX}/api/v1/resolve`, async (request, reply) => {
+    requireAdmin(request);
+    return proxyCollectorRequest({
       reply,
       baseUrl,
       path: `/api/v1/resolve${querySuffix(request.url)}`,
@@ -242,14 +245,15 @@ export async function registerWebNovelMetadataCollectorGateway(
       timeoutMs: RESOLVE_TIMEOUT_MS,
       maximumBytes: RESOLVE_RESPONSE_LIMIT,
       fetchImpl,
-    }),
-  );
+    });
+  });
 
   app.post(
     `${GATEWAY_PREFIX}/api/v1/resolve/batch`,
     { bodyLimit: GATEWAY_REQUEST_BODY_LIMIT },
-    async (request, reply) =>
-      proxyCollectorRequest({
+    async (request, reply) => {
+      requireAdmin(request);
+      return proxyCollectorRequest({
         reply,
         baseUrl,
         path: '/api/v1/resolve/batch',
@@ -261,10 +265,13 @@ export async function registerWebNovelMetadataCollectorGateway(
         timeoutMs: RESOLVE_TIMEOUT_MS,
         maximumBytes: BATCH_RESPONSE_LIMIT,
         fetchImpl,
-      }),
+      });
+    },
   );
 
   app.get<{ Params: { coverRef: string } }>(`${GATEWAY_PREFIX}/api/v1/covers/:coverRef`, async (request, reply) => {
+    requireAdmin(request);
+
     if (!COVER_REF_PATTERN.test(request.params.coverRef)) {
       return gatewayError(reply, 400, '표지 참조가 올바르지 않습니다.');
     }
@@ -280,6 +287,8 @@ export async function registerWebNovelMetadataCollectorGateway(
   });
 
   app.get(`${GATEWAY_PREFIX}/api/v1/auth/status`, async (_request, reply) => {
+    requireAdmin(_request);
+
     if (!requireRemoteAuth(reply)) return reply;
     return proxyCollectorRequest({
       reply,
@@ -296,6 +305,8 @@ export async function registerWebNovelMetadataCollectorGateway(
     `${GATEWAY_PREFIX}/api/v1/auth/:platform/open`,
     { bodyLimit: AUTH_ACTION_BODY_LIMIT },
     async (request, reply) => {
+      requireAdmin(request);
+
       if (!requireRemoteAuth(reply)) return reply;
       if (!AUTH_PLATFORMS.has(request.params.platform)) {
         return gatewayError(reply, 404, '지원하지 않는 인증 플랫폼입니다.');
@@ -320,6 +331,8 @@ export async function registerWebNovelMetadataCollectorGateway(
     `${GATEWAY_PREFIX}/api/v1/auth/:platform`,
     { bodyLimit: AUTH_ACTION_BODY_LIMIT },
     async (request, reply) => {
+      requireAdmin(request);
+
       if (!requireRemoteAuth(reply)) return reply;
       if (!AUTH_PLATFORMS.has(request.params.platform)) {
         return gatewayError(reply, 404, '지원하지 않는 인증 플랫폼입니다.');
@@ -344,6 +357,8 @@ export async function registerWebNovelMetadataCollectorGateway(
     `${GATEWAY_PREFIX}/api/v1/auth/novelpia/credentials`,
     { bodyLimit: AUTH_ACTION_BODY_LIMIT },
     async (request, reply) => {
+      requireAdmin(request);
+
       if (!requireRemoteAuth(reply)) return reply;
       return proxyCollectorRequest({
         reply,
@@ -365,6 +380,8 @@ export async function registerWebNovelMetadataCollectorGateway(
     `${GATEWAY_PREFIX}/api/v1/auth/novelpia/login-key`,
     { bodyLimit: AUTH_ACTION_BODY_LIMIT },
     async (request, reply) => {
+      requireAdmin(request);
+
       if (!requireRemoteAuth(reply)) return reply;
       return proxyCollectorRequest({
         reply,
@@ -386,6 +403,8 @@ export async function registerWebNovelMetadataCollectorGateway(
     `${GATEWAY_PREFIX}/api/v1/auth/browser/close`,
     { bodyLimit: AUTH_ACTION_BODY_LIMIT },
     async (request, reply) => {
+      requireAdmin(request);
+
       if (!requireRemoteAuth(reply)) return reply;
       return proxyCollectorRequest({
         reply,
@@ -404,6 +423,8 @@ export async function registerWebNovelMetadataCollectorGateway(
   );
 
   app.delete(`${GATEWAY_PREFIX}/api/v1/auth/session`, async (_request, reply) => {
+    requireAdmin(_request);
+
     if (!requireRemoteAuth(reply)) return reply;
     return proxyCollectorRequest({
       reply,
@@ -417,6 +438,8 @@ export async function registerWebNovelMetadataCollectorGateway(
   });
 
   app.get(`${GATEWAY_PREFIX}/api/v1/auth/browser/frame`, async (request, reply) => {
+    requireAdmin(request);
+
     if (!requireRemoteAuth(reply)) return reply;
     return proxyCollectorRequest({
       reply,
@@ -434,6 +457,8 @@ export async function registerWebNovelMetadataCollectorGateway(
     `${GATEWAY_PREFIX}/api/v1/auth/browser/action`,
     { bodyLimit: AUTH_ACTION_BODY_LIMIT },
     async (request, reply) => {
+      requireAdmin(request);
+
       if (!requireRemoteAuth(reply)) return reply;
       return proxyCollectorRequest({
         reply,

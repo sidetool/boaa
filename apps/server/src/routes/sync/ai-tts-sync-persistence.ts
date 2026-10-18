@@ -103,6 +103,7 @@ export async function persistAiTtsSyncEvent(client: pg.PoolClient, userId: strin
             confidence = greatest(characters.confidence, excluded.confidence),
             is_user_confirmed = characters.is_user_confirmed or excluded.is_user_confirmed,
             updated_at = excluded.updated_at
+          where characters.book_id = excluded.book_id
         `,
         [
           character.id,
@@ -136,6 +137,7 @@ export async function persistAiTtsSyncEvent(client: pg.PoolClient, userId: strin
               confidence = excluded.confidence,
               evidence = excluded.evidence,
               updated_at = excluded.updated_at
+          where character_relations.book_id = excluded.book_id
           `,
           [
             relation.id,
@@ -196,7 +198,7 @@ export async function persistAiTtsSyncEvent(client: pg.PoolClient, userId: strin
             voice_profile_id = excluded.voice_profile_id,
             is_user_corrected = excluded.is_user_corrected,
             updated_at = excluded.updated_at
-          where labeled_segments.is_user_corrected = false or excluded.is_user_corrected = true
+          where labeled_segments.book_id = excluded.book_id and (labeled_segments.is_user_corrected = false or excluded.is_user_corrected = true)
         `,
         [
           segment.id,
@@ -258,6 +260,7 @@ export async function persistAiTtsSyncEvent(client: pg.PoolClient, userId: strin
             provider_options = excluded.provider_options,
             is_user_selected = excluded.is_user_selected,
             updated_at = excluded.updated_at
+          where voice_profiles.book_id = excluded.book_id
         `,
         [
           id,
@@ -316,6 +319,7 @@ export async function persistAiTtsSyncEvent(client: pg.PoolClient, userId: strin
               intent_json = excluded.intent_json,
               provenance_kind = excluded.provenance_kind,
               source_review_artifact_id = excluded.source_review_artifact_id
+          where user_corrections.book_id = excluded.book_id
       `,
       [
         id,

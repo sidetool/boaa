@@ -370,12 +370,23 @@ it('preserves encrypted options across restart and imports original-script pages
   expect(downloaded.assets.size).toBe(1);
   expect(calls).toContain('http://127.0.0.1:9870/close');
   const app = Fastify();
-  const headers = { cookie: 'moya_session=legacy-fixture-session' };
+  app.addHook('onRequest', async (request) => {
+    request.principal = { userId: 'fixture-admin', role: 'admin', authMethod: 'legacy-token' };
+  });
+  const headers = {
+    cookie: 'moya_session=legacy-fixture-session',
+    'x-boaa-session-context': 'fixture-context',
+    origin: 'http://localhost:80',
+    host: 'localhost:80',
+  };
   await registerAuthHook(
     app,
     { host: '127.0.0.1', authToken: 'fixture-auth' } as ServerConfig,
     {
-      authenticateSession: async (token?: string) => (token === 'legacy-fixture-session' ? { id: 'owner' } : undefined),
+      authenticateSession: async (token?: string) =>
+        token === 'legacy-fixture-session'
+          ? { userId: 'owner', role: 'admin', sessionContext: 'fixture-context' }
+          : undefined,
       setupRequired: async () => false,
     } as unknown as SelfHostAuthService,
   );
@@ -419,7 +430,7 @@ it('preserves encrypted options across restart and imports original-script pages
     const canonical = await app.inject({
       method: 'POST',
       url: prefix + '/cover',
-      headers: { cookie: 'boaa_session=legacy-fixture-session' },
+      headers: { ...headers, cookie: 'boaa_session=legacy-fixture-session' },
       payload: { workId: work.id },
     });
     expect(canonical.statusCode).toBe(200);
@@ -540,6 +551,9 @@ it('imports original JS files without a repository, preserves multi-source choic
   expect(host.snapshot().repositories).toHaveLength(0);
   await expect(host.inspectFile(source, 'extension.js', 1, signal)).rejects.toThrow('apk_version_not_newer');
   const app = Fastify();
+  app.addHook('onRequest', async (request) => {
+    request.principal = { userId: 'fixture-admin', role: 'admin', authMethod: 'legacy-token' };
+  });
   await registerApkExtensionRoutes(app, host, '/api/mangayomi-extensions');
   const request = { name: 'extension.js', base64: source.toString('base64'), sourceIndex: 0 };
   const uploaded = await app.inject({

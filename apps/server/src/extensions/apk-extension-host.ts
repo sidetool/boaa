@@ -1,3 +1,4 @@
+import type { ApkProcessBudget } from '../../../../services/apk-worker/process-budget.mjs';
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
@@ -26,7 +27,7 @@ export class ApkExtensionHost {
     java: string,
     build: string,
     root: string,
-    options: { resolveDefaultProxy?: () => string | undefined } = {},
+    options: { resolveDefaultProxy?: () => string | undefined; processBudget?: ApkProcessBudget } = {},
   ) {
     await validateApkRuntimeManifest(java, build, process.env.BOAA_APK_RUNTIME_MANAGED === '1');
     const tools = await createJavaApkTools(java, build, options);
@@ -130,6 +131,16 @@ export class ApkExtensionHost {
     signal.throwIfAborted();
     if (epoch !== this.epoch) throw new Error('apk_repository_conflict');
     return this.store.inspect(bytes, entry, signal);
+  }
+  async provisionFrom(sourceHost: ApkExtensionHost, pkg: string, signal: AbortSignal) {
+    if (this.store.snapshot().packages.some((record) => record.pkg === pkg)) throw new Error('source_binding_exists');
+    const record = sourceHost.store.snapshot().packages.find((record) => record.pkg === pkg);
+    if (!record) throw new Error('source_binding_missing');
+    const bytes = await readFile(join(sourceHost.store.root, 'archives', record.digest, 'extension.apk'));
+    if (createHash('sha256').update(bytes).digest('hex') !== record.digest) throw new Error('apk_archive_integrity');
+    const plan = await this.store.inspect(bytes, undefined, signal);
+    if (plan.pkg !== record.pkg || plan.digest !== record.digest) throw new Error('apk_archive_integrity');
+    await this.install(plan.id, plan.revision, signal);
   }
   async install(id: string, revision: number, signal: AbortSignal) {
     await this.store.install(id, revision, signal);

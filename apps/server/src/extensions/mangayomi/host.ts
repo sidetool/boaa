@@ -354,6 +354,24 @@ export class MangayomiExtensionHost {
       origin: new URL(entry.sourceCodeUrl).origin,
     };
   }
+  /** Copy only reviewed code and manifest into a fresh owner binding. */
+  async provisionFrom(sourceHost: MangayomiExtensionHost, pkg: string, signal: AbortSignal) {
+    if (this.state.packages.some((record) => record.pkg === pkg)) throw new Error('source_binding_exists');
+    const record = sourceHost.state.packages.find((record) => record.pkg === pkg);
+    if (!record) throw new Error('source_binding_missing');
+    const source = await readFile(join(sourceHost.root, 'archives', record.digest, 'source.js'), 'utf8');
+    if (hash(source) !== record.digest) throw new Error('apk_archive_integrity');
+    const id = randomUUID();
+    this.plans.set(id, {
+      revision: this.state.revision,
+      digest: record.digest,
+      metadata: structuredClone(record.metadata),
+      repository: record.repository,
+      source,
+      expires: Date.now() + 60_000,
+    });
+    await this.install(id, this.state.revision, signal);
+  }
   async install(id: string, revision: number, signal: AbortSignal) {
     signal.throwIfAborted();
     await this.exclusive(async () => {

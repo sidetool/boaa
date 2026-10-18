@@ -33,6 +33,7 @@ export function ApkExtensionsPanel({
   format = 'apk',
   initialInstalledOnly = false,
   autoAddInitialRepository = false,
+  manage = true,
 }: {
   manager: ApkExtensionManager;
   initialRepository?: string;
@@ -42,6 +43,8 @@ export function ApkExtensionsPanel({
   autoAddInitialRepository?: boolean;
   target?: 'server' | 'device';
   format?: 'apk' | 'mangayomi-js';
+  /** False for accounts that may use installed sources but not install, update or remove code. */
+  manage?: boolean;
 }) {
   const label = format === 'apk' ? 'APK' : 'Mangayomi JS';
   const [optionsPackage, setOptionsPackage] = useState<string>();
@@ -49,7 +52,8 @@ export function ApkExtensionsPanel({
   const [url, setUrl] = useState(initialRepository ?? '');
   const [selected, setSelected] = useState('');
   const [query, setQuery] = useState('');
-  const [installedOnly, setInstalledOnly] = useState(initialInstalledOnly);
+  const [installedOnlyChoice, setInstalledOnly] = useState(initialInstalledOnly);
+  const installedOnly = installedOnlyChoice || !manage;
   const [page, setPage] = useState(0);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
@@ -339,7 +343,7 @@ export function ApkExtensionsPanel({
       )}
       {snapshot?.available && (
         <>
-          {manager.inspectFile && (
+          {manage && manager.inspectFile && (
             <label className="compatibility-preference-field">
               <span>파일에서 설치</span>
               <input
@@ -369,48 +373,52 @@ export function ApkExtensionsPanel({
           )}
           {!reviewPackage && operationStatus}
           {!reviewPackage && reviewCard}
-          <form
-            className="extension-repository-add"
-            onSubmit={(event) => {
-              event.preventDefault();
-              addRepository(url);
-            }}
-          >
-            <input
-              aria-label={`${label} 저장소 주소`}
-              type="url"
-              value={url}
-              onChange={(event) => setUrl(event.target.value)}
-              placeholder="https://…/index.min.json"
-              required
-              disabled={busy}
-            />
-            <button type="submit" disabled={busy || !url.trim()}>
-              저장소 추가
-            </button>
-          </form>
-          <div className="installed-extension-actions">
-            <button
-              type="button"
-              aria-pressed={!installedOnly}
-              onClick={() => {
-                setInstalledOnly(false);
-                setPage(0);
-              }}
-            >
-              저장소
-            </button>
-            <button
-              type="button"
-              aria-pressed={installedOnly}
-              onClick={() => {
-                setInstalledOnly(true);
-                setPage(0);
-              }}
-            >
-              설치됨 {snapshot.packages.length}
-            </button>
-          </div>
+          {manage && (
+            <>
+              <form
+                className="extension-repository-add"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  addRepository(url);
+                }}
+              >
+                <input
+                  aria-label={`${label} 저장소 주소`}
+                  type="url"
+                  value={url}
+                  onChange={(event) => setUrl(event.target.value)}
+                  placeholder="https://…/index.min.json"
+                  required
+                  disabled={busy}
+                />
+                <button type="submit" disabled={busy || !url.trim()}>
+                  저장소 추가
+                </button>
+              </form>
+              <div className="installed-extension-actions">
+                <button
+                  type="button"
+                  aria-pressed={!installedOnly}
+                  onClick={() => {
+                    setInstalledOnly(false);
+                    setPage(0);
+                  }}
+                >
+                  저장소
+                </button>
+                <button
+                  type="button"
+                  aria-pressed={installedOnly}
+                  onClick={() => {
+                    setInstalledOnly(true);
+                    setPage(0);
+                  }}
+                >
+                  설치됨 {snapshot.packages.length}
+                </button>
+              </div>
+            </>
+          )}
           {!installedOnly && repository && (
             <RepositoryAddress key={repository.url} url={repository.url} checkedAt={repository.updatedAt} />
           )}
@@ -518,13 +526,15 @@ export function ApkExtensionsPanel({
                       >
                         {row.installed.enabled === false ? '켜기' : '끄기'}
                       </button>
-                      <button
-                        type="button"
-                        disabled={busy}
-                        onClick={() => void run(() => manager.change(row.id, snapshot.revision, 'remove'))}
-                      >
-                        확장 제거
-                      </button>
+                      {manage && (
+                        <button
+                          type="button"
+                          disabled={busy}
+                          onClick={() => void run(() => manager.change(row.id, snapshot.revision, 'remove'))}
+                        >
+                          확장 제거
+                        </button>
+                      )}
                     </>
                   )}
                 </div>

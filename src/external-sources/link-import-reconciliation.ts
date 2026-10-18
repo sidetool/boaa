@@ -87,6 +87,7 @@ export function finalizedExternalSourceLinks(
     if (!pending) return link;
     return {
       ...link,
+      localBookId: novel.id,
       collectionRemoteId: pending.collectionRemoteId ?? link.collectionRemoteId,
       importedRemoteRevision: pending.importedRemoteRevision,
       importedSourceContentHash: pending.importedSourceContentHash,
@@ -95,6 +96,38 @@ export function finalizedExternalSourceLinks(
       pendingImport: undefined,
     };
   });
+}
+
+function acceptsImportedBook(link: ExternalSourceLink, novel: Novel): boolean {
+  const pending = link.pendingImport;
+  if (!pending || !novel.id) return false;
+  if (pending.resolvedLocalBookId && pending.resolvedLocalBookId !== novel.id) return false;
+  return link.localBookId === novel.id || (!pending.hadExistingLink && !pending.previousActiveContentRevisionId);
+}
+
+/** Keep a confirmed remap durable even if the final projection write is interrupted. */
+export async function checkpointImportedExternalSourceLinks(
+  state: ExternalSourceLocalState,
+  staged: readonly ExternalSourceLink[],
+  novel: Novel,
+): Promise<ExternalSourceLink[]> {
+  if (staged.some((link) => !acceptsImportedBook(link, novel)))
+    throw new Error('가져온 본문과 외부 소스 연결 식별자가 일치하지 않습니다.');
+  if (staged.every((link) => link.localBookId === novel.id || link.pendingImport?.resolvedLocalBookId === novel.id))
+    return [...staged];
+  const checkpoint = staged.map((link) => ({
+    ...link,
+    pendingImport: { ...link.pendingImport!, resolvedLocalBookId: novel.id },
+  }));
+  if (state.compareAndSwapPendingLinks) {
+    const applied = await state.compareAndSwapPendingLinks(
+      staged.map((link) => ({ id: link.id, operationId: link.pendingImport!.operationId })),
+      checkpoint,
+      [],
+    );
+    if (!applied) throw new Error('다른 창에서 외부 소스 연결이 변경되었습니다.');
+  } else await saveExternalSourceLinks(state, checkpoint);
+  return checkpoint;
 }
 
 export async function finalizeExternalSourceLinks(
@@ -106,13 +139,14 @@ export async function finalizeExternalSourceLinks(
     staged.length === 0 ||
     staged.some(
       (link) =>
-        !link.pendingImport ||
+        !acceptsImportedBook(link, novel) ||
         !novel.sourceContentHash ||
-        normalizedHash(link.pendingImport.expectedActiveSourceContentHash) !== normalizedHash(novel.sourceContentHash),
+        normalizedHash(link.pendingImport?.expectedActiveSourceContentHash) !== normalizedHash(novel.sourceContentHash),
     )
   ) {
     throw new Error('가져온 본문과 외부 소스 연결 식별자가 일치하지 않습니다.');
   }
+  await checkpointImportedExternalSourceLinks(state, staged, novel);
   const next = finalizedExternalSourceLinks(staged, novel);
   const expected = staged.map((link) => ({
     id: link.id,
@@ -137,13 +171,14 @@ export async function finalizeImporterResolvedExternalSourceLinks(
     staged.some(
       (link) =>
         !link.pendingImport?.sourceHashResolvedByImporter ||
-        link.localBookId !== novel.id ||
+        !acceptsImportedBook(link, novel) ||
         !novel.activeContentRevisionId ||
         !novel.sourceContentHash,
     )
   ) {
     throw new Error('가져온 본문과 외부 소스 연결 식별자가 일치하지 않습니다.');
   }
+  await checkpointImportedExternalSourceLinks(state, staged, novel);
   const next = finalizedExternalSourceLinks(staged, novel);
   const expected = staged.map((link) => ({
     id: link.id,
@@ -177,7 +212,7 @@ export async function reconcilePendingExternalSourceLinks(
   const projected = new Map(links.map((link) => [link.id, link]));
 
   for (const staged of groups.values()) {
-    const novel = novelById.get(staged[0]!.localBookId);
+    const novel = novelById.get(staged[0]!.pendingImport?.resolvedLocalBookId ?? staged[0]!.localBookId);
     const importerResolvedSource = staged.every((link) => link.pendingImport?.sourceHashResolvedByImporter);
     if (importerResolvedSource && novel && !novel.deletedAt && options.resolveImporterApplied) {
       const importerApplied = await options.resolveImporterApplied(staged, novel).catch(() => undefined);
@@ -218,6 +253,10 @@ export async function reconcilePendingExternalSourceLinks(
       );
     });
     if (intentIsFresh) continue;
+    // No response/receipt means an owner-scoped import may already be active.
+    // Never infer a target from matching bytes or erase that unresolved intent.
+    if (!novel && staged.some((link) => link.pendingImport?.bookIdMayChange && !link.pendingImport.hadExistingLink))
+      continue;
     const previous = staged.flatMap((link) =>
       link.pendingImport?.hadExistingLink ? [{ ...link, pendingImport: undefined }] : [],
     );

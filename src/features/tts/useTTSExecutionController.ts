@@ -101,9 +101,9 @@ export function useTTSExecutionController(input: TTSExecutionControllerInput) {
     for (const resolve of waiters) resolve();
   }, []);
 
-  const abortPrefetch = useCallback(() => {
+  const abortPrefetch = useCallback((preserveCompleted = false) => {
     abortPrefetchControllers(prefetchControllersRef.current);
-    prefetchCacheRef.current.clear();
+    if (!preserveCompleted) prefetchCacheRef.current.clear();
   }, []);
 
   const abortOperation = useCallback((lane: HostedOperationLane, updateState = true) => {
@@ -130,7 +130,7 @@ export function useTTSExecutionController(input: TTSExecutionControllerInput) {
       if (!options.preserveSystemPlayback) inputRef.current.systemTTS.stop();
       abortOperation('playback', updateState);
       abortOperation('warmup', updateState);
-      abortPrefetch();
+      abortPrefetch(options.preserveSleepTimer === true);
       audioSession.stop(true);
       if (options.preserveSleepTimer) sleepTimerRef.current.pause();
       else sleepTimerRef.current.clear();
@@ -204,7 +204,7 @@ export function useTTSExecutionController(input: TTSExecutionControllerInput) {
       resolveResumeWaiters();
       inputRef.current.systemTTS.stop();
       abortOperation('playback');
-      abortPrefetch();
+      abortPrefetch(options.preserveSleepTimer === true);
       audioSession.stop(true);
       if (options.preserveSleepTimer && sleepTimerRef.current.activePreset !== undefined) {
         sleepTimerRef.current.resume();
@@ -290,7 +290,7 @@ export function useTTSExecutionController(input: TTSExecutionControllerInput) {
       setItemActiveState(false);
       resolveResumeWaiters();
       abortOperation('playback');
-      abortPrefetch();
+      abortPrefetch(options.preserveSleepTimer === true);
       audioSession.stop(true);
       if (options.preserveSleepTimer) sleepTimerRef.current.pause();
       else sleepTimerRef.current.clear();
@@ -332,14 +332,16 @@ export function useTTSExecutionController(input: TTSExecutionControllerInput) {
   }, [audioSession, isSessionCurrent, resolveResumeWaiters]);
 
   const playAudio = useCallback(
-    async (blob: Blob, sessionId: number): Promise<boolean> => {
+    async (blob: Blob, sessionId: number, onProgress?: (fraction: number) => void): Promise<boolean> => {
       if (!isSessionCurrent(sessionId)) return true;
       if (!(await waitForResume(sessionId))) return true;
       itemActiveRef.current = true;
       setItemActiveState(true);
       if (!pausedRef.current) sleepTimerRef.current.resume();
       try {
-        return await audioSession.playBlob(blob);
+        return await audioSession.playBlob(blob, (fraction) => {
+          if (isSessionCurrent(sessionId)) onProgress?.(fraction);
+        });
       } finally {
         itemActiveRef.current = false;
         setItemActiveState(false);

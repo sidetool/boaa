@@ -10,6 +10,17 @@ import { openImageArchiveStream } from '@boaa/fixed-document-core';
 import type { ServerConfig } from '../config.js';
 import { BlobWriter, TextReader, Uint8ArrayReader, ZipWriter } from '@zip.js/zip.js';
 
+function mockWriteCount(sql: string, params: unknown[] | undefined, fallback: number): number {
+  for (const [table, width] of [
+    ['chapters', 15],
+    ['paragraph_pages', 8],
+    ['paragraph_search', 9],
+  ] as const) {
+    if (sql.includes(`insert into ${table}`)) return (params?.length ?? 0) / width;
+  }
+  return sql.includes('insert into library_books') || sql.includes('insert into book_assets') ? 1 : fallback;
+}
+
 vi.mock('./object-storage.js', () => ({
   createS3Client: vi.fn(() => ({})),
   getObjectBuffer: vi.fn(),
@@ -350,17 +361,23 @@ describe('server import service', () => {
         completed.push(key);
       });
       const client = {
-        query: vi.fn(async (sql: string) => {
+        query: vi.fn(async (sql: string, params?: unknown[]) => {
+          if (sql.includes('select j.user_id')) return { rows: [{ user_id: 'user_test' }], rowCount: 1 };
+          if (sql === 'select user_id from library_books where id=$1')
+            return { rows: [{ user_id: 'user_test' }], rowCount: 1 };
           if (sql === 'begin') {
             expect(active).toBe(0);
             events.push('begin');
           }
-          return { rows: [], rowCount: 1 };
+          return { rows: [], rowCount: mockWriteCount(sql, params, 1) };
         }),
         release: vi.fn(),
       };
       const pool = {
         query: vi.fn(async (sql: string, params?: unknown[]) => {
+          if (sql.includes('select j.user_id')) return { rows: [{ user_id: 'user_test' }], rowCount: 1 };
+          if (sql === 'select user_id from library_books where id=$1')
+            return { rows: [{ user_id: 'user_test' }], rowCount: 1 };
           if (sql.includes('select * from upload_sessions'))
             return {
               rows: [
@@ -381,7 +398,10 @@ describe('server import service', () => {
             expect(active).toBe(0);
             events.push('cleanup');
           }
-          return { rows: [], rowCount: 1 };
+          return {
+            rows: [],
+            rowCount: mockWriteCount(sql, params, 1),
+          };
         }),
         connect: vi.fn(async () => client),
       };
@@ -574,8 +594,14 @@ describe('server import service', () => {
     const calls: Array<{ sql: string; params?: unknown[] }> = [];
     const client = {
       query: async (sql: string, params?: unknown[]) => {
+        if (sql.includes('select j.user_id')) return { rows: [{ user_id: 'user_test' }], rowCount: 1 };
+        if (sql === 'select user_id from library_books where id=$1')
+          return { rows: [{ user_id: 'user_test' }], rowCount: 1 };
         calls.push({ sql, params });
-        return { rows: [], rowCount: 0 };
+        return {
+          rows: [],
+          rowCount: mockWriteCount(sql, params, 0),
+        };
       },
     };
 
@@ -614,6 +640,9 @@ describe('server import service', () => {
     let objectDeleteParams: unknown[] | undefined;
     const client = {
       query: vi.fn(async (sql: string, params?: unknown[]) => {
+        if (sql.includes('select j.user_id')) return { rows: [{ user_id: 'user_test' }], rowCount: 1 };
+        if (sql === 'select user_id from library_books where id=$1')
+          return { rows: [{ user_id: 'user_test' }], rowCount: 1 };
         if (sql === 'begin' || sql === 'commit' || sql === 'rollback') return { rows: [] };
         if (sql.includes('insert into book_objects')) objectParams = params;
         if (sql.includes('insert into library_books')) {
@@ -624,18 +653,24 @@ describe('server import service', () => {
         if (sql.includes('insert into paragraph_pages')) pageInsertParams = params;
         if (sql.includes('insert into paragraph_search')) searchInsertParams = params;
         if (sql.includes('insert into sync_events')) syncEventParams = params;
-        if (sql.includes('select storage_key from book_objects')) {
+        if (sql.includes('select id, storage_key from book_objects')) {
           return { rows: [{ storage_key: 'user_test/sources/old/server-single.txt' }], rowCount: 1 };
         }
         if (sql.includes('insert into object_delete_outbox')) objectDeleteParams = params;
         if (sql.includes("update upload_sessions set status = 'imported'"))
           return { rows: [{ id: 'upload_single' }], rowCount: 1 };
-        return { rows: [], rowCount: 0 };
+        return {
+          rows: [],
+          rowCount: mockWriteCount(sql, params, 0),
+        };
       }),
       release: vi.fn(),
     };
     const pool = {
-      query: vi.fn(async (sql: string) => {
+      query: vi.fn(async (sql: string, params?: unknown[]) => {
+        if (sql.includes('select j.user_id')) return { rows: [{ user_id: 'user_test' }], rowCount: 1 };
+        if (sql === 'select user_id from library_books where id=$1')
+          return { rows: [{ user_id: 'user_test' }], rowCount: 1 };
         if (sql.includes('select * from upload_sessions')) {
           return {
             rows: [
@@ -664,7 +699,7 @@ describe('server import service', () => {
             ],
           };
         }
-        return { rows: [], rowCount: 0 };
+        return { rows: [], rowCount: mockWriteCount(sql, params, 0) };
       }),
       connect: vi.fn(async () => client),
     };
@@ -703,10 +738,10 @@ describe('server import service', () => {
       "when $19::text in ('append_image_series','append_local_archive') then library_books.metadata_revision",
     );
     expect(libraryBookParams?.[18]).toBe('replace_book');
-    expect(objectParams?.[0]).toBe(persistentId128('object', [String(objectParams?.[1])]));
+    expect(objectParams?.[0]).toBe(persistentId128('object', ['user_test', String(objectParams?.[1])]));
     expect(objectParams?.[1]).toBe(integrityHash(Buffer.from(text)));
     expect(client.query).toHaveBeenCalledWith('select pg_advisory_xact_lock(hashtextextended($1, 0))', [
-      integrityHash(Buffer.from(text)),
+      `user_test:${integrityHash(Buffer.from(text))}`,
     ]);
     expect(objectParams?.[2]).toMatch(
       /^user_test\/sources\/object_[^/]+\/job_single\/[^/]+\/attempt-1\/server-single\.txt$/,
@@ -757,7 +792,14 @@ describe('server import service', () => {
     let chapterInsertParams: unknown[] | undefined;
     const client = {
       query: vi.fn(async (sql: string, params?: unknown[]) => {
-        if (sql === 'begin' || sql === 'commit' || sql === 'rollback') return { rows: [], rowCount: 1 };
+        if (sql.includes('select j.user_id')) return { rows: [{ user_id: 'user_test' }], rowCount: 1 };
+        if (sql === 'select user_id from library_books where id=$1')
+          return { rows: [{ user_id: 'user_test' }], rowCount: 1 };
+        if (sql === 'begin' || sql === 'commit' || sql === 'rollback')
+          return {
+            rows: [],
+            rowCount: mockWriteCount(sql, params, 1),
+          };
         if (sql.includes('insert into library_books')) {
           libraryBookSql = sql;
           libraryBookParams = params;
@@ -769,12 +811,18 @@ describe('server import service', () => {
         if (sql.includes("update upload_sessions set status = 'imported'")) {
           return { rows: [{ id: 'upload_series' }], rowCount: 1 };
         }
-        return { rows: [], rowCount: 1 };
+        return {
+          rows: [],
+          rowCount: mockWriteCount(sql, params, 1),
+        };
       }),
       release: vi.fn(),
     };
     const pool = {
-      query: vi.fn(async (sql: string) => {
+      query: vi.fn(async (sql: string, params?: unknown[]) => {
+        if (sql.includes('select j.user_id')) return { rows: [{ user_id: 'user_test' }], rowCount: 1 };
+        if (sql === 'select user_id from library_books where id=$1')
+          return { rows: [{ user_id: 'user_test' }], rowCount: 1 };
         if (sql.includes('select * from upload_sessions')) {
           return {
             rows: [
@@ -793,7 +841,7 @@ describe('server import service', () => {
         if (sql.includes('from upload_chunks')) {
           return { rows: [{ chunk_index: 0, size_bytes: bytes.length, storage_path: chunkPath }] };
         }
-        return { rows: [], rowCount: 1 };
+        return { rows: [], rowCount: mockWriteCount(sql, params, 1) };
       }),
       connect: vi.fn(async () => client),
     };
@@ -842,7 +890,10 @@ describe('server import service', () => {
     vi.mocked(putRawBookObject).mockClear();
 
     const appendClient = {
-      query: vi.fn(async (sql: string) => {
+      query: vi.fn(async (sql: string, params?: unknown[]) => {
+        if (sql.includes('select j.user_id')) return { rows: [{ user_id: 'user_test' }], rowCount: 1 };
+        if (sql === 'select user_id from library_books where id=$1')
+          return { rows: [{ user_id: 'user_test' }], rowCount: 1 };
         if (sql.startsWith('select id, kind, content_hash, page_index from book_assets')) return { rows: [] };
         if (sql.includes('select pg_advisory_lock') || sql.includes('select pg_advisory_unlock')) {
           return { rows: [{ locked: true }], rowCount: 1 };
@@ -864,21 +915,25 @@ describe('server import service', () => {
             rowCount: 1,
           };
         }
-        if (sql === 'begin' || sql === 'commit' || sql === 'rollback') return { rows: [], rowCount: 1 };
+        if (sql === 'begin' || sql === 'commit' || sql === 'rollback')
+          return { rows: [], rowCount: mockWriteCount(sql, params, 1) };
         if (sql.includes('select active_content_revision_id from library_books')) {
           return { rows: [{ active_content_revision_id: 'content_revision_7' }], rowCount: 1 };
         }
         if (sql.includes("update upload_sessions set status = 'imported'")) {
           return { rows: [{ id: 'upload_series_noop' }], rowCount: 1 };
         }
-        if (sql.startsWith('delete from upload_chunks')) return { rows: [], rowCount: 1 };
+        if (sql.startsWith('delete from upload_chunks')) return { rows: [], rowCount: mockWriteCount(sql, params, 1) };
         if (sql.startsWith('update import_jobs')) return { rows: [{ id: 'job_series_noop' }], rowCount: 1 };
         throw new Error(`unexpected append query: ${sql}`);
       }),
       release: vi.fn(),
     };
     const pool = {
-      query: vi.fn(async (sql: string) => {
+      query: vi.fn(async (sql: string, params?: unknown[]) => {
+        if (sql.includes('select j.user_id')) return { rows: [{ user_id: 'user_test' }], rowCount: 1 };
+        if (sql === 'select user_id from library_books where id=$1')
+          return { rows: [{ user_id: 'user_test' }], rowCount: 1 };
         if (sql.includes('select * from upload_sessions')) {
           return {
             rows: [
@@ -902,7 +957,7 @@ describe('server import service', () => {
           return { rows: [{ chunk_index: 0, size_bytes: delta.length, storage_path: chunkPath }] };
         }
         if (sql.startsWith('update import_jobs')) return { rows: [{ id: 'job_series_noop' }], rowCount: 1 };
-        return { rows: [], rowCount: 1 };
+        return { rows: [], rowCount: mockWriteCount(sql, params, 1) };
       }),
       connect: vi.fn(async () => appendClient),
     };
@@ -955,7 +1010,10 @@ describe('server import service', () => {
     vi.mocked(putRawBookObject).mockClear();
 
     const appendClient = {
-      query: vi.fn(async (sql: string) => {
+      query: vi.fn(async (sql: string, params?: unknown[]) => {
+        if (sql.includes('select j.user_id')) return { rows: [{ user_id: 'user_test' }], rowCount: 1 };
+        if (sql === 'select user_id from library_books where id=$1')
+          return { rows: [{ user_id: 'user_test' }], rowCount: 1 };
         if (sql.startsWith('select id, kind, content_hash, page_index from book_assets')) return { rows: basePages };
         if (sql.includes('select pg_advisory_lock') || sql.includes('select pg_advisory_unlock')) {
           return { rows: [{ locked: true }], rowCount: 1 };
@@ -977,12 +1035,15 @@ describe('server import service', () => {
             rowCount: 1,
           };
         }
-        return { rows: [], rowCount: 1 };
+        return { rows: [], rowCount: mockWriteCount(sql, params, 1) };
       }),
       release: vi.fn(),
     };
     const pool = {
-      query: vi.fn(async (sql: string) => {
+      query: vi.fn(async (sql: string, params?: unknown[]) => {
+        if (sql.includes('select j.user_id')) return { rows: [{ user_id: 'user_test' }], rowCount: 1 };
+        if (sql === 'select user_id from library_books where id=$1')
+          return { rows: [{ user_id: 'user_test' }], rowCount: 1 };
         if (sql.includes('select * from upload_sessions')) {
           return {
             rows: [
@@ -1005,7 +1066,7 @@ describe('server import service', () => {
         if (sql.includes('from upload_chunks')) {
           return { rows: [{ chunk_index: 0, size_bytes: delta.length, storage_path: chunkPath }] };
         }
-        return { rows: [], rowCount: 1 };
+        return { rows: [], rowCount: mockWriteCount(sql, params, 1) };
       }),
       connect: vi.fn(async () => appendClient),
     };
@@ -1054,6 +1115,9 @@ describe('server import service', () => {
     const insertedAssetKinds: string[] = [];
     const appendClient = {
       query: vi.fn(async (sql: string, params?: unknown[]) => {
+        if (sql.includes('select j.user_id')) return { rows: [{ user_id: 'user_test' }], rowCount: 1 };
+        if (sql === 'select user_id from library_books where id=$1')
+          return { rows: [{ user_id: 'user_test' }], rowCount: 1 };
         queries.push({ sql, params });
         if (sql.startsWith('select id, kind, content_hash, page_index from book_assets')) return { rows: basePages };
         if (sql.includes('select pg_advisory_lock') || sql.includes('select pg_advisory_unlock')) {
@@ -1095,8 +1159,11 @@ describe('server import service', () => {
         if (sql.includes('select id from library_books') && sql.includes('active_content_revision_id = $3')) {
           return { rows: [{ id: 'book_series_1' }], rowCount: 1 };
         }
-        if (sql === 'select storage_key from book_objects where raw_text_hash = $1 for update') {
-          return { rows: [], rowCount: 0 };
+        if (sql.includes('select id, storage_key from book_objects where raw_text_hash = $1')) {
+          return {
+            rows: [],
+            rowCount: mockWriteCount(sql, params, 0),
+          };
         }
         if (sql === 'select object_id from library_books where id = $1 and user_id = $2') {
           return { rows: [{ object_id: 'object_old_series' }], rowCount: 1 };
@@ -1111,10 +1178,16 @@ describe('server import service', () => {
           return { rows: [{ storage_key: 'user_test/book_series_1/old/001.png' }], rowCount: 1 };
         }
         if (sql === 'select id, storage_key from book_assets where id = any($1::text[])') {
-          return { rows: [], rowCount: 0 };
+          return {
+            rows: [],
+            rowCount: mockWriteCount(sql, params, 0),
+          };
         }
         if (sql.includes("status = 'superseded' and kind <> 'cover'")) {
-          return { rows: [], rowCount: 0 };
+          return {
+            rows: [],
+            rowCount: mockWriteCount(sql, params, 0),
+          };
         }
         if (sql.includes('insert into library_books')) {
           libraryBookSql = sql;
@@ -1122,15 +1195,25 @@ describe('server import service', () => {
         }
         if (sql.includes('insert into book_assets')) insertedAssetKinds.push(String(params?.[3]));
         if (sql.includes('insert into chapters')) chapterInsertParams = params;
-        if (sql.includes('insert into reading_positions')) return { rows: [], rowCount: 1 };
+        if (sql.includes('insert into reading_positions'))
+          return {
+            rows: [],
+            rowCount: mockWriteCount(sql, params, 1),
+          };
         if (sql.includes('select coalesce(max(revision_number)')) {
           return { rows: [{ revision_number: 3 }], rowCount: 1 };
         }
         if (sql.includes('select id, book_id, canonical_name, aliases')) {
-          return { rows: [], rowCount: 0 };
+          return {
+            rows: [],
+            rowCount: mockWriteCount(sql, params, 0),
+          };
         }
         if (sql.includes('from character_relations') && sql.includes('order by id asc')) {
-          return { rows: [], rowCount: 0 };
+          return {
+            rows: [],
+            rowCount: mockWriteCount(sql, params, 0),
+          };
         }
         if (sql.includes('set active_content_revision_id = $4')) {
           return { rows: [{ id: 'book_series_1' }], rowCount: 1 };
@@ -1138,12 +1221,18 @@ describe('server import service', () => {
         if (sql.includes("update upload_sessions set status = 'imported'")) {
           return { rows: [{ id: 'upload_series_append' }], rowCount: 1 };
         }
-        return { rows: [], rowCount: 1 };
+        return {
+          rows: [],
+          rowCount: mockWriteCount(sql, params, 1),
+        };
       }),
       release: vi.fn(),
     };
     const pool = {
-      query: vi.fn(async (sql: string) => {
+      query: vi.fn(async (sql: string, params?: unknown[]) => {
+        if (sql.includes('select j.user_id')) return { rows: [{ user_id: 'user_test' }], rowCount: 1 };
+        if (sql === 'select user_id from library_books where id=$1')
+          return { rows: [{ user_id: 'user_test' }], rowCount: 1 };
         if (sql.includes('select * from upload_sessions')) {
           return {
             rows: [
@@ -1166,7 +1255,7 @@ describe('server import service', () => {
         if (sql.includes('from upload_chunks')) {
           return { rows: [{ chunk_index: 0, size_bytes: delta.length, storage_path: chunkPath }] };
         }
-        return { rows: [], rowCount: 1 };
+        return { rows: [], rowCount: mockWriteCount(sql, params, 1) };
       }),
       connect: vi.fn(async () => appendClient),
     };
@@ -1254,6 +1343,9 @@ describe('server import service', () => {
     const insertedAssetKinds: string[] = [];
     const appendClient = {
       query: vi.fn(async (sql: string, params?: unknown[]) => {
+        if (sql.includes('select j.user_id')) return { rows: [{ user_id: 'user_test' }], rowCount: 1 };
+        if (sql === 'select user_id from library_books where id=$1')
+          return { rows: [{ user_id: 'user_test' }], rowCount: 1 };
         queries.push({ sql, params });
         if (sql.startsWith('select id, kind, content_hash, page_index from book_assets')) return { rows: basePages };
         if (sql.startsWith('select id, kind, provenance, file_name')) return { rows: basePages };
@@ -1296,8 +1388,11 @@ describe('server import service', () => {
         if (sql.includes('select id from library_books') && sql.includes('active_content_revision_id = $3')) {
           return { rows: [{ id: 'book_series_1' }], rowCount: 1 };
         }
-        if (sql === 'select storage_key from book_objects where raw_text_hash = $1 for update') {
-          return { rows: [], rowCount: 0 };
+        if (sql.includes('select id, storage_key from book_objects where raw_text_hash = $1')) {
+          return {
+            rows: [],
+            rowCount: mockWriteCount(sql, params, 0),
+          };
         }
         if (sql === 'select object_id from library_books where id = $1 and user_id = $2') {
           return { rows: [{ object_id: 'object_old_series' }], rowCount: 1 };
@@ -1312,21 +1407,37 @@ describe('server import service', () => {
           return { rows: [{ storage_key: 'user_test/book_series_1/old/001.png' }], rowCount: 1 };
         }
         if (sql === 'select id, storage_key from book_assets where id = any($1::text[])') {
-          return { rows: [], rowCount: 0 };
+          return {
+            rows: [],
+            rowCount: mockWriteCount(sql, params, 0),
+          };
         }
         if (sql.includes("status = 'superseded' and kind <> 'cover'")) {
-          return { rows: [], rowCount: 0 };
+          return {
+            rows: [],
+            rowCount: mockWriteCount(sql, params, 0),
+          };
         }
         if (sql.includes('insert into book_assets')) insertedAssetKinds.push(String(params?.[3]));
-        if (sql.includes('insert into reading_positions')) return { rows: [], rowCount: 1 };
+        if (sql.includes('insert into reading_positions'))
+          return {
+            rows: [],
+            rowCount: mockWriteCount(sql, params, 1),
+          };
         if (sql.includes('select coalesce(max(revision_number)')) {
           return { rows: [{ revision_number: 3 }], rowCount: 1 };
         }
         if (sql.includes('select id, book_id, canonical_name, aliases')) {
-          return { rows: [], rowCount: 0 };
+          return {
+            rows: [],
+            rowCount: mockWriteCount(sql, params, 0),
+          };
         }
         if (sql.includes('from character_relations') && sql.includes('order by id asc')) {
-          return { rows: [], rowCount: 0 };
+          return {
+            rows: [],
+            rowCount: mockWriteCount(sql, params, 0),
+          };
         }
         if (sql.includes('set active_content_revision_id = $4')) {
           return { rows: [{ id: 'book_series_1' }], rowCount: 1 };
@@ -1334,12 +1445,18 @@ describe('server import service', () => {
         if (sql.includes("update upload_sessions set status = 'imported'")) {
           return { rows: [{ id: 'upload_series_stale_add' }], rowCount: 1 };
         }
-        return { rows: [], rowCount: 1 };
+        return {
+          rows: [],
+          rowCount: mockWriteCount(sql, params, 1),
+        };
       }),
       release: vi.fn(),
     };
     const pool = {
-      query: vi.fn(async (sql: string) => {
+      query: vi.fn(async (sql: string, params?: unknown[]) => {
+        if (sql.includes('select j.user_id')) return { rows: [{ user_id: 'user_test' }], rowCount: 1 };
+        if (sql === 'select user_id from library_books where id=$1')
+          return { rows: [{ user_id: 'user_test' }], rowCount: 1 };
         if (sql.includes('select * from upload_sessions')) {
           return {
             rows: [
@@ -1362,7 +1479,7 @@ describe('server import service', () => {
         if (sql.includes('from upload_chunks')) {
           return { rows: [{ chunk_index: 0, size_bytes: delta.length, storage_path: chunkPath }] };
         }
-        return { rows: [], rowCount: 1 };
+        return { rows: [], rowCount: mockWriteCount(sql, params, 1) };
       }),
       connect: vi.fn(async () => appendClient),
     };
@@ -1411,9 +1528,15 @@ describe('server import service', () => {
     const queries: Array<{ sql: string; params?: unknown[] }> = [];
     const pool = {
       query: vi.fn(async (sql: string, params?: unknown[]) => {
+        if (sql.includes('select j.user_id')) return { rows: [{ user_id: 'user_test' }], rowCount: 1 };
+        if (sql === 'select user_id from library_books where id=$1')
+          return { rows: [{ user_id: 'user_test' }], rowCount: 1 };
         queries.push({ sql, params });
         if (sql.includes('select * from upload_sessions')) return { rows: [] };
-        return { rows: [], rowCount: 0 };
+        return {
+          rows: [],
+          rowCount: mockWriteCount(sql, params, 0),
+        };
       }),
     } as unknown as Parameters<typeof processImportJob>[0];
 
@@ -1447,8 +1570,15 @@ describe('server import service', () => {
       const insertedAssetKinds: string[] = [];
       const client = {
         query: vi.fn(async (sql: string, params?: unknown[]) => {
+          if (sql.includes('select j.user_id')) return { rows: [{ user_id: 'user_test' }], rowCount: 1 };
+          if (sql === 'select user_id from library_books where id=$1')
+            return { rows: [{ user_id: 'user_test' }], rowCount: 1 };
           lifecycleQueries.push({ sql, params });
-          if (sql === 'begin' || sql === 'commit' || sql === 'rollback') return { rows: [], rowCount: 1 };
+          if (sql === 'begin' || sql === 'commit' || sql === 'rollback')
+            return {
+              rows: [],
+              rowCount: mockWriteCount(sql, params, 1),
+            };
           if (sql.includes('asset.provenance')) {
             return { rows: [{ id: 'cover_existing', provenance: coverProvenance }], rowCount: 1 };
           }
@@ -1456,12 +1586,18 @@ describe('server import service', () => {
           if (sql.includes("update upload_sessions set status = 'imported'")) {
             return { rows: [{ id: 'upload_cover' }], rowCount: 1 };
           }
-          return { rows: [], rowCount: 1 };
+          return {
+            rows: [],
+            rowCount: mockWriteCount(sql, params, 1),
+          };
         }),
         release: vi.fn(),
       };
       const pool = {
-        query: vi.fn(async (sql: string) => {
+        query: vi.fn(async (sql: string, params?: unknown[]) => {
+          if (sql.includes('select j.user_id')) return { rows: [{ user_id: 'user_test' }], rowCount: 1 };
+          if (sql === 'select user_id from library_books where id=$1')
+            return { rows: [{ user_id: 'user_test' }], rowCount: 1 };
           if (sql.includes('select * from upload_sessions')) {
             return {
               rows: [
@@ -1480,7 +1616,10 @@ describe('server import service', () => {
           if (sql.includes('from upload_chunks')) {
             return { rows: [{ chunk_index: 0, size_bytes: bytes.length, storage_path: chunkPath }] };
           }
-          return { rows: [], rowCount: 1 };
+          return {
+            rows: [],
+            rowCount: mockWriteCount(sql, params, 1),
+          };
         }),
         connect: vi.fn(async () => client),
       };
@@ -1511,10 +1650,16 @@ describe('server import service', () => {
 
   it('ignores a retained BullMQ delivery after its execution fence was superseded', async () => {
     const pool = {
-      query: vi.fn(async (sql: string) => {
+      query: vi.fn(async (sql: string, params?: unknown[]) => {
+        if (sql.includes('select j.user_id')) return { rows: [{ user_id: 'user_test' }], rowCount: 1 };
+        if (sql === 'select user_id from library_books where id=$1')
+          return { rows: [{ user_id: 'user_test' }], rowCount: 1 };
         expect(sql).toContain("status = 'queued'");
         expect(sql).toContain('active_queue_job_id = $2');
-        return { rows: [], rowCount: 0 };
+        return {
+          rows: [],
+          rowCount: mockWriteCount(sql, params, 0),
+        };
       }),
     } as unknown as Parameters<typeof processImportJob>[0];
 
@@ -1527,16 +1672,22 @@ describe('server import service', () => {
       }),
     ).resolves.toBeUndefined();
 
-    expect(pool.query).toHaveBeenCalledTimes(1);
+    expect(pool.query).toHaveBeenCalledTimes(2);
   });
 
   it('marks the upload session failed only after the final BullMQ attempt', async () => {
     const queries: Array<{ sql: string; params?: unknown[] }> = [];
     const pool = {
       query: vi.fn(async (sql: string, params?: unknown[]) => {
+        if (sql.includes('select j.user_id')) return { rows: [{ user_id: 'user_test' }], rowCount: 1 };
+        if (sql === 'select user_id from library_books where id=$1')
+          return { rows: [{ user_id: 'user_test' }], rowCount: 1 };
         queries.push({ sql, params });
         if (sql.includes('select * from upload_sessions')) return { rows: [] };
-        return { rows: [], rowCount: 0 };
+        return {
+          rows: [],
+          rowCount: mockWriteCount(sql, params, 0),
+        };
       }),
     } as unknown as Parameters<typeof processImportJob>[0];
 

@@ -32,7 +32,7 @@ export async function insertChapterBatch(client: pg.PoolClient, chapters: Chapte
     return `($${offset + 1}, $${offset + 2}, $${offset + 3}, $${offset + 4}, $${offset + 5}, $${offset + 6}, $${offset + 7}, $${offset + 8}, $${offset + 9}, $${offset + 10}, $${offset + 11}, $${offset + 12}, $${offset + 13}, $${offset + 14}, $${offset + 15})`;
   });
 
-  await client.query(
+  const inserted = await client.query(
     `
       insert into chapters (
         id, book_id, chapter_index, title, text_hash, raw_start_offset, raw_end_offset,
@@ -53,9 +53,11 @@ export async function insertChapterBatch(client: pg.PoolClient, chapters: Chapte
             document_section_index = excluded.document_section_index,
             document_page_index_in_section = excluded.document_page_index_in_section,
             updated_at = excluded.updated_at
+      where chapters.book_id = excluded.book_id
     `,
     values,
   );
+  if (inserted.rowCount !== chapters.length) throw new Error('import_chapter_parent_conflict');
 }
 
 export async function insertParagraphPageBatch(client: pg.PoolClient, pages: ParagraphPage[]): Promise<number> {
@@ -76,7 +78,7 @@ export async function insertParagraphPageBatch(client: pg.PoolClient, pages: Par
     return `($${offset + 1}, $${offset + 2}, $${offset + 3}, $${offset + 4}, $${offset + 5}, $${offset + 6}, $${offset + 7}, $${offset + 8})`;
   });
 
-  await client.query(
+  const inserted = await client.query(
     `
       insert into paragraph_pages (
         id, book_id, chapter_id, page_index, start_paragraph_index,
@@ -88,10 +90,12 @@ export async function insertParagraphPageBatch(client: pg.PoolClient, pages: Par
             text_hash = excluded.text_hash,
             start_paragraph_index = excluded.start_paragraph_index,
             end_paragraph_index = excluded.end_paragraph_index
+      where paragraph_pages.book_id = excluded.book_id
     `,
     values,
   );
 
+  if (inserted.rowCount !== pages.length) throw new Error('import_paragraph_parent_conflict');
   await insertParagraphSearchBatch(client, pages);
 
   return pages.reduce((sum, page) => sum + page.paragraphs.length, 0);

@@ -62,14 +62,14 @@ async function coverArchive(): Promise<Uint8Array> {
     tables: new Map([
       [
         'library_books',
-        [{ id: 'book_1', user_id: 'old_user', object_id: null, title: 'Restored', cover_asset_id: 'cover_1' }],
+        [{ id: 'book_1', user_id: 'user_1', object_id: null, title: 'Restored', cover_asset_id: 'cover_1' }],
       ],
       [
         'book_assets',
         [
           {
             id: 'cover_1',
-            user_id: 'old_user',
+            user_id: 'user_1',
             book_id: 'book_1',
             kind: 'cover',
             status: 'active',

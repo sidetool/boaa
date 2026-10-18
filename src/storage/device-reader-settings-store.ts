@@ -1,7 +1,7 @@
 import type { ReaderSettings } from '../domain/types';
 import { deviceReaderSettings, type DeviceReaderSettings } from '../repositories/reader-settings-scope';
 import { defaultSettings } from '../repositories/reader-defaults';
-import { openReaderDb } from './reader-database';
+import { openReaderDb, createAccountReaderDb } from './reader-database';
 import { requestToPromise, transactionDone } from './indexeddb-transaction';
 
 const PREFIX = 'device-reader-settings:v1:';
@@ -35,7 +35,7 @@ export async function deviceSettingsInStore(
 }
 
 export async function loadDeviceReaderSettings(scope: string, legacy: Partial<ReaderSettings>, replace = false) {
-  const db = await openReaderDb();
+  const db = await (scope.startsWith('hosted-account:') ? createAccountReaderDb(scope)() : openReaderDb());
   const tx = db.transaction('settings', 'readwrite');
   const done = transactionDone(tx);
   const preferences = await deviceSettingsInStore(tx.objectStore('settings'), scope, legacy, replace);

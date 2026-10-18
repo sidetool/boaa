@@ -1,4 +1,4 @@
-const CACHE_NAME = 'boaa-app-shell-v6';
+const CACHE_NAME = 'boaa-app-shell-v7';
 const APP_SHELL = [
   '/',
   '/manifest.webmanifest',
@@ -39,7 +39,13 @@ if (IS_TAURI_SHELL) {
     event.waitUntil(
       caches
         .keys()
-        .then((keys) => Promise.all(keys.filter((key) => key !== CACHE_NAME).map((key) => caches.delete(key))))
+        .then((keys) =>
+          Promise.all(
+            keys
+              .filter((key) => key.startsWith('boaa-app-shell-') && key !== CACHE_NAME)
+              .map((key) => caches.delete(key)),
+          ),
+        )
         .then(() => self.clients.claim()),
     );
   });
@@ -49,6 +55,9 @@ if (IS_TAURI_SHELL) {
       request.method !== 'GET' ||
       url.origin !== self.location.origin ||
       url.pathname === '/runtime-config.js' ||
+      (url.search !== '' && !url.pathname.startsWith('/icons/')) ||
+      /(?:invitation|password-reset)/.test(url.pathname) ||
+      request.headers.has('x-boaa-session-context') ||
       url.pathname.startsWith('/api/') ||
       request.headers.has('authorization') ||
       request.headers.has('range')
@@ -79,7 +88,7 @@ if (IS_TAURI_SHELL) {
     if (shouldBypass(event.request, url)) return;
 
     if (event.request.mode === 'navigate') {
-      event.respondWith(networkFirst(event.request, '/'));
+      event.respondWith(networkFirst(new Request(new URL('/', self.location.origin)), '/'));
       return;
     }
 

@@ -258,7 +258,12 @@ describe('listening controls', () => {
     expect(labeledButton(panel, '재생').props.disabled).toBe(true);
     expect(labeledButton(panel, '목소리 미리듣기').props.disabled).toBe(true);
     expect(JSON.stringify(renderer.toJSON())).toContain('Voice server is unavailable');
-    act(() => labeledButton(panel, '세부 청취 설정음높이, 볼륨, 쉬는 간격, 건너뛸 내용').props.onClick());
+    act(() =>
+      panel
+        .findAllByType('button')
+        .find((node) => node.findAllByType('b').some((label) => text(label) === '세부 청취 설정'))!
+        .props.onClick(),
+    );
     const offline = renderer.root.findAllByType(Switch).find((node) => node.props.label === '준비된 음성만 사용')!;
     expect(offline.props.checked).toBe(true);
     act(() => offline.props.onChange(false));

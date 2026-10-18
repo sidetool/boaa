@@ -34,6 +34,7 @@ function createFixture(
     ok: true as const,
     settings: { ...settings, revision: expectedRevision + 1, updatedAt: '2026-09-04T00:00:01.000Z' },
   })),
+  allowLegacyImport = true,
 ) {
   const extensionListeners = new Set<() => void>();
   const metadataListeners = new Set<() => void>();
@@ -51,6 +52,7 @@ function createFixture(
   function Harness() {
     waitUntilReady = useSelfHostIntegrationSettings({
       enabled: true,
+      allowLegacyImport,
       client: { getIntegrationSettings, saveIntegrationSettings },
       extensionManager: {
         subscribe: (listener: () => void) => {
@@ -299,6 +301,32 @@ describe('useSelfHostIntegrationSettings', () => {
       expect.objectContaining({ legacyImportCompleted: true }),
       4,
     );
+    await act(async () => renderer.unmount());
+  });
+
+  it('never merges old device settings for a newly invited member', async () => {
+    const server = {
+      ...integrationSettings(),
+      legacyImportCompleted: false,
+      extensionEnablement: { schemaVersion: 1 as const, enabledByExtensionId: {} },
+      externalSources: { schemaVersion: 1 as const, connections: [], links: [], subscriptions: [] },
+    };
+    const save = vi.fn(async (settings: SelfHostIntegrationSettingsV1, revision: number) => ({
+      ok: true as const,
+      settings: { ...settings, revision: revision + 1 },
+    }));
+    const fixture = createFixture(
+      vi.fn(async () => ({ settings: server })),
+      save,
+      false,
+    );
+    let renderer!: ReactTestRenderer;
+    await act(async () => {
+      renderer = create(<fixture.Harness />);
+      await flush();
+    });
+    expect(fixture.replaceSharedState).toHaveBeenCalledWith(server.externalSources);
+    expect(save).not.toHaveBeenCalled();
     await act(async () => renderer.unmount());
   });
 

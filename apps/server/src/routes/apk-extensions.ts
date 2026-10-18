@@ -1,19 +1,28 @@
+import { ownerRuntimeSignal } from '../extensions/owner-runtime-request.js';
+import { requireAdmin, requirePrincipal } from '../auth.js';
 import { compatibilityFile } from '../extensions/compatibility-file.js';
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, FastifyRequest } from 'fastify';
 import type { CompatibilityHost } from '../extensions/apk-command.js';
 
 export async function registerApkExtensionRoutes(
   app: FastifyInstance,
   host?: CompatibilityHost,
   prefix = '/api/apk-extensions',
+  resolveHost?: (request: FastifyRequest) => Promise<CompatibilityHost | undefined>,
 ) {
+  const hostFallback = host;
   app.get(prefix, async (_request, reply) => {
+    const current = resolveHost ? await resolveHost(_request) : host;
     reply.header('Cache-Control', 'no-store');
-    return host?.snapshot() ?? { available: false, revision: 0, packages: [], repositories: [] };
+    const snapshot = current?.snapshot() ?? { available: false, revision: 0, packages: [], repositories: [] };
+    return requirePrincipal(_request).role === 'admin' ? snapshot : { ...snapshot, repositories: [] };
   });
-  if (!host) return;
-  app.addHook('onClose', () => host.close());
+  if (!host && !resolveHost) return;
+  if (host && !resolveHost) app.addHook('onClose', () => host.close());
   app.post(prefix + '/inspect-file', { bodyLimit: 45 * 1024 * 1024 }, async (request, reply) => {
+    requireAdmin(request);
+    const host = resolveHost ? await resolveHost(request) : hostFallback;
+    if (!host) return reply.code(503).send({ error: 'source_runtime_unavailable' });
     reply.header('Cache-Control', 'no-store');
     const controller = new AbortController();
     const cancel = () => {
@@ -25,7 +34,12 @@ export async function registerApkExtensionRoutes(
       if (!request.body || typeof request.body !== 'object' || Array.isArray(request.body))
         throw new Error('compatibility_file_invalid');
       const file = compatibilityFile(request.body as Record<string, unknown>);
-      return await host.inspectFile(file.bytes, file.name, file.sourceIndex, controller.signal);
+      return await host.inspectFile(
+        file.bytes,
+        file.name,
+        file.sourceIndex,
+        ownerRuntimeSignal(request, controller.signal),
+      );
     } catch (error) {
       const code = error instanceof Error ? error.message : '';
       const allowed = [
@@ -56,6 +70,19 @@ export async function registerApkExtensionRoutes(
     if (!body || typeof body !== 'object' || Array.isArray(body))
       return reply.code(400).send({ error: 'apk_input_invalid' });
     const input = body as Record<string, unknown>;
+    if (
+      !['preferences', 'preferences-save'].includes(request.params.action) &&
+      !(request.params.action === 'change' && ['enable', 'disable'].includes(String(input.action)))
+    )
+      requireAdmin(request);
+    if (
+      requirePrincipal(request).role !== 'admin' &&
+      input.privateOrigins !== undefined &&
+      (!Array.isArray(input.privateOrigins) || input.privateOrigins.length > 0)
+    )
+      return reply.code(403).send({ error: 'forbidden' });
+    const host = resolveHost ? await resolveHost(request) : hostFallback;
+    if (!host) return reply.code(503).send({ error: 'source_runtime_unavailable' });
     const controller = new AbortController();
     const cancel = () => {
       if (!reply.raw.writableFinished) controller.abort();
@@ -78,7 +105,7 @@ export async function registerApkExtensionRoutes(
           return { saved: true };
         case 'repository-refresh':
           if (typeof input.url !== 'string') break;
-          await host.refreshRepository(input.url, controller.signal);
+          await host.refreshRepository(input.url, ownerRuntimeSignal(request, controller.signal));
           return { updated: true };
         case 'repository-remove':
           if (typeof input.url !== 'string') break;
@@ -87,10 +114,15 @@ export async function registerApkExtensionRoutes(
         case 'inspect':
           if (typeof input.url !== 'string' || typeof input.pkg !== 'string' || !Number.isSafeInteger(input.code))
             break;
-          return await host.inspect(input.url, input.pkg, input.code as number, controller.signal);
+          return await host.inspect(
+            input.url,
+            input.pkg,
+            input.code as number,
+            ownerRuntimeSignal(request, controller.signal),
+          );
         case 'install':
           if (typeof input.id !== 'string' || !Number.isSafeInteger(input.revision) || input.trusted !== true) break;
-          await host.install(input.id, input.revision as number, controller.signal);
+          await host.install(input.id, input.revision as number, ownerRuntimeSignal(request, controller.signal));
           return { installed: true };
         case 'change':
           if (

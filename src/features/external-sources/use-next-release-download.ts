@@ -1,3 +1,4 @@
+import { useAccountStorage } from '../auth/use-account-storage';
 import { readBrandStorage, writeBrandStorage } from '@boaa/extension-contracts/brand-compat';
 import { useEffect, useRef, useState } from 'react';
 
@@ -16,16 +17,17 @@ export function useNextReleaseDownload(input: {
   run(signal: AbortSignal, count: NextReleaseCount): Promise<void>;
   reportError(): void;
 }) {
+  const storage = useAccountStorage();
   const [localEnabled, setEnabled] = useState(() => {
     try {
-      return readBrandStorage(localStorage, KEY) === 'true';
+      return readBrandStorage(storage, KEY) === 'true';
     } catch {
       return false;
     }
   });
   const [localCount, updateCount] = useState<NextReleaseCount>(() => {
     try {
-      const value = Number(readBrandStorage(localStorage, COUNT_KEY));
+      const value = Number(readBrandStorage(storage, COUNT_KEY));
       return value === 2 || value === 3 ? value : 1;
     } catch {
       return 1;
@@ -75,7 +77,7 @@ export function useNextReleaseDownload(input: {
         return;
       }
       try {
-        writeBrandStorage(localStorage, COUNT_KEY, String(value));
+        writeBrandStorage(storage, COUNT_KEY, String(value));
       } catch {
         /* session preference */
       }
@@ -87,7 +89,7 @@ export function useNextReleaseDownload(input: {
         return;
       }
       try {
-        writeBrandStorage(localStorage, KEY, String(value));
+        writeBrandStorage(storage, KEY, String(value));
       } catch {
         /* session preference still works */
       }

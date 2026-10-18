@@ -1,3 +1,4 @@
+import type { ApkProcessBudget } from './process-budget.mjs';
 import type { ApkTools, ApkMetadata } from './installations.mjs';
 export interface JavaApkTools extends ApkTools {
   networkIdentity?(state: string): string;
@@ -14,5 +15,5 @@ export interface JavaApkTools extends ApkTools {
 export function createJavaApkTools(
   java: string,
   build: string,
-  options?: { systemRoot?: string; resolveDefaultProxy?: () => string | undefined },
+  options?: { processBudget?: ApkProcessBudget; systemRoot?: string; resolveDefaultProxy?: () => string | undefined },
 ): Promise<JavaApkTools>;

@@ -12,6 +12,11 @@ import type { InstalledPackageSummary } from '../../extensions/packages/package-
 import { examplePackageManifest } from '../../test/extension-package-fixture';
 import { UiNextExtensionsPanel } from './UiNextExtensionsPanel';
 
+const capability = vi.hoisted(() => ({ manageExtensions: true }));
+vi.mock('../../features/auth/self-host-account-api', () => ({
+  useSelfHostCapability: (name: string) => (name === 'manageExtensions' ? capability.manageExtensions : true),
+}));
+
 let renderer: ReactTestRenderer | undefined;
 beforeEach(() => vi.useFakeTimers());
 afterEach(() => {
@@ -281,4 +286,22 @@ describe('UiNextExtensionsPanel navigation', () => {
       }
     },
   );
+});
+
+describe('UiNextExtensionsPanel for a member account', () => {
+  afterEach(() => {
+    capability.manageExtensions = true;
+  });
+  it('lets a member use and sign in to allowed sources without install, update, removal or network controls', async () => {
+    capability.manageExtensions = false;
+    const { manager } = fixture({ packages: [installed()] });
+    const root = await mount(manager);
+    expect(text(root)).toContain('관리자가 허용한 소스');
+    expect(buttons(root, /파일로 설치/)).toHaveLength(0);
+    expect(root.findAll((node) => node.props.role === 'radio' && text(node).trim() === '추가하기')).toHaveLength(0);
+    expect(root.findAll((node) => node.type === 'details')).toHaveLength(0);
+    await click(buttons(root, /Example/)[0] ?? root.find((node) => node.props['aria-expanded'] === false));
+    expect(buttons(root, /제거/)).toHaveLength(0);
+    expect(buttons(root, '업데이트 확인')).toHaveLength(0);
+  });
 });

@@ -16,6 +16,7 @@ import {
 import type { ExternalSourceLocalState } from '../local-state';
 import {
   acquireExternalSourcePendingLinks,
+  checkpointImportedExternalSourceLinks,
   finalizeExternalSourceLinks,
   restoreExternalSourceLinks,
 } from '../link-import-reconciliation';
@@ -192,7 +193,7 @@ async function runDocumentSeries(
     link.collectionRemoteId === first.collection.remoteId;
   const targetIds = [...new Set(links.filter(related).map((link) => link.localBookId))];
   if (targetIds.length > 1) throw new Error('회차가 여러 작품에 연결되어 있어 자동 병합할 수 없습니다.');
-  const bookId = targetIds[0] ?? externalDocumentCollectionId(first.key, first.collection.remoteId);
+  let bookId = targetIds[0] ?? externalDocumentCollectionId(first.key, first.collection.remoteId);
   const generation = options.registry.getExternalSourceStatus(
     options.sourceId,
     options.hostContext,
@@ -361,7 +362,7 @@ async function runDocumentSeries(
             linkedAt: now,
           });
       }
-      const staged = [...candidates.values()].map((link) => {
+      let staged: ExternalSourceLink[] = [...candidates.values()].map((link) => {
         const release = checked.get(externalItemKeyId(link.source));
         return {
           ...link,
@@ -371,6 +372,7 @@ async function runDocumentSeries(
             hadExistingLink: previous.some((old) => old.id === link.id),
             previousActiveContentRevisionId: base.novel?.activeContentRevisionId,
             expectedActiveSourceContentHash: sourceHash,
+            bookIdMayChange: options.importService.mayChangeBookId,
             collectionRemoteId: first.collection.remoteId,
             importedRemoteRevision: release?.remoteRevision ?? link.importedRemoteRevision,
             importedSourceContentHash: release?.sourceContentHash ?? link.importedSourceContentHash,
@@ -423,7 +425,9 @@ async function runDocumentSeries(
           if (options.signal.aborted) cancel();
           try {
             novel = (await task.promise).novel;
+            bookId = novel.id;
             activated = true;
+            staged = await checkpointImportedExternalSourceLinks(options.state, staged, novel);
           } finally {
             options.signal.removeEventListener('abort', cancel);
           }
@@ -467,7 +471,7 @@ async function runDocumentSeries(
             });
           }
         } else {
-          if (!activated && inspected)
+          if (!activated && inspected && !(importStarted && !base.novel && options.importService.mayChangeBookId))
             await restoreExternalSourceLinks(options.state, staged, previous).catch(() => undefined);
           if (activated && novel) {
             committed += batch.length;

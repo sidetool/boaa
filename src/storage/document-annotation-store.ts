@@ -1,13 +1,18 @@
 import type { DocumentAnnotation } from '../domain/types';
 import type { DocumentAnnotationRepository } from '../repositories/document-annotation-repository';
 import { DOCUMENT_LISTENING_STORES } from './document-listening-schema';
-import { getAllByIndex, requestToPromise, transactionDone } from './indexeddb-transaction';
+import { createIndexedDbTransactions, requestToPromise, transactionDone } from './indexeddb-transaction';
 import { openReaderDb } from './reader-database';
 import { jsonValue, queueSyncEventInTransaction, tombstoneEntity, tombstoneId } from './sync-event-store';
 
 export class IndexedDbDocumentAnnotationRepository implements DocumentAnnotationRepository {
+  private readonly transactions;
+  constructor(private readonly openDatabase: () => Promise<IDBDatabase> = openReaderDb) {
+    this.transactions = createIndexedDbTransactions(openDatabase);
+  }
+
   async list(bookId: string): Promise<DocumentAnnotation[]> {
-    const rows = await getAllByIndex<DocumentAnnotation>(
+    const rows = await this.transactions.getAllByIndex<DocumentAnnotation>(
       DOCUMENT_LISTENING_STORES.documentAnnotations,
       'bookId',
       bookId,
@@ -16,7 +21,7 @@ export class IndexedDbDocumentAnnotationRepository implements DocumentAnnotation
   }
 
   async listPage(bookId: string, pageIndex: number): Promise<DocumentAnnotation[]> {
-    const rows = await getAllByIndex<DocumentAnnotation>(
+    const rows = await this.transactions.getAllByIndex<DocumentAnnotation>(
       DOCUMENT_LISTENING_STORES.documentAnnotations,
       'bookId_pageIndex',
       IDBKeyRange.only([bookId, pageIndex]),
@@ -25,15 +30,9 @@ export class IndexedDbDocumentAnnotationRepository implements DocumentAnnotation
   }
 
   async save(annotation: DocumentAnnotation): Promise<void> {
-    const db = await openReaderDb();
+    const db = await this.openDatabase();
     const tx = db.transaction(
-      [
-        DOCUMENT_LISTENING_STORES.documentAnnotations,
-        'sync_tombstones',
-        'devices',
-        'sync_outbox',
-        'sync_state',
-      ],
+      [DOCUMENT_LISTENING_STORES.documentAnnotations, 'sync_tombstones', 'devices', 'sync_outbox', 'sync_state'],
       'readwrite',
     );
     const saved = { ...annotation, deletedAt: undefined };
@@ -47,15 +46,9 @@ export class IndexedDbDocumentAnnotationRepository implements DocumentAnnotation
   }
 
   async remove(id: string, deletedAt = new Date().toISOString()): Promise<void> {
-    const db = await openReaderDb();
+    const db = await this.openDatabase();
     const tx = db.transaction(
-      [
-        DOCUMENT_LISTENING_STORES.documentAnnotations,
-        'sync_tombstones',
-        'devices',
-        'sync_outbox',
-        'sync_state',
-      ],
+      [DOCUMENT_LISTENING_STORES.documentAnnotations, 'sync_tombstones', 'devices', 'sync_outbox', 'sync_state'],
       'readwrite',
     );
     const store = tx.objectStore(DOCUMENT_LISTENING_STORES.documentAnnotations);

@@ -40,8 +40,8 @@ const noLimits = { maxActiveAttempts: 0, maxAttemptsPerMinute: 0, maxAttemptsPer
 async function seedAnalysisBook(pool: pg.Pool, paragraphTexts: readonly string[]): Promise<BookAIWorkflowPlan> {
   await pool.query(`insert into users (id, email, display_name) values ('user_test', 'test@example.com', 'Test')`);
   await pool.query(`
-    insert into book_objects (id, raw_text_hash, storage_key, file_name, content_type, size_bytes)
-    values ('object_1', 'raw_1', 'book.txt', 'book.txt', 'text/plain', 100)
+    insert into book_objects (user_id, id, raw_text_hash, storage_key, file_name, content_type, size_bytes)
+    values ('user_test', 'object_1', 'raw_1', 'book.txt', 'book.txt', 'text/plain', 100)
   `);
   await pool.query(
     `

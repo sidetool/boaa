@@ -24,6 +24,12 @@ const harness = await startPostgresIntegrationHarness();
       `);
       const a = Fastify(),
         b = Fastify();
+      a.addHook('onRequest', async (request) => {
+        request.principal = { userId: 'a', role: 'member', authMethod: 'session', sessionContext: 'a' };
+      });
+      b.addHook('onRequest', async (request) => {
+        request.principal = { userId: 'b', role: 'member', authMethod: 'session', sessionContext: 'b' };
+      });
       registerChapterReadRoutes(a, pool, { defaultUserId: 'a' } as ServerConfig);
       registerChapterReadRoutes(b, pool, { defaultUserId: 'b' } as ServerConfig);
       const request = {

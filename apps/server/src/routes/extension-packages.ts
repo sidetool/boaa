@@ -1,3 +1,6 @@
+import { ownerRuntimeSignal } from '../extensions/owner-runtime-request.js';
+import { requireAdmin } from '../auth.js';
+import { PreparedImageDownloads } from '../services/prepared-image-downloads.js';
 import { validContentConnectionRequest } from '../../../../packages/extension-contracts/source-content-service.js';
 import { Readable } from 'node:stream';
 import { sourceCoverThumbnail } from '../extensions/source-cover-thumbnail.js';
@@ -99,23 +102,18 @@ function withCancellation<T>(
   };
   request.raw.once('aborted', cancel);
   reply.raw.once('close', cancel);
-  return run(controller.signal).finally(() => {
+  return run(ownerRuntimeSignal(request, controller.signal)).finally(() => {
     request.raw.removeListener('aborted', cancel);
     reply.raw.removeListener('close', cancel);
   });
 }
 
-/** Call only after the application's authentication hook. The store is already fixed to the server owner. */
-export async function registerExtensionPackageRoutes(
-  app: FastifyInstance,
+export function createExtensionRuntime(
   store: PackageInstallStore,
   execution: PackageExecutionPort,
   apk?: ApkExtensionHost,
   mangayomi?: MangayomiExtensionHost,
-  migratedTextSources: ReadonlySet<string> = new Set(),
-  stageImageImport?: StageServerImageImport,
-  documentImports?: ServerDocumentImports,
-): Promise<PackageRuntimeCatalog> {
+) {
   const catalog = new PackageRuntimeCatalog(store, execution);
   const repositories = new PackageRepositories(store, execution);
   const cacheOwner = Symbol('owner-source-cache');
@@ -129,12 +127,84 @@ export async function registerExtensionPackageRoutes(
     [],
     mgRegistry ? compositeSourceRegistry(imageRegistry, mgRegistry) : imageRegistry,
   );
-  app.addHook('onClose', async () => {
+  const preparedImages = new PreparedImageDownloads();
+  const preparedDocuments = new PreparedImageDownloads(16 * 1024 * 1024);
+  const assembly = { count: 0 };
+  const close = async () => {
     installed.dispose();
     apkRegistry?.dispose();
     mgRegistry?.dispose();
     catalog.dispose();
+    await preparedImages.close();
+    await preparedDocuments.close();
+    await apk?.close();
+    await mangayomi?.close();
+  };
+  return { store, catalog, repositories, registry, apk, mangayomi, preparedImages, preparedDocuments, assembly, close };
+}
+export type ExtensionRuntime = ReturnType<typeof createExtensionRuntime>;
+export type ResolveExtensionRuntime = (request: FastifyRequest) => Promise<ExtensionRuntime>;
+
+/** Register once after authentication. Hosted requests resolve an immutable owner runtime. */
+export function registerExtensionPackageRoutes(
+  app: FastifyInstance,
+  store: PackageInstallStore,
+  execution: PackageExecutionPort,
+  apk?: ApkExtensionHost,
+  mangayomi?: MangayomiExtensionHost,
+  migratedTextSources?: ReadonlySet<string>,
+  stageImageImport?: StageServerImageImport,
+  documentImports?: ServerDocumentImports,
+): Promise<PackageRuntimeCatalog>;
+export function registerExtensionPackageRoutes(
+  app: FastifyInstance,
+  store: PackageInstallStore,
+  execution: PackageExecutionPort,
+  apk: ApkExtensionHost | undefined,
+  mangayomi: MangayomiExtensionHost | undefined,
+  migratedTextSources: ReadonlySet<string>,
+  stageImageImport: StageServerImageImport,
+  documentImports: ServerDocumentImports,
+  resolver: ResolveExtensionRuntime,
+): Promise<PackageRuntimeCatalog | undefined>;
+export async function registerExtensionPackageRoutes(
+  app: FastifyInstance,
+  store: PackageInstallStore,
+  execution: PackageExecutionPort,
+  apk?: ApkExtensionHost,
+  mangayomi?: MangayomiExtensionHost,
+  migratedTextSources: ReadonlySet<string> = new Set(),
+  stageImageImport?: StageServerImageImport,
+  documentImports?: ServerDocumentImports,
+  resolver?: ResolveExtensionRuntime,
+): Promise<PackageRuntimeCatalog | undefined> {
+  app.addHook('preHandler', async (request) => {
+    const url = request.routeOptions.url ?? ''; // Matched route template, never caller-encoded URL.
+    if (
+      /\/sources\/[^/]+\/preferences$/.test(url) &&
+      object(request.body) &&
+      request.body.privateOrigins !== undefined &&
+      (!Array.isArray(request.body.privateOrigins) || request.body.privateOrigins.length > 0)
+    )
+      requireAdmin(request);
+
+    if (/\/sources\/[^/]+\/content-connection$/.test(url)) requireAdmin(request);
+    if (
+      url.startsWith('/api/extensions/repositories') ||
+      /\/packages\/(inspect|install)$/.test(url) ||
+      /\/packages\/[^/]+\/update$/.test(url)
+    )
+      requireAdmin(request);
+    if (
+      /\/packages\/[^/]+\/change$/.test(url) &&
+      object(request.body) &&
+      ['remove', 'rollback'].includes(String(request.body.action))
+    )
+      requireAdmin(request);
   });
+  const fallback = resolver ? undefined : createExtensionRuntime(store, execution, apk, mangayomi);
+  const resolveRuntime: ResolveExtensionRuntime = resolver ?? (async () => fallback!);
+  if (fallback) app.addHook('onClose', fallback.close);
   const handle = async (reply: FastifyReply, run: () => Promise<unknown>) => {
     reply.header('Cache-Control', 'no-store').header('X-Content-Type-Options', 'nosniff');
     try {
@@ -159,8 +229,9 @@ export async function registerExtensionPackageRoutes(
     }
   };
 
-  app.get(`${PREFIX}/packages`, (_request, reply) =>
-    handle(reply, async () => {
+  app.get(`${PREFIX}/packages`, async (_request, reply) => {
+    const { catalog, registry, store, apk, mangayomi } = await resolveRuntime(_request);
+    return handle(reply, async () => {
       await catalog.refresh();
       return {
         sourceStreaming: true,
@@ -179,12 +250,16 @@ export async function registerExtensionPackageRoutes(
           }),
         errors: catalog.getErrors(),
       };
-    }),
-  );
-  app.get(`${PREFIX}/repositories`, (_request, reply) => handle(reply, () => repositories.list()));
+    });
+  });
+  app.get(`${PREFIX}/repositories`, async (_request, reply) => {
+    const { repositories } = await resolveRuntime(_request);
+    return handle(reply, () => repositories.list());
+  });
   for (const action of ['refresh', 'remove', 'download'] as const)
-    app.post(`${PREFIX}/repositories/${action}`, { bodyLimit: 8192 }, (request, reply) =>
-      handle(reply, () =>
+    app.post(`${PREFIX}/repositories/${action}`, { bodyLimit: 8192 }, async (request, reply) => {
+      const { repositories } = await resolveRuntime(request);
+      return handle(reply, () =>
         withCancellation(request, reply, async (signal) => {
           const body = request.body;
           if (
@@ -205,11 +280,12 @@ export async function registerExtensionPackageRoutes(
           reply.header('Content-Type', 'application/octet-stream').header('Content-Length', archive.size);
           return reply.send(Readable.fromWeb(archive.stream() as import('node:stream/web').ReadableStream));
         }),
-      ),
-    );
+      );
+    });
 
-  app.post(`${PREFIX}/packages/inspect`, { bodyLimit: 10 * 1024 * 1024 }, (request, reply) =>
-    handle(reply, () =>
+  app.post(`${PREFIX}/packages/inspect`, { bodyLimit: 10 * 1024 * 1024 }, async (request, reply) => {
+    const { catalog } = await resolveRuntime(request);
+    return handle(reply, () =>
       withCancellation(request, reply, async (signal) => {
         if (!Buffer.isBuffer(request.body)) return reply.code(400).send({ error: 'package_body_required' });
         const plan = await catalog.installer.inspect(new Blob([Uint8Array.from(request.body)]), signal);
@@ -219,11 +295,12 @@ export async function registerExtensionPackageRoutes(
           package: { digest: pkg.digest, manifest: pkg.manifest, publisherFingerprint: pkg.publisherFingerprint },
         };
       }),
-    ),
-  );
+    );
+  });
 
-  app.post(`${PREFIX}/packages/install`, { bodyLimit: 10 * 1024 * 1024 }, (request, reply) =>
-    handle(reply, () =>
+  app.post(`${PREFIX}/packages/install`, { bodyLimit: 10 * 1024 * 1024 }, async (request, reply) => {
+    const { catalog } = await resolveRuntime(request);
+    return handle(reply, () =>
       withCancellation(request, reply, async (signal) => {
         const query = request.query;
         if (
@@ -248,11 +325,12 @@ export async function registerExtensionPackageRoutes(
         await catalog.refresh();
         return { installed: true };
       }),
-    ),
-  );
+    );
+  });
 
-  app.post<{ Params: { id: string } }>(`${PREFIX}/packages/:id/change`, { bodyLimit: 4096 }, (request, reply) =>
-    handle(reply, async () => {
+  app.post<{ Params: { id: string } }>(`${PREFIX}/packages/:id/change`, { bodyLimit: 4096 }, async (request, reply) => {
+    const { catalog } = await resolveRuntime(request);
+    return handle(reply, async () => {
       const body = request.body;
       if (
         !object(body) ||
@@ -267,11 +345,12 @@ export async function registerExtensionPackageRoutes(
       else await catalog.installer.setEnabled(id, body.revision, body.action === 'enable');
       await catalog.refresh();
       return { changed: true };
-    }),
-  );
+    });
+  });
 
-  app.post<{ Params: { id: string } }>(`${PREFIX}/packages/:id/update`, { bodyLimit: 1024 }, (request, reply) =>
-    handle(reply, () =>
+  app.post<{ Params: { id: string } }>(`${PREFIX}/packages/:id/update`, { bodyLimit: 1024 }, async (request, reply) => {
+    const { catalog } = await resolveRuntime(request);
+    return handle(reply, () =>
       withCancellation(request, reply, async (signal) => {
         if (
           !object(request.body) ||
@@ -284,29 +363,35 @@ export async function registerExtensionPackageRoutes(
         reply.header('Content-Type', 'application/octet-stream').header('Content-Length', archive.size);
         return reply.send(Readable.fromWeb(archive.stream() as import('node:stream/web').ReadableStream));
       }),
-    ),
-  );
+    );
+  });
 
-  app.post<{ Params: { id: string } }>(`${PREFIX}/sources/:id/list`, { bodyLimit: 16 * 1024 }, (request, reply) =>
-    handle(reply, () =>
-      withCancellation(request, reply, async (signal) => {
-        if (!object(request.body)) return reply.code(400).send({ error: 'invalid_source_input' });
-        await catalog.refresh();
-        return registry.listExternalSource(
-          request.params.id as ExtensionContributionId,
-          context,
-          request.body as ExternalSourceListInput,
-          signal,
-        );
-      }),
-    ),
+  app.post<{ Params: { id: string } }>(
+    `${PREFIX}/sources/:id/list`,
+    { bodyLimit: 16 * 1024 },
+    async (request, reply) => {
+      const { catalog, registry } = await resolveRuntime(request);
+      return handle(reply, () =>
+        withCancellation(request, reply, async (signal) => {
+          if (!object(request.body)) return reply.code(400).send({ error: 'invalid_source_input' });
+          await catalog.refresh();
+          return registry.listExternalSource(
+            request.params.id as ExtensionContributionId,
+            context,
+            request.body as ExternalSourceListInput,
+            signal,
+          );
+        }),
+      );
+    },
   );
 
   app.post<{ Params: { id: string } }>(
     `${PREFIX}/sources/:id/preferences`,
     { bodyLimit: 64 * 1024 },
-    (request, reply) =>
-      handle(reply, () =>
+    async (request, reply) => {
+      const { catalog } = await resolveRuntime(request);
+      return handle(reply, () =>
         withCancellation(request, reply, async (signal) => {
           const { validSourcePreferencesRequest } =
             await import('../../../../packages/extension-contracts/source-preferences.js');
@@ -314,61 +399,75 @@ export async function registerExtensionPackageRoutes(
             return reply.code(400).send({ error: 'invalid_source_preferences' });
           return catalog.preferences(request.params.id, request.body, signal);
         }),
-      ),
+      );
+    },
   );
   app.post<{ Params: { id: string } }>(
     `${PREFIX}/sources/:id/content-connection`,
     { bodyLimit: 16 * 1024 },
-    (request, reply) =>
-      handle(reply, () =>
+    async (request, reply) => {
+      const { catalog } = await resolveRuntime(request);
+      return handle(reply, () =>
         withCancellation(request, reply, async (signal) => {
           if (!validContentConnectionRequest(request.body))
             return reply.code(400).send({ error: 'source_content_service_denied' });
           return catalog.contentConnection(request.params.id, request.body, signal);
         }),
-      ),
+      );
+    },
   );
   app.post<{ Params: { id: string } }>(
     `${PREFIX}/sources/:id/authentication`,
     { bodyLimit: 16 * 1024 },
-    (request, reply) =>
-      handle(reply, () =>
+    async (request, reply) => {
+      const { catalog } = await resolveRuntime(request);
+      return handle(reply, () =>
         withCancellation(request, reply, async (signal) => {
           if (!validateSourceAuthenticationRequest(request.body))
             return reply.code(400).send({ error: 'invalid_source_authentication' });
           return catalog.authenticate(request.params.id, request.body, signal);
         }),
-      ),
+      );
+    },
   );
 
-  app.post<{ Params: { id: string } }>(`${PREFIX}/sources/:id/download`, { bodyLimit: 16 * 1024 }, (request, reply) =>
-    handle(reply, () =>
-      withCancellation(request, reply, async (signal) => {
-        const body = request.body;
-        if (
-          !object(body) ||
-          !object(body.key) ||
-          typeof body.fileName !== 'string' ||
-          body.fileName.length > 1024 ||
-          typeof body.key.remoteId !== 'string' ||
-          body.key.remoteId.length > 4096 ||
-          body.key.connectorId !== request.params.id
-        )
-          return reply.code(400).send({ error: 'invalid_source_input' });
-        await catalog.refresh();
-        const result = await registry.downloadExternalSource(
-          request.params.id as ExtensionContributionId,
-          context,
-          body as unknown as ExternalSourceDownloadRef,
-          signal,
-        );
-        reply.header('Content-Type', result.file.type).header('Content-Length', result.file.size);
-        return reply.send(Readable.fromWeb(result.file.stream() as import('node:stream/web').ReadableStream));
-      }),
-    ),
+  app.post<{ Params: { id: string } }>(
+    `${PREFIX}/sources/:id/download`,
+    { bodyLimit: 16 * 1024 },
+    async (request, reply) => {
+      const { catalog, registry } = await resolveRuntime(request);
+      return handle(reply, () =>
+        withCancellation(request, reply, async (signal) => {
+          const body = request.body;
+          if (
+            !object(body) ||
+            !object(body.key) ||
+            typeof body.fileName !== 'string' ||
+            body.fileName.length > 1024 ||
+            typeof body.key.remoteId !== 'string' ||
+            body.key.remoteId.length > 4096 ||
+            body.key.connectorId !== request.params.id
+          )
+            return reply.code(400).send({ error: 'invalid_source_input' });
+          await catalog.refresh();
+          const result = await registry.downloadExternalSource(
+            request.params.id as ExtensionContributionId,
+            context,
+            body as unknown as ExternalSourceDownloadRef,
+            signal,
+          );
+          reply.header('Content-Type', result.file.type).header('Content-Length', result.file.size);
+          return reply.send(Readable.fromWeb(result.file.stream() as import('node:stream/web').ReadableStream));
+        }),
+      );
+    },
   );
 
-  const streamingCatalog = (id: string) => {
+  const streamingCatalog = (
+    id: string,
+    apk: ApkExtensionHost | undefined,
+    mangayomi: MangayomiExtensionHost | undefined,
+  ) => {
     const host = apk?.catalog.getSource(id)
       ? apk.catalog
       : mangayomi?.catalog.getSource(id)
@@ -378,8 +477,9 @@ export async function registerExtensionPackageRoutes(
       throw new Error('compatibility_feature_unsupported');
     return host;
   };
-  app.post<{ Params: { id: string } }>(`${PREFIX}/sources/:id/stream`, { bodyLimit: 4096 }, (request, reply) =>
-    handle(reply, () =>
+  app.post<{ Params: { id: string } }>(`${PREFIX}/sources/:id/stream`, { bodyLimit: 4096 }, async (request, reply) => {
+    const { apk, mangayomi } = await resolveRuntime(request);
+    return handle(reply, () =>
       withCancellation(request, reply, async (signal) => {
         const body = request.body;
         if (!object(body) || typeof body.remoteId !== 'string')
@@ -396,7 +496,7 @@ export async function registerExtensionPackageRoutes(
           ids.some((id) => typeof id !== 'string' || !/^[a-f0-9]{64}$/.test(id))
         )
           return reply.code(400).send({ error: 'invalid_source_input' });
-        return streamingCatalog(request.params.id).openStream(
+        return streamingCatalog(request.params.id, apk, mangayomi).openStream(
           request.params.id,
           {
             workId: ids[0],
@@ -406,15 +506,16 @@ export async function registerExtensionPackageRoutes(
           signal,
         );
       }),
-    ),
-  );
+    );
+  });
   app.get<{ Params: { id: string; token: string; index: string }; Querystring: { reload?: string } }>(
     `${PREFIX}/sources/:id/stream/:token/:index`,
-    (request, reply) =>
-      handle(reply, () =>
+    async (request, reply) => {
+      const { apk, mangayomi } = await resolveRuntime(request);
+      return handle(reply, () =>
         withCancellation(request, reply, async (signal) => {
           const { id, token, index } = request.params;
-          const blob = await streamingCatalog(id).streamPage(
+          const blob = await streamingCatalog(id, apk, mangayomi).streamPage(
             id,
             token,
             Number(index),
@@ -424,17 +525,23 @@ export async function registerExtensionPackageRoutes(
           reply.header('Content-Type', blob.type).header('Content-Length', blob.size);
           return reply.send(Readable.fromWeb(blob.stream() as import('node:stream/web').ReadableStream));
         }),
-      ),
+      );
+    },
   );
-  app.delete<{ Params: { id: string; token: string } }>(`${PREFIX}/sources/:id/stream/:token`, (request, reply) =>
-    handle(reply, async () => {
-      streamingCatalog(request.params.id).closeStream(request.params.id, request.params.token);
-      return { ok: true };
-    }),
+  app.delete<{ Params: { id: string; token: string } }>(
+    `${PREFIX}/sources/:id/stream/:token`,
+    async (request, reply) => {
+      const { apk, mangayomi } = await resolveRuntime(request);
+      return handle(reply, async () => {
+        streamingCatalog(request.params.id, apk, mangayomi).closeStream(request.params.id, request.params.token);
+        return { ok: true };
+      });
+    },
   );
 
-  app.post<{ Params: { id: string } }>(`${PREFIX}/sources/:id/cover`, { bodyLimit: 4096 }, (request, reply) =>
-    handle(reply, () =>
+  app.post<{ Params: { id: string } }>(`${PREFIX}/sources/:id/cover`, { bodyLimit: 4096 }, async (request, reply) => {
+    const { catalog, apk, mangayomi } = await resolveRuntime(request);
+    return handle(reply, () =>
       withCancellation(request, reply, async (signal) => {
         if (!object(request.body) || typeof request.body.workId !== 'string')
           return reply.code(400).send({ error: 'invalid_source_input' });
@@ -463,11 +570,47 @@ export async function registerExtensionPackageRoutes(
         reply.header('Content-Type', blob.type).header('Content-Length', blob.size);
         return reply.send(Readable.fromWeb(blob.stream() as import('node:stream/web').ReadableStream));
       }),
-    ),
-  );
+    );
+  });
   if (stageImageImport)
-    registerPreparedSourceImages(app, registry, () => catalog.refresh(), stageImageImport, handle, withCancellation);
+    registerPreparedSourceImages(
+      app,
+      fallback?.registry,
+      async () => fallback?.catalog.refresh(),
+      stageImageImport,
+      handle,
+      withCancellation,
+      async (request) => {
+        const runtime = await resolveRuntime(request);
+        return {
+          store: runtime.preparedImages,
+          registry: runtime.registry,
+          refresh: () => runtime.catalog.refresh(),
+          stage: (file, input, signal) => stageImageImport(file, input, signal, request),
+        };
+      },
+    );
   if (documentImports)
-    registerPreparedSourceDocuments(app, registry, () => catalog.refresh(), documentImports, handle, withCancellation);
-  return catalog;
+    registerPreparedSourceDocuments(
+      app,
+      fallback?.registry,
+      async () => fallback?.catalog.refresh(),
+      documentImports,
+      handle,
+      withCancellation,
+      async (request) => {
+        const runtime = await resolveRuntime(request);
+        return {
+          store: runtime.preparedDocuments,
+          registry: runtime.registry,
+          refresh: () => runtime.catalog.refresh(),
+          assembly: runtime.assembly,
+          imports: {
+            read: (bookId, expected, signal) => documentImports.read(bookId, expected, signal, request),
+            stage: (file, input, signal) => documentImports.stage(file, input, signal, request),
+          },
+        };
+      },
+    );
+  return fallback?.catalog;
 }

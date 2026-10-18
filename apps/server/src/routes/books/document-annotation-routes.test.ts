@@ -62,6 +62,9 @@ describe('hosted document annotations', () => {
       },
     } as unknown as pg.Pool;
     const app = Fastify();
+    app.addHook('onRequest', async (request) => {
+      request.principal = { userId: 'user_test', role: 'admin', authMethod: 'legacy-token' };
+    });
     await registerDocumentAnnotationRoutes(app, pool, testConfig());
     const annotation = {
       id: 'annotation_1',

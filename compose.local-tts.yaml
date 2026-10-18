@@ -3,33 +3,28 @@ services:
     environment:
       TTS_PROVIDER_DEFAULT: ${LOCAL_TTS_PROVIDER_DEFAULT:-local-endpoint}
       TTS_PROVIDER_ENABLED: ${LOCAL_TTS_PROVIDER_ENABLED:-local-endpoint}
-      TTS_LOCAL_ENDPOINT_MODEL_ID: ${TTS_LOCAL_ENDPOINT_MODEL_ID:-melotts-korean}
+      TTS_LOCAL_ENDPOINT_MODEL_ID: ${TTS_LOCAL_ENDPOINT_MODEL_ID:-supertonic-3-ko}
       TTS_LOCAL_ENDPOINT_URL: http://tts-model:9010/synthesize
-      TTS_LOCAL_ENDPOINT_VOICE_ID: ${TTS_LOCAL_ENDPOINT_VOICE_ID:-KR}
+      TTS_LOCAL_ENDPOINT_VOICE_ID: ${TTS_LOCAL_ENDPOINT_VOICE_ID:-M1}
       LOCAL_TTS_ALLOWED_HOSTS: tts-model
+      TTS_LOCAL_ENDPOINT_MAX_INPUT_CHARACTERS: 1000
 
   worker:
     environment:
       TTS_PROVIDER_DEFAULT: ${LOCAL_TTS_PROVIDER_DEFAULT:-local-endpoint}
       TTS_PROVIDER_ENABLED: ${LOCAL_TTS_PROVIDER_ENABLED:-local-endpoint}
-      TTS_LOCAL_ENDPOINT_MODEL_ID: ${TTS_LOCAL_ENDPOINT_MODEL_ID:-melotts-korean}
+      TTS_LOCAL_ENDPOINT_MODEL_ID: ${TTS_LOCAL_ENDPOINT_MODEL_ID:-supertonic-3-ko}
       TTS_LOCAL_ENDPOINT_URL: http://tts-model:9010/synthesize
-      TTS_LOCAL_ENDPOINT_VOICE_ID: ${TTS_LOCAL_ENDPOINT_VOICE_ID:-KR}
+      TTS_LOCAL_ENDPOINT_VOICE_ID: ${TTS_LOCAL_ENDPOINT_VOICE_ID:-M1}
       LOCAL_TTS_ALLOWED_HOSTS: tts-model
+      TTS_LOCAL_ENDPOINT_MAX_INPUT_CHARACTERS: 1000
 
   tts-model:
     build:
       context: .
-      dockerfile: deploy/local-tts.Dockerfile
-      args:
-        MELOTTS_COMMIT: ${MELOTTS_COMMIT:-209145371cff8fc3bd60d7be902ea69cbdb7965a}
+      dockerfile: deploy/plain-tts.Dockerfile
     environment:
-      HF_HOME: /models/huggingface
-      MELOTTS_DEVICE: ${MELOTTS_DEVICE:-cpu}
-      MELOTTS_LANGUAGE: ${MELOTTS_LANGUAGE:-KR}
-      MELOTTS_MODEL_ID: ${TTS_LOCAL_ENDPOINT_MODEL_ID:-melotts-korean}
-      MELOTTS_MAX_TEXT_CHARACTERS: ${MELOTTS_MAX_TEXT_CHARACTERS:-20000}
-      PORT: 9010
+      MODEL_AUTO_INSTALL: 'true'
     volumes:
       - local-tts-models:/models
     expose:
@@ -49,7 +44,10 @@ services:
     init: true
     stop_grace_period: 30s
     restart: unless-stopped
-    mem_limit: ${LOCAL_TTS_MEMORY_LIMIT:-4g}
+    cpus: 4
+    security_opt: ['no-new-privileges:true']
+    cap_drop: [ALL]
+    mem_limit: ${LOCAL_TTS_MEMORY_LIMIT:-1536m}
     logging:
       driver: json-file
       options:

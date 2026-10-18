@@ -152,7 +152,7 @@ it('adds ordered remote neighbors without mutating persisted chapters and opens 
 
 it('joins the background import when next is pressed and exposes both phases', async () => {
   const h = setup();
-  let prefetch!: Promise<void>;
+  let prefetch!: ReturnType<typeof h.current.prefetch>;
   await act(async () => {
     prefetch = h.current.prefetch(item);
   });
@@ -174,7 +174,7 @@ it('joins the background import when next is pressed and exposes both phases', a
 it('retains home/library prefetch while another import is busy, and joins it on navigation', async () => {
   const h = setup();
   h.canImport.mockReturnValue(false);
-  let prefetch!: Promise<void>;
+  let prefetch!: ReturnType<typeof h.current.prefetch>;
   let opening!: Promise<unknown>;
   await act(async () => {
     prefetch = h.current.prefetch(item);
@@ -217,7 +217,7 @@ it('does not import again if a different batch saves the queued episode', async 
   const h = setup();
   h.canImport.mockReturnValue(false);
   h.options.prefetchChapter = vi.fn();
-  let prefetch!: Promise<void>;
+  let prefetch!: ReturnType<typeof h.current.prefetch>;
   await act(async () => {
     prefetch = h.current.prefetch(item);
   });
@@ -226,7 +226,9 @@ it('does not import again if a different batch saves the queued episode', async 
     h.canImport.mockReturnValue(true);
     h.rerender();
   });
-  await act(async () => prefetch);
+  await act(async () => {
+    await prefetch;
+  });
   expect(h.importItems).not.toHaveBeenCalled();
   expect(h.options.prefetchChapter).toHaveBeenCalledWith(h.novel, expect.anything());
 });
@@ -287,3 +289,15 @@ it.each([true, false])(
     expect(fallback).not.toHaveBeenCalled();
   },
 );
+
+it('returns prepared next-chapter metadata without opening the reader', async () => {
+  const h = setup(true);
+  let prepared: Awaited<ReturnType<typeof h.current.prefetch>>;
+  await act(async () => {
+    prepared = await h.current.prefetch(item);
+  });
+  expect(prepared?.novel.id).toBe(h.novel.id);
+  expect(prepared?.chapter.documentSectionId).toBe(item.key.remoteId);
+  expect(prepared?.chapters).toContainEqual(prepared?.chapter);
+  expect(h.options.openNovel).not.toHaveBeenCalled();
+});

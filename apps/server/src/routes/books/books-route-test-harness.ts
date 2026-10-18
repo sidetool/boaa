@@ -28,6 +28,9 @@ export function testConfig(): ServerConfig {
 
 export async function appWithBooks(pool: pg.Pool) {
   const app = Fastify({ logger: false });
+  app.addHook('onRequest', async (request) => {
+    request.principal = { userId: 'user_test', role: 'admin', authMethod: 'legacy-token' };
+  });
   await registerBookRoutes(app, pool, testConfig());
   return app;
 }

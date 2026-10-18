@@ -1,12 +1,8 @@
+import { useSourceWorkReadingTime } from './use-source-work-reading-time';
 import 'fake-indexeddb/auto';
 import { act, create } from 'react-test-renderer';
 import { afterEach, expect, it, vi } from 'vitest';
-import {
-  clearSourceWorkReadingTime,
-  sourceWorkReadingSeconds,
-  sourceWorkSessionId,
-  useSourceWorkReadingTime,
-} from './source-work-reading-time';
+import { clearSourceWorkReadingTime, sourceWorkReadingSeconds, sourceWorkSessionId } from './source-work-reading-time';
 
 afterEach(() => {
   vi.useRealTimers();

@@ -1,4 +1,4 @@
-import { spawn } from 'node:child_process';
+import { spawnWithBudget } from './process-budget.mjs';
 import { randomUUID } from 'node:crypto';
 
 const methods = new Set([
@@ -36,9 +36,11 @@ export class ApkWorkerSupervisor {
       chaptersTimeoutMs = timeoutMs,
       idleMs = 10 * 60 * 1000,
       queueLimit = 32,
+      processBudget,
     } = {},
   ) {
-    this.launch = () => spawn(command, args, { cwd, env, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
+    this.launch = () =>
+      spawnWithBudget(command, args, { cwd, env, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true }, processBudget);
     this.timeoutMs = timeoutMs;
     this.pagesTimeoutMs = pagesTimeoutMs;
     this.chaptersTimeoutMs = chaptersTimeoutMs;
@@ -140,8 +142,8 @@ export class ApkWorkerSupervisor {
             : this.timeoutMs,
       );
       this.#child.stdin.write(task.frame);
-    } catch {
-      this.#fail('apk_worker_unavailable');
+    } catch (error) {
+      this.#fail(error?.message === 'apk_worker_busy' ? 'apk_worker_busy' : 'apk_worker_unavailable');
     }
   }
   #stop() {

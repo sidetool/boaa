@@ -131,8 +131,22 @@ export function useSourceAutomaticDownload(input: {
           completeSeries: true,
           detail: page.detail ? { ...page.detail, thumbnailUrl: undefined } : undefined,
           fetchedAt: new Date(sourcePageTime(page)).toISOString(),
-          expiresAt: new Date(sourcePageTime(page) + sourceCachePolicy(input).fresh).toISOString(),
-          retainUntil: new Date(sourcePageTime(page) + sourceCachePolicy(input).keep).toISOString(),
+          expiresAt: new Date(
+            sourcePageTime(page) +
+              sourceCachePolicy(
+                input,
+                false,
+                current.settingsScope?.startsWith('hosted-account:') ? current.settingsScope : undefined,
+              ).fresh,
+          ).toISOString(),
+          retainUntil: new Date(
+            sourcePageTime(page) +
+              sourceCachePolicy(
+                input,
+                false,
+                current.settingsScope?.startsWith('hosted-account:') ? current.settingsScope : undefined,
+              ).keep,
+          ).toISOString(),
           scope: current.settingsScope,
           schemaVersion: 1,
         });

@@ -1,6 +1,11 @@
+import { WebNovelMetadataCollectorBroker } from './services/webnovel-metadata-collector-broker';
+import { WebNovelMetadataCollectorClient } from './services/webnovel-metadata-collector-client';
+import { accountStorage } from './storage/account-storage';
+import { ExtensionEnablementStore } from './extensions/extension-enablement-store';
 import './platform/brand-storage-init';
 import { PlatformPluginProvider } from './extensions/platform/PlatformPluginProvider';
-import React from 'react';
+import React, { useEffect, useState, useRef } from 'react';
+import type { SelfHostSession } from './features/auth/self-host-session';
 import { EmbeddedServerGate, type EmbeddedServerConnection } from './platform/EmbeddedServerGate';
 import { createReaderRuntime } from './repositories/reader-runtime';
 import ReactDOM from 'react-dom/client';
@@ -16,7 +21,6 @@ import { DesktopRemoteHome, DesktopServerChoice } from './platform/DesktopServer
 import { readDesktopServerSelection, type DesktopServerSelection } from './platform/desktop-server-selection';
 import { detectPlatformRuntime } from './platform/runtime';
 import { desktopGoogleSession } from './platform/desktop-google-session';
-import { googleSession } from './cloud-vault/google/google-session';
 import { clearWebAppRuntimeState } from './platform/web-app-cache';
 import { createPlatformWebNovelMetadataCollector } from './platform/webnovel-metadata-collector';
 import './styles/tokens.css';
@@ -76,6 +80,46 @@ function registerWebAppServiceWorker(): void {
   });
 }
 
+function AuthenticatedApplication({ session }: { session: SelfHostSession }) {
+  const [runtime] = useState(() =>
+    createAppRuntime({
+      readerRuntimeFactory: () => createReaderRuntime({ mode: 'remote', apiBaseUrl: session.apiBaseUrl, session }),
+      extensionRuntimeFactory: () => {
+        const storage = accountStorage(localStorage, session.storageScope, session.signal);
+        const client = new WebNovelMetadataCollectorClient(
+          new URL(`${session.apiBaseUrl}/integrations/webnovel-metadata`, location.origin).href,
+          session.fetch.bind(session),
+          { credentials: 'same-origin', allowHttp: true },
+        );
+        return createAppExtensionRuntime({
+          enablementStore: new ExtensionEnablementStore(storage),
+          webNovelMetadataCollector: new WebNovelMetadataCollectorBroker({
+            storage,
+            managedRuntime: { client, stop: async () => undefined },
+          }),
+        });
+      },
+    }),
+  );
+  const mounted = useRef(false);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      queueMicrotask(() => {
+        if (!mounted.current) runtime.dispose?.();
+      });
+    };
+  }, [runtime]);
+  return (
+    <RuntimeProvider runtime={runtime}>
+      <PlatformPluginProvider runtime={runtime.readerRuntime}>
+        <App />
+      </PlatformPluginProvider>
+    </RuntimeProvider>
+  );
+}
+
 async function startApp(): Promise<void> {
   const platformRuntime = detectPlatformRuntime();
   const embedded = platformRuntime.kind === 'tauri-desktop' && import.meta.env.VITE_DESKTOP_EMBEDDED_SERVER === 'true';
@@ -88,7 +132,7 @@ async function startApp(): Promise<void> {
       selectionError = String(error instanceof Error ? error.message : error);
     }
   }
-  if (!embedded || desktopSelection?.mode === 'embedded') {
+  if (platformRuntime.hasTauri && (!embedded || desktopSelection?.mode === 'embedded')) {
     try {
       await initializeAppCredentialStore();
     } catch (error) {
@@ -148,7 +192,6 @@ async function startApp(): Promise<void> {
     });
 
     if (platformRuntime.kind === 'tauri-desktop') void desktopGoogleSession.restore();
-    else if (platformRuntime.kind === 'browser') void googleSession.restore();
 
     return (
       <RuntimeProvider runtime={runtime}>
@@ -173,6 +216,10 @@ async function startApp(): Promise<void> {
         ) : (
           <DesktopRemoteHome selection={desktopSelection} configurationError={selectionError} />
         )
+      ) : platformRuntime.kind === 'browser' && import.meta.env.VITE_READER_BACKEND === 'remote' ? (
+        <SelfHostAccountGate apiBaseUrl={(import.meta.env.VITE_API_BASE_URL as string | undefined) ?? '/api'}>
+          {(session) => <AuthenticatedApplication key={session.epoch} session={session} />}
+        </SelfHostAccountGate>
       ) : (
         renderReader()
       )}

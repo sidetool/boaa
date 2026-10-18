@@ -1,3 +1,4 @@
+import { useAccountStorage } from '../auth/use-account-storage';
 import { readBrandStorage, writeBrandStorage } from '@boaa/extension-contracts/brand-compat';
 import { useState } from 'react';
 import type { ReadingProfile, ReadingProfileOverride } from '../../domain/types';
@@ -12,10 +13,10 @@ export interface ReaderThemePreset {
   readonly brightness: number;
 }
 
-function loadPresets(): ReaderThemePreset[] {
+function loadPresets(storage: Storage): ReaderThemePreset[] {
   if (typeof window === 'undefined') return [];
   try {
-    const parsed = JSON.parse(readBrandStorage(window.localStorage, STORAGE_KEY) ?? '[]') as unknown;
+    const parsed = JSON.parse(readBrandStorage(storage, STORAGE_KEY) ?? '[]') as unknown;
     if (!Array.isArray(parsed)) return [];
     return parsed.filter(
       (item): item is ReaderThemePreset =>
@@ -32,9 +33,9 @@ function loadPresets(): ReaderThemePreset[] {
   }
 }
 
-function storePresets(presets: readonly ReaderThemePreset[]): boolean {
+function storePresets(presets: readonly ReaderThemePreset[], storage: Storage): boolean {
   try {
-    writeBrandStorage(window.localStorage, STORAGE_KEY, JSON.stringify(presets));
+    writeBrandStorage(storage, STORAGE_KEY, JSON.stringify(presets));
     return true;
   } catch {
     return false;
@@ -48,7 +49,8 @@ export interface ReaderThemePresetsOptions {
   readonly updateProfile: (patch: ReadingProfileOverride) => void;
 }
 export function useReaderThemePresets({ profile, foreground, background, updateProfile }: ReaderThemePresetsOptions) {
-  const [presets, setPresets] = useState(loadPresets);
+  const storage = useAccountStorage();
+  const [presets, setPresets] = useState(() => loadPresets(storage));
   const [name, setName] = useState('');
   const [error, setError] = useState<'save_failed'>();
   const [editing, setEditing] = useState<string>();
@@ -69,7 +71,7 @@ export function useReaderThemePresets({ profile, foreground, background, updateP
         brightness: profile.brightness,
       },
     ];
-    if (!storePresets(next)) {
+    if (!storePresets(next, storage)) {
       setError('save_failed');
       return;
     }
@@ -79,7 +81,7 @@ export function useReaderThemePresets({ profile, foreground, background, updateP
   };
   const remove = (id: string) => {
     const next = presets.filter((preset) => preset.id !== id);
-    if (!storePresets(next)) {
+    if (!storePresets(next, storage)) {
       setError('save_failed');
       return;
     }
@@ -101,7 +103,7 @@ export function useReaderThemePresets({ profile, foreground, background, updateP
     const draft = (target?.name ?? renameDraft).trim();
     if (!id || !draft || presets.some((p) => p.id !== id && p.name === draft)) return;
     const next = presets.map((p) => (p.id === id ? { ...p, name: draft } : p));
-    if (!storePresets(next)) {
+    if (!storePresets(next, storage)) {
       setError('save_failed');
       return;
     }

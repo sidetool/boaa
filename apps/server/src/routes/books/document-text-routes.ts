@@ -1,3 +1,4 @@
+import { requestOwnerConfig } from '../../services/owner-context.js';
 import type { FastifyInstance } from 'fastify';
 import pg from 'pg';
 import type { DocumentTextBlock, DocumentTextRevision } from '@boaa/contracts';
@@ -140,9 +141,12 @@ export async function registerDocumentTextRoutes(
   pool: pg.Pool,
   config: ServerConfig,
 ): Promise<void> {
+  const deploymentConfig = config;
   app.put<{ Params: { bookId: string; pageIndex: string }; Body: unknown }>(
     '/api/books/:bookId/document-text/pages/:pageIndex',
     async (request, reply) => {
+      const config = requestOwnerConfig(deploymentConfig, request);
+
       const pageIndex = Number(request.params.pageIndex);
       if (!Number.isInteger(pageIndex) || pageIndex < 0) return reply.code(400).send({ error: 'invalid page index' });
       const parsed = parseDocumentTextPage(request.params.bookId, pageIndex, request.body);

@@ -78,7 +78,11 @@ export function useSourceReaderCatalog(
       cached = await current.state.getCachePage(id).catch(() => undefined);
       abort.signal.throwIfAborted();
       assertConnection();
-      const policy = sourceCachePolicy(input);
+      const policy = sourceCachePolicy(
+        input,
+        false,
+        options.settingsScope?.startsWith('hosted-account:') ? options.settingsScope : undefined,
+      );
       if (!cached?.completeSeries || cached.nextCursor || Date.parse(cached.fetchedAt) + policy.keep <= Date.now())
         cached = undefined;
       if (cached) {
@@ -140,7 +144,7 @@ export function useSourceReaderCatalog(
       clearTimeout(timer);
       if (onAbort) abort.signal.removeEventListener('abort', onAbort);
     }
-  }, [key]);
+  }, [key, options.settingsScope]);
   useEffect(() => {
     if (detailLoading) return;
     void run().catch(() => undefined);

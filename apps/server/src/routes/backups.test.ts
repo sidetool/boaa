@@ -75,7 +75,11 @@ it('authenticates issue/inspect/restore, streams past the default body limit, an
     expect(restored.statusCode, restored.body).toBe(200);
     const parsed = vi.mocked(restoreHostedBackup).mock.calls.at(-1)![2];
     expect('assetBlobs' in parsed && parsed.assetBlobs.get('source')).toBeInstanceOf(Blob);
-    expect(await readdir(path.join(directory, 'backup-staging'))).toEqual([]);
+    expect(
+      await readdir(
+        path.join(directory, 'backup-staging', createHash('sha256').update(config.defaultUserId).digest('hex')),
+      ),
+    ).toEqual([]);
     expect((await app.inject({ method: 'POST', url: restoreUrl, headers })).statusCode).toBe(410);
   } finally {
     await app.close();

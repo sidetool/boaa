@@ -1,3 +1,4 @@
+import { useSelfHostCapability } from '../auth/self-host-account-api';
 import { AIAnalysisControls } from './AIAnalysisControls';
 import { AILabelCorrectionPanel } from './AILabelCorrectionPanel';
 import { CharacterGraphReviewPanel } from './CharacterGraphReviewPanel';
@@ -12,6 +13,19 @@ export type {
 
 export default function AIAddonPanel({ data, actions, controller, managedWorkflow }: AIAddonPanelProps) {
   const activeWorkflowId = managedWorkflow.active?.id;
+  // AI analysis runs on the server's providers, which V1 keeps to the administrator.
+  const providers = useSelfHostCapability('useProviders');
+  if (!providers)
+    return (
+      <div className="panel-body ai-addon-body">
+        <header className="addon-intro">
+          <h3>AI 분석</h3>
+          <p className="muted">
+            이 서버의 AI 분석은 관리자 계정에서만 쓸 수 있어요. 듣기와 이 기기의 시스템 음성은 그대로 쓸 수 있어요.
+          </p>
+        </header>
+      </div>
+    );
   return (
     <div className="panel-body ai-addon-body">
       <header className="addon-intro">

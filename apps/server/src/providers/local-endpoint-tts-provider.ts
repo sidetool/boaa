@@ -26,12 +26,18 @@ export class LocalEndpointTTSProvider implements TTSSynthesisProvider {
   async listVoices(): Promise<TTSVoice[]> {
     const endpointUrl = this.options.endpointUrl.trim();
     if (!endpointUrl) throw new Error('TTS_LOCAL_ENDPOINT_URL is required for local-endpoint provider');
-    const response = await requestLocalEndpoint(localEndpointVoicesUrl(endpointUrl), { method: 'GET' }, this.options);
-    if (!response.ok) {
-      throw new Error(`Local TTS voices request failed with status ${response.status}`);
+    const signal = AbortSignal.timeout(10_000);
+    const urls = [localEndpointVoicesUrl(endpointUrl)];
+    if (isOpenAIEndpoint(endpointUrl)) urls.push(endpointUrl.replace(/\/audio\/speech\/?(?:\?.*)?$/, '/voices'));
+    for (const url of urls) {
+      const response = await requestLocalEndpoint(url, { method: 'GET', signal }, this.options);
+      if (response.status === 404 || response.status === 405) continue;
+      if (!response.ok) throw new Error(`Local TTS voices request failed with status ${response.status}`);
+      return parseLocalEndpointVoices(await response.json());
     }
-    const json = await response.json().catch(() => undefined);
-    return parseLocalEndpointVoices(json);
+    const voice = this.options.providerOptions?.voice;
+    if (typeof voice === 'string' && voice.trim()) return [{ id: voice.trim(), label: voice.trim(), lang: 'und' }];
+    throw new Error('This endpoint needs a voices API or a configured voice');
   }
 
   async synthesize(input: TTSSynthesisInput): Promise<TTSSynthesisResult> {
@@ -48,17 +54,28 @@ export class LocalEndpointTTSProvider implements TTSSynthesisProvider {
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          modelId: this.options.modelId,
-          text: input.text,
-          voiceProfile: input.voiceProfile,
-          voiceId: input.voiceProfile.providerVoiceId,
-          emotion: input.emotion,
-          tone: input.tone,
-          speed: input.speed ?? input.voiceProfile.speed,
-          format: input.format ?? 'mp3',
-          providerOptions,
-        }),
+        body: JSON.stringify(
+          isOpenAIEndpoint(endpointUrl)
+            ? {
+                model: this.options.modelId,
+                input: input.text,
+                voice: providerOptions.voice ?? input.voiceProfile.providerVoiceId,
+                speed: input.speed ?? input.voiceProfile.speed,
+                response_format: input.format === 'ogg' ? 'opus' : (input.format ?? 'mp3'),
+              }
+            : {
+                modelId: this.options.modelId,
+                text: input.text,
+                voiceProfile: input.voiceProfile,
+                voiceId: input.voiceProfile.providerVoiceId,
+                emotion: input.emotion,
+                tone: input.tone,
+                speed: input.speed ?? input.voiceProfile.speed,
+                // The bundled ONNX engine emits WAV; callers use the returned content type.
+                format: this.options.modelId === 'supertonic-3-ko' ? 'wav' : (input.format ?? 'mp3'),
+                providerOptions,
+              },
+        ),
         signal: input.signal,
       },
       this.options,
@@ -80,6 +97,10 @@ export class LocalEndpointTTSProvider implements TTSSynthesisProvider {
   }
 }
 
+function isOpenAIEndpoint(endpointUrl: string): boolean {
+  return /\/audio\/speech\/?$/.test(new URL(endpointUrl).pathname);
+}
+
 function localEndpointVoicesUrl(endpointUrl: string): string {
   const url = new URL(endpointUrl);
   url.pathname = url.pathname.replace(/\/[^/]*$/, '/voices');
@@ -89,9 +110,16 @@ function localEndpointVoicesUrl(endpointUrl: string): string {
 
 function parseLocalEndpointVoices(value: unknown): TTSVoice[] {
   const body = value && typeof value === 'object' ? (value as Record<string, unknown>) : undefined;
-  const voices = Array.isArray(value) ? value : Array.isArray(body?.voices) ? body.voices : [];
+  const voices = Array.isArray(value)
+    ? value
+    : Array.isArray(body?.voices)
+      ? body.voices
+      : Array.isArray(body?.data)
+        ? body.data
+        : [];
   return voices
     .map((voice): TTSVoice | undefined => {
+      if (typeof voice === 'string' && voice.trim()) return { id: voice, label: voice, lang: 'und' };
       const row = voice && typeof voice === 'object' ? (voice as Record<string, unknown>) : undefined;
       const id =
         typeof row?.id === 'string' && row.id.trim()

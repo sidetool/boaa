@@ -1,3 +1,4 @@
+import { requestOwnerConfig } from '../../services/owner-context.js';
 import type { FastifyInstance } from 'fastify';
 import pg from 'pg';
 import type { ServerConfig } from '../../config.js';
@@ -57,9 +58,15 @@ export async function registerLibraryManagementRoutes(
   pool: pg.Pool,
   config: ServerConfig,
 ): Promise<void> {
-  app.get('/api/shelves', async () => listHostedShelves(pool, config));
+  const deploymentConfig = config;
+  app.get('/api/shelves', async (request) => {
+    const config = requestOwnerConfig(deploymentConfig, request);
+    return listHostedShelves(pool, config);
+  });
 
   app.post<{ Body: { name?: unknown; color?: unknown } }>('/api/shelves', async (request, reply) => {
+    const config = requestOwnerConfig(deploymentConfig, request);
+
     if (
       typeof request.body?.name !== 'string' ||
       (request.body.color !== undefined && typeof request.body.color !== 'string')
@@ -74,6 +81,8 @@ export async function registerLibraryManagementRoutes(
   });
 
   app.put<{ Body: { order?: unknown } }>('/api/shelves/order', async (request, reply) => {
+    const config = requestOwnerConfig(deploymentConfig, request);
+
     const order = request.body?.order;
     if (
       !Array.isArray(order) ||
@@ -103,6 +112,8 @@ export async function registerLibraryManagementRoutes(
     Params: { shelfId: string };
     Body: { name?: unknown; color?: unknown; sortOrder?: unknown; expectedRevision?: unknown };
   }>('/api/shelves/:shelfId', async (request, reply) => {
+    const config = requestOwnerConfig(deploymentConfig, request);
+
     const { name, color, sortOrder, expectedRevision } = request.body ?? {};
     if (
       (name !== undefined && typeof name !== 'string') ||
@@ -129,6 +140,8 @@ export async function registerLibraryManagementRoutes(
   app.delete<{ Params: { shelfId: string }; Body: { expectedRevision?: unknown } }>(
     '/api/shelves/:shelfId',
     async (request, reply) => {
+      const config = requestOwnerConfig(deploymentConfig, request);
+
       const expected = request.body?.expectedRevision;
       if (expected !== undefined && !Number.isSafeInteger(expected)) {
         return reply.code(400).send({ error: 'invalid shelf revision' });
@@ -146,6 +159,8 @@ export async function registerLibraryManagementRoutes(
       method,
       url: '/api/shelves/:shelfId/books/:bookId',
       handler: async (request, reply) => {
+        const config = requestOwnerConfig(deploymentConfig, request);
+
         try {
           await setHostedShelfMembership(pool, config, request.params.shelfId, request.params.bookId, method === 'PUT');
           return { ok: true };
@@ -157,6 +172,8 @@ export async function registerLibraryManagementRoutes(
   }
 
   app.post<{ Body: unknown }>('/api/library/batch', async (request, reply) => {
+    const config = requestOwnerConfig(deploymentConfig, request);
+
     const body = record(request.body);
     const command = batchCommand(body?.command);
     const targets = batchTargets(body?.targets);

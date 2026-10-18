@@ -122,7 +122,17 @@ export async function runSourceCatalogQuery(request: SourceCatalogRequest): Prom
   let cached: ExternalCatalogCachePage | undefined;
   try {
     cached = await port.state.getCachePage(id).catch(() => undefined);
-    if (cached && Date.parse(cached.fetchedAt) + sourceCachePolicy(input).keep <= Date.now()) cached = undefined;
+    if (
+      cached &&
+      Date.parse(cached.fetchedAt) +
+        sourceCachePolicy(
+          input,
+          false,
+          port.settingsScope?.startsWith('hosted-account:') ? port.settingsScope : undefined,
+        ).keep <=
+        Date.now()
+    )
+      cached = undefined;
     const snapshot = !append ? cached : undefined;
     if (!connectionIsCurrent()) {
       setLoading(false);
@@ -168,7 +178,13 @@ export async function runSourceCatalogQuery(request: SourceCatalogRequest): Prom
         !forceRefresh &&
         (!snapshot.items.some((item) => item.release && item.collection) || snapshot.completeSeries === true) &&
         Date.parse(snapshot.expiresAt) > Date.now() &&
-        Date.parse(snapshot.fetchedAt) + sourceCachePolicy(input).fresh > Date.now()
+        Date.parse(snapshot.fetchedAt) +
+          sourceCachePolicy(
+            input,
+            false,
+            port.settingsScope?.startsWith('hosted-account:') ? port.settingsScope : undefined,
+          ).fresh >
+          Date.now()
       ) {
         setCatalogLoading(false);
         return true;
@@ -287,7 +303,14 @@ export async function runSourceCatalogQuery(request: SourceCatalogRequest): Prom
     cached ??= await port.state.getCachePage(id).catch(() => undefined);
     if (
       !transientSourceFailure(error) ||
-      (cached && Date.parse(cached.fetchedAt) + sourceCachePolicy(input).keep <= Date.now())
+      (cached &&
+        Date.parse(cached.fetchedAt) +
+          sourceCachePolicy(
+            input,
+            false,
+            port.settingsScope?.startsWith('hosted-account:') ? port.settingsScope : undefined,
+          ).keep <=
+          Date.now())
     )
       cached = undefined;
     if (!connectionIsCurrent()) return undefined;

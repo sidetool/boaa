@@ -1,4 +1,4 @@
-import { readBrandStorage, writeBrandStorage } from '@boaa/extension-contracts/brand-compat';
+import { readBrandStorage } from '@boaa/extension-contracts/brand-compat';
 import { externalItemKeyId, type ExternalItemKey } from './contracts';
 import type { ExternalSourceLocalState } from './local-state';
 import {
@@ -10,9 +10,16 @@ import {
 
 const storageKey = 'boaa.source-stream-pending-visits.v1';
 type PendingVisit = { scope: string; preference: SourceReleasePreference };
-function entries(): PendingVisit[] {
+function scopedKey(scope?: string) {
+  return scope?.startsWith('hosted-account:') ? `${storageKey}:${scope}` : storageKey;
+}
+function entries(scope?: string): PendingVisit[] {
   try {
-    const value: unknown = JSON.parse(readBrandStorage(localStorage, storageKey) ?? '[]');
+    const value: unknown = JSON.parse(
+      (scopedKey(scope) === storageKey
+        ? readBrandStorage(localStorage, storageKey)
+        : localStorage.getItem(scopedKey(scope))) ?? '[]',
+    );
     if (!Array.isArray(value)) return [];
     return value
       .filter((entry): entry is PendingVisit => {
@@ -40,9 +47,9 @@ function entries(): PendingVisit[] {
     return [];
   }
 }
-function write(value: PendingVisit[]) {
+function write(value: PendingVisit[], scope?: string) {
   try {
-    writeBrandStorage(localStorage, storageKey, JSON.stringify(value.slice(-200)));
+    localStorage.setItem(scopedKey(scope), JSON.stringify(value.slice(-200)));
   } catch {
     /* The normal repository still handles saves when browser storage is unavailable. */
   }
@@ -71,20 +78,24 @@ export function stageSourceStreamVisit(
     ...(lastReadWork ? { lastReadWork } : {}),
     updatedAt: readAt,
   };
-  write([
-    ...entries().filter((entry) => entry.scope !== (scope ?? 'local') || entry.preference.id !== id),
-    { scope: scope ?? 'local', preference },
-  ]);
+  write(
+    [
+      ...entries(scope).filter((entry) => entry.scope !== (scope ?? 'local') || entry.preference.id !== id),
+      { scope: scope ?? 'local', preference },
+    ],
+    scope,
+  );
 }
 
 export function acknowledgeSourceStreamVisit(scope: string | undefined, source: ExternalItemKey, readAt: string): void {
   write(
-    entries().filter(
+    entries(scope).filter(
       (entry) =>
         entry.scope !== (scope ?? 'local') ||
         externalItemKeyId(entry.preference.source) !== externalItemKeyId(source) ||
         entry.preference.lastReadAt !== readAt,
     ),
+    scope,
   );
 }
 
@@ -97,7 +108,7 @@ export async function recoverSourceStreamVisits(
   >,
 ): Promise<SourceReleasePreference[]> {
   const preferences = new Map(((await state.listReleasePreferences?.()) ?? []).map((p) => [p.id, p]));
-  for (const { preference: pending } of entries().filter((entry) => entry.scope === (scope ?? 'local'))) {
+  for (const { preference: pending } of entries(scope).filter((entry) => entry.scope === (scope ?? 'local'))) {
     const current = preferences.get(pending.id);
     const superseded =
       current &&
@@ -126,7 +137,7 @@ export async function recoverSourceStreamVisits(
 
 /** Snapshot interrupted visits for atomic last-association history retirement. */
 export function pendingSourceStreamPreferences(scope: string | undefined): SourceReleasePreference[] {
-  return entries()
+  return entries(scope)
     .filter((entry) => entry.scope === (scope ?? 'local'))
     .map((entry) => entry.preference);
 }

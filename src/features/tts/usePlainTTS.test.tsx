@@ -18,7 +18,7 @@ afterEach(() => {
   renderer = undefined;
 });
 
-function harness(speak: TTSProvider['speak']) {
+function harness(speak: TTSProvider['speak'], overrides: Partial<Parameters<typeof usePlainTTS>[0]> = {}) {
   let hook!: ReturnType<typeof usePlainTTS>;
   const onError = vi.fn();
   const systemTTS: TTSProvider = {
@@ -44,6 +44,7 @@ function harness(speak: TTSProvider['speak']) {
     controller: { stopAll: vi.fn() } as unknown as Parameters<typeof usePlainTTS>[0]['controller'],
     systemTTS,
     onError,
+    ...overrides,
   };
   function Harness() {
     hook = usePlainTTS(input);
@@ -129,4 +130,30 @@ describe('plain device voice preview', () => {
     expect(view.onError).toHaveBeenCalledExactlyOnceWith('Device callback failure');
     expect(view.hook.previewBusy).toBe(false);
   });
+});
+
+it('does not preview a paid fallback when the default server engine is unavailable', async () => {
+  const synthesizePlainTTS = vi.fn();
+  const client = {
+    listPlainTTSVoices: vi.fn(async () => ({
+      available: true,
+      revision: 'v1',
+      defaultVoiceId: '',
+      voices: [{ id: 'gemini-tts:Kore', label: 'Kore', lang: 'und', paid: true }],
+    })),
+    synthesizePlainTTS,
+  } as unknown as Parameters<typeof usePlainTTS>[0]['client'];
+  const f = harness(vi.fn(), {
+    client,
+    settings: { ...DEFAULT_TTS_PLAYBACK_SETTINGS, mode: 'plain', voiceSource: 'server', serverVoiceId: undefined },
+  });
+  await act(async () => {
+    await f.hook.refresh();
+  });
+  expect(f.hook.ready).toBe(false);
+  await act(async () => {
+    await f.hook.preview();
+  });
+  expect(synthesizePlainTTS).not.toHaveBeenCalled();
+  expect(f.onError).toHaveBeenCalledWith('서버 목소리를 선택하세요.');
 });

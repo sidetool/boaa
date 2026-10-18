@@ -23,7 +23,7 @@ import {
   type SourcePreferenceValue,
 } from '../../../../packages/extension-contracts/source-preferences.js';
 
-export function createSourcePreferences(vault: SourceCredentialVault) {
+export function createSourcePreferences(vault: SourceCredentialVault, allowPrivateNetwork = true) {
   const key = (pkg: string, source: string, epoch: string) => JSON.stringify([pkg, `preferences:${source}`, epoch]);
   const read = (
     pkg: string,
@@ -53,7 +53,8 @@ export function createSourcePreferences(vault: SourceCredentialVault) {
         .map((field) => new URL(String(saved.values[field.key])).origin);
       return {
         ...saved,
-        privateOrigins: [...new Set([...saved.privateOrigins, ...serviceOrigins])],
+        privateOrigins: allowPrivateNetwork ? [...new Set([...saved.privateOrigins, ...serviceOrigins])] : [],
+        networkOrigins: allowPrivateNetwork ? [] : serviceOrigins,
         values: Object.fromEntries(
           fields.flatMap((field) => {
             const value = saved.values[field.key] ?? field.defaultValue;
@@ -76,6 +77,7 @@ export function createSourcePreferences(vault: SourceCredentialVault) {
         throw new Error('invalid_source_preferences');
       const saved = read(pkg.manifest.extension.id, source, epoch);
       if (request.action === 'save') {
+        if (!allowPrivateNetwork && request.privateOrigins.length) throw new Error('invalid_source_preferences');
         if (saved.revision !== request.revision) throw new Error('source_preferences_conflict');
         applyProxyChanges(saved, request.changes);
         for (const [name, value] of Object.entries(request.changes)) {

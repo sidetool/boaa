@@ -333,8 +333,8 @@ BOAA는 이 원본 파일을 애플리케이션 수준에서 암호화하거나 
 ## 4. 로컬 TTS를 함께 실행하기
 
 로컬 TTS는 필수 서비스가 아니다. 현재 제공하는 `tts-model`은 Compose 연결을 바로 시험할 수 있도록
-만든 MeloTTS Korean CPU 레퍼런스 구현이다. 상용 음성 품질을 보장하는 모델 선택 기능과는 구분해야
-한다.
+만든 Supertonic 3 CPU/ONNX 실행기다. 남성 M1–M5, 여성 F1–F5의 열 가지 목소리를 일반 듣기에서 쓴다.
+화자 분석이나 음성 승인은 필요 없다.
 
 선택 모델의 source/Python 빌드가 실패해도 서재 서버를 사용할 수 있도록 한 번에 모두 빌드하지 않는다.
 핵심 서버를 먼저 시작하고, `tts-model` 이미지만 별도로 빌드한 뒤 성공했을 때 override 환경을 적용한다.
@@ -368,13 +368,23 @@ http://tts-model:9010/synthesize
 ```dotenv
 LOCAL_TTS_PROVIDER_DEFAULT=local-endpoint
 LOCAL_TTS_PROVIDER_ENABLED=local-endpoint
-MELOTTS_DEVICE=cpu
-MELOTTS_LANGUAGE=KR
+TTS_LOCAL_ENDPOINT_MODEL_ID=supertonic-3-ko
+TTS_LOCAL_ENDPOINT_VOICE_ID=M1
+LOCAL_TTS_MEMORY_LIMIT=1536m
 ```
 
-현재 sidecar는 `melotts-korean` 한 모델을 실행한다. `TTS_LOCAL_ENDPOINT_MODEL_ID` 이름만 바꾼다고 다른
-모델이 자동 설치되는 것은 아니다. 다른 모델을 사용하려면 동일한 `/voices`, `/synthesize` 계약을 구현한
-별도 이미지로 `tts-model` 서비스를 교체하면 된다.
+모델은 최초에 약 401 MB를 내려받고, 이후에는 검증 후 재사용한다. 기본 서버 이미지에는 넣지 않는다.
+MeloTTS에서 전환할 때 기존 `.env`의 `melotts-korean`/`KR` 재정의는 위 값으로 바꾸고 듣기에서 목소리를 다시 고른다.
+기존 volume의 이전 모델은 보존하며 새 실행기가 읽지 않는다. volume을 지울 필요는 없다.
+`compose.plain-tts.yaml`도 동일한 Supertonic 실행기를 제공하므로 두 override를 동시에 쓰지 않는다.
+
+외부 API도 **듣기 → TTS 엔진 연결**에서 키·모델을 저장하고 활성화하면 일반 듣기와 미리듣기에 쓸 수 있다.
+Gemini API 기본 모델은 `gemini-3.8-flash-lite-tts`이며, OpenAI·ElevenLabs·기존 Google 연결도 지원한다.
+사용료가 생길 수 있고, 선택한 엔진이 실패해도 다른 유료 엔진으로 자동 전환하지 않는다.
+다중 계정 v1에서는 관리자만 서버 TTS를 쓰며 회원의 기기 음성은 그대로 제공한다.
+별도 엔진은 BOAA `/synthesize` 또는 OpenAI 호환 `/v1/audio/speech` 주소로 연결한다.
+내부 호스트는 `LOCAL_TTS_ALLOWED_HOSTS`에 추가해야 한다. 설정·음성 목록 계약은
+[`deploy/plain-tts/README.md`](../../deploy/plain-tts/README.md)를 참고한다.
 
 ## 5. WireGuard, LAN 또는 인터넷에서 접속하기
 

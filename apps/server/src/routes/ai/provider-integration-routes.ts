@@ -63,7 +63,7 @@ export async function registerProviderIntegrationRoutes(
   app.put<{
     Params: { scope: string; providerId: string; secretName: string };
     Body: { secretValue?: unknown };
-  }>('/api/provider-secrets/:scope/:providerId/:secretName', async (request, reply) => {
+  }>('/api/provider-secrets/:scope/:providerId/:secretName', { bodyLimit: 131072 }, async (request, reply) => {
     const scope = providerSettingsScope(request.params.scope);
     const secretName = providerSecretName(request.params.secretName);
     const providerId = request.params.providerId;

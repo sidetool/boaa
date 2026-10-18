@@ -1,3 +1,4 @@
+import { requestOwnerConfig } from '../../services/owner-context.js';
 import type { FastifyInstance } from 'fastify';
 import pg from 'pg';
 import { integrityHash } from '@boaa/text-core/hash';
@@ -75,7 +76,10 @@ export async function registerReaderPersonalizationRoutes(
   pool: pg.Pool,
   config: ServerConfig,
 ): Promise<void> {
-  app.get('/api/fonts', async () => {
+  const deploymentConfig = config;
+  app.get('/api/fonts', async (request) => {
+    const config = requestOwnerConfig(deploymentConfig, request);
+
     const result = await pool.query(
       'select * from user_fonts where user_id = $1 order by family_label, updated_at desc',
       [config.defaultUserId],
@@ -84,6 +88,8 @@ export async function registerReaderPersonalizationRoutes(
   });
 
   app.get<{ Params: { fontId: string } }>('/api/fonts/:fontId/content', async (request, reply) => {
+    const config = requestOwnerConfig(deploymentConfig, request);
+
     const result = await pool.query('select * from user_fonts where id = $1 and user_id = $2', [
       request.params.fontId,
       config.defaultUserId,
@@ -101,6 +107,8 @@ export async function registerReaderPersonalizationRoutes(
     '/api/fonts/:fontId',
     { bodyLimit: MAX_FONT_BYTES },
     async (request, reply) => {
+      const config = requestOwnerConfig(deploymentConfig, request);
+
       if (!Buffer.isBuffer(request.body) || !request.body.length)
         return reply.code(400).send({ error: 'font_body_required' });
       const contentType = detectedFontType(request.body);
@@ -167,6 +175,8 @@ export async function registerReaderPersonalizationRoutes(
   app.patch<{ Params: { fontId: string }; Body: { familyLabel?: string; licenseNote?: string } }>(
     '/api/fonts/:fontId',
     async (request, reply) => {
+      const config = requestOwnerConfig(deploymentConfig, request);
+
       const familyLabel = request.body?.familyLabel?.trim().slice(0, 120);
       if (!familyLabel) return reply.code(400).send({ error: 'font_family_required' });
       const result = await pool.query(
@@ -184,6 +194,8 @@ export async function registerReaderPersonalizationRoutes(
   );
 
   app.delete<{ Params: { fontId: string } }>('/api/fonts/:fontId', async (request, reply) => {
+    const config = requestOwnerConfig(deploymentConfig, request);
+
     const result = await pool.query('delete from user_fonts where id = $1 and user_id = $2 returning storage_key', [
       request.params.fontId,
       config.defaultUserId,
@@ -194,6 +206,8 @@ export async function registerReaderPersonalizationRoutes(
   });
 
   app.post<{ Body: Record<string, unknown> }>('/api/reading-sessions', async (request, reply) => {
+    const config = requestOwnerConfig(deploymentConfig, request);
+
     const body = request.body ?? {};
     const startedAt = safeDate(body.startedAt);
     const endedAt = safeDate(body.endedAt);
@@ -216,7 +230,7 @@ export async function registerReaderPersonalizationRoutes(
     const result = await pool.query(
       `insert into reading_session_events
          (id,user_id,book_id,device_id,mode,started_at,ended_at,active_seconds,start_anchor,end_anchor,characters_advanced,operation_id)
-       values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+       select $1,$2,b.id,$4,$5,$6,$7,$8,$9,$10,$11,$12 from library_books b where b.id=$3 and b.user_id=$2
        on conflict (user_id, operation_id) do update set operation_id = excluded.operation_id returning *`,
       [
         body.id,
@@ -233,12 +247,15 @@ export async function registerReaderPersonalizationRoutes(
         body.operationId,
       ],
     );
+    if (!result.rows[0]) return reply.code(404).send({ error: 'book_not_found' });
     return { session: sessionRow(result.rows[0]) };
   });
 
   app.get<{ Querystring: { bookId?: string; from?: string; to?: string } }>(
     '/api/reading-sessions',
     async (request) => {
+      const config = requestOwnerConfig(deploymentConfig, request);
+
       const values: unknown[] = [config.defaultUserId];
       const where = ['user_id = $1'];
       if (request.query.bookId) {
@@ -262,6 +279,8 @@ export async function registerReaderPersonalizationRoutes(
   );
 
   app.delete<{ Querystring: { bookId?: string; before?: string } }>('/api/reading-sessions', async (request) => {
+    const config = requestOwnerConfig(deploymentConfig, request);
+
     const values: unknown[] = [config.defaultUserId];
     const where = ['user_id = $1'];
     if (request.query.bookId) {

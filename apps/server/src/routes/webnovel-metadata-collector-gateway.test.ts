@@ -12,6 +12,9 @@ afterEach(async () => {
 
 async function appWith(fetchImpl: typeof fetch, configured = true, remoteAuth = false, token?: string) {
   const app = Fastify();
+  app.addHook('onRequest', async (request) => {
+    request.principal = { userId: 'fixture-admin', role: 'admin', authMethod: 'legacy-token' };
+  });
   apps.push(app);
   const config = loadConfig(
     configured
@@ -98,6 +101,9 @@ describe('webnovel metadata collector gateway', () => {
   it('retains the existing bearer gate before reaching the collector', async () => {
     const fetchImpl = vi.fn<typeof fetch>(async () => Response.json(healthBody()));
     const app = Fastify();
+    app.addHook('onRequest', async (request) => {
+      request.principal = { userId: 'fixture-admin', role: 'admin', authMethod: 'legacy-token' };
+    });
     apps.push(app);
     const config = loadConfig({
       READER_AUTH_TOKEN: 'owner-token',

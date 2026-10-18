@@ -1,6 +1,7 @@
 import { ArchiveRestore, DatabaseBackup, FileArchive, Upload } from 'lucide-react';
 import { useRef } from 'react';
 import { taskProgressDetail, taskProgressLabel, taskProgressPercent } from '../../components/task-progress';
+import { useSelfHostCapability } from '../../features/auth/self-host-account-api';
 import type { BackupFeatureController } from '../../features/backup/useBackupController';
 import type { BackupConflictResolution } from '../../repositories/backup-repository';
 import { formatBytes, formatCount } from '../../utils/format';
@@ -43,6 +44,9 @@ function ResolutionSelect({
 export default function UiNextBackupSheet({ controller }: { controller: BackupFeatureController }) {
   const input = useRef<HTMLInputElement>(null);
   const { inspection, progress } = controller;
+  // Members can take their own library out; restoring stays with the administrator in this release.
+  const canExport = useSelfHostCapability('exportLibrary');
+  const canRestore = useSelfHostCapability('restoreLibrary');
   const percent = taskProgressPercent(progress);
   const label = progress ? taskProgressLabel(progress) : '준비 중';
   const detail = taskProgressDetail(progress);
@@ -58,9 +62,9 @@ export default function UiNextBackupSheet({ controller }: { controller: BackupFe
       open={controller.open}
       onClose={controller.closePanel}
       closeDisabled={controller.busy}
-      title="백업과 복원"
+      title={canRestore ? '백업과 복원' : '백업'}
       footer={
-        inspection ? (
+        inspection && canRestore ? (
           <button
             type="button"
             className="un-btn is-primary un-tools-wide"
@@ -97,40 +101,47 @@ export default function UiNextBackupSheet({ controller }: { controller: BackupFe
           )}
 
           <PrefGroup>
-            <Pref
-              title="백업 만들기"
-              help="책, 원본, 읽던 위치, 주석, 설정을 ZIP 하나로 저장해요."
-              control={
-                <button
-                  type="button"
-                  className="un-btn is-primary is-sm"
-                  disabled={controller.busy}
-                  onClick={() => void controller.exportBackup()}
-                >
-                  <DatabaseBackup size={15} />
-                  만들기
-                </button>
-              }
-            />
-            <Pref
-              title="백업에서 복원"
-              help="파일을 먼저 확인하고, 겹치는 책은 어떻게 할지 골라요."
-              control={
-                <button
-                  type="button"
-                  className="un-btn is-ghost is-sm"
-                  disabled={controller.busy}
-                  onClick={() => {
-                    if (controller.usesPlatformPicker) void controller.pickBackupFile();
-                    else input.current?.click();
-                  }}
-                >
-                  <Upload size={15} />
-                  파일 고르기
-                </button>
-              }
-            />
+            {canExport && (
+              <Pref
+                title="백업 만들기"
+                help="책, 원본, 읽던 위치, 주석, 설정을 ZIP 하나로 저장해요."
+                control={
+                  <button
+                    type="button"
+                    className="un-btn is-primary is-sm"
+                    disabled={controller.busy}
+                    onClick={() => void controller.exportBackup()}
+                  >
+                    <DatabaseBackup size={15} />
+                    만들기
+                  </button>
+                }
+              />
+            )}
+            {canRestore && (
+              <Pref
+                title="백업에서 복원"
+                help="파일을 먼저 확인하고, 겹치는 책은 어떻게 할지 골라요."
+                control={
+                  <button
+                    type="button"
+                    className="un-btn is-ghost is-sm"
+                    disabled={controller.busy}
+                    onClick={() => {
+                      if (controller.usesPlatformPicker) void controller.pickBackupFile();
+                      else input.current?.click();
+                    }}
+                  >
+                    <Upload size={15} />
+                    파일 고르기
+                  </button>
+                }
+              />
+            )}
           </PrefGroup>
+          {!canRestore && (
+            <Notice>백업에서 복원하기는 지금은 서버 관리자만 할 수 있어요. 내 백업 파일은 보관해 두세요.</Notice>
+          )}
           <input
             ref={input}
             type="file"
@@ -143,7 +154,7 @@ export default function UiNextBackupSheet({ controller }: { controller: BackupFe
             }}
           />
 
-          {inspection && (
+          {inspection && canRestore && (
             <PrefSection title="확인한 백업">
               <div className="un-tools-card un-tools-file">
                 <FileArchive size={20} aria-hidden="true" />

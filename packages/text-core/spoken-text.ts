@@ -1,3 +1,4 @@
+import { spokenFilterMatches } from './spoken-text-filter';
 import type {
   ReaderDocumentInlineSemantic,
   SpokenTextProjection,
@@ -185,18 +186,31 @@ function applyRules(units: Unit[], input: ProjectSpokenTextInput, skipped: Spoke
       skipped.push({ sourceStart, sourceEnd, ruleId: rule.id });
       return;
     }
-    if (rule.kind === 'replace_literal') {
-      let index = current.indexOf(rule.pattern);
-      while (index >= 0) {
-        const value = units.map((unit) => unit.char).join('');
-        const start = [...value.slice(0, index)].length;
-        const replacement = rule.replacement ?? '';
-        replaceUnits(units, start, start + [...rule.pattern].length, replacement, 'pronunciation');
-        index = units
-          .map((unit) => unit.char)
-          .join('')
-          .indexOf(rule.pattern, start + [...replacement].length);
+    if (rule.kind === 'replace_literal' || rule.kind === 'replace_regex') {
+      const output: Unit[] = [];
+      let unitIndex = 0;
+      let textOffset = 0;
+      for (const match of spokenFilterMatches(current, { ...rule, kind: rule.kind })) {
+        while (unitIndex < units.length && textOffset < match.start) {
+          const unit = units[unitIndex++];
+          output.push(unit);
+          textOffset += unit.char.length;
+        }
+        let sourceStart = units[unitIndex]?.sourceStart ?? units.at(-1)?.sourceEnd ?? input.sourceOffset ?? 0;
+        let sourceEnd = sourceStart;
+        while (unitIndex < units.length && textOffset < match.end) {
+          const unit = units[unitIndex++];
+          sourceStart = Math.min(sourceStart, unit.sourceStart);
+          sourceEnd = Math.max(sourceEnd, unit.sourceEnd);
+          textOffset += unit.char.length;
+        }
+        for (const char of match.replacement) output.push({ char, sourceStart, sourceEnd, transform: 'pronunciation' });
+        if (output.length > 100000) throw new Error('필터 교체 결과가 너무 길어요. 규칙을 확인해 주세요.');
       }
+      while (unitIndex < units.length) output.push(units[unitIndex++]);
+      units.splice(0, units.length);
+      // Avoid spreading a large paragraph into function arguments.
+      for (const unit of output) units.push(unit);
     }
   }
 }

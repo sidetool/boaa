@@ -1,4 +1,4 @@
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, FastifyRequest } from 'fastify';
 import type { ExtensionContributionId } from '@boaa/extension-contracts';
 import { isExternalSeriesProfile } from '@boaa/extension-contracts';
 import type { ExternalSourceRegistryPort } from '../../../../src/external-sources/app-external-source-registry.js';
@@ -18,8 +18,15 @@ import type { ServerImportInput } from '../services/stage-server-import.js';
 import type { registerPreparedSourceImages } from './prepared-source-images.js';
 
 export interface ServerDocumentImports {
-  read: ReadDocumentSeriesSnapshot;
-  stage(file: File, input: ServerImportInput, signal: AbortSignal): Promise<PreparedServerImport>;
+  read: (
+    ...args: [...Parameters<ReadDocumentSeriesSnapshot>, FastifyRequest?]
+  ) => ReturnType<ReadDocumentSeriesSnapshot>;
+  stage(
+    file: File,
+    input: ServerImportInput,
+    signal: AbortSignal,
+    request?: FastifyRequest,
+  ): Promise<PreparedServerImport>;
 }
 const context = { brokers: { get: () => undefined } };
 const record = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
@@ -61,28 +68,36 @@ export function validHostedDocumentAssembly(v: unknown, sourceId: string): v is 
 
 export function registerPreparedSourceDocuments(
   app: FastifyInstance,
-  registry: ExternalSourceRegistryPort,
+  registry: ExternalSourceRegistryPort | undefined,
   refresh: () => Promise<unknown>,
   imports: ServerDocumentImports,
   handle: Parameters<typeof registerPreparedSourceImages>[4],
   withCancellation: Parameters<typeof registerPreparedSourceImages>[5],
+  resolveRuntime?: (request: FastifyRequest) => Promise<{
+    store: PreparedImageDownloads;
+    registry: ExternalSourceRegistryPort;
+    refresh: () => Promise<unknown>;
+    imports: ServerDocumentImports;
+    assembly: { count: number };
+  }>,
 ) {
-  const store = new PreparedImageDownloads(16 * 1024 * 1024);
+  const store = resolveRuntime ? undefined : new PreparedImageDownloads(16 * 1024 * 1024);
+  const defaults = { store: store!, registry: registry!, refresh, imports, assembly: { count: 0 } };
   // At most two whole-book assemblies can occupy memory per owner/runtime.
-  let assembling = 0;
-  const status = (id: string) => {
+  const status = (id: string, registry: ExternalSourceRegistryPort) => {
     const result = registry.getExternalSourceStatus(id as ExtensionContributionId, context);
     if (result.state !== 'connected') throw new Error('package_source_unavailable');
     return result;
   };
-  const generation = (id: string) => {
-    const s = status(id);
+  const generation = (id: string, registry: ExternalSourceRegistryPort) => {
+    const s = status(id, registry);
     return JSON.stringify([s.accountConnectionId, s.connectionGeneration]);
   };
-  app.addHook('onClose', async () => store.close());
+  app.addHook('onClose', async () => store?.close());
   const prefix = '/api/extensions/sources/:id/prepared-documents';
-  app.post<{ Params: { id: string } }>(prefix, { bodyLimit: 16 * 1024 }, (request, reply) =>
-    handle(reply, () =>
+  app.post<{ Params: { id: string } }>(prefix, { bodyLimit: 16 * 1024 }, async (request, reply) => {
+    const { store, registry, refresh } = resolveRuntime ? await resolveRuntime(request) : defaults;
+    return handle(reply, () =>
       withCancellation(request, reply, async (signal) => {
         const body = request.body;
         const id = request.params.id;
@@ -95,8 +110,8 @@ export function registerPreparedSourceDocuments(
         )
           return reply.code(400).send({ error: 'invalid_source_input' });
         await refresh();
-        const before = generation(id);
-        if ((body.key.accountConnectionId ?? '') !== (status(id).accountConnectionId ?? ''))
+        const before = generation(id, registry);
+        if ((body.key.accountConnectionId ?? '') !== (status(id, registry).accountConnectionId ?? ''))
           throw new Error('package_source_unavailable');
         const result = await registry.downloadExternalSource(
           id as ExtensionContributionId,
@@ -114,29 +129,30 @@ export function registerPreparedSourceDocuments(
           content.file.size > 2 * 1024 * 1024
         )
           throw new Error('invalid_source_assets');
-        if (generation(id) !== before) throw new Error('prepared_download_unavailable');
+        if (generation(id, registry) !== before) throw new Error('prepared_download_unavailable');
         const receipt = await store.put(id, body.key.remoteId, content.file, signal, before);
-        if (signal.aborted || generation(id) !== before) {
+        if (signal.aborted || generation(id, registry) !== before) {
           store.discard(receipt.artifactId, id);
           signal.throwIfAborted();
           throw new Error('prepared_download_unavailable');
         }
         return { ...receipt, remoteRevision: result.remoteRevision };
       }),
-    ),
-  );
-  app.post<{ Params: { id: string } }>(`${prefix}/assemble`, { bodyLimit: 32 * 1024 }, (request, reply) =>
-    handle(reply, () =>
+    );
+  });
+  app.post<{ Params: { id: string } }>(`${prefix}/assemble`, { bodyLimit: 32 * 1024 }, async (request, reply) => {
+    const { store, registry, refresh, imports, assembly } = resolveRuntime ? await resolveRuntime(request) : defaults;
+    return handle(reply, () =>
       withCancellation(request, reply, async (signal) => {
         const input = request.body;
         const id = request.params.id;
         if (!validHostedDocumentAssembly(input, id)) return reply.code(400).send({ error: 'invalid_source_input' });
         await refresh();
-        const before = generation(id);
-        if ((input.item.key.accountConnectionId ?? '') !== (status(id).accountConnectionId ?? ''))
+        const before = generation(id, registry);
+        if ((input.item.key.accountConnectionId ?? '') !== (status(id, registry).accountConnectionId ?? ''))
           throw new Error('package_source_unavailable');
-        if (assembling >= 2) throw new Error('execution_busy');
-        assembling++;
+        if (assembly.count >= 2) throw new Error('execution_busy');
+        assembly.count++;
         try {
           return await store.consume(
             input.artifactId,
@@ -160,7 +176,7 @@ export function registerPreparedSourceDocuments(
                 ],
               });
               signal.throwIfAborted();
-              if (generation(id) !== before) throw new Error('prepared_download_unavailable');
+              if (generation(id, registry) !== before) throw new Error('prepared_download_unavailable');
               const prepared = archive
                 ? await imports.stage(
                     archive,
@@ -181,12 +197,14 @@ export function registerPreparedSourceDocuments(
             true,
           );
         } finally {
-          assembling--;
+          assembly.count--;
         }
       }),
-    ),
-  );
+    );
+  });
   app.delete<{ Params: { id: string; artifactId: string } }>(`${prefix}/:artifactId`, async (request) => {
+    const { store } = resolveRuntime ? await resolveRuntime(request) : defaults;
+
     store.discard(request.params.artifactId, request.params.id);
     return { ok: true };
   });
