@@ -78,6 +78,11 @@ const serverTsconfig = JSON.parse(tsconfigSource);
 check('server build remains typecheck-only', serverPackage.scripts.build === 'tsc -p tsconfig.json --noEmit');
 check('esbuild is a direct dev dependency', Boolean(serverPackage.devDependencies?.esbuild));
 check(
+  'Docker build includes bundled dependency license inputs',
+  dockerfile.includes('COPY public/licenses public/licenses'),
+);
+
+check(
   'text-core is a direct server workspace dependency',
   serverPackage.devDependencies?.['@boaa/text-core'] === 'workspace:*' ||
     serverPackage.dependencies?.['@boaa/text-core'] === 'workspace:*',

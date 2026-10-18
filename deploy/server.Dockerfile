@@ -46,6 +46,7 @@ COPY packages/fixed-document-core packages/fixed-document-core
 COPY packages/text-core packages/text-core
 COPY packages/reader-core packages/reader-core
 COPY src src
+COPY public/licenses public/licenses
 COPY scripts/plugins/build-product-runtime.mjs scripts/plugins/build-product-runtime.mjs
 COPY scripts/release scripts/release
 COPY services/apk-worker services/apk-worker
