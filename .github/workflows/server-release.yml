@@ -125,7 +125,7 @@ jobs:
       # The global desktop/mobile binary gate remains closed. This release has its own
       # fail-closed, final-image evidence verifier, executed for every native child below.
       - run: pnpm check:licenses:source-release
-      - run: node --test scripts/release/*.test.mjs services/apk-worker/*.test.mjs services/runtime-components/runtime.test.mjs
+      - run: node --test --test-concurrency=2 scripts/release/*.test.mjs services/apk-worker/*.test.mjs services/runtime-components/runtime.test.mjs
       - run: python3 -m unittest discover -s services/runtime-components -p 'test_*.py'
       - run: python3 -m unittest discover -s scripts/release -p 'test_*.py'
       - name: Prepare pinned corresponding-source archive

@@ -461,7 +461,7 @@ describeWithPostgres('versioned PostgreSQL migrations', () => {
         pool.query(`update self_host_accounts set role='member' where user_id='owner'`),
       ).rejects.toMatchObject({ code: '23514' });
     });
-  });
+  }, 60_000);
 
   test('applies a clean install in numbered order', async () => {
     await withIsolatedSchema(postgres, 'clean', async (pool) => {

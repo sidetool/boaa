@@ -1,3 +1,7 @@
+-- Legacy pre-multi-account snapshot, retained for adoption compatibility.
+-- New installations and upgrades must use migrateDatabase() and numbered migrations.
+-- Do not fold epoch-2 ownership changes into this ledger-free snapshot: migrations
+-- 0055 and 0059/0060 must observe their original predecessor constraints.
 -- Consolidated schema snapshot for review and fresh-schema inspection.
 -- Runtime upgrades are applied only from db/migrations by migrate.ts.
 
@@ -20,10 +24,7 @@ create table if not exists devices (
 
 create table if not exists book_objects (
   id text primary key,
-  user_id text not null references users(id),
-  raw_text_hash text not null,
-  unique (user_id, raw_text_hash),
-  unique (id, user_id),
+  raw_text_hash text not null unique,
   storage_key text not null,
   file_name text not null,
   content_type text not null,
@@ -181,8 +182,7 @@ create table if not exists reader_settings (
 
 create table if not exists sync_events (
   sequence bigserial primary key,
-  id text not null,
-  unique (user_id, id),
+  id text unique not null,
   user_id text not null references users(id) on delete cascade,
   device_id text,
   type text not null,
@@ -1214,42 +1214,3 @@ create index if not exists self_host_sessions_user_expiry_idx
   on self_host_sessions (user_id, expires_at desc);
 create index if not exists self_host_sessions_expiry_idx
   on self_host_sessions (expires_at);
-
--- Admin-invited account evolution (0059).
-alter table users alter column email drop not null;
-alter table self_host_accounts drop constraint self_host_accounts_pkey;
-alter table self_host_accounts rename column singleton_key to bootstrap_owner_key;
-alter table self_host_accounts alter column bootstrap_owner_key drop not null;
-alter table self_host_accounts alter column bootstrap_owner_key drop default;
-alter table self_host_accounts add primary key (user_id);
-alter table self_host_accounts add unique (bootstrap_owner_key);
-alter table self_host_accounts add column role text not null default 'member' check (role in ('admin','member'));
-alter table self_host_accounts add column status text not null default 'active' check (status in ('invited','active','disabled'));
-alter table self_host_accounts add column auth_version integer not null default 1 check (auth_version > 0);
-update self_host_accounts set role = 'admin' where bootstrap_owner_key = 1;
-alter table self_host_accounts alter column password_scheme drop not null;
-alter table self_host_accounts alter column password_salt drop not null;
-alter table self_host_accounts alter column password_digest drop not null;
-alter table self_host_accounts add constraint self_host_credentials_complete check ((password_scheme is null and password_salt is null and password_digest is null and status <> 'active') or (password_scheme is not null and password_salt is not null and password_digest is not null));
-alter table self_host_accounts add constraint self_host_owner_protected check (bootstrap_owner_key is null or (role = 'admin' and status = 'active'));
-alter table self_host_sessions add column auth_version integer not null default 1;
-alter table self_host_sessions add column session_context text not null default gen_random_uuid()::text unique;
-create table self_host_account_tokens (
- token_hash text primary key,
- user_id text not null references self_host_accounts(user_id) on delete cascade,
- purpose text not null check (purpose in ('invite','password-reset')),
- creator_user_id text not null references users(id),
- created_at timestamptz not null default now(), expires_at timestamptz not null,
- consumed_at timestamptz, revoked_at timestamptz
-);
-create index self_host_account_tokens_user_idx on self_host_account_tokens(user_id, purpose);
-
--- Personal data ownership (0060); see migration for legacy backfill and constraints
--- on tables introduced by later migrations that are not expanded in this snapshot.
-alter table upload_sessions add unique(id,user_id);
-alter table import_jobs add constraint import_jobs_upload_owner_fk foreign key(upload_id,user_id) references upload_sessions(id,user_id) on delete cascade;
-alter table library_books add unique(id,user_id);
-alter table library_books add constraint library_book_object_owner_fk foreign key(object_id,user_id) references book_objects(id,user_id) on update cascade;
-alter table bookmarks add constraint bookmarks_book_owner_fk foreign key(book_id,user_id) references library_books(id,user_id) on delete cascade on update cascade;
-alter table highlights add constraint highlights_book_owner_fk foreign key(book_id,user_id) references library_books(id,user_id) on delete cascade on update cascade;
-alter table notes add constraint notes_book_owner_fk foreign key(book_id,user_id) references library_books(id,user_id) on delete cascade on update cascade;

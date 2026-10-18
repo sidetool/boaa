@@ -39,6 +39,11 @@ function decodeAwsChunks(body: Buffer, decodedLength: number): Buffer {
 export async function withImportPageFixture<T>(pool: pg.Pool, run: (fixture: ImportPageFixture) => Promise<T>) {
   await migrateDatabase(pool);
   await pool.query("insert into users (id, email, display_name) values ('user_test', 'test@example.com', 'Test')");
+  // This fixture exercises the existing owner's stable book IDs. Member-derived IDs
+  // are covered separately by multi-account-data.integration.test.ts.
+  await pool.query(`insert into self_host_accounts
+    (bootstrap_owner_key,user_id,username,normalized_username,display_name,role,password_scheme,password_salt,password_digest)
+    values (1,'user_test','fixture-owner','fixture-owner','Fixture owner','admin','scrypt-v1','fixture','fixture')`);
   const directory = await mkdtemp(path.join(tmpdir(), 'boaa-page-import-'));
   const objects = new Map<string, { bytes: Buffer; type: string }>();
   const puts: Array<{ key: string; bytes: number }> = [];

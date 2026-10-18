@@ -176,6 +176,9 @@ describe.skipIf(!harness || Boolean(benchmark))('append page reuse with real Pos
         expect(after).toBe(before);
 
         const app = Fastify();
+        app.addHook('onRequest', async (request) => {
+          request.principal = { userId: 'user_test', role: 'admin', authMethod: 'legacy-token' };
+        });
         await registerBookContentRoutes(app, pool, fixture.config);
         try {
           const response = await app.inject(`/api/paragraphs/${encodeURIComponent(paragraphId)}`);
@@ -278,6 +281,9 @@ describe.skipIf(!harness || Boolean(benchmark))('append page reuse with real Pos
         );
         expect(manifest?.chapters).toHaveLength(101);
         const app = Fastify();
+        app.addHook('onRequest', async (request) => {
+          request.principal = { userId: 'user_test', role: 'admin', authMethod: 'legacy-token' };
+        });
         await registerEpubResourceRoutes(app, pool, fixture.config);
         try {
           for (const page of [finalPages[0]!, finalPages.at(-1)!]) {
@@ -312,6 +318,9 @@ describe.skipIf(!harness || Boolean(benchmark))('append page reuse with real Pos
         await drainObjectDeleteOutbox(pool, fixture.config, 1000);
         await assertActiveObjects(pool, fixture);
         const app = Fastify();
+        app.addHook('onRequest', async (request) => {
+          request.principal = { userId: 'user_test', role: 'admin', authMethod: 'legacy-token' };
+        });
         await registerBookCatalogRoutes(app, pool, fixture.config);
         await registerEpubResourceRoutes(app, pool, fixture.config);
         try {
@@ -426,6 +435,9 @@ describe.skipIf(!harness || Boolean(benchmark))('append page reuse with real Pos
         const beforePages = await pages(pool);
         const beforeChapters = (await pool.query('select id from chapters order by chapter_index')).rows;
         const app = Fastify();
+        app.addHook('onRequest', async (request) => {
+          request.principal = { userId: 'user_test', role: 'admin', authMethod: 'legacy-token' };
+        });
         await registerBookCatalogRoutes(app, pool, fixture.config);
         await registerBookContentRoutes(app, pool, fixture.config);
         await registerReaderStateRoutes(app, pool, fixture.config);
