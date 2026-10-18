@@ -13,7 +13,9 @@ it('persists, confirms overwrites, validates rename and preserves state on stora
   const setItem = vi.fn((key: string, value: string) => {
     data.set(key, value);
   });
-  vi.stubGlobal('window', { localStorage: { getItem: (key: string) => data.get(key) ?? null, setItem } });
+  const storage = { getItem: (key: string) => data.get(key) ?? null, setItem };
+  vi.stubGlobal('localStorage', storage);
+  vi.stubGlobal('window', { localStorage: storage });
   const updateProfile = vi.fn();
   let model!: ReaderThemePresetsModel;
   function Harness() {
