@@ -464,9 +464,10 @@ check(
     includes(metadataCollectorAuth, 'METADATA_COLLECTOR_AUTH_MEMORY_LIMIT'),
 );
 check(
-  'metadata collector auth image installs the explicit Playwright extra and Chromium',
+  'metadata collector auth image installs the explicit Patchright extra and Chromium',
   includes(files.metadataCollectorAuthDockerfile, "pip install --no-cache-dir '.[auth]'") &&
-    includes(files.metadataCollectorAuthDockerfile, 'playwright install --with-deps --no-shell chromium') &&
+    includes(files.metadataCollectorAuthDockerfile, 'BOAA_BROWSER_ENGINE=patchright') &&
+    includes(files.metadataCollectorAuthDockerfile, 'patchright install --with-deps --no-shell chromium') &&
     includes(files.metadataCollectorAuthDockerfile, 'Xvfb :99') &&
     includes(files.metadataCollectorAuthDockerfile, '-nolisten tcp'),
 );

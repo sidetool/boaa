@@ -7692,6 +7692,34 @@
           "sha256": "528ed15c438eb94d291d402ebe5db15cc8e1bc17a240305ff778300fdc4a96a9"
         }
       ]
+    },
+    {
+      "component": "runs-1.3.0",
+      "url": "https://codeload.github.com/rec/runs/tar.gz/dac72d88caed543d1e4cc4e4ac3e9ad77cf035cd",
+      "file": "runs-1.3.0-upstream.tar.gz",
+      "sha256": "60479741ddc6ed2cd2ad2190de45a8810afc6ef4fde74f712cbf77a482df9bef",
+      "scope": ["browser-camoufox"],
+      "notices": [
+        {
+          "upstreamPath": "runs-dac72d88caed543d1e4cc4e4ac3e9ad77cf035cd/LICENSE",
+          "file": "third_party/licenses/server-extra/d87dd34ec0491150eeef744705b6035d33d116cca944b3a99648e1fc0c1f3a2f.txt",
+          "sha256": "d87dd34ec0491150eeef744705b6035d33d116cca944b3a99648e1fc0c1f3a2f"
+        }
+      ]
+    },
+    {
+      "component": "ua-parser-builtins-202610",
+      "url": "https://codeload.github.com/ua-parser/uap-core/tar.gz/73e7340c3ed8055051607b296bf46ead7aa5f19e",
+      "file": "uap-core-73e7340c3ed8055051607b296bf46ead7aa5f19e.tar.gz",
+      "sha256": "8fb0f0e68f3eadf26000a32e7c33c553175893fdb73aa868c12460f1c27c7be0",
+      "scope": ["browser-camoufox"],
+      "notices": [
+        {
+          "upstreamPath": "uap-core-73e7340c3ed8055051607b296bf46ead7aa5f19e/LICENSE",
+          "file": "third_party/licenses/server-extra/0c6f6cd66573dd12f68c71bffca774e58087c3c9168aed0eabf0a5ae10d3800f.txt",
+          "sha256": "0c6f6cd66573dd12f68c71bffca774e58087c3c9168aed0eabf0a5ae10d3800f"
+        }
+      ]
     }
   ]
 }

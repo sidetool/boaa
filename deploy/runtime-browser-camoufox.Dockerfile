@@ -24,6 +24,7 @@ COPY packages/browser-runtime/requirements.txt /tmp/camoufox-requirements.txt
 RUN python3 -m venv /opt/camoufox-env \
     && /opt/camoufox-env/bin/pip install --no-cache-dir -r /tmp/camoufox-requirements.txt \
     && /opt/camoufox-env/bin/python -c "from camoufox.fpgen_model import ensure_fpgen_model; ensure_fpgen_model()" \
+    && find /opt/camoufox-env/lib -path '*/site-packages/setuptools/*.exe' -delete \
     && rm /tmp/camoufox-requirements.txt
 ARG TARGETARCH
 COPY services/runtime-components/install-camoufox.py /tmp/install-camoufox.py

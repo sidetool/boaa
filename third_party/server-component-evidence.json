@@ -16008,6 +16008,53 @@
         }
       ],
       "decision": "Runtime/glue notices for the supplied WASM build recipes. libarchive pins 4.0.5; the 7z replacement recipe pins 4.0.10 and is rebuild-tested. The original 7z upstream recipe selected latest and its compiler identity is not claimed."
+    },
+    {
+      "ecosystem": "python",
+      "name": "runs",
+      "version": "1.3.0",
+      "origin": "https://codeload.github.com/rec/runs/tar.gz/dac72d88caed543d1e4cc4e4ac3e9ad77cf035cd",
+      "originSha256": "60479741ddc6ed2cd2ad2190de45a8810afc6ef4fde74f712cbf77a482df9bef",
+      "licenses": ["MIT"],
+      "notices": [
+        {
+          "upstreamPath": "runs-dac72d88caed543d1e4cc4e4ac3e9ad77cf035cd/LICENSE",
+          "file": "third_party/licenses/server-extra/d87dd34ec0491150eeef744705b6035d33d116cca944b3a99648e1fc0c1f3a2f.txt",
+          "sha256": "d87dd34ec0491150eeef744705b6035d33d116cca944b3a99648e1fc0c1f3a2f"
+        }
+      ],
+      "decision": "Exact upstream release source matches the PyPI sdist module bytes; its MIT notice omitted from the wheel is retained with the source."
+    },
+    {
+      "ecosystem": "python",
+      "name": "ua-parser-builtins",
+      "version": "202610",
+      "origin": "https://codeload.github.com/ua-parser/uap-core/tar.gz/73e7340c3ed8055051607b296bf46ead7aa5f19e",
+      "originSha256": "8fb0f0e68f3eadf26000a32e7c33c553175893fdb73aa868c12460f1c27c7be0",
+      "licenses": ["Apache-2.0"],
+      "notices": [
+        {
+          "upstreamPath": "uap-core-73e7340c3ed8055051607b296bf46ead7aa5f19e/LICENSE",
+          "file": "third_party/licenses/server-extra/0c6f6cd66573dd12f68c71bffca774e58087c3c9168aed0eabf0a5ae10d3800f.txt",
+          "sha256": "0c6f6cd66573dd12f68c71bffca774e58087c3c9168aed0eabf0a5ae10d3800f"
+        }
+      ],
+      "decision": "Wheel REVISION identifies this exact upstream ruleset commit; its Apache-2.0 notice and source are retained."
+    },
+    {
+      "ecosystem": "binary",
+      "name": "node",
+      "version": "24.18.1",
+      "origin": "https://raw.githubusercontent.com/nodejs/node/v24.18.1/LICENSE",
+      "originSha256": "148eacf7863ef4329224a29398623077200a27194aa075569faf4a0a85566ca5",
+      "licenses": ["MIT and bundled third-party terms"],
+      "notices": [
+        {
+          "upstreamPath": "LICENSE",
+          "file": "third_party/licenses/server-extra/148eacf7863ef4329224a29398623077200a27194aa075569faf4a0a85566ca5.txt",
+          "sha256": "148eacf7863ef4329224a29398623077200a27194aa075569faf4a0a85566ca5"
+        }
+      ]
     }
   ]
 }

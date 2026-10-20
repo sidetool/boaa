@@ -334,6 +334,24 @@
       "noticePathExample": "usr/share/doc/wget/copyright",
       "licenseRefDefinition": "Any additional terms are defined by this exact retained copyright text, not ignored.",
       "sourcePackages": ["wget"]
+    },
+    {
+      "packages": ["libpython3-stdlib", "python3", "python3-minimal", "python3-venv"],
+      "copyrightSha256": "5b274dbb44b28a54b795b9471c07ab045054d6b8a86273cb9feb632b6fd2760d",
+      "licenses": ["PSF-2.0", "MIT", "LicenseRef-Python-historical-terms"],
+      "decision": "The exact Debian copyright text retains the PSF license and historical BeOpen, CNRI and CWI Python terms; python3-defaults also includes MIT-licensed Debian helper tools. Full notices and exact corresponding Debian sources are archived.",
+      "noticePathExample": "usr/share/doc/libpython3-stdlib/copyright",
+      "sourcePackages": ["python3-defaults"],
+      "licenseRefDefinition": "LicenseRef-Python-historical-terms denotes the BeOpen, CNRI and CWI license sections in this exact retained copyright text."
+    },
+    {
+      "packages": ["python3-distutils", "python3-lib2to3"],
+      "copyrightSha256": "183860dfd4168e0608fb99fe53cef26088ba7275ce38a41e3c737d4217c0ccc1",
+      "licenses": ["PSF-2.0", "LicenseRef-Python-historical-terms"],
+      "decision": "The exact Debian copyright text retains the PSF license and historical BeOpen, CNRI and CWI Python terms; python3-defaults also includes MIT-licensed Debian helper tools. Full notices and exact corresponding Debian sources are archived.",
+      "noticePathExample": "usr/share/doc/python3-distutils/copyright",
+      "sourcePackages": ["python3-stdlib-extensions"],
+      "licenseRefDefinition": "LicenseRef-Python-historical-terms denotes the BeOpen, CNRI and CWI license sections in this exact retained copyright text."
     }
   ]
 }

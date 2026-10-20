@@ -40,7 +40,7 @@ validation.
 
 ## Final image boundary and additional components
 
-All six image recipes pin their multi-architecture base index. Each native CI job
+All seven image recipes pin their multi-architecture base index. Each native CI job
 runs the **final image**, exports that image's filesystem, collects Syft 1.54.1
 inventories, records actual notice files and captures the exact installed Debian
 source packages (including `.dsc`, upstream archives and Debian patches). Those
