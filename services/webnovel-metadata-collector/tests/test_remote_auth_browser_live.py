@@ -1,4 +1,4 @@
-"""Opt-in isolated Chromium check; no real accounts or external requests."""
+"""Opt-in isolated Camoufox check; no real accounts or external requests."""
 import asyncio
 import os
 

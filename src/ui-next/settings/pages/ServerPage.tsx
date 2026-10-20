@@ -75,7 +75,7 @@ const COMPONENTS: Record<OptionalComponentId, ComponentInfo> = {
   browser: {
     title: '브라우저 실행 환경',
     object: '브라우저 실행 환경을',
-    help: '로그인이 필요하거나 브라우저로만 열리는 소스, 작품 정보 인증에 써요.',
+    help: '소스 인증과 브라우저 작업에 써요. 작업 후 자동으로 종료돼요.',
     stopEffect: '브라우저가 필요한 소스와 작품 정보 인증은 다시 켤 때까지 멈춰요. HTTP 소스는 계속 열려요.',
     icon: <AppWindow size={18} />,
   },

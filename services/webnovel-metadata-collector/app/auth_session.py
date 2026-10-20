@@ -346,11 +346,11 @@ class AuthSessionManager:
             await self._finish_login()
 
     async def _finish_login(self) -> None:
-        """로그인 창을 닫고 같은 프로필로 검색 컨텍스트를 열 수 있는지 확인한다."""
+        """로그인 상태를 저장하고 검증용 브라우저도 종료한다."""
         if self.remote_auth:
-            context = await self._ensure_context(visible=False)
             if not self._remote_login_active:
                 raise AuthFeatureUnavailable("먼저 로그인 화면을 열어 주세요.")
+            context = await self._ensure_context(visible=False)
             await self._save_session(context)
             self._remote_login_active = False
             for page in list(context.pages):
@@ -369,6 +369,7 @@ class AuthSessionManager:
         for attempt in range(5):
             try:
                 await self._ensure_context(visible=False)
+                await self.close_browser()
                 self.last_error = None
                 return
             except AuthFeatureUnavailable as exc:
@@ -616,6 +617,10 @@ class AuthSessionManager:
                     if attempt == 1:
                         raise
                     await asyncio.sleep(0.25)
+                finally:
+                    # Keep a user-operated login window alive, but never retain a background browser.
+                    if self._context_headless is not False and not self._remote_login_active:
+                        await self._reset_context(context)
 
         raise RuntimeError("인증 페이지 요청을 완료하지 못했습니다.")
 
@@ -688,7 +693,7 @@ class AuthSessionManager:
                     user_data_dir=str(self.profile_dir), **options,
                 )
                 session = self._load_session()
-                if self.remote_auth and session.get("cookies"):
+                if session.get("cookies"):
                     await context.add_cookies(session["cookies"])
                 context.on("page", self._remote_page_opened)
                 if self.remote_auth:
@@ -711,7 +716,7 @@ class AuthSessionManager:
 
     async def _close_context_locked(self) -> None:
         context = self._context
-        if context is not None and self.remote_auth and not self._remote_login_active and self.session_path.exists():
+        if context is not None and not self._remote_login_active and (self.session_path.exists() or not self.remote_auth):
             try:
                 await self._save_session(context)
             except (PlaywrightError, OSError):
@@ -816,8 +821,8 @@ class AuthSessionManager:
         return {}
 
     async def _save_session(self, context: Any) -> None:
-        # Persistent cookies/local storage already live in the browser profile. Chromium drops session cookies
-        # on a fresh launch, so checkpoint those explicitly after the user completes authentication.
+        # Persistent cookies/local storage live in the profile. Checkpoint session cookies too,
+        # so closing the background browser does not discard the completed login.
         cookies = [cookie for cookie in await context.cookies() if cookie.get("expires", -1) == -1]
         self.data_dir.mkdir(parents=True, exist_ok=True)
         payload = {"saved_at": datetime.now(timezone.utc).isoformat(), "cookies": cookies}

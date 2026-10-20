@@ -1,5 +1,13 @@
 import { normalizeBrandRecord } from '@boaa/extension-contracts/brand-compat';
-import { SOURCE_BROWSER_MODE_KEY, sourceBrowserMode, type SourceBrowserMode } from './source-browser-mode.js';
+import {
+  SOURCE_BROWSER_MODE_KEY,
+  sourceBrowserMode,
+  type SourceBrowserMode,
+  SOURCE_BROWSER_USAGE_KEY,
+  sourceBrowserUsage,
+  sourceBrowserFields,
+  type SourceBrowserUsage,
+} from './source-browser-mode.js';
 import type { VerifiedBoaaPackage } from '../../../../src/extensions/packages/package-archive.js';
 import {
   OUTBOUND_PROXY_KEY,
@@ -26,6 +34,7 @@ export function createSourcePreferences(vault: SourceCredentialVault, allowPriva
     epoch: string,
   ): SourceProxyOptions & {
     browserMode?: SourceBrowserMode;
+    browserUsage?: SourceBrowserUsage;
     outboundProxy?: string;
     revision: number;
     values: Record<string, SourcePreferenceValue>;
@@ -36,6 +45,7 @@ export function createSourcePreferences(vault: SourceCredentialVault, allowPriva
     const saved = normalizeBrandRecord(parsed);
     if (secret && saved !== parsed) vault.write(key(pkg, source, epoch), { secret: JSON.stringify(saved) });
     saved.browserMode = sourceBrowserMode(saved.browserMode);
+    saved.browserUsage = sourceBrowserUsage(saved.browserUsage);
     delete saved.proxyDns;
     delete saved.values[LEGACY_PROXY_DNS_KEY];
     return saved;
@@ -83,6 +93,10 @@ export function createSourcePreferences(vault: SourceCredentialVault, allowPriva
             saved.browserMode = sourceBrowserMode(value);
             continue;
           }
+          if (name === SOURCE_BROWSER_USAGE_KEY && pkg.manifest.requestedAccess.webview) {
+            saved.browserUsage = sourceBrowserUsage(value);
+            continue;
+          }
           const field = fields.find((row) => row.key === name);
           if (!field || (value !== null && !validSourcePreferenceValue(field, value)))
             throw new Error('invalid_source_preferences');
@@ -108,12 +122,17 @@ export function createSourcePreferences(vault: SourceCredentialVault, allowPriva
         networkPolicy: 'restricted',
         fields: [
           ...outboundProxyFields(saved),
+          ...(pkg.manifest.requestedAccess.webview ? sourceBrowserFields(saved.browserUsage) : []),
           ...fields
             .filter(
               (field) =>
-                ![PROXY_MODE_KEY, SOURCE_BROWSER_MODE_KEY, OUTBOUND_PROXY_KEY, LEGACY_PROXY_DNS_KEY].includes(
-                  field.key,
-                ),
+                ![
+                  PROXY_MODE_KEY,
+                  SOURCE_BROWSER_MODE_KEY,
+                  SOURCE_BROWSER_USAGE_KEY,
+                  OUTBOUND_PROXY_KEY,
+                  LEGACY_PROXY_DNS_KEY,
+                ].includes(field.key),
             )
             .map(({ defaultValue, ...field }) => ({
               ...field,

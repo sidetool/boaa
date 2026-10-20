@@ -100,6 +100,65 @@ describe('maker-defined source preferences', () => {
         .fields.find((f) => f.key === '__boaa_webview_mode'),
     ).toBeUndefined();
   });
+  it('defaults browser use off and stores an explicit choice per source, only with browser capability', () => {
+    const { store, pkg } = setup();
+    const browserPkg = {
+      ...pkg,
+      manifest: { ...pkg.manifest, requestedAccess: { ...pkg.manifest.requestedAccess, webview: true } },
+    };
+    const signal = AbortSignal.timeout(1000);
+    const key = '__boaa_browser_usage';
+    expect(
+      store.manage(browserPkg, sourceId, 'epoch', { action: 'read' }, signal).fields.find((f) => f.key === key),
+    ).toMatchObject({ title: '브라우저 사용', value: 'off' });
+    store.manage(
+      browserPkg,
+      sourceId,
+      'epoch',
+      {
+        action: 'save',
+        revision: 0,
+        changes: { [key]: 'always' },
+        privateOrigins: [],
+      },
+      signal,
+    );
+    expect(store.values(browserPkg, sourceId, 'epoch').browserUsage).toBe('always');
+    expect(store.values(browserPkg, sourceId, 'other').browserUsage).toBe('off');
+    expect(store.values(browserPkg, sourceId, 'epoch').values).not.toHaveProperty(key);
+    const noBrowser = {
+      ...pkg,
+      manifest: { ...pkg.manifest, requestedAccess: { ...pkg.manifest.requestedAccess, webview: false } },
+    };
+    expect(() =>
+      store.manage(
+        noBrowser,
+        sourceId,
+        'other',
+        {
+          action: 'save',
+          revision: 0,
+          changes: { [key]: 'always' },
+          privateOrigins: [],
+        },
+        signal,
+      ),
+    ).toThrow('invalid_source_preferences');
+    expect(() =>
+      store.manage(
+        browserPkg,
+        sourceId,
+        'epoch',
+        {
+          action: 'save',
+          revision: 1,
+          changes: { [key]: 'unknown' },
+          privateOrigins: [],
+        },
+        signal,
+      ),
+    ).toThrow('compatibility_preferences_invalid');
+  });
   it('offers host proxy exceptions even when the package declares no maker preferences', () => {
     const { store, pkg } = setup();
     const plain = { ...pkg, manifest: { ...pkg.manifest, preferences: undefined } };

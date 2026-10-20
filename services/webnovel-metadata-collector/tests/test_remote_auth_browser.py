@@ -196,3 +196,36 @@ def test_completed_login_checkpoints_session_cookies_and_clear_removes_them(tmp_
         assert not restarted.status()["session_saved_at"]
         assert not restarted.enabled_platforms
     asyncio.run(run())
+
+
+@pytest.mark.parametrize("fails", [False, True])
+def test_background_fetch_closes_browser_and_preserves_session(tmp_path, monkeypatch, fails):
+    manager = AuthSessionManager(tmp_path)
+    manager.remote_auth = False
+    context = FakeContext(FakePage())
+
+    async def ensure_context(*, visible):
+        assert not visible
+        manager._context = context
+        manager._context_headless = True
+        return context
+
+    async def fetch_once(_context, _requests):
+        if fails:
+            raise ValueError("synthetic failure")
+        return ["synthetic response"]
+
+    monkeypatch.setattr(manager, "_ensure_context", ensure_context)
+    monkeypatch.setattr(manager, "_fetch_many_once", fetch_once)
+
+    async def run():
+        if fails:
+            with pytest.raises(ValueError):
+                await manager.fetch_many([{"url": "https://example.com/document"}])
+        else:
+            assert await manager.fetch_many([{"url": "https://example.com/document"}]) == ["synthetic response"]
+        assert manager._context is None
+        assert context.pages[0].closed
+        assert manager._load_session()["cookies"][0]["name"] == "session"
+
+    asyncio.run(run())

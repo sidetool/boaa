@@ -1,5 +1,5 @@
 import 'fake-indexeddb/auto';
-import { afterEach, expect, it } from 'vitest';
+import { afterEach, expect, it, vi } from 'vitest';
 import Fastify from 'fastify';
 import { registerAuthHook } from '../../auth.js';
 import type { ServerConfig } from '../../config.js';
@@ -18,8 +18,55 @@ import type { compatibilityHttp } from './http.js';
 import { dispatchApkCommand } from '../apk-command.js';
 import { OUTBOUND_PROXY_KEY } from '../outbound-proxy.js';
 import { createSourceNetworkSettings } from '../source-network-settings.js';
+import { sourceWebViewHost } from '../source-webview.js';
 const roots: string[] = [];
 const hosts: MangayomiExtensionHost[] = [];
+it('requires an explicit per-source browser choice and persists it across reopen', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'boaa-source-browser-choice-'));
+  roots.push(root);
+  const script = `class DefaultExtension extends MProvider {
+    async getPopular(){
+      await evaluateJavascriptViaWebview('https://site.example/',{},['document.title']);
+      return {list:[{name:'Synthetic',link:'/work'}],hasNextPage:false};
+    }
+  }`;
+  const transport: typeof compatibilityHttp = async (input) => ({
+    bytes: Buffer.from(input.url.endsWith('.json') ? JSON.stringify([fixtureRow]) : script),
+    statusCode: 200,
+    headers: {},
+    contentType: 'text/plain',
+    url: input.url,
+  });
+  const vault = new EncryptedSourceCredentialVault(join(root, 'vault'), Buffer.alloc(32, 3));
+  let host = await MangayomiExtensionHost.open(join(root, 'host'), vault, transport);
+  hosts.push(host);
+  const repo = 'https://repo.example/index.json',
+    signal = AbortSignal.timeout(15000);
+  await host.refreshRepository(repo, signal);
+  const entry = host.snapshot().repositories[0].entries[0];
+  const review = await host.inspect(repo, entry.pkg, entry.code, signal);
+  await host.install(review.id, review.revision, signal);
+  const key = '__boaa_browser_usage';
+  expect(host.preferences(entry.pkg).fields.find((field) => field.key === key)?.value).toBe('off');
+  const browser = vi.spyOn(sourceWebViewHost, 'evaluate').mockResolvedValue('Synthetic');
+  try {
+    const source = host.catalog.getSources()[0].descriptor.id;
+    await expect(host.catalog.invoke(source, 'source.listWorks', {}, signal)).rejects.toThrow(
+      'source_browser_disabled',
+    );
+    expect(browser).not.toHaveBeenCalled();
+    await host.savePreferences(entry.pkg, host.snapshot().revision, { [key]: 'http-first' }, []);
+    host.close();
+    host = await MangayomiExtensionHost.open(join(root, 'host'), vault, transport);
+    hosts.push(host);
+    expect(host.preferences(entry.pkg).fields.find((field) => field.key === key)?.value).toBe('http-first');
+    const listed = await host.catalog.invoke(source, 'source.listWorks', {}, signal);
+    expect(listed.result.items[0].title).toBe('Synthetic');
+    expect(browser).toHaveBeenCalledOnce();
+  } finally {
+    browser.mockRestore();
+  }
+});
 it('installs parameterized JS and preserves work referers for protected covers', async () => {
   const root = await mkdtemp(join(tmpdir(), 'boaa-parameterized-js-'));
   roots.push(root);

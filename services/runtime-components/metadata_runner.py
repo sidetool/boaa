@@ -74,7 +74,7 @@ class ProviderContext:
             raise RuntimeError("metadata_browser_unavailable")
         headers = {"Authorization": f"Bearer {read_token()}"}
         # Control traffic always goes to the explicitly configured internal worker, outside the source proxy.
-        async with httpx.AsyncClient(trust_env=False, timeout=35) as client:
+        async with httpx.AsyncClient(trust_env=False, timeout=60) as client:
             async with client.stream("POST", endpoint.rstrip("/") + "/v1/browsers", headers=headers, json={
                 "protocolVersion": 1, "engine": "camoufox", "proxyBridge": {
                     "origins": list(origins), "privateOrigins": list(private_origins),

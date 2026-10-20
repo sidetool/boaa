@@ -29,6 +29,7 @@ export const PUBLIC_FAILURE_CODES = new Set([
   'source_request_timeout',
   'source_body_limit',
   'source_browser_unavailable',
+  'source_browser_disabled',
   'source_browser_failed',
   'source_url_denied',
   'source_address_denied',

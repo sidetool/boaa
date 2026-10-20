@@ -12,6 +12,7 @@ export async function launchSourceBrowser(
   _args: string[] = [],
   _platform = process.platform,
   engine: 'camoufox' = BROWSER_ENGINE,
+  signal?: AbortSignal,
 ) {
   const remote = sourceBrowserUsesRemote() && process.env.BOAA_SOURCE_BROWSER_ENDPOINT;
   if (remote) {
@@ -23,7 +24,7 @@ export async function launchSourceBrowser(
       headers: { ...headers, 'Content-Type': 'application/json' },
       body: JSON.stringify({ protocolVersion: 1, engine }),
       redirect: 'error',
-      signal: AbortSignal.timeout(35000),
+      signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(60000)]) : AbortSignal.timeout(60000),
     });
     if (!response.ok) {
       await response.body?.cancel();

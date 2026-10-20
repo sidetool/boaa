@@ -1,4 +1,12 @@
-import { SOURCE_BROWSER_MODE_KEY, sourceBrowserMode, type SourceBrowserMode } from '../source-browser-mode.js';
+import {
+  SOURCE_BROWSER_MODE_KEY,
+  sourceBrowserMode,
+  type SourceBrowserMode,
+  SOURCE_BROWSER_USAGE_KEY,
+  sourceBrowserUsage,
+  sourceBrowserFields,
+  type SourceBrowserUsage,
+} from '../source-browser-mode.js';
 import { createHash, randomUUID } from 'node:crypto';
 import { COMPATIBILITY_SOURCE_NAMESPACES } from '@boaa/extension-contracts/source-identity';
 import { thumbnailCoverAsset } from '../source-cover-thumbnail.js';
@@ -50,6 +58,7 @@ interface Inventory {
 }
 interface StoredOptions extends SourceProxyOptions {
   browserMode?: SourceBrowserMode;
+  browserUsage?: SourceBrowserUsage;
   outboundProxy?: string;
   values: PreferenceValues;
   privateOrigins: string[];
@@ -443,6 +452,7 @@ export class MangayomiExtensionHost {
     const stored = this.vault.read(scope(record));
     const options = stored ? JSON.parse(stored.secret) : { values: {}, privateOrigins: [] };
     options.browserMode = sourceBrowserMode(options.browserMode);
+    options.browserUsage = sourceBrowserUsage(options.browserUsage);
     delete options.proxyDns;
     delete options.values[LEGACY_PROXY_DNS_KEY];
     return options;
@@ -456,10 +466,17 @@ export class MangayomiExtensionHost {
       privateOrigins: options.privateOrigins,
       fields: [
         ...outboundProxyFields(options),
+        ...sourceBrowserFields(options.browserUsage),
         ...record.fields
           .filter(
             (field) =>
-              ![PROXY_MODE_KEY, OUTBOUND_PROXY_KEY, SOURCE_BROWSER_MODE_KEY, LEGACY_PROXY_DNS_KEY].includes(field.key),
+              ![
+                PROXY_MODE_KEY,
+                OUTBOUND_PROXY_KEY,
+                SOURCE_BROWSER_MODE_KEY,
+                SOURCE_BROWSER_USAGE_KEY,
+                LEGACY_PROXY_DNS_KEY,
+              ].includes(field.key),
           )
           .map((field) => {
             const value = options.values[field.key] ?? field.value;
@@ -488,6 +505,10 @@ export class MangayomiExtensionHost {
       if (
         Object.entries(changes).some(([key, value]) => {
           if (key === LEGACY_PROXY_DNS_KEY) return false;
+          if (key === SOURCE_BROWSER_USAGE_KEY) {
+            sourceBrowserUsage(value);
+            return false;
+          }
           if (key === SOURCE_BROWSER_MODE_KEY) {
             sourceBrowserMode(value);
             return false;
@@ -518,6 +539,10 @@ export class MangayomiExtensionHost {
       const options = this.options(record);
       applyProxyChanges(options, changes);
       for (const [key, value] of Object.entries(changes)) {
+        if (key === SOURCE_BROWSER_USAGE_KEY) {
+          options.browserUsage = sourceBrowserUsage(value);
+          continue;
+        }
         if (key === LEGACY_PROXY_DNS_KEY) continue;
         if (key === SOURCE_BROWSER_MODE_KEY) {
           options.browserMode = sourceBrowserMode(value);
@@ -557,6 +582,8 @@ export class MangayomiExtensionHost {
       privateOrigins: options.privateOrigins,
       outboundProxy,
       browserMode: options.browserMode,
+      browserUsage: options.browserUsage,
+      browserAllowed: true,
     };
     if (hash(source) !== record.digest) throw new Error('package_repository_integrity');
     if (method === 'image' || method === 'cover') {
@@ -580,7 +607,7 @@ export class MangayomiExtensionHost {
           ...(method === 'image' ? { options: { timeout: 30 } } : {}),
         },
         signal,
-        browserScope,
+        { ...browserScope, browserAllowed: false },
         20 * 1024 * 1024,
         this.transport,
         true,
@@ -611,8 +638,9 @@ export class MangayomiExtensionHost {
         params,
         preferences: options.values,
         privateOrigins: options.privateOrigins,
-        webview: (request, requestSignal) =>
-          sourceWebViewHost.evaluate(
+        webview: (request, requestSignal) => {
+          if (options.browserUsage === 'off') throw new Error('source_browser_disabled');
+          return sourceWebViewHost.evaluate(
             request,
             {
               key: JSON.stringify([record.pkg, 'browser', record.preferenceEpoch]),
@@ -623,7 +651,8 @@ export class MangayomiExtensionHost {
               purpose: method === 'pages' ? 'image-pages' : undefined,
             },
             requestSignal,
-          ),
+          );
+        },
         signal,
       },
       (input, requestSignal, _origins, maximum) =>

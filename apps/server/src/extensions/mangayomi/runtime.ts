@@ -98,6 +98,7 @@ export async function invokeMangayomi(input: MangayomiInvocation, transport = co
               'source_body_limit',
               'source_request_timeout',
               'source_browser_unavailable',
+              'source_browser_disabled',
               'source_browser_failed',
               'source_connection_failed',
               'source_tls_failed',
@@ -120,6 +121,9 @@ export async function invokeMangayomi(input: MangayomiInvocation, transport = co
         } catch (error) {
           if (
             [
+              'source_browser_unavailable',
+              'source_browser_disabled',
+              'source_browser_failed',
               'source_connection_failed',
               'source_request_timeout',
               'source_tls_failed',

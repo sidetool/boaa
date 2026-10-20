@@ -112,6 +112,110 @@ test('cancelled browser launches cannot leave an orphan process', async () => {
   }
 });
 
+test('one process slot includes cancelled launches and shutdown, with bounded cancellable waiting', async () => {
+  let finishLaunch, finishClose;
+  const launching = new Promise((resolve) => {
+    finishLaunch = resolve;
+  });
+  const closing = new Promise((resolve) => {
+    finishClose = resolve;
+  });
+  let launches = 0,
+    closes = 0;
+  const worker = await start({
+    maxQueued: 1,
+    launch: async () => {
+      launches++;
+      if (launches === 1) return launching;
+      const browser = new EventEmitter();
+      browser.close = async () => {};
+      return browser;
+    },
+  });
+  const state = async () => (await fetch(worker.endpoint + '/healthz', { headers: worker.headers })).json();
+  const until = async (predicate) => {
+    for (let attempt = 0; attempt < 100; attempt++) {
+      if (await predicate()) return;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    assert.fail('condition did not settle');
+  };
+  const request = (signal) =>
+    fetch(worker.endpoint + '/v1/browsers', {
+      method: 'POST',
+      headers: worker.headers,
+      signal,
+      body: JSON.stringify({ protocolVersion: 1, engine: 'camoufox' }),
+    });
+  const first = new AbortController(),
+    second = new AbortController();
+  try {
+    const one = request(first.signal);
+    const rejectedOne = assert.rejects(one);
+    await until(() => launches === 1);
+    first.abort();
+    await rejectedOne;
+    const two = request(second.signal);
+    const rejectedTwo = assert.rejects(two);
+    await until(async () => (await state()).queued === 1);
+    assert.equal((await request()).status, 503);
+    second.abort();
+    await rejectedTwo;
+    await until(async () => (await state()).queued === 0);
+    const three = request();
+    await until(async () => (await state()).queued === 1);
+    finishLaunch({
+      close: async () => {
+        closes++;
+        await closing;
+      },
+    });
+    await until(() => closes === 1);
+    assert.equal(launches, 1, 'a closing process still owns the slot');
+    assert.equal((await state()).running, 1);
+    finishClose();
+    assert.equal((await three).status, 201);
+    assert.equal(launches, 2);
+    assert.equal(closes, 1);
+  } finally {
+    first.abort();
+    second.abort();
+    finishLaunch({ close: async () => {} });
+    finishClose();
+    await worker.close();
+  }
+});
+
+test('queued browser leases expire without launching another process', async () => {
+  let launches = 0;
+  const worker = await start({
+    queueMs: 30,
+    launch: async () => {
+      launches++;
+      const browser = new EventEmitter();
+      browser.close = async () => {};
+      return browser;
+    },
+  });
+  const request = () =>
+    fetch(worker.endpoint + '/v1/browsers', {
+      method: 'POST',
+      headers: worker.headers,
+      body: JSON.stringify({ protocolVersion: 1, engine: 'camoufox' }),
+    });
+  try {
+    assert.equal((await request()).status, 201);
+    const queued = await request();
+    assert.equal(queued.status, 503);
+    assert.equal((await queued.json()).error, 'runtime_busy');
+    assert.equal(launches, 1);
+    const health = await (await fetch(worker.endpoint + '/healthz', { headers: worker.headers })).json();
+    assert.equal(health.queued, 0);
+  } finally {
+    await worker.close();
+  }
+});
+
 test('APK payload activation is atomic, repeatable, and rejects symlink escapes', async () => {
   const root = await mkdtemp(join(tmpdir(), 'boaa-apk-payload-'));
   const source = join(root, 'source'),

@@ -16,7 +16,7 @@ function abortable(operation, signal) {
   return Promise.race([operation, aborted]).finally(() => signal.removeEventListener('abort', cancel));
 }
 
-async function closeContext(context, browser) {
+async function closeContext(context, browser, closeBrowser) {
   if (!context) return;
   let timer;
   try {
@@ -30,7 +30,7 @@ async function closeContext(context, browser) {
       }),
     ]);
     // A broken browser must not keep an aborted request or its admission slot alive.
-    if (!closed) void browser?.close().catch(() => {});
+    if (!closed && browser) void closeBrowser(browser);
   } finally {
     clearTimeout(timer);
   }
@@ -50,6 +50,42 @@ export function createBrowserSourceHttp({ channel, timeoutMs = 15_000 } = {}) {
   let active = 0;
   let browserPromise;
   let disposing;
+  let retiring = Promise.resolve();
+  const shutdowns = new WeakMap();
+  function closeBrowser(instance) {
+    if (!shutdowns.has(instance)) {
+      const closing = Promise.resolve()
+        .then(() => instance.close())
+        .catch(() => {});
+      shutdowns.set(instance, closing);
+      // A failed context may discard the shared browser while other requests still hold slots.
+      retiring = Promise.all([retiring, closing]).then(() => {});
+    }
+    return shutdowns.get(instance);
+  }
+  function retireBrowser(instance) {
+    const pending = browserPromise;
+    browserPromise = undefined;
+    retiring = Promise.all([
+      retiring,
+      pending?.then(closeBrowser).catch(() => {}),
+      instance && closeBrowser(instance),
+    ]).then(() => {});
+    return retiring;
+  }
+  async function settleCleanup(cleanup) {
+    let timer;
+    try {
+      await Promise.race([
+        cleanup,
+        new Promise((resolve) => {
+          timer = setTimeout(resolve, 2000);
+        }),
+      ]);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
 
   function acquire(signal) {
     signal.throwIfAborted();
@@ -60,11 +96,12 @@ export function createBrowserSourceHttp({ channel, timeoutMs = 15_000 } = {}) {
           signal.removeEventListener('abort', cancel);
           active += 1;
           let released = false;
-          resolve(() => {
+          resolve((instance) => {
             if (released) return;
             released = true;
             active -= 1;
             waiting.shift()?.start();
+            if (active === 0) return settleCleanup(retireBrowser(instance));
           });
         },
       };
@@ -80,22 +117,31 @@ export function createBrowserSourceHttp({ channel, timeoutMs = 15_000 } = {}) {
   }
   function browser() {
     if (!browserPromise) {
-      browserPromise = camoufoxLaunchOptions()
-        .then((options) => firefox.launch({ ...options, timeout: 15_000 }))
+      const launching = retiring
+        .then(() => {
+          shutdown.signal.throwIfAborted();
+          return camoufoxLaunchOptions();
+        })
+        .then((options) => {
+          shutdown.signal.throwIfAborted();
+          if (browserPromise !== launching) throw new Error('cancelled');
+          return firefox.launch({ ...options, timeout: 15_000 });
+        })
         .then(async (instance) => {
           if (shutdown.signal.aborted) {
-            await instance.close();
+            await closeBrowser(instance);
             throw shutdown.signal.reason;
           }
           instance.on('disconnected', () => {
-            browserPromise = undefined;
+            if (browserPromise === launching) browserPromise = undefined;
           });
           return instance;
         })
         .catch(() => {
-          browserPromise = undefined;
+          if (browserPromise === launching) browserPromise = undefined;
           throw new SourceError(503, 'source_browser_unavailable');
         });
+      browserPromise = launching;
     }
     return browserPromise;
   }
@@ -148,7 +194,7 @@ export function createBrowserSourceHttp({ channel, timeoutMs = 15_000 } = {}) {
             acceptDownloads: false,
           })
           .then((created) => {
-            if (signal.aborted) void closeContext(created, instance);
+            if (signal.aborted) void closeContext(created, instance, closeBrowser);
             return created;
           }),
         signal,
@@ -257,15 +303,14 @@ export function createBrowserSourceHttp({ channel, timeoutMs = 15_000 } = {}) {
     } finally {
       clearTimeout(timer);
       signal.removeEventListener('abort', close);
-      await closeContext(context, instance);
-      release?.();
+      await closeContext(context, instance, closeBrowser);
+      await release?.(instance);
     }
   }
   function dispose() {
     return (disposing ??= (async () => {
       shutdown.abort(new SourceError(503, 'server_stopping'));
-      const instance = await browserPromise?.catch(() => undefined);
-      await instance?.close();
+      await retireBrowser();
     })());
   }
   return { fetchImpl, dispose };

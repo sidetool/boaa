@@ -64,7 +64,7 @@ test(
   'Camoufox metadata transport against an isolated loopback server',
   {
     skip: enabled ? false : 'Opt-in: RUN_SOURCE_BROWSER_TESTS=1 and an installed Camoufox browser are required.',
-    timeout: 60_000,
+    timeout: 120_000,
   },
   async (t) => {
     const requests = [];
@@ -126,7 +126,7 @@ test(
     const origin = `http://127.0.0.1:${server.address().port}`;
     const transport = createBrowserSourceHttp({
       channel: process.env.SOURCE_BROWSER_CHANNEL || undefined,
-      timeoutMs: 5_000,
+      // Use the production deadline: each completed batch now closes its browser.
     });
     t.after(async () => {
       await transport.dispose();

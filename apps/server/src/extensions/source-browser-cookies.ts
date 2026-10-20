@@ -1,10 +1,12 @@
 import { readBrowserSession, writeBrowserSession } from './source-browser-session.js';
 import { CookieJar } from 'tough-cookie';
-import type { SourceWebViewScope } from './source-webview.js';
+import { sourceWebViewHost, type SourceWebViewScope } from './source-webview.js';
+import { refreshSourceBrowserSession } from './source-browser-refresh.js';
+import { sourceBrowserUsage } from './source-browser-mode.js';
 import { compatibilityHttp, type CompatibilityHttpInput } from './mangayomi/http.js';
 import { compatibilityHttpPolicy } from './mangayomi/http-options.js';
 
-/** Bridges ordinary HTTP with the source's WebView session without launching a browser for HTTP requests. */
+/** HTTP by default; browser use requires an owner-selected source policy and host capability. */
 export async function sourceBrowserHttp(
   input: CompatibilityHttpInput,
   signal: AbortSignal,
@@ -16,14 +18,33 @@ export async function sourceBrowserHttp(
   const policy = compatibilityHttpPolicy(input?.options);
   const deadline = AbortSignal.any([signal, AbortSignal.timeout(policy.timeoutMs)]);
   try {
-    return await requestWithCookies(
-      input,
-      deadline,
-      scope,
-      maximum,
-      transport,
-      followRedirects && policy.followRedirects,
-    );
+    const usage = scope.browserAllowed ? sourceBrowserUsage(scope.browserUsage) : 'off';
+    const send = () =>
+      usage === 'always'
+        ? sourceWebViewHost.request(input, scope, deadline, maximum, followRedirects)
+        : requestWithCookies(input, deadline, scope, maximum, transport, followRedirects && policy.followRedirects);
+    const response = await send();
+    // Never replay a mutation or interpret an ordinary permission denial as a challenge.
+    if (
+      usage === 'off' ||
+      !['GET', 'HEAD'].includes(input.method ?? 'GET') ||
+      ![403, 503].includes(response.statusCode) ||
+      response.headers['cf-mitigated'] !== 'challenge'
+    )
+      return response;
+    try {
+      await refreshSourceBrowserSession(
+        response.url,
+        new URL(response.url).origin === new URL(input.url).origin ? input.headers : undefined,
+        scope,
+        deadline,
+      );
+    } catch (error) {
+      // An optional component being absent must not change ordinary HTTP behavior.
+      if ((error as Error).message === 'source_browser_unavailable') return response;
+      throw error;
+    }
+    return await send();
   } catch (error) {
     if (!signal.aborted && deadline.aborted) throw new Error('source_request_timeout', { cause: error });
     throw error;

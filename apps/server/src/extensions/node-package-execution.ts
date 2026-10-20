@@ -179,9 +179,12 @@ export function createNodePackageExecution(
                     credentialEpoch ?? pkg.digest,
                   ]),
                   vault: options.vault,
+                  origins: networkOrigins,
                   privateOrigins: sourceOptions.privateOrigins,
                   outboundProxy,
                   browserMode: 'browserMode' in sourceOptions ? sourceOptions.browserMode : undefined,
+                  browserUsage: 'browserUsage' in sourceOptions ? sourceOptions.browserUsage : undefined,
+                  browserAllowed: !!pkg.manifest.requestedAccess.webview,
                 },
                 2 * 1024 * 1024,
                 compatibilityHttp,
@@ -196,6 +199,8 @@ export function createNodePackageExecution(
             },
             'webview.evaluate': async (request, requestSignal) => {
               if (!pkg.manifest.requestedAccess.webview) throw new Error('permission_denied');
+              if (!('browserUsage' in sourceOptions) || sourceOptions.browserUsage === 'off')
+                throw new Error('source_browser_disabled');
               return sourceWebViewHost.evaluate(
                 request as SourceWebViewRequest,
                 {
@@ -209,6 +214,8 @@ export function createNodePackageExecution(
                   privateOrigins: sourceOptions.privateOrigins,
                   outboundProxy,
                   browserMode: 'browserMode' in sourceOptions ? sourceOptions.browserMode : undefined,
+                  browserUsage: 'browserUsage' in sourceOptions ? sourceOptions.browserUsage : undefined,
+                  browserAllowed: !!pkg.manifest.requestedAccess.webview,
                 },
                 requestSignal,
               );

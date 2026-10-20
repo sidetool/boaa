@@ -4,6 +4,16 @@ Source WebViews, local collector authentication and the optional text-source
 browser transport use Camoufox. Normal HTTP source requests remain HTTP.
 The source browser has no Chromium, Edge or Patchright fallback and no
 per-source engine selector. Existing engine preferences normalize to Camoufox.
+Browser _usage_ is a separate source preference: off (default), when needed,
+or always for document requests. Installing the optional browser component does
+not enable browser use for every source. The basic server image and default
+installation remain browser-free. Host cover/image downloads remain HTTP.
+Source operations save cookies/UA and close their browser immediately; there is
+no warm pool. The managed browser service admits only one process at a time,
+with a bounded cancellable queue shared by API and metadata callers. Text-source
+browser transport also shuts down when its active batch finishes; collector
+background requests close their browser, while an interactive login stays open
+until the user finishes or closes it.
 The native app's WebView2 user interface and development UI test browsers are
 separate from source execution.
 
@@ -44,8 +54,8 @@ through the actual extension host, using the installation's effective transport.
    not modify an existing installation automatically.
 4. Switch API, worker, browser and metadata as one compatible set. Verify health
    and browser operations through the actual API before marking the rollout
-   complete. Measure working memory under two concurrent source jobs against the
-   configured browser container memory limit.
+   complete. Measure queued concurrent jobs, peak memory, and true idle memory
+   after health reports zero active/queued leases and no browser process remains.
 5. Keep previous image digests and resolved configuration until the new release
    has passed those checks. Roll back the compatible image set and configuration
    together if validation fails.
@@ -59,14 +69,15 @@ One browser engine avoids duplicate engines, but the official Camoufox font
 bundle is substantial. Report measured artifact sizes; do not promise a smaller
 download solely because the engine count decreased.
 
-## Linux amd64 validation snapshot
+## Earlier Linux amd64 validation snapshot (before transient lifecycle)
 
 The local candidate passed 21 focused server tests, eight remote source-browser
 tests and the Python-to-Node metadata bridge smoke test. The remote checks ran
 with `--init`, 256 MiB shared memory and a 1536 MiB container memory limit.
 The cgroup peak was 1,474,867,200 bytes (about 1.37 GiB); the final Docker stats
 sample was 680.8 MiB. These are container measurements, not browser process RSS
-or a guarantee for arbitrary pages and concurrent workloads.
+or a fully stopped browser baseline. Re-measure idle memory after the transient
+lifecycle changes; do not present this warm sample as current idle usage.
 
 The text-source image passed all nine tests with a read-only root, the Compose
 tmpfs mounts, all capabilities dropped and `no-new-privileges`. This includes
@@ -82,3 +93,19 @@ configuration has its own fingerprint and compatibility verification.
 These checks do not certify Windows, arm64, every installed source or a production
 rollout. Public binary publication still requires final-image component/source
 evidence and the platform checks above.
+
+## Transient lifecycle validation (Linux amd64)
+
+The revised worker passed nine actual remote browser tests and the Python bridge
+smoke test, including raw HTTP bytes, POST, HEAD, manual redirects and size bounds.
+Both cold idle and post-work idle had zero active/queued leases and zero browser
+processes. Across two runs, cold Docker stats were 16.2–16.3 MiB and post-work
+samples were 302.6–696.2 MiB. Post-work cgroup totals were about 724 MiB, including
+86–90 MiB of anonymous memory and 622–629 MiB of file cache. Docker stats subtracts
+inactive file cache, whose classification differed substantially between runs;
+the smaller Docker sample does not demonstrate lower total memory consumption.
+The latest run recorded 759,443,456 bytes total, 90,144,768 anonymous and
+659,333,120 file-backed (29,089,792 inactive). Peak usage was 1,184,067,584 bytes
+(about 1.10 GiB) under a 1536 MiB limit. Closing browsers removes their processes,
+but does not immediately return file-cache accounting to its cold value.
+These measurements do not mean idle usage is zero or certify every source.

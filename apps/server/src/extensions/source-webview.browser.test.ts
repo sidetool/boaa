@@ -161,6 +161,21 @@ describe.skipIf(!process.env.BOAA_TEST_SOURCE_BROWSER)('production source WebVie
       expect(authorization).toBeUndefined();
       expect(customToken).toBeUndefined();
       expect(initialAuthorization).toBe('Bearer synthetic-only');
+      const response = await host.request(
+        { url: redirectOrigin, headers: { Authorization: 'Bearer synthetic-only', 'X-Api-Key': 'synthetic-custom' } },
+        {
+          key: 'http-redirect-isolation',
+          origins: [redirectOrigin, targetOrigin],
+          privateOrigins: [redirectOrigin, targetOrigin],
+        },
+        AbortSignal.timeout(15000),
+        1024,
+        true,
+      );
+      expect(response.statusCode).toBe(200);
+      expect(authorization).toBeUndefined();
+      expect(customToken).toBeUndefined();
+      expect(initialAuthorization).toBe('Bearer synthetic-only');
     } finally {
       redirect.closeAllConnections();
       target.closeAllConnections();
@@ -203,4 +218,56 @@ describe.skipIf(!process.env.BOAA_TEST_SOURCE_BROWSER)('production source WebVie
       });
     }
   });
+  it('uses browser HTTP for raw bytes, one POST, HEAD, bounded bodies and explicit redirect policy', async () => {
+    const exact = Buffer.from('\uFEFF{ "title": "합성", "spacing": "  " }\r\n');
+    let posts = 0,
+      receivedBody = '',
+      followed = 0;
+    const fixture = createServer(async (request, response) => {
+      if (request.url === '/redirect') {
+        response.writeHead(302, { location: '/target' }).end();
+        return;
+      }
+      if (request.url === '/target') followed++;
+      if (request.method === 'POST') {
+        posts++;
+        for await (const chunk of request) receivedBody += chunk;
+      }
+      response.writeHead(200, { 'content-type': 'application/json', 'set-cookie': 'raw=kept; Path=/' });
+      response.end(exact);
+    });
+    await new Promise<void>((resolve) => fixture.listen(0, '127.0.0.1', resolve));
+    const target = `http://127.0.0.1:${(fixture.address() as { port: number }).port}`;
+    const current = { ...scope('browser-http'), origins: [target], privateOrigins: [target] };
+    try {
+      const request = (path: string, method = 'GET', maximum = 1024, follow = false) =>
+        host.request(
+          {
+            url: target + path,
+            method,
+            ...(method === 'POST'
+              ? { body: 'query=synthetic', headers: { 'Content-Type': 'application/x-www-form-urlencoded' } }
+              : {}),
+          },
+          current,
+          AbortSignal.timeout(15000),
+          maximum,
+          follow,
+        );
+      const raw = await request('/');
+      expect(raw.bytes).toEqual(exact);
+      expect((await request('/', 'POST')).statusCode).toBe(200);
+      expect(posts).toBe(1);
+      expect(receivedBody).toBe('query=synthetic');
+      expect((await request('/', 'HEAD')).bytes.length).toBe(0);
+      expect((await request('/redirect')).statusCode).toBe(302);
+      expect(followed).toBe(0);
+      expect((await request('/redirect', 'GET', 1024, true)).url).toBe(target + '/target');
+      expect(followed).toBe(1);
+      await expect(request('/', 'GET', 4)).rejects.toThrow('source_body_limit');
+    } finally {
+      fixture.closeAllConnections();
+      await new Promise<void>((done) => fixture.close(() => done()));
+    }
+  }, 90000);
 });

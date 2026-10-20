@@ -3,6 +3,10 @@ import { sourceBrowserLimits } from './source-browser-limits.js';
 import { readBrowserSession, mergeBrowserSession } from './source-browser-session.js';
 import { launchSourceBrowser } from './source-browser-launch.js';
 import { firefox, type Browser, type BrowserContext } from 'playwright-core';
+import type { CompatibilityHttpInput, compatibilityHttp } from './mangayomi/http.js';
+import { compatibilityHttpPolicy } from './mangayomi/http-options.js';
+import type { SourceBrowserUsage } from './source-browser-mode.js';
+import { requestInSourceBrowser } from './source-browser-http-transport.js';
 import {
   validSourceWebViewRequest,
   type SourceWebViewRequest,
@@ -54,11 +58,14 @@ export interface SourceWebViewScope {
   privateOrigins?: readonly string[];
   outboundProxy?: string;
   browserMode?: 'camoufox';
+  browserUsage?: SourceBrowserUsage;
+  /** Host capability, never supplied by a source's HTTP arguments. */
+  browserAllowed?: boolean;
   /** Image discovery may load a whole chapter before its collector returns URLs. */
   purpose?: 'image-pages';
 }
 
-/** Two warm browser slots, with a separate short-lived context for each source invocation. */
+/** Browser processes exist only while a source invocation is using them. */
 const browserVaultIds = new WeakMap<SourceCredentialVault, number>();
 let browserVaultSequence = 0;
 function browserAdmissionKey(scope: SourceWebViewScope): string {
@@ -73,42 +80,85 @@ function browserAdmissionKey(scope: SourceWebViewScope): string {
 
 export class SourceWebViewHost {
   private browsers = new Map<string, Promise<Browser>>();
-  private idle?: ReturnType<typeof setTimeout>;
   private pending = 0;
   private active = 0;
   private scopes = new Set<string>();
   private slots = new Set<number>();
   private wake = new Set<() => void>();
+  private shutdowns = new WeakMap<Browser, Promise<void>>();
+
+  private disposeBrowser(browser: Browser) {
+    let closing = this.shutdowns.get(browser);
+    if (!closing) {
+      closing = Promise.resolve()
+        .then(() => browser.close())
+        .catch(() => undefined);
+      this.shutdowns.set(browser, closing);
+    }
+    return closing;
+  }
 
   private async releaseContext(context: BrowserContext, browser: Browser, engine: string) {
     if (await boundedClose(context.close())) return;
     // A stalled proxy connection can make context close hang. Discard that connection before admitting reuse.
     if ((await this.browsers.get(engine)?.catch(() => undefined)) === browser) this.browsers.delete(engine);
-    void browser.close().catch(() => undefined);
+    void this.disposeBrowser(browser);
   }
 
-  private async launch(engine: string): Promise<Browser> {
-    clearTimeout(this.idle);
+  private async launch(engine: string, signal?: AbortSignal): Promise<Browser> {
     if (!this.browsers.has(engine)) {
-      this.browsers.set(
-        engine,
-        (async () => {
-          return launchSourceBrowser(firefox);
-        })().catch((error) => {
-          this.browsers.delete(engine);
-          throw new Error('source_browser_unavailable', { cause: error });
-        }),
-      );
+      const launching = launchSourceBrowser(firefox, [], process.platform, 'camoufox', signal).catch((error) => {
+        if (this.browsers.get(engine) === launching) this.browsers.delete(engine);
+        throw new Error('source_browser_unavailable', { cause: error });
+      });
+      this.browsers.set(engine, launching);
     }
     const browser = await this.browsers.get(engine)!;
     if (!browser.isConnected()) {
       this.browsers.delete(engine);
-      return this.launch(engine);
+      throw new Error('source_browser_unavailable');
     }
     return browser;
   }
 
   async evaluate(input: SourceWebViewRequest, scope: SourceWebViewScope, signal: AbortSignal): Promise<unknown> {
+    return this.run(input, scope, signal);
+  }
+
+  /** Browser networking selected by the owner's per-source policy, preserving raw response bytes. */
+  async request(
+    input: CompatibilityHttpInput,
+    scope: SourceWebViewScope,
+    signal: AbortSignal,
+    maximum: number,
+    followRedirects: boolean,
+  ) {
+    if (
+      !['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'].includes(input.method ?? 'GET') ||
+      (input.body !== undefined && (typeof input.body !== 'string' || Buffer.byteLength(input.body) > 256 * 1024)) ||
+      new URL(input.url).hash
+    )
+      throw new Error('source_http_failed');
+    const policy = compatibilityHttpPolicy(input.options);
+    return (await this.run(
+      {
+        url: input.url,
+        headers: input.headers,
+        script: 'null',
+        timeoutMs: Math.max(100, policy.timeoutMs),
+      },
+      scope,
+      signal,
+      { input, maximum, followRedirects: followRedirects && policy.followRedirects },
+    )) as Awaited<ReturnType<typeof compatibilityHttp>>;
+  }
+
+  private async run(
+    input: SourceWebViewRequest,
+    scope: SourceWebViewScope,
+    signal: AbortSignal,
+    http?: { input: CompatibilityHttpInput; maximum: number; followRedirects: boolean },
+  ): Promise<unknown> {
     const admissionKey = browserAdmissionKey(scope);
     if (!validSourceWebViewRequest(input)) throw new Error('invalid_source_invocation');
     const permitted = (raw: string) => {
@@ -142,7 +192,7 @@ export class SourceWebViewHost {
           if (deadline.aborted) {
             cleanup();
             reject(new Error(signal.aborted ? 'cancelled' : 'source_request_timeout'));
-          } else if (this.active < 2 && !this.scopes.has(admissionKey)) {
+          } else if (this.active < 1 && !this.scopes.has(admissionKey)) {
             this.active++;
             slot = this.slots.has(0) ? 1 : 0;
             this.slots.add(slot);
@@ -161,7 +211,7 @@ export class SourceWebViewHost {
         deadline.addEventListener('abort', check, { once: true });
         check();
       });
-      browser = await beforeDeadline(this.launch(engine), deadline);
+      browser = await beforeDeadline(this.launch(engine, deadline), deadline);
       deadline.throwIfAborted();
       const saved = readBrowserSession(scope);
       const suppliedHeaders = Object.fromEntries(
@@ -213,6 +263,11 @@ export class SourceWebViewHost {
               try {
                 const request = route.request();
                 const url = permitted(request.url());
+                // Document transport does not need images or media.
+                if (http && ['image', 'media'].includes(request.resourceType()) && !request.isNavigationRequest()) {
+                  await route.abort('failed');
+                  return;
+                }
                 if (++requests > limits.requests) throw new Error('source_body_limit');
                 const headers = await request.allHeaders();
                 delete headers.host;
@@ -235,28 +290,36 @@ export class SourceWebViewHost {
             page.on('popup', (popup) => {
               void popup.close().catch(() => undefined);
             });
-            let response = await page.goto(input.url, { waitUntil: input.waitUntil ?? 'domcontentloaded', timeout: 0 });
-            if ([403, 503].includes(response?.status() ?? 0)) {
-              response = await page
-                .waitForResponse(
-                  (res) => res.request().isNavigationRequest() && res.frame() === page.mainFrame() && res.ok(),
-                  { timeout: 10000 },
-                )
-                .catch(() => response!);
-              if (response?.ok())
-                await page.waitForLoadState(input.waitUntil ?? 'domcontentloaded', { timeout: 10000 });
+            let result: unknown;
+            if (http) {
+              result = await requestInSourceBrowser(page, http.input, http.maximum, http.followRedirects, permitted);
+            } else {
+              let response = await page.goto(input.url, {
+                waitUntil: input.waitUntil ?? 'domcontentloaded',
+                timeout: 0,
+              });
+              if ([403, 503].includes(response?.status() ?? 0)) {
+                response = await page
+                  .waitForResponse(
+                    (res) => res.request().isNavigationRequest() && res.frame() === page.mainFrame() && res.ok(),
+                    { timeout: 10000 },
+                  )
+                  .catch(() => response!);
+                if (response?.ok())
+                  await page.waitForLoadState(input.waitUntil ?? 'domcontentloaded', { timeout: 10000 });
+              }
+              if (!response?.ok())
+                throw new Error(
+                  navigationFailure ??
+                    proxy?.failure ??
+                    (response?.status() === 401 || response?.status() === 403
+                      ? 'source_access_denied'
+                      : 'source_http_failed'),
+                );
+              result = await page.evaluate('mw:' + input.script);
             }
-            if (!response?.ok())
-              throw new Error(
-                navigationFailure ??
-                  proxy?.failure ??
-                  (response?.status() === 401 || response?.status() === 403
-                    ? 'source_access_denied'
-                    : 'source_http_failed'),
-              );
-            const result: unknown = await page.evaluate('mw:' + input.script);
             deadline.throwIfAborted();
-            if (Buffer.byteLength(JSON.stringify(result) ?? 'null') > 2 * 1024 * 1024)
+            if (!http && Buffer.byteLength(JSON.stringify(result) ?? 'null') > 2 * 1024 * 1024)
               throw new Error('source_body_limit');
             const state = await context.storageState();
             const actualAgent = await page.evaluate(() => navigator.userAgent);
@@ -287,41 +350,33 @@ export class SourceWebViewHost {
       if (deadline.aborted) throw new Error(signal.aborted ? 'cancelled' : 'source_request_timeout', { cause: error });
       throw error;
     } finally {
-      if (deadline.aborted && admitted) {
-        // Firefox may leave proxy authentication work pending after a cancelled context.
-        // Each admitted job owns one browser slot, so discarding it cannot cancel another source.
-        const launching = this.browsers.get(engine);
-        this.browsers.delete(engine);
-        if (browser) await boundedClose(browser.close());
-        else void launching?.then((late) => late.close()).catch(() => undefined);
-      } else if (context && browser) {
-        await this.releaseContext(context, browser, engine);
-      }
       proxy?.close();
       this.pending--;
       if (admitted) {
-        this.active--;
-        this.slots.delete(slot);
-        this.scopes.delete(admissionKey);
-      }
-      notify();
-      if (!this.pending) {
-        this.idle = setTimeout(
-          () => {
-            void this.close();
-          },
-          5 * 60 * 1000,
-        );
-        this.idle.unref();
+        // Persisted session state survives; the heavyweight process never stays warm.
+        const launching = this.browsers.get(engine);
+        const cleanup = (
+          browser ? this.disposeBrowser(browser) : launching?.then((late) => this.disposeBrowser(late))
+        )?.catch(() => undefined);
+        const released = Promise.resolve(cleanup).finally(() => {
+          if (this.browsers.get(engine) === launching) this.browsers.delete(engine);
+          this.active--;
+          this.slots.delete(slot);
+          this.scopes.delete(admissionKey);
+          notify();
+        });
+        // Respond promptly to cancellation, but do not launch a replacement over a stalled process.
+        await boundedClose(released);
       }
     }
   }
 
   async close() {
-    clearTimeout(this.idle);
     const browsers = [...this.browsers.values()];
     this.browsers.clear();
-    await Promise.all(browsers.map((browser) => browser.then((value) => value.close()).catch(() => undefined)));
+    await Promise.all(
+      browsers.map((browser) => browser.then((value) => this.disposeBrowser(value)).catch(() => undefined)),
+    );
   }
 }
 
