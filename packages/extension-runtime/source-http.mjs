@@ -148,8 +148,9 @@ function requestInput(input) {
 }
 
 /** Production transport pins the approved address. Test injection never comes from package metadata. */
-export function createSourceHttp(origins, { lookup, transport = pinnedRequest, authenticate } = {}) {
+export function createSourceHttp(origins, { lookup, transport = pinnedRequest, authenticate, session } = {}) {
   const grantedOrigins = [...origins];
+  const send = session ? (approved, request, signal) => session(approved, request, signal, transport) : transport;
   return async (untrusted, signal) => {
     const input = requestInput(untrusted);
     let next = input.url;
@@ -168,7 +169,7 @@ export function createSourceHttp(origins, { lookup, transport = pinnedRequest, a
           deadline.throwIfAborted();
           for (let index = 0; index < approved.addresses.length; index++) {
             try {
-              response = await transport(
+              response = await send(
                 { ...approved, address: approved.addresses[index] },
                 { ...request, headers: { ...request.headers, ...authentication } },
                 deadline,

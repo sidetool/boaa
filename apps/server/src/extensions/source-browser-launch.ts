@@ -6,6 +6,25 @@ export function sourceBrowserUsesRemote() {
   return !!process.env.BOAA_SOURCE_BROWSER_ENDPOINT && !process.env.BOAA_CAMOUFOX_EXECUTABLE;
 }
 
+/** An idle API lease yields to queued metadata clients rather than keeping them waiting. */
+export async function sourceBrowserHasQueuedClients(): Promise<boolean> {
+  if (!sourceBrowserUsesRemote()) return false;
+  const response = await fetch(
+    new URL('/healthz', runtimeComponentEndpoint(process.env.BOAA_SOURCE_BROWSER_ENDPOINT!)),
+    {
+      headers: { Authorization: `Bearer ${await runtimeComponentToken()}` },
+      redirect: 'error',
+      signal: AbortSignal.timeout(2000),
+    },
+  );
+  if (!response.ok) {
+    await response.body?.cancel();
+    return true;
+  }
+  const health = await readRuntimeJson(response);
+  return typeof health.queued !== 'number' || health.queued > 0;
+}
+
 /** Camoufox is the only source browser; local launches never discover a system browser. */
 export async function launchSourceBrowser(
   launcher: Pick<BrowserType, 'launch'> & Partial<Pick<BrowserType, 'connect'>>,

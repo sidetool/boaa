@@ -8,8 +8,11 @@ Browser _usage_ is a separate source preference: off (default), when needed,
 or always for document requests. Installing the optional browser component does
 not enable browser use for every source. The basic server image and default
 installation remain browser-free. Host cover/image downloads remain HTTP.
-Source operations save cookies/UA and close their browser immediately; there is
-no warm pool. The managed browser service admits only one process at a time,
+Source operations save cookies/UA and close their request contexts. Explicit
+WebView/document work shares one lazy browser for up to eight requests or 60 idle seconds;
+authentication-only refreshes close immediately before retrying HTTP. An idle API
+lease yields when another runtime client is queued, so metadata is not blocked
+by browser retention. The managed browser service admits only one process at a time,
 with a bounded cancellable queue shared by API and metadata callers. Text-source
 browser transport also shuts down when its active batch finishes; collector
 background requests close their browser, while an interactive login stays open
@@ -94,7 +97,7 @@ These checks do not certify Windows, arm64, every installed source or a producti
 rollout. Public binary publication still requires final-image component/source
 evidence and the platform checks above.
 
-## Transient lifecycle validation (Linux amd64)
+## Previous immediate-close validation (Linux amd64)
 
 The revised worker passed nine actual remote browser tests and the Python bridge
 smoke test, including raw HTTP bytes, POST, HEAD, manual redirects and size bounds.
@@ -109,3 +112,53 @@ The latest run recorded 759,443,456 bytes total, 90,144,768 anonymous and
 (about 1.10 GiB) under a 1536 MiB limit. Closing browsers removes their processes,
 but does not immediately return file-cache accounting to its cold value.
 These measurements do not mean idle usage is zero or certify every source.
+
+## Session reuse and responsive browser work
+
+Ordinary HTTP retains the selected proxy, saved cookies and browser UA. Native
+SDK requests use the same session policy without losing streaming, DNS pinning,
+authentication or origin checks. Maker cookie headers retain unrelated values;
+saved cookie values and browser identity take precedence when an authenticated
+session exists. Multi-value Set-Cookie headers must not be comma-flattened.
+
+Read-only challenge authentication coalesces concurrent requests and keeps a
+bounded 60-second cooldown. This avoids reopening browsers for every chapter
+when the resulting cookies are not accepted by HTTP. Authentication completes
+only after the challenge navigation commits, including same-URL reloads. Maker
+scripts are never replayed to mask an execution-context error.
+
+Explicit WebViews and browser document transport reuse a single process across
+operations. Every request closes its context and proxy, preserving source and
+network isolation. Idle retention is 60 seconds, with recycling after eight
+requests even during continuous use, and immediate disposal on
+failure/cancellation or authentication-only work. New requests wait for a closing
+process before launching a replacement. Idle API leases yield to queued runtime
+clients; active work is not interrupted. Browser-free installation and default-off
+source preferences remain unchanged.
+
+A repeated isolated challenge/HTTP probe passed three batches: one real browser
+authentication followed by ten ordinary HTTP reads in each batch. Browser process
+count returned to zero after each authentication batch. HTTP fixture reads took
+1–5 ms after authentication; this loopback measurement is not a live-site latency
+promise. Post-batch anonymous memory was roughly 77–91 MiB without increasing
+across the three batches; file cache remained separately accounted. Measure warm
+browsing and post-idle memory separately when validating this retention policy.
+
+An uncapped warm-process experiment completed 15 consecutive fixture requests,
+but anonymous memory rose from 455 MiB after five requests to 759 MiB after
+15 requests despite every context being closed. Container peak reached
+1,606,033,408 bytes, near the 1536 MiB limit. Idle expiry alone was therefore
+insufficient. The eight-request budget bounds retained browser state during
+continuous browsing as well; it does not imply that arbitrary pages have a
+fixed memory cost.
+
+With the eight-request budget, a 25-request fixture run passed three full recycle
+cycles and a final 65-second idle expiry. The first cold request took 5.9 seconds;
+later process starts took 3.4–3.6 seconds and reused requests took 0.75–1.08
+seconds. Each eight-request cycle used one browser instance. The four- and
+seven-request anonymous-memory samples stayed between 419 and 499 MiB across
+all three cycles instead of growing with the cumulative request count.
+Container peak was 1,082,073,088 bytes (about 1.01 GiB). After idle expiry there
+were no browser processes; cgroup usage was 453,918,720 bytes, including
+89,899,008 anonymous and 357,179,392 file-backed bytes. These are synthetic
+fixture measurements, not universal page-memory or live-site latency limits.

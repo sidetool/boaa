@@ -23,32 +23,52 @@ export async function sourceBrowserHttp(
       usage === 'always'
         ? sourceWebViewHost.request(input, scope, deadline, maximum, followRedirects)
         : requestWithCookies(input, deadline, scope, maximum, transport, followRedirects && policy.followRedirects);
-    const response = await send();
-    // Never replay a mutation or interpret an ordinary permission denial as a challenge.
-    if (
-      usage === 'off' ||
-      !['GET', 'HEAD'].includes(input.method ?? 'GET') ||
-      ![403, 503].includes(response.statusCode) ||
-      response.headers['cf-mitigated'] !== 'challenge'
-    )
-      return response;
-    try {
-      await refreshSourceBrowserSession(
-        response.url,
-        new URL(response.url).origin === new URL(input.url).origin ? input.headers : undefined,
-        scope,
-        deadline,
-      );
-    } catch (error) {
-      // An optional component being absent must not change ordinary HTTP behavior.
-      if ((error as Error).message === 'source_browser_unavailable') return response;
-      throw error;
-    }
-    return await send();
+    return await authenticateSourceRequest(input, scope, deadline, send);
   } catch (error) {
     if (!signal.aborted && deadline.aborted) throw new Error('source_request_timeout', { cause: error });
     throw error;
   }
+}
+
+/** Shared read-only challenge policy for buffered compatibility and streaming SDK transports. */
+export async function authenticateSourceRequest<
+  T extends {
+    statusCode: number;
+    url: string;
+    headers: Record<string, string | string[] | undefined>;
+  },
+>(
+  input: CompatibilityHttpInput,
+  scope: SourceWebViewScope,
+  signal: AbortSignal,
+  send: () => Promise<T>,
+  discard: (response: T) => void = () => {},
+): Promise<T> {
+  const usage = scope.browserAllowed ? sourceBrowserUsage(scope.browserUsage) : 'off';
+  const response = await send();
+  // Never replay a mutation or interpret an ordinary permission denial as a challenge.
+  if (
+    usage === 'off' ||
+    !['GET', 'HEAD'].includes(input.method ?? 'GET') ||
+    ![403, 503].includes(response.statusCode) ||
+    response.headers['cf-mitigated'] !== 'challenge'
+  )
+    return response;
+  try {
+    await refreshSourceBrowserSession(
+      response.url,
+      new URL(response.url).origin === new URL(input.url).origin ? input.headers : undefined,
+      scope,
+      signal,
+    );
+  } catch (error) {
+    // An optional component being absent must not change ordinary HTTP behavior.
+    if ((error as Error).message === 'source_browser_unavailable') return response;
+    discard(response);
+    throw error;
+  }
+  discard(response);
+  return await send();
 }
 
 async function requestWithCookies(
@@ -84,8 +104,21 @@ async function requestWithCookies(
     }
     throw new Error('source_redirect_limit');
   }
-  const read = () => readBrowserSession(scope);
-  const state = read();
+  const response = await transport(
+    { ...input, headers: sourceBrowserHeaders(input, scope) },
+    signal,
+    scope.privateOrigins,
+    maximum,
+    scope.outboundProxy,
+    followRedirects,
+  );
+  signal.throwIfAborted();
+  saveSourceBrowserCookies(response, scope);
+  return response;
+}
+
+export function sourceBrowserHeaders(input: CompatibilityHttpInput, scope: SourceWebViewScope) {
+  const state = readBrowserSession(scope);
   const jar = new CookieJar();
   for (const cookie of state.cookies) {
     const domain = String(cookie.domain).replace(/^\./, '');
@@ -98,24 +131,35 @@ async function requestWithCookies(
   }
   const headers = { ...input.headers };
   const userAgent = state.userAgents?.[new URL(input.url).origin];
-  if (userAgent && !Object.keys(headers).some((key) => key.toLowerCase() === 'user-agent'))
+  // Once the browser establishes an identity, a maker's hardcoded Chrome UA
+  // must not invalidate that session when the request returns to HTTP.
+  if (userAgent) {
+    for (const key of Object.keys(headers)) if (key.toLowerCase() === 'user-agent') delete headers[key];
     headers['user-agent'] = userAgent;
-  if (!Object.keys(headers).some((key) => key.toLowerCase() === 'cookie')) {
-    const cookie = jar.getCookieStringSync(input.url);
-    if (cookie) headers.cookie = cookie;
   }
-  const response = await transport(
-    { ...input, headers },
-    signal,
-    scope.privateOrigins,
-    maximum,
-    scope.outboundProxy,
-    followRedirects,
-  );
+  const savedCookie = jar.getCookieStringSync(input.url);
+  if (savedCookie) {
+    const names = new Set(savedCookie.split(';').map((part) => part.trim().split('=', 1)[0]));
+    const cookieKey = Object.keys(headers).find((key) => key.toLowerCase() === 'cookie');
+    const supplied = (cookieKey ? headers[cookieKey] : '')
+      .split(';')
+      .map((part) => part.trim())
+      .filter((part) => part && !names.has(part.split('=', 1)[0]));
+    for (const key of Object.keys(headers)) if (key.toLowerCase() === 'cookie') delete headers[key];
+    headers.cookie = [...supplied, savedCookie].join('; ');
+  }
+  return headers;
+}
+
+export function saveSourceBrowserCookies(
+  response: { url: string; headers: Record<string, string | string[] | undefined> },
+  scope: SourceWebViewScope,
+) {
+  const jar = new CookieJar();
   const received = response.headers['set-cookie'];
   if (received) {
     // Merge against the latest state so concurrent HTTP responses do not discard each other's cookies.
-    const latest = read();
+    const latest = readBrowserSession(scope);
     for (const text of Array.isArray(received) ? received : [received]) {
       const cookie = jar.setCookieSync(text, response.url, { ignoreError: true });
       if (!cookie?.domain) continue;
@@ -137,8 +181,6 @@ async function requestWithCookies(
         sameSite: cookie.sameSite === 'strict' ? 'Strict' : cookie.sameSite === 'none' ? 'None' : 'Lax',
       });
     }
-    signal.throwIfAborted();
     writeBrowserSession(scope, latest);
   }
-  return response;
 }

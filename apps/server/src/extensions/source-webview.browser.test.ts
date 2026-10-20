@@ -1,11 +1,13 @@
 import { mangayomiWebViewScript } from './mangayomi/webview-script.js';
 import { createServer, type Server } from 'node:http';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { firefox, type Browser } from 'playwright-core';
+import { launchSourceBrowser, sourceBrowserUsesRemote } from './source-browser-launch.js';
 import { SourceWebViewHost } from './source-webview.js';
 import { sourceBrowserHttp } from './source-browser-cookies.js';
 
 describe.skipIf(!process.env.BOAA_TEST_SOURCE_BROWSER)('production source WebView', { timeout: 30000 }, () => {
-  const host = new SourceWebViewHost();
+  const host = new SourceWebViewHost({ idleMs: 0 });
   const secrets = new Map<string, { secret: string }>();
   const vault = {
     read: (key: string) => secrets.get(key),
@@ -218,6 +220,133 @@ describe.skipIf(!process.env.BOAA_TEST_SOURCE_BROWSER)('production source WebVie
       });
     }
   });
+  it('finishes a same-URL challenge reload, then uses real HTTP with maker headers and saved identity', async () => {
+    let browserAgent = '';
+    let challenges = 0;
+    const fixture = createServer((request, response) => {
+      if (request.headers.cookie?.includes('verified=yes') && request.headers['user-agent'] === browserAgent) {
+        response.writeHead(200, { 'content-type': 'application/json' }).end('{"ok":true}');
+        return;
+      }
+      challenges++;
+      if (request.headers['user-agent']?.includes('Firefox/')) browserAgent = request.headers['user-agent'];
+      response
+        .writeHead(403, { 'content-type': 'text/html', 'cf-mitigated': 'challenge' })
+        .end('<script>document.cookie="verified=yes; Path=/";location.reload();</script>');
+    });
+    await new Promise<void>((resolve) => fixture.listen(0, '127.0.0.1', resolve));
+    const target = `http://127.0.0.1:${(fixture.address() as { port: number }).port}`;
+    const current = {
+      ...scope('http-clearance'),
+      origins: [target],
+      privateOrigins: [target],
+      browserAllowed: true,
+      browserUsage: 'http-first' as const,
+    };
+    try {
+      for (let attempt = 0; attempt < 3; attempt++) {
+        const response = await sourceBrowserHttp(
+          {
+            url: target,
+            headers: { 'User-Agent': 'Maker Chrome UA', Cookie: 'maker=yes' },
+            options: { timeout: 25 },
+          },
+          AbortSignal.timeout(30000),
+          current,
+          1024,
+        );
+        expect(response.statusCode).toBe(200);
+        expect(response.bytes.toString()).toBe('{"ok":true}');
+      }
+      expect(challenges).toBe(2); // One HTTP denial and one browser challenge; no repeated authentication.
+    } finally {
+      fixture.closeAllConnections();
+      await new Promise<void>((resolve) => fixture.close(() => resolve()));
+    }
+  });
+  it('reuses a browser across consecutive source operations, then closes after idle', async () => {
+    const warm = new SourceWebViewHost({ idleMs: 250, hasQueuedClients: async () => false });
+    const launcher = warm as unknown as { launch(engine: string, signal?: AbortSignal): Promise<Browser> };
+    const original = launcher.launch.bind(warm);
+    const browsers: Browser[] = [];
+    const launch = vi.spyOn(launcher, 'launch').mockImplementation(async (...args) => {
+      const browser = await original(...args);
+      browsers.push(browser);
+      return browser;
+    });
+    try {
+      for (let i = 0; i < 3; i++)
+        expect(await warm.evaluate({ url: origin, script: '42' }, scope('warm-' + i), AbortSignal.timeout(15000))).toBe(
+          42,
+        );
+      expect(new Set(browsers).size).toBe(1);
+      expect(browsers[0].contexts()).toHaveLength(0);
+      expect(browsers[0].isConnected()).toBe(true);
+      await vi.waitFor(() => expect(browsers[0].isConnected()).toBe(false), { timeout: 5000 });
+    } finally {
+      launch.mockRestore();
+      await warm.close();
+    }
+  });
+  it('yields an idle browser when another runtime client is waiting', async () => {
+    let queued = false;
+    const warm = new SourceWebViewHost({ idleMs: 60000, queueCheckMs: 30, hasQueuedClients: async () => queued });
+    const launcher = warm as unknown as { launch(engine: string, signal?: AbortSignal): Promise<Browser> };
+    const original = launcher.launch.bind(warm);
+    let browser: Browser | undefined;
+    const launch = vi
+      .spyOn(launcher, 'launch')
+      .mockImplementation(async (...args) => (browser = await original(...args)));
+    try {
+      await warm.evaluate({ url: origin, script: 'true' }, scope('warm-yield'), AbortSignal.timeout(15000));
+      expect(browser?.isConnected()).toBe(true);
+      queued = true;
+      await vi.waitFor(() => expect(browser?.isConnected()).toBe(false), { timeout: 5000 });
+    } finally {
+      launch.mockRestore();
+      await warm.close();
+    }
+  });
+  it('recycles a busy browser after its use budget without retaining closed contexts', async () => {
+    const warm = new SourceWebViewHost({ idleMs: 60000, maxUses: 2, hasQueuedClients: async () => false });
+    const launcher = warm as unknown as { launch(engine: string, signal?: AbortSignal): Promise<Browser> };
+    const original = launcher.launch.bind(warm);
+    const browsers: Browser[] = [];
+    const launch = vi.spyOn(launcher, 'launch').mockImplementation(async (...args) => {
+      const browser = await original(...args);
+      browsers.push(browser);
+      return browser;
+    });
+    try {
+      for (let i = 0; i < 3; i++)
+        expect(
+          await warm.evaluate({ url: origin, script: '42' }, scope('budget-' + i), AbortSignal.timeout(15000)),
+        ).toBe(42);
+      expect(browsers[0]).toBe(browsers[1]);
+      expect(browsers[0].isConnected()).toBe(false);
+      expect(browsers[2]).not.toBe(browsers[0]);
+      expect(browsers[2].isConnected()).toBe(true);
+      expect(browsers[2].contexts()).toHaveLength(0);
+    } finally {
+      launch.mockRestore();
+      await warm.close();
+    }
+  });
+  it.skipIf(!sourceBrowserUsesRemote())(
+    'allows a real second client to acquire the remote runtime while the API is idle',
+    async () => {
+      const warm = new SourceWebViewHost({ idleMs: 60000, queueCheckMs: 100 });
+      let other: Browser | undefined;
+      try {
+        await warm.evaluate({ url: origin, script: 'true' }, scope('remote-warm-yield'), AbortSignal.timeout(15000));
+        other = await launchSourceBrowser(firefox, [], process.platform, 'camoufox', AbortSignal.timeout(15000));
+        expect(other.isConnected()).toBe(true);
+      } finally {
+        await other?.close();
+        await warm.close();
+      }
+    },
+  );
   it('uses browser HTTP for raw bytes, one POST, HEAD, bounded bodies and explicit redirect policy', async () => {
     const exact = Buffer.from('\uFEFF{ "title": "합성", "spacing": "  " }\r\n');
     let posts = 0,

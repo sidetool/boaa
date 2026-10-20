@@ -1,7 +1,7 @@
 import { openSourceBrowserProxy } from './source-browser-proxy.js';
 import { sourceBrowserLimits } from './source-browser-limits.js';
 import { readBrowserSession, mergeBrowserSession } from './source-browser-session.js';
-import { launchSourceBrowser } from './source-browser-launch.js';
+import { launchSourceBrowser, sourceBrowserHasQueuedClients } from './source-browser-launch.js';
 import { firefox, type Browser, type BrowserContext } from 'playwright-core';
 import type { CompatibilityHttpInput, compatibilityHttp } from './mangayomi/http.js';
 import { compatibilityHttpPolicy } from './mangayomi/http-options.js';
@@ -61,11 +61,13 @@ export interface SourceWebViewScope {
   browserUsage?: SourceBrowserUsage;
   /** Host capability, never supplied by a source's HTTP arguments. */
   browserAllowed?: boolean;
+  /** Host-only refreshes close before returning to ordinary HTTP. */
+  authenticationOnly?: boolean;
   /** Image discovery may load a whole chapter before its collector returns URLs. */
   purpose?: 'image-pages';
 }
 
-/** Browser processes exist only while a source invocation is using them. */
+/** One lazily launched browser, with isolated short-lived contexts and bounded idle reuse. */
 const browserVaultIds = new WeakMap<SourceCredentialVault, number>();
 let browserVaultSequence = 0;
 function browserAdmissionKey(scope: SourceWebViewScope): string {
@@ -86,6 +88,53 @@ export class SourceWebViewHost {
   private slots = new Set<number>();
   private wake = new Set<() => void>();
   private shutdowns = new WeakMap<Browser, Promise<void>>();
+  private uses = new WeakMap<Browser, number>();
+  private retiring: Promise<void> = Promise.resolve();
+  private idle?: ReturnType<typeof setTimeout>;
+  private queueCheck?: ReturnType<typeof setTimeout>;
+  private idleGeneration = 0;
+  constructor(
+    private readonly options: {
+      idleMs?: number;
+      maxUses?: number;
+      queueCheckMs?: number;
+      hasQueuedClients?: () => Promise<boolean>;
+    } = {},
+  ) {}
+
+  private stopIdle() {
+    clearTimeout(this.idle);
+    clearTimeout(this.queueCheck);
+    this.idleGeneration++;
+  }
+
+  private scheduleIdle() {
+    if (this.active || !this.browsers.size) return;
+    this.stopIdle();
+    const generation = this.idleGeneration;
+    this.idle = setTimeout(() => {
+      void this.close();
+    }, this.options.idleMs ?? 60_000);
+    this.idle.unref();
+    const check = async () => {
+      // A warm API connection must not occupy the sole remote process slot
+      // while a metadata client is waiting. Never interrupt an active operation.
+      const queued = await (this.options.hasQueuedClients ?? sourceBrowserHasQueuedClients)().catch(() => true);
+      if (this.active || generation !== this.idleGeneration) return;
+      if (queued) {
+        void this.close();
+        return;
+      }
+      this.queueCheck = setTimeout(() => {
+        void check();
+      }, this.options.queueCheckMs ?? 1000);
+      this.queueCheck.unref();
+    };
+    this.queueCheck = setTimeout(() => {
+      void check();
+    }, this.options.queueCheckMs ?? 1000);
+    this.queueCheck.unref();
+  }
 
   private disposeBrowser(browser: Browser) {
     let closing = this.shutdowns.get(browser);
@@ -106,6 +155,11 @@ export class SourceWebViewHost {
   }
 
   private async launch(engine: string, signal?: AbortSignal): Promise<Browser> {
+    await this.retiring;
+    signal?.throwIfAborted();
+    const cached = await this.browsers.get(engine)?.catch(() => undefined);
+    signal?.throwIfAborted();
+    if (cached && !cached.isConnected()) this.browsers.delete(engine);
     if (!this.browsers.has(engine)) {
       const launching = launchSourceBrowser(firefox, [], process.platform, 'camoufox', signal).catch((error) => {
         if (this.browsers.get(engine) === launching) this.browsers.delete(engine);
@@ -183,6 +237,7 @@ export class SourceWebViewHost {
     let slot = -1;
     let engine = 'camoufox:0';
     let admitted = false;
+    let successful = false;
     const notify = () => {
       for (const next of [...this.wake]) next();
     };
@@ -193,6 +248,7 @@ export class SourceWebViewHost {
             cleanup();
             reject(new Error(signal.aborted ? 'cancelled' : 'source_request_timeout'));
           } else if (this.active < 1 && !this.scopes.has(admissionKey)) {
+            this.stopIdle();
             this.active++;
             slot = this.slots.has(0) ? 1 : 0;
             this.slots.add(slot);
@@ -235,13 +291,16 @@ export class SourceWebViewHost {
         },
       );
       if (suppliedHeaders.cookie) {
+        const savedNames = new Set(
+          (await beforeDeadline(context.cookies(input.url), deadline)).map((cookie) => cookie.name),
+        );
         const cookies = suppliedHeaders.cookie.split(';').flatMap((part) => {
           const index = part.indexOf('=');
-          return index > 0
+          return index > 0 && !savedNames.has(part.slice(0, index).trim())
             ? [{ name: part.slice(0, index).trim(), value: part.slice(index + 1).trim(), url: initial.origin + '/' }]
             : [];
         });
-        await context.addCookies(cookies);
+        await beforeDeadline(context.addCookies(cookies), deadline);
         delete suppliedHeaders.cookie;
       }
       const close = () => {
@@ -299,14 +358,30 @@ export class SourceWebViewHost {
                 timeout: 0,
               });
               if ([403, 503].includes(response?.status() ?? 0)) {
+                let committed: Promise<unknown> | undefined;
                 response = await page
                   .waitForResponse(
-                    (res) => res.request().isNavigationRequest() && res.frame() === page.mainFrame() && res.ok(),
+                    (res) => {
+                      if (!res.request().isNavigationRequest() || res.frame() !== page.mainFrame() || !res.ok())
+                        return false;
+                      // Register at response headers, before this navigation commits.
+                      // A same-URL reload otherwise still reports the old document loaded.
+                      committed = page.waitForEvent('framenavigated', {
+                        predicate: (frame) => frame === page.mainFrame(),
+                        timeout: 10000,
+                      });
+                      return true;
+                    },
                     { timeout: 10000 },
                   )
                   .catch(() => response!);
-                if (response?.ok())
+                if (response?.ok()) {
+                  // Response headers arrive before a same-URL challenge reload commits.
+                  // Waiting on the old document's load state alone can run maker JS
+                  // in a context that is about to be destroyed.
+                  await committed;
                   await page.waitForLoadState(input.waitUntil ?? 'domcontentloaded', { timeout: 10000 });
+                }
               }
               if (!response?.ok())
                 throw new Error(
@@ -332,6 +407,7 @@ export class SourceWebViewHost {
               state,
               Object.fromEntries([...visited].slice(0, 64).map((origin) => [origin, actualAgent])),
             );
+            successful = true;
             return result ?? null;
           })(),
           deadline,
@@ -350,33 +426,63 @@ export class SourceWebViewHost {
       if (deadline.aborted) throw new Error(signal.aborted ? 'cancelled' : 'source_request_timeout', { cause: error });
       throw error;
     } finally {
-      proxy?.close();
       this.pending--;
       if (admitted) {
-        // Persisted session state survives; the heavyweight process never stays warm.
         const launching = this.browsers.get(engine);
-        const cleanup = (
-          browser ? this.disposeBrowser(browser) : launching?.then((late) => this.disposeBrowser(late))
-        )?.catch(() => undefined);
-        const released = Promise.resolve(cleanup).finally(() => {
-          if (this.browsers.get(engine) === launching) this.browsers.delete(engine);
+        const releaseSlot = () => {
           this.active--;
           this.slots.delete(slot);
           this.scopes.delete(admissionKey);
           notify();
-        });
-        // Respond promptly to cancellation, but do not launch a replacement over a stalled process.
-        await boundedClose(released);
-      }
+          this.scheduleIdle();
+        };
+        let contextClosed = false;
+        if (successful && !deadline.aborted && context)
+          await boundedClose(
+            context.close().then(() => {
+              contextClosed = true;
+            }),
+          );
+        proxy?.close();
+        const uses = browser ? (this.uses.get(browser) ?? 0) + 1 : 0;
+        if (browser) this.uses.set(browser, uses);
+        if (
+          successful &&
+          !deadline.aborted &&
+          contextClosed &&
+          browser?.isConnected() &&
+          !scope.authenticationOnly &&
+          // Firefox can retain memory after context.close(). Bound continuous
+          // browsing as well as idle time, without reopening for every request.
+          uses < (this.options.maxUses ?? 8) &&
+          (this.options.idleMs ?? 60_000) > 0
+        ) {
+          releaseSlot();
+        } else {
+          const cleanup = (
+            browser ? this.disposeBrowser(browser) : launching?.then((late) => this.disposeBrowser(late))
+          )?.catch(() => undefined);
+          this.retiring = Promise.all([this.retiring, cleanup]).then(() => {});
+          const released = this.retiring.finally(() => {
+            if (this.browsers.get(engine) === launching) this.browsers.delete(engine);
+            releaseSlot();
+          });
+          // Cancellation returns promptly, but a closing process retains its slot.
+          await boundedClose(released);
+        }
+      } else proxy?.close();
     }
   }
 
   async close() {
+    this.stopIdle();
     const browsers = [...this.browsers.values()];
     this.browsers.clear();
-    await Promise.all(
-      browsers.map((browser) => browser.then((value) => this.disposeBrowser(value)).catch(() => undefined)),
-    );
+    this.retiring = Promise.all([
+      this.retiring,
+      ...browsers.map((browser) => browser.then((value) => this.disposeBrowser(value)).catch(() => undefined)),
+    ]).then(() => {});
+    await this.retiring;
   }
 }
 

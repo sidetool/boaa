@@ -25,7 +25,7 @@ export function sourceBrowserFields(usage: unknown): CompatibilityPreference[] {
     {
       key: SOURCE_BROWSER_USAGE_KEY,
       title: '브라우저 사용',
-      summary: '별도 설치가 필요하며, 작업 후 자동으로 종료돼요.',
+      summary: '별도 설치가 필요해요. 미사용 시 자동 종료돼요.',
       kind: 'select',
       secret: false,
       value: sourceBrowserUsage(usage),

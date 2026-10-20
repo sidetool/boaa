@@ -4,7 +4,10 @@ import { sourceWebViewHost, type SourceWebViewScope } from './source-webview.js'
 import { writeBrowserSession } from './source-browser-session.js';
 import type { compatibilityHttp } from './mangayomi/http.js';
 
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.useRealTimers();
+});
 const url = 'https://source.example/document';
 const response = (statusCode = 200, challenge = false) => ({
   url,
@@ -65,16 +68,52 @@ it('refreshes a recognized read challenge once and then reuses saved cookies thr
     return null;
   });
   const transport = vi.fn<typeof compatibilityHttp>(async (input) =>
-    input.headers?.cookie === 'session=synthetic' ? response() : response(403, true),
+    input.headers?.cookie?.split('; ').includes('session=synthetic') ? response() : response(403, true),
   );
-  const result = await sourceBrowserHttp({ url }, AbortSignal.timeout(1000), current, 1024, transport);
+  const result = await sourceBrowserHttp(
+    {
+      url,
+      headers: { 'User-Agent': 'Maker Chrome UA', Cookie: 'maker=retained; session=outdated' },
+    },
+    AbortSignal.timeout(1000),
+    current,
+    1024,
+    transport,
+  );
   expect(result.statusCode).toBe(200);
   expect(transport).toHaveBeenCalledTimes(2);
   expect(transport.mock.calls[1][0].headers).toMatchObject({
-    cookie: 'session=synthetic',
+    cookie: 'maker=retained; session=synthetic',
     'user-agent': 'Browser identity',
   });
   await sourceBrowserHttp({ url }, AbortSignal.timeout(1000), current, 1024, transport);
+  expect(evaluate).toHaveBeenCalledOnce();
+});
+
+it('bounds repeated authentication when browser clearance cannot be reused by HTTP', async () => {
+  vi.useFakeTimers();
+  const evaluate = vi.spyOn(sourceWebViewHost, 'evaluate').mockResolvedValue(null);
+  const current = scope('http-first');
+  for (let i = 0; i < 4; i++) {
+    expect(
+      (await sourceBrowserHttp({ url }, new AbortController().signal, current, 1024, async () => response(403, true)))
+        .statusCode,
+    ).toBe(403);
+  }
+  expect(evaluate).toHaveBeenCalledOnce();
+  await vi.advanceTimersByTimeAsync(60_001);
+  await sourceBrowserHttp({ url }, new AbortController().signal, current, 1024, async () => response(403, true));
+  expect(evaluate).toHaveBeenCalledTimes(2);
+});
+
+it('does not repeatedly launch a failing or missing optional browser', async () => {
+  const evaluate = vi.spyOn(sourceWebViewHost, 'evaluate').mockRejectedValue(new Error('source_browser_unavailable'));
+  const current = scope('http-first');
+  for (let i = 0; i < 3; i++)
+    expect(
+      (await sourceBrowserHttp({ url }, AbortSignal.timeout(1000), current, 1024, async () => response(403, true)))
+        .statusCode,
+    ).toBe(403);
   expect(evaluate).toHaveBeenCalledOnce();
 });
 

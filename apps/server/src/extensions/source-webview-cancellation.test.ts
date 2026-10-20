@@ -1,6 +1,7 @@
 import type { Browser } from 'playwright-core';
 import { afterEach, expect, it, vi } from 'vitest';
 import { SourceWebViewHost } from './source-webview.js';
+import * as browserLaunch from './source-browser-launch.js';
 
 vi.mock('./source-browser-proxy.js', () => ({
   openSourceBrowserProxy: vi.fn(async () => ({
@@ -13,6 +14,36 @@ vi.mock('./source-browser-proxy.js', () => ({
 afterEach(() => {
   vi.useRealTimers();
   vi.restoreAllMocks();
+});
+
+it('does not launch for a cancelled request after an idle browser finishes closing', async () => {
+  let finishClose!: () => void;
+  const browser = {
+    close: () =>
+      new Promise<void>((resolve) => {
+        finishClose = resolve;
+      }),
+  } as unknown as Browser;
+  const host = new SourceWebViewHost();
+  (host as unknown as { browsers: Map<string, Promise<Browser>> }).browsers.set('camoufox:0', Promise.resolve(browser));
+  const launch = vi.spyOn(browserLaunch, 'launchSourceBrowser').mockRejectedValue(new Error('unexpected launch'));
+  const retiring = host.close();
+  await vi.waitFor(() => expect(finishClose).toBeTypeOf('function'));
+  const abort = new AbortController();
+  const pending = host.evaluate(
+    { url: 'https://source.example/', script: 'true' },
+    { key: 'cancelled-during-idle-close', origins: ['https://source.example'] },
+    abort.signal,
+  );
+  // Let admission finish while the old process is still retiring.
+  await Promise.resolve();
+  const result = expect(pending).rejects.toThrow('cancelled');
+  abort.abort();
+  finishClose();
+  await retiring;
+  await result;
+  await host.close();
+  expect(launch).not.toHaveBeenCalled();
 });
 
 it('returns cancellation and discards the browser when navigation and context shutdown both stall', async () => {

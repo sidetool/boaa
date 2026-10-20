@@ -15,7 +15,8 @@ import type { SourceCredentialVault } from './source-credential-vault.js';
 import { downloadPackageUpdate, fetchRepositoryIndex, fetchRepositoryArchive } from './package-repository.js';
 import { materializeSourceContent, type SourceContentResolver } from './source-content-service.js';
 import { createStoredContentService } from './stored-content-service.js';
-import { sourceWebViewHost } from './source-webview.js';
+import { sourceWebViewHost, type SourceWebViewScope } from './source-webview.js';
+import { sourceBrowserSdkSession } from './source-browser-sdk-transport.js';
 import type { SourceWebViewRequest } from '../../../../packages/extension-contracts/source-webview.js';
 import { createSourcePreferences } from './source-preferences.js';
 import { compatibilityHttp, type CompatibilityHttpInput } from './mangayomi/http.js';
@@ -129,6 +130,16 @@ export function createNodePackageExecution(
             };
       const networkOrigins = [...pkg.manifest.requestedAccess.networkOrigins, ...sourceOptions.networkOrigins];
       const outboundProxy = network.resolve(sourceOptions);
+      const browserScope: SourceWebViewScope = {
+        key: JSON.stringify([pkg.manifest.extension.id, `browser:${input.sourceId}`, credentialEpoch ?? pkg.digest]),
+        vault: options.vault,
+        origins: networkOrigins,
+        privateOrigins: sourceOptions.privateOrigins,
+        outboundProxy,
+        browserMode: 'browserMode' in sourceOptions ? sourceOptions.browserMode : undefined,
+        browserUsage: 'browserUsage' in sourceOptions ? sourceOptions.browserUsage : undefined,
+        browserAllowed: !!pkg.manifest.requestedAccess.webview,
+      };
       const broker = createSourceBroker(
         {
           origins: networkOrigins,
@@ -139,6 +150,7 @@ export function createNodePackageExecution(
             ? authentication.transport(pkg, String(input.sourceId), credentialEpoch)
             : options.transport),
           ...(outboundProxy ? createSourceProxyTransport(outboundProxy) : {}),
+          session: sourceBrowserSdkSession(browserScope),
         },
       );
       const storage = createSourceStateSession(state, pkg.manifest.requestedAccess.storageKiB);

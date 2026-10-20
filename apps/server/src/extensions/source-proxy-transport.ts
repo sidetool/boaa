@@ -3,10 +3,10 @@ import type { IncomingHttpHeaders, IncomingMessage } from 'node:http';
 import type { SourceTransport } from './source-authentication.js';
 import { parseOutboundProxy, pinnedProxyAgent } from './outbound-proxy.js';
 
-function publicHeaders(headers: IncomingHttpHeaders): Record<string, string> {
+function publicHeaders(headers: IncomingHttpHeaders): Record<string, string | string[]> {
   return Object.fromEntries(
     Object.entries(headers).flatMap(([name, value]) =>
-      value === undefined ? [] : [[name, Array.isArray(value) ? value.join(', ') : value]],
+      value === undefined ? [] : [[name, Array.isArray(value) && name !== 'set-cookie' ? value.join(', ') : value]],
     ),
   );
 }
