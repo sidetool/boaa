@@ -33,6 +33,13 @@ def verify(prefix, directory, commit):
         raise ValueError('embedded_sources_hash_mismatch')
     if component == 'apk' and not any(p.startswith('payload/runtime/source/') for p in evidence['embeddedSources']):
         raise ValueError('modified_mpl_sources_missing')
+    if component == 'browser' and not {
+        'opt/camoufox/boaa-source/NetworkObserver.js',
+        'opt/camoufox/boaa-source/LICENSE',
+        'licenses/camoufox/harden-browser.py',
+        'licenses/camoufox/HARDENING.md',
+    } <= evidence['embeddedSources'].keys():
+        raise ValueError('modified_camoufox_sources_missing')
     if sha(directory / evidence['noticesArchive']['file']) != evidence['noticesArchive']['sha256']:
         raise ValueError('notice_archive_hash_mismatch')
     if any(not row['resolved'] for row in evidence.get('supplementalComponents', [])):

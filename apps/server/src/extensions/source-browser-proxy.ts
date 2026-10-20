@@ -79,6 +79,9 @@ export async function openSourceBrowserProxy(scope: SourceWebViewScope, signal: 
   const username = randomBytes(16).toString('hex'),
     password = randomBytes(24).toString('hex');
   const authorization = 'Basic ' + Buffer.from(username + ':' + password).toString('base64');
+  // Initialize proxy authentication before applying caller header overrides.
+  // The inert local response does not contact any source.
+  const bootstrapUrl = `http://boaa-browser.invalid/${randomBytes(24).toString('hex')}`;
   const sockets = new Set<Duplex>();
   let total = 0,
     connections = 0,
@@ -129,6 +132,17 @@ export async function openSourceBrowserProxy(scope: SourceWebViewScope, signal: 
   const server = createServer(async (request, response) => {
     if (request.headers['proxy-authorization'] !== authorization) {
       response.writeHead(407, { 'proxy-authenticate': 'Basic realm="source"' }).end();
+      return;
+    }
+    if (request.method === 'GET' && request.url === bootstrapUrl) {
+      response
+        .writeHead(200, {
+          'content-type': 'text/html; charset=utf-8',
+          'content-security-policy': "default-src 'none'",
+          'cache-control': 'no-store',
+          connection: 'close',
+        })
+        .end('<!doctype html><title>Browser ready</title>');
       return;
     }
     try {
@@ -216,11 +230,11 @@ export async function openSourceBrowserProxy(scope: SourceWebViewScope, signal: 
     throw error;
   }
   return {
+    bootstrapUrl,
     proxy: {
       server: `http://${advertised}:${(server.address() as { port: number }).port}`,
       username,
       password,
-      bypass: '<-loopback>',
     },
     get failure() {
       return failure;

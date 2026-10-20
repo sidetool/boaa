@@ -35,14 +35,14 @@
     "libarchive-wasm": "1.2.0",
     "linkedom": "0.18.12",
     "node-unrar-js": "2.0.2",
-    "patchright": "1.61.1",
     "pdfjs-dist": "5.7.284",
     "pg": "^8.13.1",
-    "playwright-core": "1.61.1",
+    "playwright-core": "1.62.0",
     "sharp": "0.34.5",
     "socks": "2.8.10",
     "tough-cookie": "6.0.0",
-    "@boaa/reader-core": "workspace:*"
+    "@boaa/reader-core": "workspace:*",
+    "@boaa/browser-runtime": "workspace:*"
   },
   "devDependencies": {
     "@boaa/contracts": "workspace:*",

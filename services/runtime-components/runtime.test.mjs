@@ -29,10 +29,10 @@ test('browser control authenticates health and constrains protocol, path, engine
     assert.equal(manifest.protocolVersion, 1);
     assert.equal((await fetch(worker.endpoint + '/other', { headers: worker.headers })).status, 404);
     for (const input of [
-      { protocolVersion: 2, engine: 'chromium' },
+      { protocolVersion: 2, engine: 'camoufox' },
       { protocolVersion: 1, engine: 'shell' },
-      { protocolVersion: 1, engine: 'chromium', args: ['--proxy-server=unsafe'] },
-      { protocolVersion: 1, engine: 'chromium', proxyBridge: { origins: ['file:///tmp/test'] } },
+      { protocolVersion: 1, engine: 'camoufox', args: ['--proxy-server=unsafe'] },
+      { protocolVersion: 1, engine: 'camoufox', proxyBridge: { origins: ['file:///tmp/test'] } },
     ])
       assert.equal(
         (
@@ -70,7 +70,7 @@ test('unclaimed browser leases expire and release their process and proxy', asyn
     const response = await fetch(worker.endpoint + '/v1/browsers', {
       method: 'POST',
       headers: worker.headers,
-      body: JSON.stringify({ protocolVersion: 1, engine: 'chromium', proxyBridge: { origins: [] } }),
+      body: JSON.stringify({ protocolVersion: 1, engine: 'camoufox', proxyBridge: { origins: [] } }),
     });
     assert.equal(response.status, 201);
     await new Promise((done) => setTimeout(done, 70));
@@ -94,7 +94,7 @@ test('cancelled browser launches cannot leave an orphan process', async () => {
       method: 'POST',
       headers: worker.headers,
       signal: controller.signal,
-      body: JSON.stringify({ protocolVersion: 1, engine: 'chromium' }),
+      body: JSON.stringify({ protocolVersion: 1, engine: 'camoufox' }),
     });
     await new Promise((done) => setTimeout(done, 20));
     controller.abort();

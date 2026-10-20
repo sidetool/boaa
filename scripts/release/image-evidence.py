@@ -78,7 +78,8 @@ def capture(image, component, output, syft):
                     links[name] = target
                 if not member.isfile():
                     continue
-                if name.startswith(('payload/runtime/source/', 'payload/runtime/build-recipe/', 'usr/local/share/byedpi/')):
+                if name.startswith(('payload/runtime/source/', 'payload/runtime/build-recipe/', 'usr/local/share/byedpi/',
+                                    'opt/camoufox/boaa-source/', 'licenses/camoufox/')):
                     with fs.extractfile(member) as stream:
                         data = stream.read()
                     embedded_sources[name] = {'sha256': hashlib.sha256(data).hexdigest(), 'bytes': len(data)}
@@ -210,6 +211,10 @@ def capture(image, component, output, syft):
             if name.startswith('@boaa/'):
                 refs = [p for p in notices if p.endswith('/licenses/LICENSE') or p == 'licenses/LICENSE']
                 licenses = ['Apache-2.0']
+                if name == '@boaa/browser-runtime':
+                    refs.extend(p for p in notices if p.endswith('/@boaa/browser-runtime/LICENSE.camoufox'))
+                    licenses = ['Apache-2.0 AND MPL-2.0']
+                    binary_verified = any(p.endswith('/@boaa/browser-runtime/LICENSE.camoufox') for p in refs)
         elif kind == 'python':
             for location in locations:
                 folder = location.split('.dist-info/')[0] + '.dist-info/'

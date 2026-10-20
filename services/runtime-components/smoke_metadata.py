@@ -105,7 +105,7 @@ async def main():
                 await page.goto(remote_origin)
                 assert await page.evaluate("document.cookie") == ""
                 assert await page.evaluate("localStorage.getItem('test')") is None
-            print("Python 1.61.0 -> Node 1.61.1 browser, authenticated proxy, origin denial and context isolation: PASS")
+            print("Python/Node 1.62.0 Camoufox, authenticated proxy, origin denial and context isolation: PASS")
     finally:
         origin.shutdown()
         origin.server_close()

@@ -23,7 +23,10 @@ assert((await stat(browserDir)).isDirectory());
 const browserCheck = spawnSync(executable, ['--check-browser'], {
   windowsHide: true,
   timeout: 90_000,
-  env: { ...process.env, PLAYWRIGHT_BROWSERS_PATH: browserDir },
+  env: {
+    ...process.env,
+    BOAA_CAMOUFOX_EXECUTABLE: path.join(browserDir, process.platform === 'win32' ? 'camoufox.exe' : 'camoufox-bin'),
+  },
 });
 assert.equal(
   browserCheck.status,

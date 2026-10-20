@@ -27,13 +27,8 @@ const portable =
     process.env.MOYA_PORTABLE_BUILD ??
     process.env.NOVELDESK_PORTABLE_BUILD ??
     process.env.MOA_PORTABLE_BUILD) === '1';
-const windowModeArguments =
-  (process.env.BOAA_COLLECTOR_BUNDLE_CONSOLE ??
-    process.env.MOYA_COLLECTOR_BUNDLE_CONSOLE ??
-    process.env.NOVELDESK_COLLECTOR_BUNDLE_CONSOLE ??
-    process.env.MOA_COLLECTOR_BUNDLE_CONSOLE) === '1'
-    ? []
-    : ['--noconsole'];
+// Parent processes use CREATE_NO_WINDOW; keep stdout available for launch-options IPC.
+const windowModeArguments = [];
 
 for (const temporaryPath of [buildRoot, environmentRoot]) {
   if (!temporaryPath.startsWith(`${join(workspace, '.tmp')}${sep}`)) {
@@ -92,6 +87,9 @@ mkdirSync(join(buildRoot, 'dist'), { recursive: true });
 mkdirSync(outputDir, { recursive: true });
 
 const addDataSeparator = process.platform === 'win32' ? ';' : ':';
+run(environmentPython, ['-c', 'from camoufox.fpgen_model import ensure_fpgen_model; ensure_fpgen_model()'], {
+  failureMessage: 'Pinned Camoufox fingerprint model could not be installed',
+});
 run(
   environmentPython,
   [
@@ -109,6 +107,12 @@ run(
     `${join(serviceDir, 'app', 'web')}${addDataSeparator}app/web`,
     '--collect-all',
     'playwright',
+    '--collect-all',
+    'camoufox',
+    '--collect-all',
+    'fpgen',
+    '--add-data',
+    `${join(workspace, 'packages', 'browser-runtime')}${addDataSeparator}boaa-browser-runtime`,
     '--hidden-import',
     'uvicorn.logging',
     '--hidden-import',
@@ -160,22 +164,18 @@ run(
   ],
   { failureMessage: 'metadata collector Python license inventory could not be generated' },
 );
-if (
-  (process.env.BOAA_COLLECTOR_BUNDLE_REMOTE_BROWSER ??
-    process.env.MOYA_COLLECTOR_BUNDLE_REMOTE_BROWSER ??
-    process.env.NOVELDESK_COLLECTOR_BUNDLE_REMOTE_BROWSER ??
-    process.env.MOA_COLLECTOR_BUNDLE_REMOTE_BROWSER) === '1'
-) {
-  // Playwright's installed package selects the exact browser revision. Remote-frame mode
-  // always runs headless, so the full headed Chromium payload is unnecessary.
-  run(environmentPython, ['-m', 'playwright', 'install', '--only-shell', 'chromium'], {
-    env: {
-      ...process.env,
-      PLAYWRIGHT_BROWSERS_PATH: join(outputDir, 'browsers'),
-      PLAYWRIGHT_SKIP_BROWSER_GC: '1',
-    },
-    failureMessage: 'metadata collector Chromium headless shell could not be installed',
-  });
-}
+// One full Camoufox distribution serves visible login, background metadata and source WebViews.
+run(
+  environmentPython,
+  [
+    join(workspace, 'services/runtime-components/install-camoufox.py'),
+    process.platform === 'win32' ? 'win-amd64' : process.arch === 'arm64' ? 'arm64' : 'amd64',
+    join(outputDir, 'browsers'),
+  ],
+  { failureMessage: 'Pinned Camoufox could not be installed' },
+);
+run(environmentPython, [join(workspace, 'packages/browser-runtime/harden-browser.py'), join(outputDir, 'browsers')], {
+  failureMessage: 'Camoufox redirect hardening could not be applied',
+});
 console.log(`Bundled metadata collector: ${target}`);
 console.log(`Isolated bundle environment: ${environmentRoot}`);

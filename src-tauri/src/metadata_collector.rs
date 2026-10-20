@@ -118,7 +118,19 @@ fn collector_command(app: &AppHandle, port: u16) -> Result<Command, String> {
         if !executable.is_file() {
             return Err("Bundled metadata collector is missing".to_string());
         }
-        Command::new(executable)
+        let mut command = Command::new(executable);
+        command.env(
+            "BOAA_CAMOUFOX_EXECUTABLE",
+            crate::portable::runtime_dir(app)?
+                .join("collector-sidecar")
+                .join("browsers")
+                .join(if cfg!(target_os = "windows") {
+                    "camoufox.exe"
+                } else {
+                    "camoufox-bin"
+                }),
+        );
+        command
     };
     #[cfg(boaa_portable)]
     command.env(

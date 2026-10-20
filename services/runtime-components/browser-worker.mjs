@@ -4,21 +4,19 @@ import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { authorized, jsonResponse, readJson, runtimeManifest, runtimeToken } from './common.mjs';
 
-const ENGINES = new Set(['chromium', 'patchright']);
-const BROWSER_ARGS = ['--disable-quic', '--force-webrtc-ip-handling-policy=disable_non_proxied_udp'];
+import { camoufoxLaunchOptions, BROWSER_ENGINE, BROWSER_DRIVER_VERSION } from '@boaa/browser-runtime';
+const ENGINES = new Set([BROWSER_ENGINE]);
 
 export async function createBrowserWorker({
   token,
   openProxy = async (scope, signal) =>
     (await import('./source-browser-proxy.js')).openSourceBrowserProxy(scope, signal),
-  launch = async (engine) => {
-    const { chromium } = await import(engine === 'patchright' ? 'patchright' : 'playwright-core');
-    return chromium.launchServer({
-      executablePath: process.env.BOAA_SOURCE_BROWSER_EXECUTABLE || '/usr/bin/chromium',
-      headless: true,
+  launch = async () => {
+    const { firefox } = await import('playwright-core');
+    return firefox.launchServer({
+      ...(await camoufoxLaunchOptions()),
       host: '127.0.0.1',
       port: 0,
-      args: BROWSER_ARGS,
       timeout: 30000,
     });
   },
@@ -26,10 +24,11 @@ export async function createBrowserWorker({
   idleMs = 5 * 60 * 1000,
   connectMs = 30000,
   lifetimeMs = 30 * 60 * 1000,
+  onLaunchFailure = () => {},
 } = {}) {
   token ??= await runtimeToken();
   const sessions = new Map();
-  const manifest = { ...runtimeManifest('browser'), engines: { chromium: '1.61.1', patchright: '1.61.1' } };
+  const manifest = { ...runtimeManifest('browser'), engines: { [BROWSER_ENGINE]: BROWSER_DRIVER_VERSION } };
   let closing = false;
   const stop = async (id) => {
     const entry = sessions.get(id);
@@ -121,9 +120,10 @@ export async function createBrowserWorker({
         ...manifest,
         engine: input.engine,
         wsPath: `/v1/browsers/${id}/ws`,
-        ...(entry.proxy ? { proxy: entry.proxy.proxy } : {}),
+        ...(entry.proxy ? { proxy: entry.proxy.proxy, proxyBootstrapUrl: entry.proxy.bootstrapUrl } : {}),
       });
-    } catch {
+    } catch (error) {
+      onLaunchFailure(error);
       await stop(id);
       if (!response.destroyed) jsonResponse(response, 503, { error: 'source_browser_unavailable' });
     } finally {

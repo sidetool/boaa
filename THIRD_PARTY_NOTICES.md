@@ -23,7 +23,7 @@ sidecar. Its direct runtime/build dependencies include Python, FastAPI, Uvicorn,
 Playwright, Pydantic and PyInstaller. These projects use their own PSF, MIT, BSD, Apache-2.0 and PyInstaller
 bootloader-exception terms. The generated executable is not committed to this source repository.
 
-`pnpm collector:bundle` creates an isolated Python environment and emits the exact 37-component inventory at
+`pnpm collector:bundle` creates an isolated Python environment and emits the exact component inventory at
 `src-tauri/collector-sidecar/python-license-inventory.json`. It also copies each component's detected license texts,
 the BOAA collector license and the Python runtime license under the packaged `collector-sidecar/third_party/licenses/`
 resource. The build fails when a component is unclassified or has no copied license file. This inventory is generated
@@ -35,9 +35,9 @@ this notice and the project license. Publishing an official prebuilt collector c
 for its exact Python base image and installed runtime distributions.
 
 The separate `compose.metadata-collector-auth.yaml` profile replaces that service image with an operator-built image
-that additionally installs Playwright, Chromium, Xvfb and their Debian runtime dependencies. It is not included in the
+that additionally installs Playwright, Camoufox, Xvfb and their Debian runtime dependencies. It is not included in the
 base BOAA image or the public-metadata collector image. The source Dockerfile copies this notice and the project
-license, but publishing an official prebuilt auth image still requires an exact Python, Debian package and Chromium
+license, but publishing an official prebuilt auth image still requires an exact Python, Debian package and Camoufox
 license/source inventory for the built artifact; the Desktop sidecar inventory is not evidence for that container.
 
 ## Optional local TTS sidecar
@@ -98,10 +98,13 @@ text in its npm archive; its copyright/permission notice was captured from
 
 ## Source browser runtime
 
-The host uses `playwright-core@1.61.1` (Apache-2.0, Microsoft) to drive an isolated source browser,
+The host uses `playwright-core@1.62.0` (Apache-2.0, Microsoft) to drive an isolated source browser,
 and `tough-cookie@6.0.0` (BSD-3-Clause, Salesforce and contributors) for HTTP/browser cookie interoperability.
-Their npm license texts are included with the packaged dependencies. Windows uses the installed Edge browser;
-the self-host image uses Debian's Chromium and CJK font packages, whose notices remain in the image's package inventory.
+Their npm license texts are included with the packaged dependencies. Source browsing and collector authentication
+use pinned Camoufox 156.0.1-beta.36, Python wrapper 0.5.8, and fpgen 1.3.0. The upstream browser retains
+Mozilla and bundled dependency notices. BOAA modifies Juggler's cross-origin redirect header handling under
+MPL-2.0; the patch and rebuild instructions are in `packages/browser-runtime/harden-browser.py` and
+`packages/browser-runtime/HARDENING.md`. Browser and fingerprint model downloads occur during the build.
 No Mangayomi application source or private extension code is redistributed as part of this adapter.
 
 The Windows portable executable uses the system Microsoft Edge WebView2 Evergreen Runtime.
@@ -152,8 +155,7 @@ This capture does not close the final binary redistribution gate described above
 
 The managed Docker API image includes [ByeDPI](https://github.com/hufrea/byedpi), release v0.17.3, revision `7efde1b1296eaaa187b70e951894dde17527489c`, under the MIT license. The binary is compiled from the pinned upstream source without application-specific changes. The image includes the upstream license, README, source archive, revision/checksum record, and build recipe under `/usr/local/share/byedpi/`. See `deploy/byedpi.Dockerfile` and `deploy/byedpi-integration.md`.
 
-Optional APK, Chromium browser, and Python metadata execution hosts are separate images. Their dependency and distribution obligations remain separate from the Apache-2.0 license of BOAA's host code. A public binary release must satisfy the repository's release license gate; source-only validation does not certify those artifacts.
-
+Optional APK, Camoufox browser, and Python metadata execution hosts are separate images. Their dependency and distribution obligations remain separate from the Apache-2.0 license of BOAA's host code. A public binary release must satisfy the repository's release license gate; source-only validation does not certify those artifacts.
 
 ## Hosted server candidate evidence
 

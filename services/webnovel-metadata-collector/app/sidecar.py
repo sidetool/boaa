@@ -9,7 +9,6 @@ import threading
 
 import uvicorn
 
-from app.main import app
 
 
 def _ensure_background_streams() -> None:
@@ -27,13 +26,20 @@ def main() -> None:
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int)
     parser.add_argument("--check-runtime", action="store_true")
+    parser.add_argument("--camoufox-launch-options", action="store_true")
     parser.add_argument("--check-browser", action="store_true")
     parser.add_argument("--watch-stdin", action="store_true")
     arguments = parser.parse_args()
+    if arguments.camoufox_launch_options:
+        import runpy
+        from pathlib import Path
+        root = Path(sys._MEIPASS) / "boaa-browser-runtime" if getattr(sys, "frozen", False) else Path(__file__).resolve().parents[3] / "packages" / "browser-runtime"
+        runpy.run_path(str(root / "launch-options.py"), run_name="__main__")
+        return
     if arguments.check_runtime:
         from playwright.sync_api import sync_playwright
         with sync_playwright() as runtime:
-            if not runtime.chromium.executable_path:
+            if not runtime.firefox.executable_path:
                 raise RuntimeError("Browser driver did not initialize")
         return
     if arguments.check_browser:
@@ -42,7 +48,10 @@ def main() -> None:
         async def check_browser() -> None:
             with tempfile.TemporaryDirectory(prefix="boaa-collector-browser-check-") as profile:
                 async with async_playwright() as runtime:
-                    context = await runtime.chromium.launch_persistent_context(profile, headless=True)
+                    from pathlib import Path
+                    from app.camoufox_runtime import persistent_options
+                    options = await asyncio.to_thread(persistent_options, Path(profile), headless=True)
+                    context = await runtime.firefox.launch_persistent_context(profile, **options)
                     try:
                         page = context.pages[0] if context.pages else await context.new_page()
                         await page.goto("about:blank")
@@ -55,6 +64,7 @@ def main() -> None:
         return
     if arguments.host != "127.0.0.1" or arguments.port is None or not 1 <= arguments.port <= 65535:
         parser.error("the bundled collector must use a valid IPv4 loopback port")
+    from app.main import app
     server = uvicorn.Server(uvicorn.Config(
         app,
         host=arguments.host,

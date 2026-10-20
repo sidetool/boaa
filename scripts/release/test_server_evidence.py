@@ -62,12 +62,19 @@ class EvidenceGateTests(unittest.TestCase):
         return gate.verify(self.prefix, self.root, self.commit)
 
     def test_real_upstream_notice_names_are_retained(self):
-        for path in ['payload/runtime/UPSTREAM-LICENSE', 'payload/runtime/build-recipe/MPL-NOTICE.md', 'node_modules/patchright/ThirdPartyNotices.txt']:
+        for path in ['payload/runtime/UPSTREAM-LICENSE', 'payload/runtime/build-recipe/MPL-NOTICE.md', 'node_modules/playwright-core/ThirdPartyNotices.txt', 'opt/camoufox/boaa-source/LICENSE']:
             with self.subTest(path=path):
                 self.assertTrue(collector.is_notice(path))
 
     def test_valid_bound_fixture(self):
         self.assertEqual(self.verify()['packages'], 1)
+
+    def test_browser_without_modified_source_and_rebuild_materials_is_rejected(self):
+        self.prefix = 'browser-amd64'
+        self.evidence['component'] = 'browser'
+        self.save()
+        with self.assertRaisesRegex(ValueError, 'modified_camoufox_sources_missing'):
+            self.verify()
 
     def test_wrong_commit_or_architecture_receipt_rejected(self):
         for key, value in [('revision', 'b' * 40), ('architecture', 'arm64'), ('imageId', 'another-image')]:

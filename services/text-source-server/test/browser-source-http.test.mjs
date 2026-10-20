@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import { gzipSync } from 'node:zlib';
+import { firefox } from 'playwright-core';
 import { createBrowserSourceHttp } from '../src/browser-source-http.mjs';
 
 test('browser metadata transport validates configuration without launching a browser', async () => {
@@ -22,9 +23,47 @@ test('browser metadata transport validates configuration without launching a bro
 
 const enabled = process.env.RUN_SOURCE_BROWSER_TESTS === '1';
 test(
-  'normal Chromium metadata transport against an isolated loopback server',
+  'cancellation settles when page creation and context cleanup both stall',
+  { skip: !enabled, timeout: 15_000 },
+  async (t) => {
+    let entered;
+    const creatingPage = new Promise((resolve) => {
+      entered = resolve;
+    });
+    let browserCloses = 0;
+    t.mock.method(firefox, 'launch', async () => ({
+      on() {},
+      async close() {
+        browserCloses++;
+      },
+      async newContext() {
+        return {
+          newPage() {
+            entered();
+            return new Promise(() => {});
+          },
+          close() {
+            return new Promise(() => {});
+          },
+        };
+      },
+    }));
+    const transport = createBrowserSourceHttp({ timeoutMs: 10_000 });
+    t.after(() => transport.dispose());
+    const controller = new AbortController();
+    const request = transport.fetchImpl('https://source.example/document', { signal: controller.signal });
+    const rejected = assert.rejects(request, { name: 'AbortError' });
+    await creatingPage;
+    controller.abort();
+    await rejected;
+    assert.equal(browserCloses, 1, 'discard the browser whose context cannot close');
+  },
+);
+
+test(
+  'Camoufox metadata transport against an isolated loopback server',
   {
-    skip: enabled ? false : 'Opt-in: RUN_SOURCE_BROWSER_TESTS=1 and an installed Chromium browser are required.',
+    skip: enabled ? false : 'Opt-in: RUN_SOURCE_BROWSER_TESTS=1 and an installed Camoufox browser are required.',
     timeout: 60_000,
   },
   async (t) => {
@@ -58,9 +97,10 @@ test(
         response.writeHead(302, { Location: '/redirect-target' });
         return response.end();
       }
-      if (url.pathname === '/oversized-header') {
+      if (url.pathname === '/oversized-header' || url.pathname === '/oversized-header-body') {
         response.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': 1024 * 1024 + 1 });
         response.flushHeaders();
+        if (url.pathname === '/oversized-header-body') response.write('{');
         return;
       }
       if (url.pathname === '/oversized-gzip') {
@@ -119,7 +159,11 @@ test(
       );
     });
     await t.test('stops declared and decoded compressed responses above one MiB', async () => {
-      await assert.rejects(transport.fetchImpl(`${origin}/oversized-header`), { code: 'source_response_limit' });
+      // Firefox may defer exposing headers until the first body byte; the overall deadline still bounds a stalled body.
+      await assert.rejects(transport.fetchImpl(`${origin}/oversized-header`), (error) =>
+        ['source_response_limit', 'source_timeout'].includes(error.code),
+      );
+      await assert.rejects(transport.fetchImpl(`${origin}/oversized-header-body`), { code: 'source_response_limit' });
       await assert.rejects(transport.fetchImpl(`${origin}/oversized-gzip`), { code: 'source_response_limit' });
     });
     await t.test(

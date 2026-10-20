@@ -2,6 +2,14 @@ import type { Browser } from 'playwright-core';
 import { afterEach, expect, it, vi } from 'vitest';
 import { SourceWebViewHost } from './source-webview.js';
 
+vi.mock('./source-browser-proxy.js', () => ({
+  openSourceBrowserProxy: vi.fn(async () => ({
+    proxy: { server: 'http://127.0.0.1:1' },
+    bootstrapUrl: 'http://boaa-browser.invalid/test',
+    close: vi.fn(),
+  })),
+}));
+
 afterEach(() => {
   vi.useRealTimers();
   vi.restoreAllMocks();
@@ -26,7 +34,7 @@ it('returns cancellation and discards the browser when navigation and context sh
     {
       key: 'synthetic-stall',
       origins: ['https://source.example'],
-      browserMode: 'broker',
+      browserMode: 'camoufox',
     },
     abort.signal,
   );

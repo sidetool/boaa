@@ -6,6 +6,7 @@ await build({
   outfile: '/out/source-browser-proxy.js',
   bundle: true,
   platform: 'node',
+  external: ['@boaa/browser-runtime'],
   format: 'esm',
   target: 'node22',
   alias: { '@boaa/extension-runtime/source-http': './packages/extension-runtime/source-http.mjs' },

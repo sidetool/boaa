@@ -7,7 +7,8 @@ import { createBrowserWorker } from './browser-worker.mjs';
 const require = createRequire(import.meta.url);
 const token = 'a'.repeat(64);
 const headers = { authorization: `Bearer ${token}`, 'content-type': 'application/json' };
-const worker = await createBrowserWorker({ token });
+// This isolated fixture has no user credentials. Production never prints launch failures.
+const worker = await createBrowserWorker({ token, onLaunchFailure: (error) => console.error(error.message) });
 const fixture = createServer((_request, response) => {
   response.writeHead(200, { 'content-type': 'text/html' });
   response.end('<html><body><p id="value">synthetic document</p></body></html>');
@@ -18,8 +19,8 @@ await Promise.all([once(fixture, 'listening'), once(worker.server, 'listening')]
 const origin = `http://127.0.0.1:${fixture.address().port}`;
 const endpoint = `http://127.0.0.1:${worker.server.address().port}`;
 try {
-  for (const engine of ['chromium', 'patchright']) {
-    const { chromium } = require(engine === 'patchright' ? 'patchright' : 'playwright-core');
+  for (const engine of ['camoufox']) {
+    const { firefox } = require('playwright-core');
     const response = await fetch(endpoint + '/v1/browsers', {
       method: 'POST',
       headers,
@@ -33,11 +34,12 @@ try {
     assert.equal(response.status, 201);
     const lease = await response.json();
     const websocket = endpoint.replace('http:', 'ws:') + lease.wsPath;
-    await assert.rejects(chromium.connect(websocket, { timeout: 3000 }));
-    const browser = await chromium.connect(websocket, { headers, timeout: 10000 });
+    await assert.rejects(firefox.connect(websocket, { timeout: 3000 }));
+    const browser = await firefox.connect(websocket, { headers, timeout: 10000 });
     try {
       const context = await browser.newContext({ proxy: lease.proxy, serviceWorkers: 'block', acceptDownloads: false });
       const page = await context.newPage();
+      await page.goto(lease.proxyBootstrapUrl);
       await page.goto(origin);
       assert.equal(await page.locator('#value').innerText(), 'synthetic document');
       await page.evaluate("document.cookie='session=first; Path=/';localStorage.setItem('test','first')");

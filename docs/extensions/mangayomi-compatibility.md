@@ -17,7 +17,7 @@
 ## 실행 방식
 
 Mangayomi JS 원본은 서버의 제한된 QuickJS realm에서 실행한다. Android WebView나 Flutter 앱을 실행하지 않는다.
-사이트 JavaScript가 필요한 확장은 기존 서버 Chromium bridge를 사용할 수 있다. 일반 HTTP와 브라우저의
+사이트 JavaScript가 필요한 확장은 공통 Camoufox WebView 호스트를 사용할 수 있다. 일반 HTTP와 브라우저의
 세션은 소스별로 분리되어 연결된다. 인증서 검증·네트워크 권한·취소·용량 제한은 그대로 적용된다.
 
 현재 대상으로 삼는 형식은 JavaScript 만화(`itemType: 0`)와 소설(`itemType: 2`)이다.

@@ -37,28 +37,24 @@ const env = Object.fromEntries(
     'HOMEDRIVE',
   ].flatMap((key) => (process.env[key] ? [[key, process.env[key]!]] : [])),
 );
+env.BOAA_CAMOUFOX_OPTIONS_EXECUTABLE = resolve(directory, '../collector-sidecar/webnovel-metadata-collector.exe');
+env.BOAA_CAMOUFOX_EXECUTABLE = resolve(directory, '../collector-sidecar/browsers/camoufox.exe');
+env.PLAYWRIGHT_NODEJS_PATH = resolve(directory, 'node.exe');
 const browserCheck = spawnSync(
   resolve(directory, 'node.exe'),
   [
     '-e',
     `
   (async () => {
-    for (const engine of ['playwright-core', 'patchright']) {
-      const { chromium } = require(engine);
-      let browser;
-      const errors = [];
-      for (const channel of ['msedge', 'chrome']) {
-        try { browser = await chromium.launch({ channel, headless: true }); break; }
-        catch (error) { errors.push(error); }
-      }
-      if (!browser) throw new AggregateError(errors, 'No installed source browser');
-      try {
-        const page = await browser.newPage();
-        await page.setContent('<main id="result"></main><script>document.querySelector("#result").textContent="browser ready"</script>');
-        if (await page.textContent('#result') !== 'browser ready') throw new Error('Site script did not execute');
-        console.log(engine + ': installed browser launch and page script passed');
-      } finally { await browser.close(); }
-    }
+    const { firefox } = require('playwright-core');
+    const { camoufoxLaunchOptions } = await import('@boaa/browser-runtime');
+    const browser = await firefox.launch(await camoufoxLaunchOptions());
+    try {
+      const page = await browser.newPage();
+      await page.setContent('<main id="result"></main><script>document.querySelector("#result").textContent="browser ready"</script>');
+      if (await page.textContent('#result') !== 'browser ready') throw new Error('Site script did not execute');
+      console.log('Camoufox: packaged browser launch and page script passed');
+    } finally { await browser.close(); }
   })().catch(error => { console.error(error); process.exitCode = 1; });
 `,
   ],

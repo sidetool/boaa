@@ -1,8 +1,8 @@
 services:
   text-source-server:
     build:
-      context: .
-      dockerfile: '${TEXT_SOURCE_DOCKERFILE:-Dockerfile}'
+      context: ../..
+      dockerfile: 'services/text-source-server/${TEXT_SOURCE_DOCKERFILE:-Dockerfile}'
     init: true
     restart: unless-stopped
     ports:
@@ -22,6 +22,7 @@ services:
     read_only: true
     tmpfs:
       - /tmp:rw,noexec,nosuid,size=256m
+      - /home/node:rw,noexec,nosuid,size=32m,uid=1000,gid=1000,mode=700
     shm_size: 256m
     cap_drop:
       - ALL

@@ -2,14 +2,25 @@ import type { BrowserContext } from 'playwright-core';
 import type { SourceWebViewScope } from './source-webview.js';
 type Storage = Awaited<ReturnType<BrowserContext['storageState']>>;
 export type SourceBrowserSession = Storage & { userAgents?: Record<string, string> };
+function sessionKey(scope: SourceWebViewScope) {
+  let parts: string[];
+  try {
+    parts = JSON.parse(scope.key) as string[];
+  } catch {
+    parts = [scope.key, 'browser', ''];
+  }
+  if (!Array.isArray(parts)) parts = [scope.key, 'browser', ''];
+  parts[1] = `${parts[1]}:camoufox-v1`;
+  return JSON.stringify(parts);
+}
 export function readBrowserSession(scope: SourceWebViewScope): SourceBrowserSession {
-  const raw = scope.vault?.read(scope.key)?.secret;
+  const raw = scope.vault?.read(sessionKey(scope))?.secret;
   return raw ? JSON.parse(raw) : { cookies: [], origins: [] };
 }
 export function writeBrowserSession(scope: SourceWebViewScope, state: SourceBrowserSession) {
   const secret = JSON.stringify(state);
   if (Buffer.byteLength(secret) > 1024 * 1024) throw new Error('source_body_limit');
-  scope.vault?.write(scope.key, { secret });
+  scope.vault?.write(sessionKey(scope), { secret });
 }
 /** Apply only browser changes; parallel HTTP requests may have updated other cookies meanwhile. */
 export function mergeBrowserSession(

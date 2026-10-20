@@ -8,7 +8,7 @@ import { fetchSourceJson } from '../src/source-http.mjs';
 
 const ACTIONS = {
   invalid_source_http_transport:
-    'SOURCE_HTTP_TRANSPORT는 http 또는 browser입니다. SOURCE_BROWSER_CHANNEL은 browser에서만 chromium·chrome·msedge를 선택하세요.',
+    'SOURCE_HTTP_TRANSPORT는 http 또는 browser입니다. browser는 설치된 Camoufox를 사용하며 SOURCE_BROWSER_CHANNEL은 생략하거나 camoufox로 설정하세요.',
   invalid_source_configuration: 'SOURCE_ADAPTERS가 지원하는 ID·필드로 이루어진 JSON 배열인지 확인하세요.',
   unsupported_content_provider_protocol:
     '본문 공급자의 protocol이 서버에 등록된 driver인지 확인하세요. 기본 제공은 job-v1입니다.',

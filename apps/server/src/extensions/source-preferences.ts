@@ -1,10 +1,5 @@
 import { normalizeBrandRecord } from '@boaa/extension-contracts/brand-compat';
-import {
-  SOURCE_BROWSER_MODE_KEY,
-  sourceBrowserMode,
-  sourceBrowserModeField,
-  type SourceBrowserMode,
-} from './source-browser-mode.js';
+import { SOURCE_BROWSER_MODE_KEY, sourceBrowserMode, type SourceBrowserMode } from './source-browser-mode.js';
 import type { VerifiedBoaaPackage } from '../../../../src/extensions/packages/package-archive.js';
 import {
   OUTBOUND_PROXY_KEY,
@@ -40,6 +35,7 @@ export function createSourcePreferences(vault: SourceCredentialVault, allowPriva
     const parsed = secret ? JSON.parse(secret) : { revision: 0, values: {}, privateOrigins: [] };
     const saved = normalizeBrandRecord(parsed);
     if (secret && saved !== parsed) vault.write(key(pkg, source, epoch), { secret: JSON.stringify(saved) });
+    saved.browserMode = sourceBrowserMode(saved.browserMode);
     delete saved.proxyDns;
     delete saved.values[LEGACY_PROXY_DNS_KEY];
     return saved;
@@ -112,7 +108,6 @@ export function createSourcePreferences(vault: SourceCredentialVault, allowPriva
         networkPolicy: 'restricted',
         fields: [
           ...outboundProxyFields(saved),
-          ...(pkg.manifest.requestedAccess.webview ? [sourceBrowserModeField(saved.browserMode)] : []),
           ...fields
             .filter(
               (field) =>

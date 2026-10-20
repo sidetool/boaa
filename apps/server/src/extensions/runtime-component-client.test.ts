@@ -30,6 +30,7 @@ it('authenticates only managed metadata endpoints and resolves the proxy per ope
 });
 
 it('verifies the browser manifest and authenticates the WebSocket without local fallback', async () => {
+  vi.stubEnv('BOAA_CAMOUFOX_EXECUTABLE', '');
   vi.stubEnv('BOAA_SOURCE_BROWSER_EXECUTABLE', '');
   vi.stubEnv('BOAA_SOURCE_BROWSER_ENDPOINT', 'http://runtime-browser:8791');
   vi.stubEnv('BOAA_RUNTIME_TOKEN', 'a'.repeat(64));
@@ -39,8 +40,8 @@ it('verifies the browser manifest and authenticates the WebSocket without local 
       schemaVersion: 1,
       protocolVersion: 1,
       component: 'browser',
-      engine: 'chromium',
-      engines: { chromium: '1.61.1' },
+      engine: 'camoufox',
+      engines: { camoufox: '1.62.0' },
       wsPath: '/v1/browsers/12345678-1234-1234-1234-123456789012/ws',
     }),
   );

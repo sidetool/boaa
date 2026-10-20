@@ -161,29 +161,31 @@ driver는 [content-job-provider.mjs](src/content-job-provider.mjs)에 있고 함
 `SOURCE_HTTP_TRANSPORT=browser`를 명시적으로 선택한다. 본문 공급자 설정과는 별개이며 작품 목록·목차의
 HTML/JSON GET에만 적용된다. 일반 HTTP 실패를 감지하여 자동으로 브라우저로 전환하지 않는다.
 
-로컬 Windows에서 설치된 Edge를 사용하려면 `.env`에 다음을 설정한다.
+설치된 Camoufox를 사용하려면 `.env`에 다음을 설정한다.
 
 ```dotenv
 SOURCE_HTTP_TRANSPORT=browser
-SOURCE_BROWSER_CHANNEL=msedge
+SOURCE_BROWSER_CHANNEL=camoufox
 ```
 
-채널을 비우면 Playwright에 준비된 Chromium을 사용하며, `playwright-core` npm 설치 자체는 브라우저 바이너리를
-다운로드하지 않는다. Compose에서는 `TEXT_SOURCE_DOCKERFILE=Dockerfile.browser`,
+채널을 비워도 Camoufox를 사용한다. `BOAA_CAMOUFOX_PYTHON`과 `BOAA_CAMOUFOX_EXECUTABLE`로
+미리 설치한 Python 환경과 브라우저를 지정한다. Windows 실행 파일은 `camoufox.exe`, Linux는 `camoufox-bin`이다.
+공통 런타임의 [설치·하드닝 절차](../../packages/browser-runtime/HARDENING.md)를 적용하며 실행 중에는 다운로드하지 않는다. Compose에서는 `TEXT_SOURCE_DOCKERFILE=Dockerfile.browser`,
 `SOURCE_HTTP_TRANSPORT=browser`를 선택하고 `SOURCE_BROWSER_CHANNEL`은 비운다. Hosted overlay의 브라우저
-실행에는 `TEXT_SOURCE_MEMORY_LIMIT=768m` 이상을 운영 환경에 맞게 지정한다. 두 Compose 파일은 읽기 전용
-컨테이너에서 브라우저가 쓸 `/tmp` tmpfs 256 MiB와 `/dev/shm` 256 MiB를 제공한다.
+실행에는 검증한 한도인 `TEXT_SOURCE_MEMORY_LIMIT=1536m`를 기준으로 운영 환경에 맞게 지정한다. 두 Compose 파일은 읽기 전용
+컨테이너에서 브라우저가 쓸 `/tmp` tmpfs 256 MiB, 임시 `/home/node` 32 MiB와 `/dev/shm` 256 MiB를 제공한다.
+Camoufox의 프로필 및 다운로드 디렉터리 초기화에는 쓰기 가능한 임시 홈이 필요하다. 이 홈에는 운영 데이터나 로그인 정보를 보관하지 않는다.
 
-브라우저는 첫 요청에 시작하고 재사용하지만 요청마다 빈 컨텍스트를 만든다. JavaScript·service worker를
-비활성화하며 하위 리소스와 redirect는 전송 전에 거부한다. 기본 브라우저 UA·TLS와 인증서 검증을 유지하고,
-쿠키 프로필·사용자 로그인·지문 변경 설정은 가져오지 않는다. 문서를 렌더링하지 않고 response stream을
-64 KiB씩 읽어 압축 해제 후 1 MiB 상한을 적용한다. 원본을 DOM으로 직렬화하거나 `Response.body()` 전체 읽기로
+브라우저는 첫 요청에 시작하고 재사용하지만 요청마다 빈 컨텍스트를 만든다. 서버가 만든 빈 문서에서 호스트의 fetch만
+실행하며 원격 HTML·스크립트를 실행하지 않는다. service worker·하위 리소스·redirect는 전송 전에 거부한다.
+Camoufox UA·TLS와 인증서 검증을 유지하며 쿠키 프로필·사용자 로그인은 가져오지 않는다.
+response stream에 압축 해제 후 1 MiB 상한을 적용한다. 원본을 DOM으로 직렬화하거나 `Response.body()` 전체 읽기로
 변환하지 않는다. 동시에 두 요청, 대기 여덟 요청까지 허용하며 그 이상은 `source_busy`로 응답한다.
 대기를 포함한 총 제한은 15초, 본문 정지는 최대 10초다. 취소·종료 시 대기 요청과 컨텍스트를 닫는다.
+초기 컨텍스트·페이지 생성에도 요청 제한시간을 적용한다. 취소 후 컨텍스트 정리가 2초 안에 끝나지 않으면 브라우저를 폐기해 요청 슬롯이 계속 점유되지 않도록 한다.
 
 브라우저 검사는 기본 Node 검사에서 설치 환경이 필요하다고 명시하며 건너뛴다. 준비된 브라우저 환경에서
-`RUN_SOURCE_BROWSER_TESTS=1`로 `node --test test/browser-source-http.test.mjs`를 실행한다. Windows Edge는
-추가로 `SOURCE_BROWSER_CHANNEL=msedge`를 지정한다. 합성 loopback 서버로 bytes·redirect·용량·대기·취소를
+`RUN_SOURCE_BROWSER_TESTS=1`로 `node --test test/browser-source-http.test.mjs`를 실행한다. 합성 loopback 서버로 bytes·redirect·용량·대기·취소를
 검사하며 실제 소스에 요청하지 않는다. 시스템 HTTP 필터가 응답을 수정하는 환경의 byte 동등성 실패는 별도로
 기록하고, 이를 통과시키려고 사용자 보안 설정을 변경하지 않는다.
 
@@ -192,7 +194,7 @@ SOURCE_BROWSER_CHANNEL=msedge
 호스트에서 `npm run init`을 실행하고 `.env`와 catalog를 설정한 뒤 `docker compose up --build -d`로 실행한다.
 수동 설정은 `.env.example`을 참고한다. image에는 Node와
 서버 코드, lockfile로 고정한 production 의존성이 들어간다. `data/`는 읽기 전용 mount이고 port는 host loopback에만 게시한다.
-별도 build context는 Dockerfile·package 파일·`src/`와 초기화·진단 스크립트만 허용하며 운영 `data/`와 `.env`를 포함하지 않는다.
+공유 브라우저 런타임을 포함하기 위해 저장소 루트를 build context로 사용한다. 루트 `.dockerignore`가 운영 `data/`와 `.env`를 제외하며, Dockerfile은 필요한 소스·패키지·초기화 및 진단 스크립트만 명시적으로 복사한다.
 초기화 파일은 소유자에게만 읽기·쓰기 권한을 요청하므로 컨테이너의 `node` 사용자도 catalog와 content 디렉터리를
 읽을 수 있도록 운영 환경의 소유권·ACL을 확인한다. `.env`의 비밀값은 파일 mount 대신 Compose 환경으로 전달한다.
 BOAA Hosted gateway와 같은 Docker network에서 연결할 경우 gateway의 단일 upstream을 이 서비스에 지정한다.

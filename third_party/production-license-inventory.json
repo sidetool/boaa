@@ -9,10 +9,10 @@
     "libc": "glibc"
   },
   "summary": {
-    "componentCount": 216,
+    "componentCount": 214,
     "byLicense": {
       "0BSD": 1,
-      "Apache-2.0": 45,
+      "Apache-2.0": 43,
       "Apache-2.0 OR MIT": 1,
       "BSD-2-Clause": 9,
       "BSD-3-Clause": 16,
@@ -1047,20 +1047,6 @@
     },
     {
       "ecosystem": "npm",
-      "name": "patchright",
-      "version": "1.61.1",
-      "license": "Apache-2.0",
-      "homepage": "https://github.com/Kaliiiiiiiiii-Vinyzu/patchright"
-    },
-    {
-      "ecosystem": "npm",
-      "name": "patchright-core",
-      "version": "1.61.1",
-      "license": "Apache-2.0",
-      "homepage": "https://github.com/Kaliiiiiiiiii-Vinyzu/patchright"
-    },
-    {
-      "ecosystem": "npm",
       "name": "pdfjs-dist",
       "version": "5.7.284",
       "license": "Apache-2.0",
@@ -1146,7 +1132,7 @@
     {
       "ecosystem": "npm",
       "name": "playwright-core",
-      "version": "1.61.1",
+      "version": "1.62.0",
       "license": "Apache-2.0",
       "homepage": "https://playwright.dev"
     },

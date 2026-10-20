@@ -18,6 +18,7 @@ release/Boaa.exe
 Thumbs.db
 *.log
 __pycache__/
+services/webnovel-metadata-collector/build/
 *.pyc
 
 # Local environment files

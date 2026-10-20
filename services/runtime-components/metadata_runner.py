@@ -76,7 +76,7 @@ class ProviderContext:
         # Control traffic always goes to the explicitly configured internal worker, outside the source proxy.
         async with httpx.AsyncClient(trust_env=False, timeout=35) as client:
             async with client.stream("POST", endpoint.rstrip("/") + "/v1/browsers", headers=headers, json={
-                "protocolVersion": 1, "engine": "chromium", "proxyBridge": {
+                "protocolVersion": 1, "engine": "camoufox", "proxyBridge": {
                     "origins": list(origins), "privateOrigins": list(private_origins),
                     "outboundProxy": self.outbound_proxy}}) as response:
                 response.raise_for_status()
@@ -87,18 +87,23 @@ class ProviderContext:
                         raise RuntimeError("runtime_manifest_invalid")
         manifest = json.loads(body)
         if (manifest.get("schemaVersion") != 1 or manifest.get("protocolVersion") != 1 or
-                manifest.get("component") != "browser" or manifest.get("engines", {}).get("chromium") != "1.61.1" or
+                manifest.get("component") != "browser" or manifest.get("engines", {}).get("camoufox") != "1.62.0" or
+                manifest.get("engine") != "camoufox" or
                 not re.fullmatch(r"/v1/browsers/[a-f0-9-]{36}/ws", manifest.get("wsPath", "")) or
+                not re.fullmatch(r"http://boaa-browser.invalid/[a-f0-9]{48}", manifest.get("proxyBootstrapUrl", "")) or
                 not isinstance(manifest.get("proxy"), dict)):
             raise RuntimeError("runtime_manifest_invalid")
         websocket = ("wss://" if url.scheme == "https" else "ws://") + url.netloc + manifest["wsPath"]
         async with async_playwright() as driver:
-            browser = await driver.chromium.connect(websocket, headers=headers, timeout=15000)
+            browser = await driver.firefox.connect(websocket, headers=headers, timeout=15000)
             try:
                 context = await browser.new_context(proxy=manifest["proxy"], storage_state=storage_state,
-                                                    service_workers="block", accept_downloads=False)
+                                                    service_workers="block", accept_downloads=False, no_viewport=True)
                 try:
                     await context.route_web_socket("**/*", lambda socket: socket.close())
+                    bootstrap = await context.new_page()
+                    await bootstrap.goto(manifest["proxyBootstrapUrl"], wait_until="domcontentloaded", timeout=15000)
+                    await bootstrap.close()
                     yield context
                 finally:
                     await context.close()

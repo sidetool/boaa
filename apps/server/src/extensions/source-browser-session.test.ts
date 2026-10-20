@@ -82,3 +82,25 @@ it('restores a large encrypted browser session after restart and rejects oversiz
     rmSync(directory, { recursive: true, force: true });
   }
 });
+
+it('starts a separate Camoufox session and leaves the previous engine state available for rollback', () => {
+  const key = JSON.stringify(['package', 'browser:source', 'epoch']);
+  const previous = JSON.stringify({ cookies: [], origins: [], userAgents: { 'https://site.example': 'Previous UA' } });
+  const entries = new Map([[key, { secret: previous }]]);
+  const scope = {
+    key,
+    vault: {
+      read: (entry: string) => entries.get(entry),
+      write: (entry: string, value?: { secret: string }) => {
+        if (value) entries.set(entry, value);
+        else entries.delete(entry);
+      },
+    },
+  };
+  expect(readBrowserSession(scope)).toEqual({ cookies: [], origins: [] });
+  const current = { cookies: [], origins: [], userAgents: { 'https://site.example': 'Camoufox UA' } };
+  writeBrowserSession(scope, current);
+  expect(readBrowserSession(scope)).toEqual(current);
+  expect(entries.get(key)?.secret).toBe(previous);
+  expect(entries.size).toBe(2);
+});

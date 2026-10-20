@@ -64,7 +64,7 @@ await build({
     'agent-base',
     'socks',
     'playwright-core',
-    'patchright',
+    '@boaa/browser-runtime',
     'tough-cookie',
     'sharp',
   ],
@@ -81,8 +81,8 @@ async function copyPackage(name, from) {
   copied.add(name);
   const resolver = createRequire(join(from, 'package.json'));
   let folder =
-    name === '@boaa/extension-runtime'
-      ? join(root, 'packages/extension-runtime')
+    name === '@boaa/extension-runtime' || name === '@boaa/browser-runtime'
+      ? join(root, 'packages', name.split('/')[1])
       : dirname(resolver.resolve(name.startsWith('@img/sharp-') ? `${name}/package` : name));
   while (JSON.parse(await readFile(join(folder, 'package.json'), 'utf8').catch(() => '{}')).name !== name) {
     const parent = dirname(folder);
@@ -92,7 +92,7 @@ async function copyPackage(name, from) {
   const manifest = JSON.parse(await readFile(join(folder, 'package.json'), 'utf8'));
   const target = join(output, 'node_modules', name);
   await mkdir(target, { recursive: true });
-  if (name === '@boaa/extension-runtime')
+  if (name === '@boaa/extension-runtime' || name === '@boaa/browser-runtime')
     for (const file of ['package.json', ...manifest.files]) await cp(join(folder, file), join(target, file));
   else
     await cp(folder, target, {
@@ -111,7 +111,7 @@ await copyPackage('https-proxy-agent', join(root, 'apps/server'));
 await copyPackage('agent-base', join(root, 'apps/server'));
 await copyPackage('socks', join(root, 'apps/server'));
 await copyPackage('playwright-core', join(root, 'apps/server'));
-await copyPackage('patchright', join(root, 'apps/server'));
+await copyPackage('@boaa/browser-runtime', join(root, 'apps/server'));
 await copyPackage('tough-cookie', join(root, 'apps/server'));
 await cp(join(root, 'third_party/licenses/mangayomi-dom'), join(output, 'licenses/mangayomi-dom'), { recursive: true });
 for (const file of ['LICENSE', 'THIRD_PARTY_NOTICES.md']) await cp(join(root, file), join(output, file));

@@ -7,7 +7,7 @@ import pytest
 from app.auth_session import AuthSessionManager
 
 
-@pytest.mark.skipif(os.environ.get("BOAA_TEST_AUTH_BROWSER") != "1", reason="opt-in local Chromium")
+@pytest.mark.skipif(os.environ.get("BOAA_TEST_AUTH_BROWSER") != "1", reason="opt-in local Camoufox")
 def test_real_browser_input_popup_and_restart(tmp_path):
     async def run():
         manager = AuthSessionManager(tmp_path)

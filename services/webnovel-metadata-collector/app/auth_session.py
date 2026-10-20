@@ -5,7 +5,6 @@ import json
 import os
 import shutil
 import socket
-import subprocess
 import time
 import uuid
 from datetime import datetime, timezone
@@ -24,6 +23,7 @@ try:
     from playwright.async_api import Error as PlaywrightError
     from playwright.async_api import TimeoutError as PlaywrightTimeoutError
     from playwright.async_api import async_playwright
+    from camoufox.utils import launch_options as _camoufox_available
 except ImportError:  # 선택 기능이므로 기본 실행은 Playwright 없이도 가능하다.
     PlaywrightError = RuntimeError
     PlaywrightTimeoutError = TimeoutError
@@ -115,9 +115,9 @@ class AuthSessionManager:
                     else Path.home() / ".webnovel-metadata-collector" / "auth"
                 )
         self.data_dir = data_dir
-        self.profile_dir = data_dir / "browser-profile"
+        self.profile_dir = data_dir / "camoufox-profile"
         self.settings_path = data_dir / "settings.json"
-        self.session_path = data_dir / "session-cookies.json"
+        self.session_path = data_dir / "camoufox-session-cookies.json"
         self.novelpia_auth = NovelpiaAuthManager(data_dir / "novelpia-auth.json")
         self.enabled_platforms = self._load_enabled_platforms()
         if not self.novelpia_auth.configured:
@@ -125,7 +125,6 @@ class AuthSessionManager:
         self._playwright: Any = None
         self._context: Any = None
         self._context_headless: bool | None = None
-        self._login_processes: list[subprocess.Popen[Any]] = []
         self.remote_auth = os.environ.get('BOAA_COLLECTOR_REMOTE_AUTH', os.environ.get('MOYA_COLLECTOR_REMOTE_AUTH', "")).strip().lower() in {
             "1",
             "true",
@@ -151,7 +150,7 @@ class AuthSessionManager:
 
     @property
     def available(self) -> bool:
-        # Novelpia uses a direct, persisted LOGINKEY flow and does not require Chromium.
+        # Novelpia uses a direct, persisted LOGINKEY flow and does not require a browser.
         return bool(self.supported_platforms)
 
     @property
@@ -173,7 +172,7 @@ class AuthSessionManager:
         # UI에는 사용자가 닫아야 하는 로그인 창만 노출한다.
         if self.remote_auth:
             return self._remote_login_active and self._active_remote_page() is not None
-        return bool(self._live_login_processes())
+        return self._context is not None and self._context_headless is False
 
     def is_enabled(self, platform: str) -> bool:
         return platform in self.enabled_platforms
@@ -331,31 +330,16 @@ class AuthSessionManager:
             self.last_error = None
             return
 
-        browser_path = self._find_system_browser()
-        if browser_path is None:
-            self.last_error = "설치된 Chrome 또는 Edge를 찾지 못했습니다."
-            raise AuthFeatureUnavailable(self.last_error)
-
-        async with self._context_lock:
-            await self._close_context_locked()
-            self.data_dir.mkdir(parents=True, exist_ok=True)
-            self.profile_dir.mkdir(parents=True, exist_ok=True)
-            command = [
-                str(browser_path),
-                f"--user-data-dir={self.profile_dir}",
-                "--no-first-run",
-                "--no-default-browser-check",
-                "--disable-background-mode",
-                "--new-window",
-                LOGIN_URLS[platform],
-            ]
-            try:
-                process = subprocess.Popen(command)
-            except OSError as exc:
-                self.last_error = f"로그인 브라우저를 시작하지 못했습니다: {exc}"
-                raise AuthFeatureUnavailable(self.last_error) from exc
-            self._login_processes = [*self._live_login_processes(), process]
-            self.last_error = None
+        await self.close_browser()
+        context = await self._ensure_context(visible=True)
+        page = context.pages[-1] if context.pages else await context.new_page()
+        try:
+            await page.goto(LOGIN_URLS[platform], wait_until="domcontentloaded", timeout=30000)
+        except Exception as exc:
+            await self.close_browser()
+            self.last_error = "로그인 페이지를 열지 못했습니다."
+            raise AuthFeatureUnavailable(self.last_error) from exc
+        self.last_error = None
 
     async def finish_login(self) -> None:
         async with self._request_slots, self._remote_io_lock:
@@ -380,7 +364,7 @@ class AuthSessionManager:
             await self.close_browser()
             return
 
-        await self._stop_login_processes()
+        await self.close_browser()
         last_error: Exception | None = None
         for attempt in range(5):
             try:
@@ -394,7 +378,7 @@ class AuthSessionManager:
 
         message = (
             "로그인 브라우저의 프로필이 아직 사용 중입니다. "
-            "전용 Chrome/Edge 창을 완전히 닫고 다시 체크해 주세요."
+            "전용 Camoufox 창을 완전히 닫고 다시 체크해 주세요."
         )
         self.last_error = message
         raise AuthFeatureUnavailable(message) from last_error
@@ -402,7 +386,6 @@ class AuthSessionManager:
     async def close_browser(self) -> None:
         async with self._context_lock:
             await self._close_context_locked()
-        await self._stop_login_processes()
 
     async def close_login(self) -> None:
         async with self._request_slots, self._remote_io_lock:
@@ -535,7 +518,7 @@ class AuthSessionManager:
             )
         profile = self.profile_dir.resolve()
         root = self.data_dir.resolve()
-        if profile.name != "browser-profile" or not profile.is_relative_to(root):
+        if profile.name != "camoufox-profile" or profile.parent != root:
             raise RuntimeError("인증 프로필 경로를 안전하게 확인하지 못했습니다.")
         if profile.exists():
             shutil.rmtree(profile)
@@ -684,11 +667,6 @@ class AuthSessionManager:
             )
 
         async with self._context_lock:
-            if self._live_login_processes():
-                raise AuthFeatureUnavailable(
-                    "로그인 브라우저를 먼저 닫은 뒤 다시 검색해 주세요."
-                )
-
             if self._context is not None:
                 if not visible or self._context_headless is False:
                     return self._context
@@ -699,29 +677,15 @@ class AuthSessionManager:
             if self._playwright is None:
                 self._playwright = await async_playwright().start()
 
-            browser_path = None if self.remote_auth else self._find_system_browser()
-            if browser_path is None and not self.remote_auth:
-                self.last_error = "설치된 Chrome 또는 Edge를 찾지 못했습니다."
-                raise AuthFeatureUnavailable(self.last_error)
-
             context = None
             try:
-                launch_options: dict[str, Any] = {
-                    "headless": self.remote_auth_headless if self.remote_auth else not visible,
-                    "locale": "ko-KR",
-                    "viewport": {
-                        "width": self._remote_viewport_width,
-                        "height": self._remote_viewport_height,
-                    },
-                    "args": ["--disable-dev-shm-usage"] if self.remote_auth else [],
-                }
-                if self.remote_auth:
-                    launch_options["service_workers"] = "block"
-                if browser_path is not None:
-                    launch_options["executable_path"] = str(browser_path)
-                context = await self._playwright.chromium.launch_persistent_context(
-                    user_data_dir=str(self.profile_dir),
-                    **launch_options,
+                from app.camoufox_runtime import persistent_options
+                options = await asyncio.to_thread(
+                    persistent_options, self.profile_dir,
+                    headless=self.remote_auth_headless if self.remote_auth else not visible,
+                )
+                context = await self._playwright.firefox.launch_persistent_context(
+                    user_data_dir=str(self.profile_dir), **options,
                 )
                 session = self._load_session()
                 if self.remote_auth and session.get("cookies"):
@@ -871,92 +835,6 @@ class AuthSessionManager:
             os.replace(temporary, path)
         finally:
             temporary.unlink(missing_ok=True)
-
-    def _live_login_processes(self) -> list[subprocess.Popen[Any]]:
-        live = [process for process in self._login_processes if process.poll() is None]
-        self._login_processes = live
-        return live
-
-    async def _stop_login_processes(self) -> None:
-        processes = self._live_login_processes()
-        self.last_error = None
-        if not processes:
-            return
-
-        for process in processes:
-            try:
-                if os.name == "nt":
-                    await asyncio.to_thread(
-                        subprocess.run,
-                        ["taskkill", "/PID", str(process.pid), "/T"],
-                        capture_output=True,
-                        timeout=4,
-                        check=False,
-                        creationflags=subprocess.CREATE_NO_WINDOW,
-                    )
-                else:
-                    process.terminate()
-            except (OSError, subprocess.SubprocessError):
-                pass
-
-        remaining: list[subprocess.Popen[Any]] = []
-        for process in processes:
-            try:
-                await asyncio.to_thread(process.wait, 4)
-            except subprocess.TimeoutExpired:
-                remaining.append(process)
-
-        for process in remaining:
-            try:
-                if os.name == "nt":
-                    await asyncio.to_thread(
-                        subprocess.run,
-                        ["taskkill", "/F", "/PID", str(process.pid), "/T"],
-                        capture_output=True,
-                        timeout=4,
-                        check=False,
-                        creationflags=subprocess.CREATE_NO_WINDOW,
-                    )
-                else:
-                    process.kill()
-                await asyncio.to_thread(process.wait, 3)
-            except (OSError, subprocess.SubprocessError):
-                pass
-
-        self._login_processes = [
-            process for process in processes if process.poll() is None
-        ]
-        if self._login_processes:
-            self.last_error = (
-                "로그인 브라우저를 종료하지 못했습니다. 전용 창을 직접 닫아 주세요."
-            )
-            raise AuthFeatureUnavailable(self.last_error)
-
-        # Chrome 자식 프로세스가 프로필 잠금을 해제할 짧은 시간을 준다.
-        await asyncio.sleep(0.35)
-
-    @staticmethod
-    def _find_system_browser() -> Path | None:
-        candidates: list[Path] = []
-        for command in ("chrome.exe", "chrome", "msedge.exe", "msedge"):
-            resolved = shutil.which(command)
-            if resolved:
-                candidates.append(Path(resolved))
-
-        program_files = [
-            os.environ.get("PROGRAMFILES"),
-            os.environ.get("PROGRAMFILES(X86)"),
-            os.environ.get("LOCALAPPDATA"),
-        ]
-        for root in filter(None, program_files):
-            candidates.extend(
-                [
-                    Path(root) / "Google" / "Chrome" / "Application" / "chrome.exe",
-                    Path(root) / "Microsoft" / "Edge" / "Application" / "msedge.exe",
-                ]
-            )
-
-        return next((path for path in candidates if path.is_file()), None)
 
     def _mark_context_closed(self, context: Any) -> None:
         if self._context is context:

@@ -47,8 +47,10 @@ source packages (including `.dsc`, upstream archives and Debian patches). Those
 archives are lasting release assets, independently of CI artifact retention.
 Rebuild a Debian package by extracting its `.dsc` with `dpkg-source -x`, installing
 its build dependencies, and using the included `debian/rules`/`dpkg-buildpackage`
-recipe. Chromium and its bundled dependencies follow Debian's corresponding
-source and copyright files; they are confined to the optional browser image.
+recipe. Camoufox is installed separately from a pinned upstream archive in the optional browser image.
+Its Mozilla and bundled dependency notices remain with the browser. The source/runtime changes and
+rebuild instructions are documented in `packages/browser-runtime/HARDENING.md`. The final browser
+image gate must include this upstream browser and Python model stack, beyond Debian package evidence.
 
 The web image uses Debian nginx-light, rather than a mixture of Alpine and vendor
 nginx module packages. The same final-package source/copyright check applies to

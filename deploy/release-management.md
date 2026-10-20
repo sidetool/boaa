@@ -55,7 +55,7 @@ node scripts/release/install.mjs --version vX.Y.Z --key /trusted/boaa-release-pu
 | 구성요소   | 설치 내용                                                 | 비활성화 시                                                |
 | ---------- | --------------------------------------------------------- | ---------------------------------------------------------- |
 | APK        | JRE + 사이트 중립 APK 호스트 JAR, 원자적 `current` 포인터 | API 재시작, APK 실행 중단, APK 파일·설정·payload 볼륨 보존 |
-| 브라우저   | 인증된 원격 Playwright/patchright + Chromium              | worker 중지, HTTP 확장은 계속 동작                         |
+| 브라우저   | 인증된 원격 Playwright + Camoufox                         | worker 중지, HTTP 확장은 계속 동작                         |
 | 메타데이터 | 사이트 중립 Python ASGI 실행기                            | worker 중지, 제공자·캐시 데이터 보존                       |
 
 APK provider 컨테이너는 성공 후 `Exited (0)`인 것이 정상이다. 실행 중 앱 버전과 같은 릴리즈의 구성요소만 설치한다. 이미 설치했어도 꺼 둔 구성요소는 앱 업데이트 때 다시 받지 않으며, 다음 활성화 시 현재 앱 버전으로 맞춘다. 표시되는 다운로드 크기는 이미지 압축 layer 총량의 아키텍처별 최대치로, 이미 받은 layer 재사용에 따른 실제 전송량은 더 작을 수 있다.

@@ -12,12 +12,32 @@ ENV NODE_ENV=production \
     PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 \
     BOAA_COMPONENT_VERSION=$BOAA_COMPONENT_VERSION \
     BOAA_RUNTIME_PORT=8791 \
-    BOAA_SOURCE_BROWSER_EXECUTABLE=/usr/bin/chromium
-RUN apt-get update && apt-get install -y --no-install-recommends chromium fonts-noto-cjk \
+    BOAA_CAMOUFOX_PYTHON=/opt/camoufox-env/bin/python \
+    BOAA_CAMOUFOX_EXECUTABLE=/opt/camoufox/camoufox-bin \
+    BOAA_CAMOUFOX_FINGERPRINT_FILE=/data/fingerprint.json
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      python3 python3-venv ca-certificates libgtk-3-0 libdbus-glib-1-2 libasound2 \
+      libx11-xcb1 libxt6 libpci3 libegl1 libgl1 libnss3 fonts-noto-cjk \
     && rm -rf /var/lib/apt/lists/*
+COPY packages/browser-runtime/requirements.txt /tmp/camoufox-requirements.txt
+RUN python3 -m venv /opt/camoufox-env \
+    && /opt/camoufox-env/bin/pip install --no-cache-dir -r /tmp/camoufox-requirements.txt \
+    && /opt/camoufox-env/bin/python -c "from camoufox.fpgen_model import ensure_fpgen_model; ensure_fpgen_model()" \
+    && rm /tmp/camoufox-requirements.txt
+ARG TARGETARCH
+COPY services/runtime-components/install-camoufox.py /tmp/install-camoufox.py
+COPY packages/browser-runtime/harden-browser.py packages/browser-runtime/LICENSE.camoufox /tmp/
+RUN /opt/camoufox-env/bin/python /tmp/install-camoufox.py "$TARGETARCH" /opt/camoufox \
+    && /opt/camoufox-env/bin/python /tmp/harden-browser.py /opt/camoufox \
+    && mkdir -p /licenses/camoufox \
+    && cp /tmp/harden-browser.py /licenses/camoufox/harden-browser.py \
+    && rm /tmp/install-camoufox.py /tmp/harden-browser.py \
+    && mkdir -p /data && chown node:node /data
 WORKDIR /app
 # Driver versions must match the API. Neither installer downloads bundled browsers.
-RUN npm install --omit=dev --no-audit --no-fund --ignore-scripts playwright-core@1.61.1 patchright@1.61.1
+RUN npm install --omit=dev --no-audit --no-fund --ignore-scripts playwright-core@1.62.0
+COPY packages/browser-runtime ./node_modules/@boaa/browser-runtime
+COPY packages/browser-runtime/HARDENING.md /licenses/camoufox/HARDENING.md
 COPY scripts/release/capture-npm-notices.mjs /tmp/capture-npm-notices.mjs
 RUN node /tmp/capture-npm-notices.mjs /licenses/npm && rm /tmp/capture-npm-notices.mjs
 COPY --chown=node:node services/runtime-components/common.mjs services/runtime-components/browser-worker.mjs services/runtime-components/healthcheck.mjs ./
@@ -29,8 +49,9 @@ COPY third_party/server-source-manifest.json third_party/server-component-eviden
 COPY third_party/licenses /licenses/third_party
 USER node
 COPY --chown=node:node services/runtime-components/browser-smoke.mjs ./browser-smoke.mjs
-# Check actual Chromium + both pinned drivers on every native release architecture.
-RUN node browser-smoke.mjs
+# Check Camoufox and the pinned driver on every native release architecture.
+RUN /opt/camoufox-env/bin/python node_modules/@boaa/browser-runtime/launch-options.py >/dev/null \
+    && node browser-smoke.mjs && rm -f /data/fingerprint.json
 EXPOSE 8791
 HEALTHCHECK --interval=30s --timeout=5s CMD ["node", "healthcheck.mjs"]
 CMD ["node", "browser-worker.mjs"]

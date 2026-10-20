@@ -574,6 +574,7 @@ services:
       BOAA_RUNTIME_TOKEN_FILE: /run/secrets/boaa-runtime-token
     volumes:
       - runtime-secrets:/run/secrets:ro
+      - browser-data:/data
     depends_on:
       runtime-bootstrap:
         condition: service_completed_successfully
@@ -607,4 +608,5 @@ volumes:
   runtime-secrets: null
   apk-runtime: null
   metadata-data: null
+  browser-data: null
   metadata-providers: null

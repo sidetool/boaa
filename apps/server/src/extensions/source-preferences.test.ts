@@ -82,7 +82,7 @@ describe('maker-defined source preferences', () => {
       },
       AbortSignal.timeout(1000),
     );
-    expect(store.values(browserPkg, sourceId, 'epoch').browserMode).toBe('patchright');
+    expect(store.values(browserPkg, sourceId, 'epoch').browserMode).toBe('camoufox');
     expect(store.values(browserPkg, sourceId, 'epoch')).toMatchObject({
       outboundProxy: 'socks5://proxy:1080',
     });
@@ -97,8 +97,8 @@ describe('maker-defined source preferences', () => {
     expect(
       store
         .manage(browserPkg, sourceId, 'epoch', { action: 'read' }, AbortSignal.timeout(1000))
-        .fields.find((f) => f.key === '__boaa_webview_mode')?.value,
-    ).toBe('patchright');
+        .fields.find((f) => f.key === '__boaa_webview_mode'),
+    ).toBeUndefined();
   });
   it('offers host proxy exceptions even when the package declares no maker preferences', () => {
     const { store, pkg } = setup();

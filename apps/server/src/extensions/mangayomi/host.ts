@@ -1,9 +1,4 @@
-import {
-  SOURCE_BROWSER_MODE_KEY,
-  sourceBrowserMode,
-  sourceBrowserModeField,
-  type SourceBrowserMode,
-} from '../source-browser-mode.js';
+import { SOURCE_BROWSER_MODE_KEY, sourceBrowserMode, type SourceBrowserMode } from '../source-browser-mode.js';
 import { createHash, randomUUID } from 'node:crypto';
 import { COMPATIBILITY_SOURCE_NAMESPACES } from '@boaa/extension-contracts/source-identity';
 import { thumbnailCoverAsset } from '../source-cover-thumbnail.js';
@@ -447,6 +442,7 @@ export class MangayomiExtensionHost {
   private options(record: RecordEntry): StoredOptions {
     const stored = this.vault.read(scope(record));
     const options = stored ? JSON.parse(stored.secret) : { values: {}, privateOrigins: [] };
+    options.browserMode = sourceBrowserMode(options.browserMode);
     delete options.proxyDns;
     delete options.values[LEGACY_PROXY_DNS_KEY];
     return options;
@@ -459,7 +455,6 @@ export class MangayomiExtensionHost {
       revision: this.state.revision,
       privateOrigins: options.privateOrigins,
       fields: [
-        sourceBrowserModeField(options.browserMode),
         ...outboundProxyFields(options),
         ...record.fields
           .filter(

@@ -1,0 +1,25 @@
+{
+  "name": "@boaa/browser-runtime",
+  "version": "0.1.0",
+  "private": true,
+  "license": "Apache-2.0 AND MPL-2.0",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./index.d.mts",
+      "default": "./index.mjs"
+    }
+  },
+  "files": [
+    "index.mjs",
+    "index.d.mts",
+    "launch-options.py",
+    "requirements.txt",
+    "harden-browser.py",
+    "HARDENING.md",
+    "LICENSE.camoufox"
+  ],
+  "peerDependencies": {
+    "playwright-core": "1.62.0"
+  }
+}

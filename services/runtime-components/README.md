@@ -36,11 +36,13 @@ Browser endpoints require `Authorization: Bearer <token>`, including WebSocket u
 ```text
 GET  /healthz
 GET  /v1/manifest
-POST /v1/browsers       {"protocolVersion":1,"engine":"chromium"}
+POST /v1/browsers       {"protocolVersion":1,"engine":"camoufox"}
 WS   /v1/browsers/<opaque-id>/ws
 ```
 
-Engines are `chromium` and `patchright`, both Node driver version 1.61.1. Arbitrary commands, executable paths, browser arguments and other HTTP paths are denied. Only the worker's authenticated gateway is exposed; each underlying Playwright server binds loopback and its raw endpoint is never returned. At most four browser leases run, unclaimed leases close after 30 seconds, inactive leases close after five minutes and every lease has a 30-minute maximum lifetime. Closing the WebSocket closes the browser and its scoped proxy. API source contexts retain their existing two-job limit and five-minute warm-browser idle shutdown.
+The only engine is `camoufox`, using Playwright 1.62.0. The image contains one pinned Camoufox distribution and a preinstalled fingerprint model. Arbitrary commands, executable paths, browser arguments and other HTTP paths are denied. Only the worker's authenticated gateway is exposed; each underlying Playwright server binds loopback and its raw endpoint is never returned. At most four browser leases run, unclaimed leases close after 30 seconds, inactive leases close after five minutes and every lease has a 30-minute maximum lifetime. Closing the WebSocket closes the browser and its scoped proxy. The API keeps two independent warm browser slots with five-minute idle shutdown, so cancelling one source does not interrupt the other.
+
+The `browser-data` volume preserves the installation fingerprint at `/data/fingerprint.json`. Source cookies remain in the API encrypted vault in a new Camoufox namespace; previous engine sessions remain available for rollback. See [browser provisioning and hardening](../../packages/browser-runtime/HARDENING.md).
 
 API environment when the browser component is enabled:
 
@@ -67,7 +69,7 @@ The context provides:
 - `cache_key(value)`: a SHA-256 identity including the current proxy. Use it for cached metadata/covers and any retained provider contexts. Invalidate/recreate retained network/browser resources when this identity changes; do not retain an HTTP client across requests with different policies.
 - `open_browser(origins=[...], private_origins=[], storage_state=None)`: an async context manager yielding an isolated Python Playwright context. It sends an authenticated browser lease request with a proxy bridge. The browser worker reuses BOAA's existing source proxy implementation to enforce origin grants, DNS pinning, traffic limits and the effective outbound proxy. Neither worker control calls nor provider module loading passes through the source proxy. Save any authentication state only in `data_dir`; providers that retain login contexts must track `cache_key` and close them on policy changes/shutdown.
 
-The metadata Python driver is 1.61.0 and connects to Node 1.61.1; [Playwright requires matching major/minor versions](https://playwright.dev/python/docs/api/class-browsertype#browser-type-connect). No browser binaries are downloaded into metadata. HTTP metadata remains usable when `BOAA_SOURCE_BROWSER_ENDPOINT` is empty. When browser is enabled, set that endpoint to `http://runtime-browser:8791` in metadata and recreate the container to apply it.
+Both Python and Node drivers are pinned to 1.62.0; [Playwright requires matching major/minor versions](https://playwright.dev/python/docs/api/class-browsertype#browser-type-connect). No browser binaries are downloaded into metadata. HTTP metadata remains usable when `BOAA_SOURCE_BROWSER_ENDPOINT` is empty. When browser is enabled, set that endpoint to `http://runtime-browser:8791` in metadata and recreate the container to apply it.
 
 The host accepts only existing API route shapes, authenticates before dispatch, bounds request/response sizes and concurrency, cancels on disconnect, and has a 45-second operation deadline. Private providers see neither runtime credentials nor internal control headers. Worker exceptions return stable errors without raw private diagnostics.
 
@@ -90,4 +92,4 @@ Use synthetic sources, temporary volumes and generated credentials for smoke tes
 
 The browser Docker build runs `browser-smoke.mjs` against actual Chromium and both driver engines, covering authenticated launch/WebSocket access, denied origins and isolated cookie/localStorage contexts. For cross-container checks, `smoke_metadata.py` runs in the metadata image with a token mount, the browser endpoint and network alias `metadata-check`; it uses temporary local HTTP/proxy fixtures and tests Python-to-Node connectivity, context isolation and proxy failure without direct fallback. The API's existing `source-webview.browser.test.ts` can run in a separate light Node container with network alias `api` and the environment above, exercising the actual remote adapter and cancellation.
 
-Local validation on 2026-10-17 passed on Linux amd64: all four Docker builds (basic server and three components); basic image absence of Java/Chromium/APK payload as UID 1000; repeated APK payload installation and read-only JRE execution; both native browser engines; cross-container Python bridge and HTTP proxy checks; existing API remote WebView tests; authenticated missing-provider health; focused Node/Python/TypeScript tests, server typecheck/bundle and public-source boundaries. Native arm64 validation remains a release CI requirement.
+Local validation on 2026-10-17 passed on Linux amd64: all four Docker builds (basic server and three components); basic image absence of Java/Chromium/APK payload as UID 1000; repeated APK payload installation and read-only JRE execution; the Camoufox browser engine; cross-container Python bridge and HTTP proxy checks; existing API remote WebView tests; authenticated missing-provider health; focused Node/Python/TypeScript tests, server typecheck/bundle and public-source boundaries. Native arm64 validation remains a release CI requirement.

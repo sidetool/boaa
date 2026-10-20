@@ -472,7 +472,10 @@ export async function startEmbeddedServer({ runtimeFile, profileDir, signal, onP
                 ? {
                     BOAA_COLLECTOR_REMOTE_AUTH: '1',
                     BOAA_COLLECTOR_REMOTE_AUTH_HEADLESS: '1',
-                    PLAYWRIGHT_BROWSERS_PATH: collectorBrowsers,
+                    BOAA_CAMOUFOX_EXECUTABLE: path.join(
+                      collectorBrowsers,
+                      process.platform === 'win32' ? 'camoufox.exe' : 'camoufox-bin',
+                    ),
                   }
                 : {}),
             },
@@ -510,6 +513,16 @@ export async function startEmbeddedServer({ runtimeFile, profileDir, signal, onP
     const env = {
       ...process.env,
       BOAA_MANAGED_SERVER: '1',
+      ...(collectorExecutable && collectorBrowsers
+        ? {
+            BOAA_CAMOUFOX_OPTIONS_EXECUTABLE: collectorExecutable,
+            BOAA_CAMOUFOX_EXECUTABLE: path.join(
+              collectorBrowsers,
+              process.platform === 'win32' ? 'camoufox.exe' : 'camoufox-bin',
+            ),
+            BOAA_CAMOUFOX_FINGERPRINT_FILE: path.join(profileDir, 'camoufox-fingerprint.json'),
+          }
+        : {}),
       HOST: '127.0.0.1',
       PORT: String(credentials.ports.api),
       SERVER_EXPOSURE: 'loopback',

@@ -222,7 +222,6 @@ pub(crate) async fn desktop_extension_runtime_start(
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null());
-        // Playwright locates installed Edge/Chrome from these Windows directories.
         // Keep the allowlist: arbitrary host environment (e.g. NODE_OPTIONS) stays excluded.
         for key in [
             "SystemRoot", "WINDIR", "TMP", "TEMP", "LOCALAPPDATA", "PROGRAMFILES",
@@ -231,6 +230,22 @@ pub(crate) async fn desktop_extension_runtime_start(
             if let Some(value) = std::env::var_os(key) {
                 command.env(key, value);
             }
+        }
+        if let Some(runtime) = directory.parent() {
+            let collector = runtime.join("collector-sidecar");
+            command
+                .env("BOAA_CAMOUFOX_OPTIONS_EXECUTABLE", collector.join(if cfg!(target_os = "windows") {
+                    "webnovel-metadata-collector.exe"
+                } else {
+                    "webnovel-metadata-collector"
+                }))
+                .env("BOAA_CAMOUFOX_EXECUTABLE", collector.join("browsers").join(if cfg!(target_os = "windows") {
+                    "camoufox.exe"
+                } else {
+                    "camoufox-bin"
+                }))
+                .env("PLAYWRIGHT_NODEJS_PATH", directory.join(if cfg!(target_os = "windows") { "node.exe" } else { "node" }))
+                .env("BOAA_CAMOUFOX_FINGERPRINT_FILE", vault_directory.join("camoufox-fingerprint.json"));
         }
         let child = command.spawn().map_err(|_| "native_runtime_start_failed")?;
         let mut running = ManagedProcess {

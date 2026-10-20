@@ -1,17 +1,39 @@
-import { chromium } from 'playwright-core';
+import { firefox } from 'playwright-core';
+import { camoufoxLaunchOptions } from '../../../packages/browser-runtime/index.mjs';
 import { SourceError } from './catalog.mjs';
 
 const MAX_BYTES = 1024 * 1024;
-const CHANNELS = new Set(['chromium', 'chrome', 'msedge']);
+// Legacy names are accepted only for configuration migration; every launch uses Camoufox.
+const CHANNELS = new Set(['camoufox', 'chromium', 'chrome', 'msedge']);
 
 function abortable(operation, signal) {
-  signal.throwIfAborted();
   let cancel;
   const aborted = new Promise((_resolve, reject) => {
     cancel = () => reject(signal.reason);
     signal.addEventListener('abort', cancel, { once: true });
+    if (signal.aborted) cancel();
   });
   return Promise.race([operation, aborted]).finally(() => signal.removeEventListener('abort', cancel));
+}
+
+async function closeContext(context, browser) {
+  if (!context) return;
+  let timer;
+  try {
+    const closed = await Promise.race([
+      context.close().then(
+        () => true,
+        () => true,
+      ),
+      new Promise((resolve) => {
+        timer = setTimeout(() => resolve(false), 2000);
+      }),
+    ]);
+    // A broken browser must not keep an aborted request or its admission slot alive.
+    if (!closed) void browser?.close().catch(() => {});
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /** Opt-in normal browser networking. No persistent profile, script execution, or identity overrides. */
@@ -58,8 +80,8 @@ export function createBrowserSourceHttp({ channel, timeoutMs = 15_000 } = {}) {
   }
   function browser() {
     if (!browserPromise) {
-      browserPromise = chromium
-        .launch({ headless: true, ...(channel ? { channel } : {}), timeout: 15_000 })
+      browserPromise = camoufoxLaunchOptions()
+        .then((options) => firefox.launch({ ...options, timeout: 15_000 }))
         .then(async (instance) => {
           if (shutdown.signal.aborted) {
             await instance.close();
@@ -107,130 +129,135 @@ export function createBrowserSourceHttp({ channel, timeoutMs = 15_000 } = {}) {
     const abort = new AbortController();
     const signal = AbortSignal.any([shutdown.signal, abort.signal, init.signal].filter(Boolean));
     const timer = setTimeout(() => abort.abort(new SourceError(504, 'source_timeout')), timeoutMs);
-    let idle;
     let context;
+    let instance;
     let release;
-    let settled = false;
     const close = () => {
       void context?.close().catch(() => {});
-    };
-    const fail = (code) => abort.abort(new SourceError(502, code));
-    const resetIdle = () => {
-      if (settled) return;
-      clearTimeout(idle);
-      idle = setTimeout(() => abort.abort(new SourceError(504, 'source_timeout')), Math.min(timeoutMs, 10_000));
     };
     signal.addEventListener('abort', close, { once: true });
     try {
       release = await acquire(signal);
-      const instance = await abortable(browser(), signal);
+      instance = await abortable(browser(), signal);
       signal.throwIfAborted();
-      context = await instance.newContext({
-        javaScriptEnabled: false,
-        serviceWorkers: 'block',
-        acceptDownloads: false,
-      });
+      context = await abortable(
+        instance
+          .newContext({
+            viewport: null,
+            serviceWorkers: 'block',
+            acceptDownloads: false,
+          })
+          .then((created) => {
+            if (signal.aborted) void closeContext(created, instance);
+            return created;
+          }),
+        signal,
+      );
       signal.throwIfAborted();
-      const page = await context.newPage();
-      const cdp = await context.newCDPSession(page);
-      await cdp.send('Network.enable', {
-        maxTotalBufferSize: maximumBytes + 65_536,
-        maxResourceBufferSize: maximumBytes + 65_536,
+      const page = await abortable(context.newPage(), signal);
+      page.on('response', (response) => {
+        if (response.url() === url.href && Number(response.headers()['content-length']) > maximumBytes)
+          abort.abort(new SourceError(502, 'source_response_limit'));
       });
-      await cdp.send('Network.setCacheDisabled', { cacheDisabled: true });
-      let finished;
-      let captureStarted = false;
-      const complete = new Promise((resolve) => {
-        finished = resolve;
-      });
-      const { frameTree } = await cdp.send('Page.getFrameTree');
-      cdp.on('Fetch.requestPaused', (event) => {
-        void (async () => {
-          if (event.resourceType !== 'Document' || event.frameId !== frameTree.frame.id)
-            return cdp.send('Fetch.failRequest', { requestId: event.requestId, errorReason: 'Aborted' });
-          if (
-            event.redirectedRequestId ||
-            event.request.url !== url.href ||
-            event.request.method !== 'GET' ||
-            [301, 302, 303, 307, 308].includes(event.responseStatusCode)
-          ) {
-            fail('source_redirect_rejected');
-            return cdp.send('Fetch.failRequest', { requestId: event.requestId, errorReason: 'Aborted' });
+      // Render only a host-owned inert document. Source bytes are streamed by fetch and never evaluated.
+      const bootstrapUrl = new URL('/.boaa-browser-' + crypto.randomUUID(), url.origin).href;
+      await abortable(
+        context.routeWebSocket('**/*', (socket) => socket.close()),
+        signal,
+      );
+      await abortable(
+        context.route('**/*', async (route) => {
+          const request = route.request();
+          if (request.url() === bootstrapUrl && request.isNavigationRequest()) {
+            await route.fulfill({
+              status: 200,
+              contentType: 'text/html',
+              body: '<!doctype html><title>Browser transport</title>',
+            });
+          } else if (request.url() === url.href && request.method() === 'GET' && !request.redirectedFrom()) {
+            await route.continue();
+          } else {
+            await route.abort();
           }
-          if (event.responseErrorReason) return fail('source_request_failed');
-          if (event.responseStatusCode !== undefined) {
-            captureStarted = true;
-            const responseHeaders = new Headers((event.responseHeaders ?? []).map(({ name, value }) => [name, value]));
-            if (Number(responseHeaders.get('content-length')) > maximumBytes) return fail('source_response_limit');
-            const mime = responseHeaders.get('content-type')?.split(';')[0].trim().toLowerCase();
-            if (
-              !(imageRequest ? ['image/jpeg', 'image/png', 'image/webp'] : ['application/json', 'text/html']).includes(
-                mime,
-              ) ||
-              [204, 205, 304].includes(event.responseStatusCode)
-            )
-              return fail('source_invalid_response');
-            const { stream } = await cdp.send('Fetch.takeResponseBodyAsStream', { requestId: event.requestId });
-            const chunks = [];
-            let length = 0;
-            try {
-              while (true) {
-                resetIdle();
-                const chunk = await abortable(cdp.send('IO.read', { handle: stream, size: 65_536 }), signal);
-                const bytes = Buffer.from(chunk.data, chunk.base64Encoded ? 'base64' : 'utf8');
-                length += bytes.length;
-                if (length > maximumBytes) return fail('source_response_limit');
-                chunks.push(bytes);
-                if (chunk.eof) break;
-              }
-            } finally {
-              clearTimeout(idle);
-              await cdp.send('IO.close', { handle: stream }).catch(() => {});
-            }
-            // The raw decoded stream is complete. Do not render, normalize, or execute the document.
-            await cdp.send('Fetch.failRequest', { requestId: event.requestId, errorReason: 'Aborted' });
-            finished(
-              new Response(Buffer.concat(chunks, length), {
-                status: event.responseStatusCode,
-                headers: {
-                  'Content-Type': responseHeaders.get('content-type'),
-                  'Content-Length': String(length),
-                },
-              }),
-            );
-            return;
-          }
-          const outgoing = new Headers(event.request.headers);
-          for (const [name, value] of headers) outgoing.set(name, value);
-          return cdp.send('Fetch.continueRequest', {
-            requestId: event.requestId,
-            headers: [...outgoing].map(([name, value]) => ({ name, value })),
+        }),
+        signal,
+      );
+      await abortable(page.goto(bootstrapUrl, { waitUntil: 'domcontentloaded', timeout: 0 }), signal);
+      const readResponse = async ({ target, outgoing, maximum, images, idleMs }) => {
+        const controller = new AbortController();
+        let idle;
+        const reset = () => {
+          clearTimeout(idle);
+          idle = setTimeout(() => controller.abort(), idleMs);
+        };
+        try {
+          reset();
+          const response = await fetch(target, {
+            headers: outgoing,
+            credentials: 'omit',
+            redirect: 'manual',
+            cache: 'no-store',
+            signal: controller.signal,
           });
-        })().catch(() => {
-          if (!signal.aborted) fail('source_request_failed');
-        });
+          if (response.type === 'opaqueredirect' || (response.status >= 300 && response.status < 400))
+            return { error: 'source_redirect_rejected' };
+          if (Number(response.headers.get('content-length')) > maximum) return { error: 'source_response_limit' };
+          const contentType = response.headers.get('content-type') || '';
+          const mime = contentType.split(';')[0].trim().toLowerCase();
+          if (
+            !(images ? ['image/jpeg', 'image/png', 'image/webp'] : ['application/json', 'text/html']).includes(mime) ||
+            [204, 205, 304].includes(response.status) ||
+            !response.body
+          )
+            return { error: 'source_invalid_response' };
+          const reader = response.body.getReader();
+          const chunks = [];
+          let length = 0;
+          while (true) {
+            reset();
+            const { done, value } = await reader.read();
+            if (done) break;
+            length += value.length;
+            if (length > maximum) return { error: 'source_response_limit' };
+            for (let start = 0; start < value.length; start += 32768)
+              chunks.push(btoa(String.fromCharCode(...value.subarray(start, start + 32768))));
+          }
+          return { status: response.status, contentType, length, chunks };
+        } catch {
+          return { error: controller.signal.aborted ? 'source_timeout' : 'source_request_failed' };
+        } finally {
+          clearTimeout(idle);
+          controller.abort();
+        }
+      };
+      const parameters = {
+        target: url.href,
+        outgoing: Object.fromEntries(headers),
+        maximum: maximumBytes,
+        images: imageRequest,
+        idleMs: Math.min(timeoutMs, 10000),
+      };
+      const result = await abortable(
+        page.evaluate('mw:(' + readResponse.toString() + ')(' + JSON.stringify(parameters) + ')'),
+        signal,
+      );
+      if (result.error) throw new SourceError(result.error === 'source_timeout' ? 504 : 502, result.error);
+      const bytes = Buffer.concat(
+        result.chunks.map((chunk) => Buffer.from(chunk, 'base64')),
+        result.length,
+      );
+      return new Response(bytes, {
+        status: result.status,
+        headers: { 'Content-Type': result.contentType, 'Content-Length': String(bytes.length) },
       });
-      await cdp.send('Fetch.enable', {
-        patterns: [
-          { urlPattern: '*', requestStage: 'Request' },
-          { urlPattern: '*', requestStage: 'Response' },
-        ],
-      });
-      // Navigation is intentionally aborted after capture; its rejected promise must always be observed.
-      void page.goto(url.href, { waitUntil: 'commit', timeout: 0 }).catch(() => {
-        if (!captureStarted && !signal.aborted) fail('source_request_failed');
-      });
-      return await abortable(complete, signal);
     } catch (error) {
       if (signal.aborted) throw signal.reason;
       if (error instanceof SourceError) throw error;
       throw new SourceError(502, 'source_request_failed');
     } finally {
-      settled = true;
       clearTimeout(timer);
-      clearTimeout(idle);
       signal.removeEventListener('abort', close);
-      await context?.close().catch(() => {});
+      await closeContext(context, instance);
       release?.();
     }
   }

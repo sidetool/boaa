@@ -86,7 +86,7 @@ jobs:
           & $python -m pip install --disable-pip-version-check 'pytest>=8.4,<10'
           if ($LASTEXITCODE -ne 0) { throw 'Collector test dependency install failed' }
           $env:BOAA_TEST_AUTH_BROWSER = '1'
-          $env:PLAYWRIGHT_BROWSERS_PATH = (Resolve-Path 'src-tauri/collector-sidecar/browsers').Path
+          $env:BOAA_CAMOUFOX_EXECUTABLE = (Resolve-Path 'src-tauri/collector-sidecar/browsers/camoufox.exe').Path
           & $python -m pytest -q services/webnovel-metadata-collector/tests/test_remote_auth_browser.py services/webnovel-metadata-collector/tests/test_remote_auth_browser_live.py services/webnovel-metadata-collector/tests/test_companion_service.py
           if ($LASTEXITCODE -ne 0) { throw 'Collector auth and session tests failed' }
       - name: Launch packaged collector and login browser through the authenticated gateway
