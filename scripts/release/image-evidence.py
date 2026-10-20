@@ -113,7 +113,7 @@ def capture(image, component, output, syft):
                 elif name.endswith(('build-inventory.json', 'inventory.json', 'build-packages.txt', '/release', '.dist-info/METADATA')) and member.size < 8 * 1024 * 1024:
                     metadata[name] = fs.extractfile(member).read().decode('utf-8', errors='replace')
                 if (member.mode & 0o111 and member.size > 100000 and
-                    (name.startswith(('usr/local/bin/', 'usr/local/libexec/')) or name.endswith(('.wasm', '/node', '/java')))) or name.endswith(('.wasm', '.node', 'geometry.cjs')):
+                    (name.startswith(('usr/local/bin/', 'usr/local/libexec/')) or name.endswith(('.wasm', '/node', '/java', '/chrome')))) or name.endswith(('.wasm', '.node', 'geometry.cjs')):
                     with fs.extractfile(member) as stream:
                         binaries[name] = {'sha256': hashlib.file_digest(stream, 'sha256').hexdigest(), 'bytes': member.size}
             for name, target in links.items():
@@ -243,6 +243,17 @@ def capture(image, component, output, syft):
             binary_verified = version == '21.0.12.1+1-LTS'
             refs.extend(p for p in notices if p.startswith('payload/java/legal/'))
             licenses = ['GPL-2.0-only WITH Classpath-exception-2.0']
+        elif kind == 'binary' and name == 'chrome':
+            chromium = json.loads(metadata.get('licenses/chromium/inventory.json', '{}'))
+            notice = 'licenses/chromium/credits.html'
+            binary_verified = (chromium.get('version') == version and
+                               chromium.get('executable') in locations and
+                               binaries.get(chromium.get('executable'), {}).get('sha256') == chromium.get('executableSha256') and
+                               notices.get(notice, {}).get('sha256') == chromium.get('creditsSha256') and
+                               notices.get(notice, {}).get('bytes', 0) > 100000)
+            refs = [notice] if notice in notices else []
+            licenses = ['BSD-3-Clause', 'LicenseRef-Chromium-bundled-terms']
+            reason = 'Exact executable hash and native version match the build-time chrome://credits capture. LicenseRef-Chromium-bundled-terms refers to all original third-party terms in that retained HTML, not a blanket BSD classification.'
         if not refs and parent:
             row = static.get(('npm', parent['name'], parent['version']))
             if row:

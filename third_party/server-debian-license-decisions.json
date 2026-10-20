@@ -352,6 +352,54 @@
       "noticePathExample": "usr/share/doc/python3-distutils/copyright",
       "sourcePackages": ["python3-stdlib-extensions"],
       "licenseRefDefinition": "LicenseRef-Python-historical-terms denotes the BeOpen, CNRI and CWI license sections in this exact retained copyright text."
+    },
+    {
+      "packages": ["fonts-liberation"],
+      "copyrightSha256": "bcb5f95766d5dc969748869eef4559dd991fd31f7e0d30c29e140276cc3c24ee",
+      "licenses": ["GPL-2.0-only", "LicenseRef-Liberation-font-exceptions"],
+      "decision": "Liberation 1.x is GPL v2 with the font embedding and physical-product exceptions and trademark conditions in this exact Red Hat notice. Exact Debian source is archived.",
+      "noticePathExample": "usr/share/doc/fonts-liberation/copyright",
+      "licenseRefDefinition": "Each LicenseRef denotes the additional terms or public-domain declaration in this exact retained copyright text; no notice is omitted and exact corresponding Debian sources are required."
+    },
+    {
+      "packages": ["x11-xkb-utils"],
+      "copyrightSha256": "bf23f1dfd52e0f7526b83496effacba1e3f29a38adaf119091efad060f8836b1",
+      "licenses": ["MIT", "X11", "LicenseRef-XKB-per-file-terms"],
+      "decision": "The aggregate copyright document retains the individual XKB utilities' MIT/X11-style permissions and SGI, Digital and other notices; exact Debian source is archived.",
+      "noticePathExample": "usr/share/doc/x11-xkb-utils/copyright",
+      "licenseRefDefinition": "Each LicenseRef denotes the additional terms or public-domain declaration in this exact retained copyright text; no notice is omitted and exact corresponding Debian sources are required."
+    },
+    {
+      "packages": ["xfonts-encodings"],
+      "copyrightSha256": "7eb990b2914b0e2c2c9493c2511bff3d0b20ced9fb7416d6e74bf79876484811",
+      "licenses": ["LicenseRef-Xorg-public-domain-encodings"],
+      "decision": "The original notice explicitly states that the XFree86/Xorg encoding files are in the public domain; retain the declaration and exact Debian source.",
+      "noticePathExample": "usr/share/doc/xfonts-encodings/copyright",
+      "licenseRefDefinition": "Each LicenseRef denotes the additional terms or public-domain declaration in this exact retained copyright text; no notice is omitted and exact corresponding Debian sources are required."
+    },
+    {
+      "packages": ["xfonts-scalable"],
+      "copyrightSha256": "eca307f5e148200991e7cdacf6b11910e014073ed09c81cf853aa09d09ee2a60",
+      "licenses": ["Bitstream-Charter"],
+      "decision": "The retained Bitstream Charter permission allows redistribution while preserving notices and trademark acknowledgement; exact Debian source is archived.",
+      "noticePathExample": "usr/share/doc/xfonts-scalable/copyright",
+      "licenseRefDefinition": "Each LicenseRef denotes the additional terms or public-domain declaration in this exact retained copyright text; no notice is omitted and exact corresponding Debian sources are required."
+    },
+    {
+      "packages": ["xfonts-utils"],
+      "copyrightSha256": "4d404116525a133581918c1ad7d32456b49b599f501f1f4ff12d8202e6694a59",
+      "licenses": ["MIT", "X11", "LicenseRef-Xfonts-per-file-terms"],
+      "decision": "The aggregate document retains the individual font utilities' MIT/X11-style permissions and all additional per-file terms; exact Debian source is archived.",
+      "noticePathExample": "usr/share/doc/xfonts-utils/copyright",
+      "licenseRefDefinition": "Each LicenseRef denotes the additional terms or public-domain declaration in this exact retained copyright text; no notice is omitted and exact corresponding Debian sources are required."
+    },
+    {
+      "packages": ["xserver-common", "xvfb"],
+      "copyrightSha256": "4cc0447a22635c7b2f1a93fec4aa94f1970fadeb72a063de006b51cf4963a06f",
+      "licenses": ["MIT", "X11", "LicenseRef-Xserver-per-file-terms"],
+      "decision": "The complete X server copyright document retains its primary MIT/X11 license and all contributor/per-file conditions; exact Debian source is archived.",
+      "noticePathExample": "usr/share/doc/xserver-common/copyright",
+      "licenseRefDefinition": "Each LicenseRef denotes the additional terms or public-domain declaration in this exact retained copyright text; no notice is omitted and exact corresponding Debian sources are required."
     }
   ]
 }

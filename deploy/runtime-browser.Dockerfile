@@ -21,6 +21,8 @@ RUN npm install --omit=dev --no-audit --no-fund --ignore-scripts patchright-core
     && mkdir /data && chown node:node /data \
     && rm -rf /var/lib/apt/lists/*
 COPY packages/browser-runtime ./node_modules/@boaa/browser-runtime
+COPY services/runtime-components/capture-chromium-notices.mjs ./capture-chromium-notices.mjs
+RUN node capture-chromium-notices.mjs
 COPY scripts/release/capture-npm-notices.mjs /tmp/capture-npm-notices.mjs
 RUN node /tmp/capture-npm-notices.mjs /licenses/npm && rm /tmp/capture-npm-notices.mjs
 COPY --chown=node:node services/runtime-components/common.mjs services/runtime-components/browser-worker.mjs services/runtime-components/healthcheck.mjs ./
