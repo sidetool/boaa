@@ -32,7 +32,7 @@ export function importQueueAttempt(job: Pick<Job, 'attemptsMade' | 'opts'>, exec
   };
 }
 
-function redisConnectionOptions(config: ServerConfig) {
+export function redisConnectionOptions(config: ServerConfig) {
   const url = new URL(config.redisUrl);
   return {
     host: url.hostname,

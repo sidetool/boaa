@@ -208,7 +208,12 @@ describe('Google service-account connection', () => {
     const priorPath = process.env.GOOGLE_APPLICATION_CREDENTIALS;
     const wav = wavFromPcm16(Buffer.from([1, 0, 2, 0]), 24000);
     sdk.generate.mockResolvedValue({
-      candidates: [{ content: { parts: [{ inlineData: { data: wav.toString('base64'), mimeType: 'audio/wav' } }] } }],
+      candidates: [
+        {
+          finishReason: 'STOP',
+          content: { parts: [{ inlineData: { data: wav.toString('base64'), mimeType: 'audio/wav' } }] },
+        },
+      ],
     });
     const provider = createServerTTSSynthesisProvider({
       providerId: 'gemini-vertex-tts',
@@ -262,7 +267,12 @@ describe('Google service-account connection', () => {
       expect(body.contents).toEqual([{ role: 'user', parts: [{ text: '본문', speechMetadata: { style: 'calm' } }] }]);
       expect(body.generationConfig.speechConfig).toEqual({ voiceConfig: { voice: 'Kore' } });
       return Response.json({
-        candidates: [{ content: { parts: [{ inlineData: { mimeType: 'audio/wav', data: wav.toString('base64') } }] } }],
+        candidates: [
+          {
+            finishReason: 'STOP',
+            content: { parts: [{ inlineData: { mimeType: 'audio/wav', data: wav.toString('base64') } }] },
+          },
+        ],
       });
     });
     vi.stubGlobal('fetch', fetchSpy);
@@ -271,7 +281,12 @@ describe('Google service-account connection', () => {
       location: 'global',
     });
     sdk.generate.mockResolvedValue({
-      candidates: [{ content: { parts: [{ inlineData: { mimeType: 'audio/wav', data: wav.toString('base64') } }] } }],
+      candidates: [
+        {
+          finishReason: 'STOP',
+          content: { parts: [{ inlineData: { mimeType: 'audio/wav', data: wav.toString('base64') } }] },
+        },
+      ],
     });
     await wrapper.generateAudio({
       modelId: 'gemini-3.8-flash-lite-tts',

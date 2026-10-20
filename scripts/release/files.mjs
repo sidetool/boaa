@@ -41,7 +41,7 @@ export function validateRequest(value) {
     check: ['action'],
     update: ['action'],
     channel: ['action', 'channel'],
-    component: ['action', 'componentId', 'enabled'],
+    component: ['action', 'componentId', 'enabled', 'engine'],
   }[value.action];
   if (!fields || Object.keys(value).some((key) => !fields.includes(key))) throw new Error('management_request_invalid');
   if (value.action === 'channel' && !['stable', 'beta'].includes(value.channel))
@@ -49,6 +49,11 @@ export function validateRequest(value) {
   if (
     value.action === 'component' &&
     (!['apk', 'browser', 'metadata'].includes(value.componentId) || typeof value.enabled !== 'boolean')
+  )
+    throw new Error('management_request_invalid');
+  if (
+    value.engine !== undefined &&
+    (value.componentId !== 'browser' || !['patchright', 'camoufox'].includes(value.engine))
   )
     throw new Error('management_request_invalid');
   return value;

@@ -129,6 +129,7 @@ beforeEach(() => {
     positions: new Map(),
     dedicated: undefined,
     openQuick: vi.fn(),
+    openSection: vi.fn(),
     owned: vi.fn(() => false),
     sectionSources: [section.sourceId],
     rows: [section],
@@ -151,9 +152,6 @@ beforeEach(() => {
     unavailable: false,
     title: section.title,
     eyebrow: '첫 번째 소스',
-    expanded: false,
-    setExpanded: vi.fn(),
-    collapse: vi.fn(),
     refreshSection: vi.fn(),
     itemOpenArgs: vi.fn(openArgs),
   };
@@ -176,6 +174,7 @@ beforeEach(() => {
       error: '',
       hasPage: true,
       more: false,
+      pageKey: 'page-1',
       retry: vi.fn(),
       loadMore: vi.fn(),
     },
@@ -402,20 +401,13 @@ describe('section rows', () => {
     expect(sectionRoot.findAllByType('button').map(text)).not.toContain('전체 보기');
   });
 
-  it('expands the full catalog and delegates collapsing it', () => {
+  it('opens the source catalog instead of expanding a row', () => {
     const root = mount();
-    expect(button(row(root), '전체 보기').props['aria-expanded']).toBe(false);
+    expect(button(row(root), '전체 보기').props['aria-expanded']).toBeUndefined();
     click(button(row(root), '전체 보기'));
-    expect(rail.setExpanded).toHaveBeenCalledExactlyOnceWith(true);
-    rail.expanded = true;
-    update();
-    expect(useDiscoverySourceView).toHaveBeenCalledWith(
-      expect.objectContaining({ section, controls: false, query: screen.query }),
-    );
+    expect(screen.openSection).toHaveBeenCalledExactlyOnceWith(section);
+    expect(useDiscoverySourceView).not.toHaveBeenCalled();
     expect(root.findAllByProps({ 'aria-label': '소스 작품 검색' })).toHaveLength(0);
-    expect(button(row(root), '접기').props['aria-expanded']).toBe(true);
-    click(button(row(root), '접기'));
-    expect(rail.collapse).toHaveBeenCalledExactlyOnceWith();
   });
 
   it('opens cloud-file folders even when catalog browsing is unsupported', () => {
@@ -423,7 +415,7 @@ describe('section rows', () => {
     rail.unsupported = '파일 소스입니다. 폴더 보기에서 파일을 찾아보세요.';
     click(button(row(mount()), '폴더 보기'));
     expect(props.open).toHaveBeenCalledExactlyOnceWith(section.sourceId, {});
-    expect(rail.setExpanded).not.toHaveBeenCalled();
+    expect(screen.openSection).not.toHaveBeenCalled();
   });
 
   it('renders the cover hook result and forwards image failures', () => {

@@ -1,3 +1,4 @@
+import { vertexAudioResponse } from './gemini-audio-response.js';
 import type { GoogleServiceAccount } from './google-service-account.js';
 import { GEMINI_VOICES, namedVoices } from './tts-voices.js';
 import type { TTSSynthesisInput, TTSSynthesisProvider, TTSSynthesisResult } from '../../../../src/providers/tts';
@@ -135,7 +136,7 @@ export async function createGeminiVertexTTSGenerateContentClient(
           abortSignal: input.signal,
         } as Record<string, unknown>,
       });
-      const audio = audioDataFromGenerateContentResponse(response);
+      const audio = vertexAudioResponse(response);
       if (!audio.buffer.byteLength) throw new Error('Gemini Vertex TTS returned no audio data');
       const audioBuffer = audio.buffer;
       return {
@@ -172,53 +173,6 @@ function speechInstructions(input: TTSSynthesisInput): string | undefined {
     (part): part is string => Boolean(part && part.trim()),
   );
   return parts.length ? `Read the following text exactly with this delivery: ${parts.join(', ')}` : undefined;
-}
-
-function audioDataFromGenerateContentResponse(value: unknown): { buffer: Buffer; mimeType?: string } {
-  const found = findInlineAudio(value);
-  if (!found) return { buffer: Buffer.alloc(0) };
-  return found;
-}
-
-function findInlineAudio(value: unknown): { buffer: Buffer; mimeType?: string } | undefined {
-  if (!value || typeof value !== 'object') return undefined;
-  if (Array.isArray(value)) {
-    for (const item of value) {
-      const found = findInlineAudio(item);
-      if (found) return found;
-    }
-    return undefined;
-  }
-  const record = value as Record<string, unknown>;
-  const inlineData = record.inlineData ?? record.inline_data;
-  if (inlineData && typeof inlineData === 'object' && !Array.isArray(inlineData)) {
-    const inlineRecord = inlineData as Record<string, unknown>;
-    const mimeType =
-      typeof inlineRecord.mimeType === 'string'
-        ? inlineRecord.mimeType
-        : typeof inlineRecord.mime_type === 'string'
-          ? inlineRecord.mime_type
-          : undefined;
-    const data = inlineRecord.data;
-    const buffer = bufferFromInlineAudioData(data);
-    if (buffer) return { buffer, mimeType };
-  }
-  const directBuffer = bufferFromInlineAudioData(record.data);
-  if (directBuffer && typeof record.mimeType === 'string' && record.mimeType.startsWith('audio/')) {
-    return { buffer: directBuffer, mimeType: record.mimeType };
-  }
-  for (const item of Object.values(record)) {
-    const found = findInlineAudio(item);
-    if (found) return found;
-  }
-  return undefined;
-}
-
-function bufferFromInlineAudioData(value: unknown): Buffer | undefined {
-  if (typeof value === 'string' && value.trim()) return Buffer.from(value, 'base64');
-  if (value instanceof Uint8Array) return Buffer.from(value);
-  if (value instanceof ArrayBuffer) return Buffer.from(value);
-  return undefined;
 }
 
 function wavFromPcm16(pcm: Buffer, sampleRate: number): Buffer {

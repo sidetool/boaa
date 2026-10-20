@@ -78,11 +78,7 @@ export async function runTTSPlaybackSession(
     if (!input.shouldContinue()) return stopped(paragraphIndex);
     const paragraph = await input.getParagraph(paragraphIndex);
     if (!input.shouldContinue()) return stopped(paragraphIndex);
-    if (!paragraph) {
-      input.onActivePlayback?.(undefined);
-      input.onFinished?.();
-      return { completed: true, stopped: false, lastParagraphIndex: paragraphIndex };
-    }
+    if (!paragraph) return missingSource(input, paragraphIndex);
 
     if (!hasSpokenContent(paragraph.text)) continue;
     const sourceParagraphIndex = input.sourceParagraphIndex?.(paragraph, paragraphIndex) ?? paragraphIndex;
@@ -198,7 +194,8 @@ async function runSystemSequence(input: RunTTSPlaybackSessionInput): Promise<TTS
   for (let paragraphIndex = input.startIndex; paragraphIndex < input.paragraphCount; paragraphIndex += 1) {
     if (!input.shouldContinue()) return stopped(paragraphIndex);
     const paragraph = await input.getParagraph(paragraphIndex);
-    if (!paragraph) break;
+    if (!input.shouldContinue()) return stopped(paragraphIndex);
+    if (!paragraph) return missingSource(input, paragraphIndex);
     const playableSegments = input.buildPlayableSegments(paragraph).filter((item) => hasSpokenContent(item.text));
     const requestedPlayableIndex =
       paragraphIndex === input.startIndex && input.startQueueItemFingerprint && input.queueItemFingerprint
@@ -407,4 +404,14 @@ function stopped(lastParagraphIndex?: number): TTSPlaybackSessionRunnerResult {
 
 function timerStopped(lastParagraphIndex: number): TTSPlaybackSessionRunnerResult {
   return { completed: false, stopped: true, stopReason: 'timer', lastParagraphIndex };
+}
+
+function missingSource(input: RunTTSPlaybackSessionInput, index: number): TTSPlaybackSessionRunnerResult {
+  input.onActivePlayback?.(undefined);
+  return {
+    completed: false,
+    stopped: true,
+    lastParagraphIndex: index,
+    errorMessage: '읽을 문단을 불러오지 못해 멈췄습니다. 회차를 다시 열어 이어 들어 주세요.',
+  };
 }

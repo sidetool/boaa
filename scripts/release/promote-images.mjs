@@ -38,4 +38,6 @@ for (const name of IMAGE_NAMES) {
   if (`sha256:${createHash('sha256').update(raw).digest('hex')}` !== image.digest)
     throw new Error('promotion_index_digest_changed');
 }
-console.log(`Promoted six reviewed image indexes for ${tag}; release draft and visibility unchanged.`);
+console.log(
+  `Promoted ${Object.keys(images).length} reviewed image indexes for ${tag}; release draft and visibility unchanged.`,
+);

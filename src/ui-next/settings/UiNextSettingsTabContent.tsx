@@ -1,3 +1,4 @@
+import { TranslationPage } from './pages/TranslationPage';
 import { SettingsTabContent, type SettingsTabContentProps } from '../../features/reader-settings/SettingsTabContent';
 import { WEBNOVEL_METADATA_ENRICHMENT_EXTENSION_ID } from '../../extensions/builtin/webnovel-metadata-enrichment-extension';
 import { AccountPage } from './pages/AccountPage';
@@ -72,6 +73,8 @@ export function UiNextSettingsTabContent(props: SettingsTabContentProps) {
       );
     case 'remote-access':
       return <RemoteAccessPage serverApiBaseUrl={props.serverApiBaseUrl} />;
+    case 'translation':
+      return <TranslationPage />;
     case 'server':
       return <ServerManagementPage />;
     case 'application':

@@ -182,6 +182,7 @@ export class HomeDiscoveryLoader {
         work: {
           id: externalItemKeyId(item.key),
           title: item.title,
+          translateTitle: item.kind === 'work',
           author: item.author,
           thumbnailUrl: item.thumbnailUrl ?? (item.coverRef ? this.session.peekCover?.(item.coverRef) : undefined),
           subline: item.subtitle,

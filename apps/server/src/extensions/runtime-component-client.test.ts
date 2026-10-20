@@ -30,6 +30,7 @@ it('authenticates only managed metadata endpoints and resolves the proxy per ope
 });
 
 it('verifies the browser manifest and authenticates the WebSocket without local fallback', async () => {
+  vi.stubEnv('BOAA_BROWSER_ENGINE', 'camoufox');
   vi.stubEnv('BOAA_CAMOUFOX_EXECUTABLE', '');
   vi.stubEnv('BOAA_SOURCE_BROWSER_EXECUTABLE', '');
   vi.stubEnv('BOAA_SOURCE_BROWSER_ENDPOINT', 'http://runtime-browser:8791');
@@ -61,4 +62,34 @@ it('verifies the browser manifest and authenticates the WebSocket without local 
   fetch.mockResolvedValueOnce(Response.json({ schemaVersion: 2 }));
   await expect(launchSourceBrowser({ launch, connect }, [])).rejects.toThrow('runtime_manifest_invalid');
   expect(launch).not.toHaveBeenCalled();
+});
+
+it('connects the selected Patchright driver and rejects another engine without fallback', async () => {
+  vi.stubEnv('BOAA_BROWSER_ENGINE', 'patchright');
+  vi.stubEnv('BOAA_SOURCE_BROWSER_ENDPOINT', 'http://runtime-browser:8791');
+  vi.stubEnv('BOAA_CAMOUFOX_EXECUTABLE', '/previous/camoufox');
+  vi.stubEnv('BOAA_PATCHRIGHT_EXECUTABLE', '');
+  vi.stubEnv('BOAA_RUNTIME_TOKEN_FILE', '');
+  vi.stubEnv('BOAA_RUNTIME_TOKEN', 'a'.repeat(64));
+  const manifest = {
+    schemaVersion: 1,
+    protocolVersion: 1,
+    component: 'browser',
+    engine: 'patchright',
+    engines: { patchright: '1.61.1' },
+    wsPath: '/v1/browsers/12345678-1234-1234-1234-123456789012/ws',
+  };
+  const request = vi
+    .fn()
+    .mockResolvedValueOnce(Response.json(manifest))
+    .mockResolvedValueOnce(Response.json({ ...manifest, engine: 'camoufox', engines: { camoufox: '1.62.0' } }));
+  vi.stubGlobal('fetch', request);
+  const browser = {};
+  const launch = vi.fn();
+  const connect = vi.fn().mockResolvedValue(browser);
+  expect(await launchSourceBrowser({ launch, connect })).toBe(browser);
+  expect(JSON.parse(request.mock.calls[0][1].body)).toEqual({ protocolVersion: 1, engine: 'patchright' });
+  await expect(launchSourceBrowser({ launch, connect })).rejects.toThrow('runtime_manifest_invalid');
+  expect(launch).not.toHaveBeenCalled();
+  expect(connect).toHaveBeenCalledTimes(1);
 });

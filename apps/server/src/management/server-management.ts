@@ -82,7 +82,9 @@ export async function registerServerManagement(
       const saved = await readJson<SavedStatus | null>(path.join(directory, 'status.json'), null);
       recoveryRequired = saved?.status?.phase === 'recovery-required';
       const counts = await Promise.all(
-        queues.map((queue) => queue.getJobCounts('active', 'waiting', 'delayed', 'paused', 'waiting-children')),
+        queues.map((queue) =>
+          queue.getJobCounts('active', 'waiting', 'prioritized', 'delayed', 'paused', 'waiting-children'),
+        ),
       );
       await atomicJson(
         path.join(directory, 'activity.json'),

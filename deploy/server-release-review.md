@@ -1,7 +1,7 @@
 # Server candidate review and publication
 
 Candidate CI does not create a version tag, merge, publish an installable release, or change package
-visibility. It publishes source-only releases named `server-sources-<commit>` before uploading candidate images; the update feed excludes these tags. It verifies the exact dispatch commit, builds twelve native images,
+visibility. It publishes source-only releases named `server-sources-<commit>` before uploading candidate images; the update feed excludes these tags. It verifies the exact dispatch commit, builds fourteen native images,
 checks their component evidence and sources, tests the final updater in isolated
 application stacks, then uploads signed assets to an **existing draft**. Registry
 packages may be private or public; public packages remain usable for subsequent releases. The global desktop/mobile
@@ -12,12 +12,12 @@ binary gate is unchanged and remains closed.
 1. Record the candidate workflow run and its commit. Download every draft asset
    into one empty directory; do not mix assets from different candidate runs.
 2. Run `node scripts/release/verify-evidence.mjs <asset-directory>` with the
-   committed trust key. It verifies the evidence signature, the twelve component /
+   committed trust key. It verifies the evidence signature, the fourteen component /
    architecture receipts and the SHA-256/size of every companion asset. Verify the
    signed installer with `verify-bundle.mjs` as well.
 3. Inspect the substantive source diff, `server-evidence.json`, each
    `*-evidence.json`, `*-smoke.json`, both integration logs and `7z-rebuild.log`.
-   Confirm the twelve child/config digests and six index digests belong to that
+   Confirm the fourteen child/config digests and seven index digests belong to that
    commit. The collector reads actual final image architecture/configuration;
    merely counting two index descriptors is insufficient.
 4. Inspect component notices and corresponding source coverage, not only license
@@ -56,11 +56,11 @@ squash/rebase changes the release commit, rerun candidate CI for that new commit
 A normal merge may retain the tested branch commit as the version tag target.
 
 1. Merge the reviewed changes into main as appropriate, create annotated Git tag
-   `v0.1.1-beta.3` **at the reviewed evidence commit**, and push that tag. Confirm
-   `git rev-parse v0.1.1-beta.3^{commit}` equals `server-evidence.json.commit`.
+   `v0.1.1-beta.5` **at the reviewed evidence commit**, and push that tag. Confirm
+   `git rev-parse v0.1.1-beta.5^{commit}` equals `server-evidence.json.commit`.
 2. Copy each reviewed index digest to its
    final version tag using `docker buildx imagetools create --tag
-ghcr.io/sidetool/boaa-<component>:0.1.1-beta.3
+ghcr.io/sidetool/boaa-<component>:0.1.1-beta.5
 ghcr.io/sidetool/boaa-<component>@<reviewed-index-digest>`. Verify the registry
    index digest remains the reviewed digest. The signed installer uses immutable
    digests and does not depend on these mutable registry tags. If local credentials
@@ -71,8 +71,7 @@ ghcr.io/sidetool/boaa-<component>@<reviewed-index-digest>`. Verify the registry
 3. Replace the draft notes with the actual verified features, source/evidence
    assets and limits. Keep all final assets together. Publish the prerelease with
    an explicit release PATCH containing `tag_name`, `target_commitish`,
-   `draft:false` and `prerelease:true`; a target-only PATCH is unsafe. The existing
-   draft id is 415804732. Do not publish if any evidence gate is unresolved.
+   `draft:false` and `prerelease:true`; a target-only PATCH is unsafe. Resolve the draft id from the selected release tag. Do not publish if any evidence gate is unresolved.
 4. Check each package's visibility. For any package still private, change it to public in GitHub package
    settings. Already-public packages require no visibility changes on later releases. Candidate CI already publishes the matching source assets before uploading images.
    For a personal account the settings URL is
@@ -81,7 +80,7 @@ ghcr.io/sidetool/boaa-<component>@<reviewed-index-digest>`. Verify the registry
    visibility from a public repository. Making a package public is irreversible.
 5. Run `python3 scripts/release/verify-public-images.py --directory
 <asset-directory>`. It uses no registry credentials and actually pulls all
-   twelve child images while checking the six index mappings against signed
+   fourteen child images while checking the seven index mappings against signed
    evidence. Verify the public GitHub assets and release feed signature as well.
    Report successful publication only after these checks pass.
 

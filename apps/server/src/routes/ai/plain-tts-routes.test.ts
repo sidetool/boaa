@@ -367,6 +367,40 @@ describe('plain TTS failure classification', () => {
 });
 
 describe('batch source verification and quota cooldown', () => {
+  it('reconstructs the configured batch size and rejects out-of-range limits before synthesis', async () => {
+    const f = await fixture();
+    f.source.text = f.source.paragraph.text = '가'.repeat(800);
+    const [item] = buildPlainTTSItems({
+      paragraph: f.source.paragraph,
+      rate: 1,
+      chunking: 'batch',
+      batchCharacters: 1200,
+    });
+    const body = {
+      chunking: 'batch',
+      batchCharacters: 1200,
+      paragraphHash: plainTTSParagraphHash(f.source.paragraph),
+      chunkHash: item.spokenTextFingerprint,
+    };
+    expect((await f.request(body)).statusCode).toBe(200);
+    expect(f.synthesize.mock.calls[0][0].text).toBe(f.source.text);
+    expect((await f.request({ ...body, batchCharacters: 700 })).statusCode).toBe(409);
+    for (const batchCharacters of [0, 199, 2001, Infinity, '700', 350.5])
+      expect((await f.request({ ...body, batchCharacters })).statusCode).toBe(400);
+    expect(f.synthesize).toHaveBeenCalledTimes(1);
+  });
+  it('does not cache or accept incomplete audio as a successful synthesis', async () => {
+    const f = await fixture();
+    f.synthesize.mockRejectedValueOnce(
+      Object.assign(new Error('private upstream detail'), { code: 'tts_incomplete_audio' }),
+    );
+    const response = await f.request();
+    expect(response.statusCode).toBe(502);
+    expect(response.json().code).toBe('tts_incomplete_audio');
+    expect(response.body).not.toContain('private upstream detail');
+    expect((await f.request()).statusCode).toBe(200);
+    expect(f.synthesize).toHaveBeenCalledTimes(2);
+  });
   it('synthesizes one batch, rejects stale secondary source and checks ownership on cache hits', async () => {
     const f = await fixture();
     const next = {

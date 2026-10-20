@@ -1,3 +1,5 @@
+import { createTranslationQueue } from './translation/worker.js';
+import { registerTranslationRoutes } from './translation/routes.js';
 import { ApkProcessBudget } from '../../../services/apk-worker/process-budget.mjs';
 import { registerServerManagement } from './management/server-management.js';
 import { createManagedMetadataFetch } from './extensions/runtime-component-client.js';
@@ -188,6 +190,7 @@ export async function buildServer(
   await seedDefaultUser(pool, config.defaultUserId);
   const importQueue = createImportQueue(config);
   const providerQueue = createProviderQueue(config);
+  const translationQueue = createTranslationQueue(config);
   const objectStorage = createS3Client(config);
   const logger = createStructuredLogger({ service: 'api' });
   const metrics = metricsFromQueue(providerQueue, logger);
@@ -220,7 +223,7 @@ export async function buildServer(
     membersReady,
     resolveIdentity: (userId) => accountIdentity(pool, userId),
   });
-  await registerServerManagement(app, [importQueue, providerQueue]);
+  await registerServerManagement(app, [importQueue, providerQueue, translationQueue]);
   await registerPluginRuntimeRoutes(app, config, pool, new URL('../dist/plugin-runtime-assets/', import.meta.url));
   if (config.webRoot) await registerWebAssets(app, config.webRoot);
 
@@ -251,6 +254,7 @@ export async function buildServer(
   app.addHook('onClose', async () => {
     clearInterval(uploadPruneTimer);
     await uploadPrunePromise;
+    await translationQueue.close();
     await providerQueue.close();
     await importQueue.close();
     await pool.end();
@@ -269,6 +273,7 @@ export async function buildServer(
   await registerUploadRoutes(app, pool, config, importQueue);
   await registerBookRoutes(app, pool, config);
   await registerAIRoutes(app, pool, config, providerQueue);
+  await registerTranslationRoutes(app, pool, config, translationQueue);
   await registerSyncRoutes(app, pool, config);
   await registerBackupRoutes(app, pool, config);
   const masterKey = loadProviderSecretMasterKey(config, process.env);

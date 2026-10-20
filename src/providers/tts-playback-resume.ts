@@ -1,3 +1,4 @@
+import { normalizePlainTTSBatchCharacters } from './plain-tts-limits';
 import { readBrandStorage, removeBrandStorage, writeBrandStorage } from '@boaa/extension-contracts/brand-compat';
 import type { TTSPlaybackSettings } from '../domain/types';
 import { persistentId128 } from '../domain/id-hash-contract';
@@ -34,7 +35,8 @@ export function ttsPlaybackSettingsFingerprint(input: {
     voiceSource: input.settings.voiceSource ?? 'system',
     serverVoiceId: input.settings.serverVoiceId,
     plainChunking: input.settings.plainChunking ?? 'sentence',
-    rate: input.settings.rate,
+    plainBatchCharacters: normalizePlainTTSBatchCharacters(input.settings.plainBatchCharacters),
+    rate: input.settings.mode !== 'cast' && input.settings.voiceSource === 'server' ? 1 : input.settings.rate,
     pitch: input.settings.pitch,
     skippedContentTypes: [...input.settings.skippedContentTypes].sort(),
     footnotePlayback: input.settings.footnotePlayback,

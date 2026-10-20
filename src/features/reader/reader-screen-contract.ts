@@ -70,11 +70,14 @@ export interface ReaderScreenModel {
     readonly scope?: string;
     readonly nextScope?: string;
     openNext?(isCurrent: () => boolean): Promise<void>;
+    prepareTranslationNext?(
+      signal: AbortSignal,
+    ): Promise<import('../../translation/contracts').TranslationRequest | undefined>;
     retry(): void;
   };
   readonly novel: Pick<
     Novel,
-    'id' | 'title' | 'totalChapters' | 'lastReadChapterId' | 'activeContentRevisionId' | 'format'
+    'id' | 'title' | 'totalChapters' | 'lastReadChapterId' | 'activeContentRevisionId' | 'format' | 'language'
   >;
   readonly chapter: Chapter;
   readonly chapters: readonly Chapter[];

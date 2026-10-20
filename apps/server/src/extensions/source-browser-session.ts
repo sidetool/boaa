@@ -1,3 +1,4 @@
+import { browserEngine } from '@boaa/browser-runtime';
 import type { BrowserContext } from 'playwright-core';
 import type { SourceWebViewScope } from './source-webview.js';
 type Storage = Awaited<ReturnType<BrowserContext['storageState']>>;
@@ -10,7 +11,7 @@ function sessionKey(scope: SourceWebViewScope) {
     parts = [scope.key, 'browser', ''];
   }
   if (!Array.isArray(parts)) parts = [scope.key, 'browser', ''];
-  parts[1] = `${parts[1]}:camoufox-v1`;
+  parts[1] = `${parts[1]}:${browserEngine()}-v1`;
   return JSON.stringify(parts);
 }
 export function readBrowserSession(scope: SourceWebViewScope): SourceBrowserSession {

@@ -86,6 +86,7 @@ function NextHomeWorkspace({
       ),
       memberships: libraryShelfMemberships(libraryManagement.memberships, externalSources.libraryWorks),
       config: settings.homeRows,
+      showSourceRanks: settings.showHomeSourceRanks === true,
       setConfig: (homeRows: readonly HomeRowConfig[]) =>
         updateSettings((previous) => ({ ...previous, homeRows: [...homeRows] })),
     }),
@@ -101,6 +102,7 @@ function NextHomeWorkspace({
       props.state?.chapters,
       libraryManagement.memberships,
       settings.homeRows,
+      settings.showHomeSourceRanks,
       updateSettings,
     ],
   );

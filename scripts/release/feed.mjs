@@ -1,6 +1,6 @@
 import { createHash, createPublicKey, verify } from 'node:crypto';
 
-export const IMAGE_NAMES = ['server', 'web', 'apk', 'browser', 'metadata', 'updater'];
+export const IMAGE_NAMES = ['server', 'web', 'apk', 'browser', 'browser-camoufox', 'metadata', 'updater'];
 export const UPDATER_PROTOCOL = 1;
 export const releaseVersion = (value) =>
   typeof value === 'string' && /^v?(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-beta\.(0|[1-9]\d*))?$/.test(value);
@@ -40,6 +40,16 @@ export function validateManifest(value, repository) {
   for (const [name, image] of Object.entries(value.images)) {
     if (
       !image ||
+      (image.browserEngines !== undefined &&
+        (name !== 'metadata' ||
+          !Array.isArray(image.browserEngines) ||
+          !image.browserEngines.length ||
+          image.browserEngines.some((engine) => !['patchright', 'camoufox'].includes(engine)))) ||
+      (image.engine !== undefined &&
+        !(
+          (name === 'browser' && image.engine === 'patchright') ||
+          (name === 'browser-camoufox' && image.engine === 'camoufox')
+        )) ||
       image.image !== `ghcr.io/${owner}/boaa-${name}` ||
       !/^sha256:[a-f0-9]{64}$/.test(image.digest) ||
       !Array.isArray(image.platforms) ||

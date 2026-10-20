@@ -70,8 +70,8 @@ class EvidenceGateTests(unittest.TestCase):
         self.assertEqual(self.verify()['packages'], 1)
 
     def test_browser_without_modified_source_and_rebuild_materials_is_rejected(self):
-        self.prefix = 'browser-amd64'
-        self.evidence['component'] = 'browser'
+        self.prefix = 'browser-camoufox-amd64'
+        self.evidence['component'] = 'browser-camoufox'
         self.save()
         with self.assertRaisesRegex(ValueError, 'modified_camoufox_sources_missing'):
             self.verify()

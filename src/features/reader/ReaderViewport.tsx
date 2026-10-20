@@ -1,3 +1,5 @@
+import { useContext } from 'react';
+import { ReaderTranslationContext } from '../translation/reader-translation-context';
 import { readerSearchVisibleTop, useReaderSearchInset } from './reader-search-occlusion';
 import { visibleTextOffset } from './visible-text-offset';
 import { preparedSourceOpening } from './prepared-source-opening';
@@ -257,6 +259,11 @@ function VirtualizedReaderViewportComponent({
   navigationBusy,
   positionPersistence,
 }: ReaderViewportLayerProps) {
+  const translationText = useContext(ReaderTranslationContext);
+  const translationActive = useRef(Boolean(translationText));
+  translationActive.current = Boolean(translationText);
+  const translationLayout = useRef(false);
+  if (translationText) translationLayout.current = true;
   const rootRef = useRef<HTMLDivElement>(null);
   const documentRef = useRef<HTMLElement>(null);
   const [searchPlacement, setSearchPlacement] = useState(Boolean(openRequest?.preserveSearch));
@@ -338,6 +345,11 @@ function VirtualizedReaderViewportComponent({
       // Let the virtualizer defer row measurement during native scrolling. An immediate
       // resizeItem here bypasses that scheduling and forces layout for every mounted row.
       virtualizer.measureElement(element);
+      // Translation has a different height from the source cache. Do not defer
+      // its first measurement, otherwise newly mounted rows overlap in a smooth jump.
+      if (translationLayout.current && element instanceof HTMLElement && element.querySelector('[data-paragraph-id]')) {
+        virtualizer.resizeItem(Number(element.dataset.index), Math.ceil(element.getBoundingClientRect().height));
+      }
     },
     [virtualizer],
   );
@@ -351,6 +363,15 @@ function VirtualizedReaderViewportComponent({
   const virtualItems = virtualizer.getVirtualItems();
   const virtualRangeKey = virtualItems.map((item) => item.index).join(':');
   const loadParagraphIndexes = pages.loadIndexes;
+  // Source page identity is unchanged when a translation batch arrives. Resize
+  // loaded rows now; the scroll-position controller preserves the visible anchor.
+  useLayoutEffect(() => {
+    if (!translationLayout.current) return;
+    for (const row of rootRef.current?.querySelectorAll<HTMLElement>('.reader-virtual-row[data-index]') ?? []) {
+      if (!row.querySelector('[data-paragraph-id]')) continue;
+      virtualizer.resizeItem(Number(row.dataset.index), Math.ceil(row.getBoundingClientRect().height));
+    }
+  }, [translationText, virtualizer, settings.fontSize, settings.lineHeight, settings.readingProfile]);
 
   const firstVisible = useCallback((): { index?: number; paragraph?: Paragraph; offsetInParagraph?: number } => {
     const root = rootRef.current;
@@ -409,7 +430,7 @@ function VirtualizedReaderViewportComponent({
       await pages.loadIndexes([targetIndex]);
       if (searchPlacement) await nextFrame();
       if (!isCurrentNavigation(navigation)) return;
-      virtualizer.scrollToIndex(targetIndex, { align, behavior });
+      virtualizer.scrollToIndex(targetIndex, { align, behavior: translationActive.current ? 'auto' : behavior });
       onRevealChrome();
     },
     [

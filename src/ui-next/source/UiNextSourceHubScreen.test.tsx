@@ -1,3 +1,4 @@
+import { useTranslatedTitle } from '../../features/translation/use-translated-title';
 import type { ReactNode } from 'react';
 import { act, create, type ReactTestInstance, type ReactTestRenderer } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -18,6 +19,9 @@ import { useSourceReleaseList } from '../../features/external-sources/useSourceR
 import { actions, model, novel } from '../test-fixtures';
 import UiNextSourceHubScreen from './UiNextSourceHubScreen';
 
+vi.mock('../../features/translation/use-translated-title', () => ({
+  useTranslatedTitle: vi.fn((title: string) => title),
+}));
 vi.mock('../../features/external-sources/useSourceHubModel', () => ({ useSourceHubModel: vi.fn() }));
 vi.mock('../../features/external-sources/useSourceReleaseList', () => ({ useSourceReleaseList: vi.fn() }));
 vi.mock('../../features/external-sources/SourceStreamReader', () => ({ SourceStreamReader: vi.fn(() => null) }));
@@ -122,6 +126,7 @@ function controller(): ExternalSourceController {
 }
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.mocked(useTranslatedTitle).mockImplementation((title) => title);
   vi.stubGlobal('document', { activeElement: null, documentElement: { style: { overflow: '' } }, body: {} });
   vi.stubGlobal('window', { addEventListener: vi.fn(), removeEventListener: vi.fn() });
   c = controller();
@@ -1094,5 +1099,18 @@ describe('batch action bar', () => {
     hub.selectedDownloaded = [{ ...episode(), importState: 'imported', localBookId: 'saved', selected: true }];
     click(button(batch(mount()), '다운로드 삭제 1'));
     expect(hub.commands.deleteSelectedDownloads).toHaveBeenCalledExactlyOnceWith();
+  });
+  it('shows a translated source heading alongside its original without changing editing or source metadata', () => {
+    localWork();
+    hub.workTitle = 'An Original Work';
+    patch({ detail: { title: 'An Original Work' } });
+    vi.mocked(useTranslatedTitle).mockImplementation((title, visible) => (visible ? '번역한 작품' : title));
+    const root = mount();
+    expect(text(root.findByProps({ id: 'un-source-title' }))).toBe('번역한 작품');
+    expect(
+      root.findAllByProps({ className: 'un-detail-byline' }).some((node) => text(node) === 'An Original Work'),
+    ).toBe(true);
+    expect(c.detail?.title).toBe('An Original Work');
+    expect(props.localSeriesTitleEditor?.draft).toBe('로컬 작품');
   });
 });

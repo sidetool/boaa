@@ -74,13 +74,15 @@ async function fixture(t) {
     rollbackSafe: true,
     updaterProtocol: 1,
     images: Object.fromEntries(
-      ['server', 'web', 'apk', 'browser', 'metadata'].map((name) => [
+      ['server', 'web', 'apk', 'browser', 'browser-camoufox', 'metadata'].map((name) => [
         name,
         {
           image: `ghcr.io/example/boaa-${name}`,
           digest: `sha256:${'a'.repeat(64)}`,
           platforms: ['linux/amd64'],
           downloadBytes: 123,
+          ...(name === 'browser' ? { engine: 'patchright' } : {}),
+          ...(name === 'metadata' ? { browserEngines: ['patchright', 'camoufox'] } : {}),
         },
       ]),
     ),
@@ -339,4 +341,128 @@ test('accepted requests that expire or become unavailable get a result instead o
     assert.equal(result.error, expired ? 'management_request_expired' : 'deployment_drift');
     assert.deepEqual(f.calls, []);
   }
+});
+
+test('new browser installs Patchright, switching engines reuses one service and retains both downloads', async (t) => {
+  const f = await fixture(t);
+  await f.updater.perform({ action: 'component', componentId: 'browser', enabled: true });
+  assert.equal(f.deployment.current.browserEngine, 'patchright');
+  assert.match(f.deployment.config.services['runtime-browser'].image, /boaa-browser@/);
+  await f.updater.perform({ action: 'component', componentId: 'browser', enabled: true, engine: 'camoufox' });
+  assert.equal(f.deployment.current.browserEngine, 'camoufox');
+  assert.match(f.deployment.config.services['runtime-browser'].image, /boaa-browser-camoufox@/);
+  assert.equal(f.deployment.config.services.api.environment.BOAA_BROWSER_ENGINE, 'camoufox');
+  assert.equal(f.deployment.config.services['runtime-metadata'].environment.BOAA_BROWSER_ENGINE, 'camoufox');
+  assert.deepEqual(f.deployment.current.enabled, ['browser']);
+  assert.deepEqual(f.deployment.current.installedBrowserEngines, ['patchright', 'camoufox']);
+  await f.updater.perform({ action: 'component', componentId: 'browser', enabled: true, engine: 'patchright' });
+  assert.equal(f.deployment.current.browserEngine, 'patchright');
+  assert.match(f.deployment.config.services['runtime-browser'].image, /boaa-browser@/);
+});
+
+test('an existing enabled or stopped Camoufox install is preserved during application upgrades', async (t) => {
+  for (const enabled of [true, false]) {
+    const f = await fixture(t);
+    f.deployment.current.installed = ['browser'];
+    f.deployment.config.services['runtime-browser'].environment = { BOAA_BROWSER_ENGINE: 'camoufox' };
+    f.deployment.current.enabled = enabled ? ['browser'] : [];
+    f.deployment.config.services.api.environment.BOAA_SOURCE_BROWSER_ENDPOINT = enabled
+      ? 'http://runtime-browser:8791'
+      : '';
+    f.updater.refreshComponents();
+    const browser = f.updater.state.components.find((item) => item.id === 'browser');
+    assert.equal(browser.engine, 'camoufox');
+    assert.deepEqual(browser.installedEngines, ['camoufox']);
+    await f.updater.perform({ action: 'update' });
+    assert.equal(f.updater.state.components.find((item) => item.id === 'browser').engine, 'camoufox');
+    assert.equal(f.deployment.config.services.api.environment.BOAA_BROWSER_ENGINE, 'camoufox');
+    if (enabled) assert.match(f.deployment.config.services['runtime-browser'].image, /boaa-browser-camoufox@/);
+  }
+});
+
+test('failed engine switching rolls back the selected engine and configuration', async (t) => {
+  const faults = {};
+  const f = await fixture(t, faults);
+  await f.updater.perform({ action: 'component', componentId: 'browser', enabled: true, engine: 'patchright' });
+  const previous = f.deployment.current;
+  f.deployment.verify = async (state) => {
+    if (state.browserEngine === 'camoufox') throw new Error('update_health_failed');
+  };
+  await f.updater.perform({ action: 'component', componentId: 'browser', enabled: true, engine: 'camoufox' });
+  assert.equal(f.deployment.current.browserEngine, 'patchright');
+  assert.equal(f.deployment.current.config, previous.config);
+});
+
+test('operator-pinned browser builds switch offline without trusting request image references', async (t) => {
+  const f = await fixture(t);
+  const image = `sha256:${'b'.repeat(64)}`;
+  f.deployment.current.localBrowserImages = { patchright: { image, version: '1.0.0', platform: 'linux/amd64' } };
+  f.deployment.run = async () => JSON.stringify([{ Id: image, Os: 'linux', Architecture: 'amd64' }]);
+  f.updater.feed.releases = async () => {
+    throw Error('offline');
+  };
+  await f.updater.perform({ action: 'component', componentId: 'browser', enabled: true, engine: 'patchright' });
+  assert.equal(f.updater.state.phase, 'complete');
+  assert.equal(f.deployment.config.services['runtime-browser'].image, image);
+  assert.equal(f.calls.includes('pull'), false);
+  f.deployment.current.version = '1.1.0';
+  assert.equal(f.updater.localBrowserImage('patchright'), undefined);
+  f.deployment.current.version = '1.0.0';
+  f.deployment.current.localBrowserImages.patchright.platform = 'linux/arm64';
+  assert.equal(f.updater.localBrowserImage('patchright'), undefined);
+});
+
+test('operator-pinned browser image mismatch fails before stopping services', async (t) => {
+  const f = await fixture(t);
+  f.deployment.current.localBrowserImages = {
+    patchright: { image: `sha256:${'b'.repeat(64)}`, version: '1.0.0', platform: 'linux/amd64' },
+  };
+  f.deployment.run = async () =>
+    JSON.stringify([{ Id: `sha256:${'c'.repeat(64)}`, Os: 'linux', Architecture: 'amd64' }]);
+  await f.updater.perform({ action: 'component', componentId: 'browser', enabled: true, engine: 'patchright' });
+  assert.equal(f.updater.state.phase, 'failed');
+  assert.equal(f.calls.includes('stop'), false);
+});
+
+test('metadata activation rejects an old browser protocol before pulling or stopping', async (t) => {
+  const f = await fixture(t);
+  await f.updater.perform({ action: 'component', componentId: 'browser', enabled: true });
+  const manifest = f.updater.feed.manifest;
+  f.updater.feed.manifest = async (tag) => {
+    const release = await manifest(tag);
+    delete release.manifest.images.metadata.browserEngines;
+    return release;
+  };
+  f.calls.length = 0;
+  await f.updater.perform({ action: 'component', componentId: 'metadata', enabled: true });
+  assert.equal(f.updater.state.error, 'component_unsupported');
+  assert.equal(f.calls.includes('pull'), false);
+  assert.equal(f.calls.includes('stop'), false);
+});
+
+test('operator-pinned metadata uses the compatible local image and release updates discard the pin', async (t) => {
+  const f = await fixture(t);
+  const image = `sha256:${'d'.repeat(64)}`;
+  f.deployment.current.localComponentImages = { metadata: { image, version: '1.0.0', platform: 'linux/amd64' } };
+  f.deployment.run = async () => JSON.stringify([{ Id: image, Os: 'linux', Architecture: 'amd64' }]);
+  await f.updater.perform({ action: 'component', componentId: 'metadata', enabled: true });
+  assert.equal(f.updater.state.phase, 'complete');
+  assert.equal(f.deployment.config.services['runtime-metadata'].image, image);
+  assert.equal(f.calls.includes('pull'), false);
+  await f.updater.perform({ action: 'update' });
+  assert.equal(f.updater.state.phase, 'complete');
+  assert.equal(f.deployment.current.localComponentImages, undefined);
+  assert.match(f.deployment.config.services['runtime-metadata'].image, /boaa-metadata@/);
+});
+
+test('published beta.4 browser installations without an engine marker upgrade to Patchright', async (t) => {
+  const f = await fixture(t);
+  f.deployment.current.enabled = ['browser'];
+  f.deployment.config.services.api.environment.BOAA_SOURCE_BROWSER_ENDPOINT = 'http://runtime-browser:8791';
+  f.updater.refreshComponents();
+  assert.equal(f.updater.state.components.find((c) => c.id === 'browser').engine, 'patchright');
+  await f.updater.perform({ action: 'update' });
+  assert.equal(f.updater.state.phase, 'complete');
+  assert.equal(f.deployment.current.browserEngine, 'patchright');
+  assert.match(f.deployment.config.services['runtime-browser'].image, /boaa-browser@/);
 });

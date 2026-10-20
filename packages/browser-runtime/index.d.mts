@@ -1,4 +1,10 @@
-import type { LaunchOptions } from 'playwright-core';
-export const BROWSER_ENGINE: 'camoufox';
+import type { LaunchOptions, BrowserType, Page } from 'playwright-core';
+export type BrowserEngine = 'patchright' | 'camoufox';
+export function browserEngine(env?: Record<string, string | undefined>): BrowserEngine;
+export const BROWSER_ENGINE: BrowserEngine;
 export const BROWSER_DRIVER_VERSION: '1.62.0';
+export function browserDriverVersion(engine?: BrowserEngine): string;
+export function browserLauncher(engine?: BrowserEngine): Promise<BrowserType>;
+export function browserLaunchOptions(engine?: BrowserEngine): Promise<LaunchOptions>;
 export function camoufoxLaunchOptions(): Promise<LaunchOptions>;
+export function evaluateBrowserScript<T = unknown>(page: Page, script: string, engine?: BrowserEngine): Promise<T>;

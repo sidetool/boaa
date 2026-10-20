@@ -76,9 +76,13 @@ if (!environmentReady) {
   run(bootstrapPython, ['-m', 'venv', environmentRoot], {
     failureMessage: 'metadata collector isolated Python environment could not be created',
   });
-  run(environmentPython, ['-m', 'pip', 'install', '--disable-pip-version-check', '-e', `${serviceDir}[auth,bundle]`], {
-    failureMessage: 'metadata collector isolated dependencies could not be installed',
-  });
+  run(
+    environmentPython,
+    ['-m', 'pip', 'install', '--disable-pip-version-check', '-e', `${serviceDir}[auth-camoufox,bundle]`],
+    {
+      failureMessage: 'metadata collector isolated dependencies could not be installed',
+    },
+  );
   writeFileSync(environmentMarker, `${environmentFingerprint}\n`, 'utf8');
 }
 

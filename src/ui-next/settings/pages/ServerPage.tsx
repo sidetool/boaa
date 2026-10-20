@@ -73,9 +73,9 @@ const COMPONENTS: Record<OptionalComponentId, ComponentInfo> = {
     icon: <Package size={18} />,
   },
   browser: {
-    title: '브라우저 실행 환경',
+    title: '브라우저 인증',
     object: '브라우저 실행 환경을',
-    help: '소스 인증과 브라우저 작업에 써요. 미사용 시 자동 종료돼요.',
+    help: 'Patchright로 소스 인증을 처리해요. 미사용 시 자동 종료돼요.',
     stopEffect: '브라우저가 필요한 소스와 작품 정보 인증은 다시 켤 때까지 멈춰요. HTTP 소스는 계속 열려요.',
     icon: <AppWindow size={18} />,
   },
@@ -122,11 +122,16 @@ function componentState(component: ServerComponent, model: ServerManagementModel
   if (!component.supported) return 'unsupported';
   if (!component.managed) return 'external';
   const operation = model.status?.operation;
-  if (model.pending === `component:${component.id}`) return model.pendingStage === 'running' ? 'working' : 'queued';
+  if (
+    model.pending === `component:${component.id}` &&
+    (!component.engine || !model.pendingEngine || model.pendingEngine === component.engine)
+  )
+    return model.pendingStage === 'running' ? 'working' : 'queued';
   if (
     model.active &&
     operation?.action === 'component' &&
     operation.componentId === component.id &&
+    (!component.engine || !operation.engine || operation.engine === component.engine) &&
     !operation.completedAt
   )
     return 'working';
@@ -160,7 +165,15 @@ function ComponentRow({
   model: ServerManagementModel;
   onChange(component: ServerComponent, change: ComponentChange): void;
 }) {
-  const info = COMPONENTS[component.id];
+  const info =
+    component.id === 'browser' && component.engine === 'camoufox'
+      ? {
+          ...COMPONENTS.browser,
+          title: 'Camoufox (실험)',
+          object: 'Camoufox를',
+          help: '별도로 설치하는 인증 브라우저예요.',
+        }
+      : COMPONENTS[component.id];
   const state = componentState(component, model);
   const blocked = Boolean(model.pending) || model.active || model.reconnecting || model.recoveryRequired;
   const ours = model.pending === `component:${component.id}`;
@@ -583,7 +596,11 @@ function ComponentConfirm({
   onClose(): void;
   onConfirm(component: ServerComponent, kind: ComponentChange): void;
 }) {
-  const info = change && COMPONENTS[change.component.id];
+  const info =
+    change &&
+    (change.component.id === 'browser' && change.component.engine === 'camoufox'
+      ? { ...COMPONENTS.browser, title: 'Camoufox (실험)', object: 'Camoufox를' }
+      : COMPONENTS[change.component.id]);
   const copy = change && CHANGE_COPY[change.kind];
   const size = change?.component.downloadBytes ? formatDownloadSize(change.component.downloadBytes) : undefined;
   return (
@@ -625,9 +642,22 @@ export function ServerPage({ client }: { client: ServerManagementClient }) {
     return <Unavailable reason={status.reason} phase={status.phase} retry={() => void model.refresh()} />;
 
   const blocked = Boolean(model.pending) || model.active || model.reconnecting || model.recoveryRequired;
-  const components = COMPONENT_ORDER.map((id) => status.components.find((component) => component.id === id)).filter(
-    (component): component is ServerComponent => Boolean(component),
-  );
+  const components = COMPONENT_ORDER.flatMap((id): ServerComponent[] => {
+    const component = status.components.find((row) => row.id === id);
+    if (!component) return [];
+    if (id !== 'browser' || !component.browserChoices) return [component];
+    return component.browserChoices.map((choice) => ({
+      ...component,
+      engine: choice.engine,
+      installed: component.installedEngines?.includes(choice.engine) ?? false,
+      enabled: component.enabled && component.engine === choice.engine,
+      running: component.running && component.engine === choice.engine,
+      supported: component.supported && choice.supported,
+      downloadBytes: choice.downloadBytes,
+      version: component.installedEngines?.includes(choice.engine) ? choice.version : undefined,
+      error: component.engine === choice.engine || !component.managed ? component.error : undefined,
+    }));
+  });
   const release = status.release;
 
   return (
@@ -675,7 +705,7 @@ export function ServerPage({ client }: { client: ServerManagementClient }) {
           <PrefGroup>
             {components.map((component) => (
               <ComponentRow
-                key={component.id}
+                key={`${component.id}:${component.engine ?? ''}`}
                 component={component}
                 model={model}
                 onChange={(target, kind) => setChange({ component: target, kind })}
@@ -711,7 +741,7 @@ export function ServerPage({ client }: { client: ServerManagementClient }) {
       <ComponentConfirm
         change={change}
         onClose={() => setChange(undefined)}
-        onConfirm={(target, kind) => void model.setComponent(target.id, kind !== 'stop')}
+        onConfirm={(target, kind) => void model.setComponent(target.id, kind !== 'stop', target.engine)}
       />
     </>
   );

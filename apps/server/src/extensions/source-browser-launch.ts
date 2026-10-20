@@ -1,9 +1,11 @@
-import { camoufoxLaunchOptions, BROWSER_ENGINE, BROWSER_DRIVER_VERSION } from '@boaa/browser-runtime';
+import { browserLaunchOptions, browserEngine, browserDriverVersion, type BrowserEngine } from '@boaa/browser-runtime';
 import type { BrowserType } from 'playwright-core';
 import { readRuntimeJson, runtimeComponentEndpoint, runtimeComponentToken } from './runtime-component-client.js';
 
 export function sourceBrowserUsesRemote() {
-  return !!process.env.BOAA_SOURCE_BROWSER_ENDPOINT && !process.env.BOAA_CAMOUFOX_EXECUTABLE;
+  const local =
+    browserEngine() === 'camoufox' ? process.env.BOAA_CAMOUFOX_EXECUTABLE : process.env.BOAA_PATCHRIGHT_EXECUTABLE;
+  return !!process.env.BOAA_SOURCE_BROWSER_ENDPOINT && !local;
 }
 
 /** An idle API lease yields to queued metadata clients rather than keeping them waiting. */
@@ -25,12 +27,12 @@ export async function sourceBrowserHasQueuedClients(): Promise<boolean> {
   return typeof health.queued !== 'number' || health.queued > 0;
 }
 
-/** Camoufox is the only source browser; local launches never discover a system browser. */
+/** Only the selected, explicitly installed engine is used; no system-browser fallback. */
 export async function launchSourceBrowser(
   launcher: Pick<BrowserType, 'launch'> & Partial<Pick<BrowserType, 'connect'>>,
   _args: string[] = [],
   _platform = process.platform,
-  engine: 'camoufox' = BROWSER_ENGINE,
+  engine: BrowserEngine = browserEngine(),
   signal?: AbortSignal,
 ) {
   const remote = sourceBrowserUsesRemote() && process.env.BOAA_SOURCE_BROWSER_ENDPOINT;
@@ -56,7 +58,7 @@ export async function launchSourceBrowser(
       manifest.protocolVersion !== 1 ||
       manifest.component !== 'browser' ||
       manifest.engine !== engine ||
-      engines?.[engine] !== BROWSER_DRIVER_VERSION ||
+      engines?.[engine] !== browserDriverVersion(engine) ||
       typeof manifest.wsPath !== 'string' ||
       !/^\/v1\/browsers\/[a-f0-9-]{36}\/ws$/.test(manifest.wsPath)
     )
@@ -65,5 +67,5 @@ export async function launchSourceBrowser(
     websocket.protocol = websocket.protocol === 'https:' ? 'wss:' : 'ws:';
     return launcher.connect(websocket.href, { headers, timeout: 15000 });
   }
-  return launcher.launch(await camoufoxLaunchOptions());
+  return launcher.launch(await browserLaunchOptions(engine));
 }

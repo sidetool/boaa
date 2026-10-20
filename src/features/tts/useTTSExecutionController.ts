@@ -33,19 +33,21 @@ interface PollHostedTTSJobOptions {
 export interface TTSExecutionControllerInput {
   readonly systemTTS: Pick<TTSProvider, 'pause' | 'resume' | 'stop'>;
   readonly audioSession?: Pick<BrowserAudioSession, 'hasActivePlayback' | 'pause' | 'playBlob' | 'resume' | 'stop'> &
-    Partial<Pick<BrowserAudioSession, 'setVolume'>>;
+    Partial<Pick<BrowserAudioSession, 'setVolume' | 'setPlaybackRate'>>;
   readonly providerClient?: RemoteApiClient;
   /** Changes on content revision, account or runtime replacement. */
   readonly sessionOwner?: object;
   readonly bookId?: string;
   readonly chapterId?: string;
   readonly volume?: number;
+  readonly playbackRate?: number;
   readonly sleepTimerPreset?: TTSSleepTimerPreset;
   readonly preserveSystemPlaybackOnUnmount?: boolean;
 }
 
 export function useTTSExecutionController(input: TTSExecutionControllerInput) {
   const [index, setIndex] = useState<number>();
+  const playbackParagraph = useRef<number>();
   const [playing, setPlaying] = useState(false);
   const [paused, setPaused] = useState(false);
   const [activePlayback, setActivePlaybackState] = useState<ActiveTTSPlayback>();
@@ -87,6 +89,10 @@ export function useTTSExecutionController(input: TTSExecutionControllerInput) {
   useEffect(() => {
     audioSession.setVolume?.(input.volume ?? 1);
   }, [audioSession, input.volume]);
+
+  useEffect(() => {
+    audioSession.setPlaybackRate?.(input.playbackRate ?? 1);
+  }, [audioSession, input.playbackRate]);
 
   useEffect(() => {
     if (!playing) return;
@@ -214,6 +220,7 @@ export function useTTSExecutionController(input: TTSExecutionControllerInput) {
       sleepTimerRef.current.pause();
       setPlaying(true);
       setPaused(false);
+      playbackParagraph.current = startIndex;
       setIndex(startIndex);
       setActivePlaybackState(undefined);
       setErrorMessage(undefined);
@@ -255,6 +262,17 @@ export function useTTSExecutionController(input: TTSExecutionControllerInput) {
       if (!isSessionCurrent(sessionId)) return false;
       playingRef.current = true;
       setPlaying(true);
+      playbackParagraph.current = paragraphIndex;
+      setIndex(paragraphIndex);
+      return true;
+    },
+    [isSessionCurrent],
+  );
+
+  // Estimated highlighting must not become the retry cursor after an audio failure.
+  const setFollowedParagraph = useCallback(
+    (sessionId: number, paragraphIndex: number) => {
+      if (!isSessionCurrent(sessionId)) return false;
       setIndex(paragraphIndex);
       return true;
     },
@@ -296,7 +314,7 @@ export function useTTSExecutionController(input: TTSExecutionControllerInput) {
       else sleepTimerRef.current.clear();
       setPlaying(false);
       setPaused(false);
-      if (!options.preserveIndex) setIndex(undefined);
+      setIndex(options.preserveIndex ? playbackParagraph.current : undefined);
       setActivePlaybackState(undefined);
       setErrorMessage(options.errorMessage);
       if (!options.preserveSleepTimer) {
@@ -334,7 +352,7 @@ export function useTTSExecutionController(input: TTSExecutionControllerInput) {
   const playAudio = useCallback(
     async (blob: Blob, sessionId: number, onProgress?: (fraction: number) => void): Promise<boolean> => {
       if (!isSessionCurrent(sessionId)) return true;
-      if (!(await waitForResume(sessionId))) return true;
+      if (!(await waitForResume(sessionId)) || !isSessionCurrent(sessionId)) return true;
       itemActiveRef.current = true;
       setItemActiveState(true);
       if (!pausedRef.current) sleepTimerRef.current.resume();
@@ -343,10 +361,12 @@ export function useTTSExecutionController(input: TTSExecutionControllerInput) {
           if (isSessionCurrent(sessionId)) onProgress?.(fraction);
         });
       } finally {
-        itemActiveRef.current = false;
-        setItemActiveState(false);
-        sleepTimerRef.current.pause();
-        setSleepTimerRemainingSeconds(sleepTimerRef.current.remainingSeconds);
+        if (isSessionCurrent(sessionId, false)) {
+          itemActiveRef.current = false;
+          setItemActiveState(false);
+          sleepTimerRef.current.pause();
+          setSleepTimerRemainingSeconds(sleepTimerRef.current.remainingSeconds);
+        }
       }
     },
     [audioSession, isSessionCurrent, waitForResume],
@@ -354,10 +374,17 @@ export function useTTSExecutionController(input: TTSExecutionControllerInput) {
 
   const setSleepTimer = useCallback((preset?: TTSSleepTimerPreset) => {
     sleepTimerRef.current.start(preset);
-    if (pausedRef.current) sleepTimerRef.current.pause();
+    if (pausedRef.current || !itemActiveRef.current) sleepTimerRef.current.pause();
     setSleepTimerPresetState(preset);
     setSleepTimerRemainingSeconds(sleepTimerRef.current.remainingSeconds);
   }, []);
+
+  const previousTimerPreset = useRef(input.sleepTimerPreset);
+  useEffect(() => {
+    if (previousTimerPreset.current === input.sleepTimerPreset) return;
+    previousTimerPreset.current = input.sleepTimerPreset;
+    if (playingRef.current) setSleepTimer(input.sleepTimerPreset);
+  }, [input.sleepTimerPreset, setSleepTimer]);
 
   const setItemActive = useCallback(
     (sessionId: number, active: boolean) => {
@@ -402,7 +429,9 @@ export function useTTSExecutionController(input: TTSExecutionControllerInput) {
     setPlaying(true);
     setPaused(snapshot.paused);
     setItemActiveState(true);
-    setIndex(snapshot.anchor?.kind === 'reflowable_text' ? snapshot.anchor.blockIndex : snapshot.itemIndex);
+    playbackParagraph.current =
+      snapshot.anchor?.kind === 'reflowable_text' ? snapshot.anchor.blockIndex : snapshot.itemIndex;
+    setIndex(playbackParagraph.current);
   }, []);
 
   const beginOperation = useCallback(
@@ -559,6 +588,7 @@ export function useTTSExecutionController(input: TTSExecutionControllerInput) {
     waitForResume,
     sessionSignal,
     setParagraph,
+    setFollowedParagraph,
     setActivePlayback,
     finishSession,
     pause,

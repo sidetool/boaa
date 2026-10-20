@@ -28,5 +28,6 @@ export interface ReaderChromeProps {
   readonly onMobileSearchOpenChanged: (open: boolean) => void;
   readonly onOverflowOpenChanged: (open: boolean) => void;
   readonly onGoToSavedPosition: () => void;
+  readonly onOpenTranslation?: () => void;
   readonly onOpenAutoScroll?: () => void;
 }

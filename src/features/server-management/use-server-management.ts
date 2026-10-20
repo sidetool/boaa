@@ -329,6 +329,7 @@ export function useServerManagement(client: ServerManagementClient | undefined, 
     pending: tracked?.key,
     pendingStage: tracked?.stage,
     pendingEnabled: tracked?.request.enabled,
+    pendingEngine: tracked?.request.engine,
     actionError,
     active,
     /** Update and rollback both failed: the API refuses changes (409) until an admin restores the server. */
@@ -340,8 +341,8 @@ export function useServerManagement(client: ServerManagementClient | undefined, 
     check: () => send({ action: 'check' }),
     update: () => send({ action: 'update' }),
     setChannel: (channel: ReleaseChannel) => send({ action: 'channel', channel }),
-    setComponent: (componentId: OptionalComponentId, enabled: boolean) =>
-      send({ action: 'component', componentId, enabled }),
+    setComponent: (componentId: OptionalComponentId, enabled: boolean, engine?: 'patchright' | 'camoufox') =>
+      send({ action: 'component', componentId, enabled, ...(engine ? { engine } : {}) }),
     dismissError: () => setActionError(undefined),
   };
 }

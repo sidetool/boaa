@@ -30,7 +30,9 @@ import {
   Trash2,
   X,
 } from 'lucide-react';
-import { useState } from 'react';
+import { useRef, useState } from 'react';
+import { useTranslatedTitle } from '../../features/translation/use-translated-title';
+import { useNearOnce } from '../home/rows';
 import { externalItemKeyId } from '../../external-sources/contracts';
 import type {
   ExternalSourceController,
@@ -460,15 +462,18 @@ function SourceItem({ item, model }: { item: ExternalSourceItemView; model: Mode
   const libraryAddEnabled = Boolean(activeSource?.supportsSubscriptions);
   const actions = sourceHubItemActions(item, controller, undefined, libraryAddEnabled);
   const browsable = item.kind === 'work' && Boolean(item.navigationRef);
+  const titleRef = useRef<HTMLDivElement>(null);
+  const near = useNearOnce(titleRef);
+  const title = useTranslatedTitle(item.title, browsable && near);
 
   if (browsable)
     return (
-      <div className="un-tile un-source-work">
+      <div ref={titleRef} className="un-tile un-source-work">
         <button
           type="button"
           className="un-tile-open"
           disabled={controller.blockingBusy || controller.loading}
-          aria-label={`${item.title} 작품 상세 열기`}
+          aria-label={`${title} 작품 상세 열기`}
           onClick={() => void actions.open()}
         >
           <span className="un-tile-art">
@@ -478,7 +483,9 @@ function SourceItem({ item, model }: { item: ExternalSourceItemView; model: Mode
             {actions.added && <span className="un-tile-flag is-owned">추가됨</span>}
           </span>
           <span className="un-tile-meta">
-            <span className="un-tile-title">{item.title}</span>
+            <span className="un-tile-title" title={title !== item.title ? item.title : undefined}>
+              {title}
+            </span>
             {itemDescription(item) && <span className="un-tile-sub">{itemDescription(item)}</span>}
           </span>
         </button>
@@ -587,6 +594,7 @@ function WorkHero({ model, props }: { model: Model; props: SourceHubScreenProps 
   const [moreOpen, setMoreOpen] = useState(false);
   const editor = props.localSeriesTitleEditor;
   const description = controller.detail?.description ?? seriesNovel?.description;
+  const title = useTranslatedTitle(model.workTitle, Boolean(controller.detail));
   const cover = seriesLibraryBook ? (
     <WorkCover item={{ kind: 'book', key: seriesLibraryBook.novel.id, book: seriesLibraryBook }} />
   ) : (
@@ -686,8 +694,9 @@ function WorkHero({ model, props }: { model: Model; props: SourceHubScreenProps 
                 </button>
               </form>
             ) : (
-              <h1 id="un-source-title">{model.workTitle}</h1>
+              <h1 id="un-source-title">{title}</h1>
             )}
+            {title !== model.workTitle && <p className="un-detail-byline">{model.workTitle}</p>}
             {model.workByline && <p className="un-detail-byline">{model.workByline}</p>}
             <p className="un-detail-kicker">
               <span className="un-tag is-accent">{model.seriesReadingStatus ?? model.workSourceLabel}</span>

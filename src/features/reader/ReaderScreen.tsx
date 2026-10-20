@@ -1,3 +1,6 @@
+import { useReaderTranslation } from '../translation/use-reader-translation';
+import { ReaderTranslationContext } from '../translation/reader-translation-context';
+import { ReaderTranslationControls } from '../../ui-next/reader/ReaderTranslationControls';
 import type { ReaderBodyRepository } from '../../repositories/reader-repository';
 import { ReaderPluginInput } from '../../extensions/platform/ReaderPluginInput';
 import type { PluginService } from '../../extensions/platform/plugin-service';
@@ -106,6 +109,7 @@ function ReaderScreenComponent({
 }: ReaderScreenProps) {
   const { readerRuntime } = useAppRuntime();
   const repository = bodyRepository ?? readerRuntime.readerRepository;
+  const translation = useReaderTranslation(model, repository);
   const pluginRoot = useRef<HTMLElement>(null);
   const { host: pluginHost, snapshot: pluginSnapshot } = useReaderPlugins();
   useLayoutEffect(() => {
@@ -129,7 +133,7 @@ function ReaderScreenComponent({
   const openSequence = openRequest?.sequence;
   const preserveSearch = openRequest?.preserveSearch;
   const initialMode = openRequest?.initialMode;
-  const modeLock = model.settings.readingProfile.modeLock ?? 'auto';
+  const modeLock = translation.displaying ? 'scroll' : (model.settings.readingProfile.modeLock ?? 'auto');
   const [readingFlow, setReadingFlow] = useState<ReaderRuntimeFlow>(() =>
     modeLock === 'auto' ? screenHandle.getReadingFlow(model.novel.id) : modeLock,
   );
@@ -882,6 +886,7 @@ function ReaderScreenComponent({
         }}
       />
       <ReaderChrome
+        onOpenTranslation={translation.available ? () => translation.setOpen(true) : undefined}
         model={model}
         screenHandle={screenHandle}
         viewport={viewportApi}
@@ -892,7 +897,7 @@ function ReaderScreenComponent({
         readingFlow={readingFlow}
         activeBookmark={activeBookmark}
         activeHighlight={activeHighlight}
-        selection={selection}
+        selection={translation.displaying ? undefined : selection}
         mobileSearchOpen={mobileSearchOpen}
         overflowOpen={overflowOpen}
         onSetMode={setMode}
@@ -929,32 +934,35 @@ function ReaderScreenComponent({
         />
       )}
 
-      <ReaderViewport
-        key={model.chapter.id}
-        repository={repository}
-        novel={model.novel}
-        chapter={model.chapter}
-        chapters={model.chapters}
-        settings={model.settings}
-        readingFlow={readingFlow}
-        pageTransitionPending={scrollToPageSettling}
-        navigationBusy={model.navigation?.busy}
-        mode={mode}
-        ttsIndex={model.ttsIndex}
-        search={viewportSearch}
-        screenHandle={screenHandle}
-        openRequest={openRequest}
-        apiRef={viewportApiRef}
-        onApiReady={handleApiReady}
-        onVisualLocation={handleVisualLocation}
-        onSelectionChanged={setSelection}
-        onRevealChrome={chrome.reveal}
-        onToggleImmersive={toggleImmersive}
-        onPageIntent={requestPageIntent}
-        onScrollIntent={requestScrollIntent}
-        onDocumentLink={handleDocumentLink}
-        assetRepository={readerRuntime.bookAssetRepository}
-      />
+      <ReaderTranslationControls controller={translation} listening={model.ttsIndex !== undefined} />
+      <ReaderTranslationContext.Provider value={translation.texts}>
+        <ReaderViewport
+          key={model.chapter.id}
+          repository={repository}
+          novel={model.novel}
+          chapter={model.chapter}
+          chapters={model.chapters}
+          settings={model.settings}
+          readingFlow={readingFlow}
+          pageTransitionPending={scrollToPageSettling}
+          navigationBusy={model.navigation?.busy}
+          mode={mode}
+          ttsIndex={model.ttsIndex}
+          search={viewportSearch}
+          screenHandle={screenHandle}
+          openRequest={openRequest}
+          apiRef={viewportApiRef}
+          onApiReady={handleApiReady}
+          onVisualLocation={handleVisualLocation}
+          onSelectionChanged={setSelection}
+          onRevealChrome={chrome.reveal}
+          onToggleImmersive={toggleImmersive}
+          onPageIntent={requestPageIntent}
+          onScrollIntent={requestScrollIntent}
+          onDocumentLink={handleDocumentLink}
+          assetRepository={readerRuntime.bookAssetRepository}
+        />
+      </ReaderTranslationContext.Provider>
       {footnote && (
         <EpubFootnoteSheet
           paragraphs={footnote.paragraphs}
@@ -966,7 +974,7 @@ function ReaderScreenComponent({
           }}
         />
       )}
-      {selection && !model.transient && (
+      {selection && !model.transient && !translation.displaying && (
         <SelectionToolbar
           selection={selection}
           location={location}

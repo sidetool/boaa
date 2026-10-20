@@ -75,6 +75,19 @@ describe('BrowserAudioSession', () => {
     expect(revoked).toEqual(['blob:test-1']);
   });
 
+  it('ignores a stale ended event while the current media has not ended', async () => {
+    const { session, created } = createHarness();
+    const first = session.playBlob(blob());
+    fireEnded(created[0]);
+    await first;
+    const second = session.playBlob(blob());
+    Object.defineProperty(created[0], 'ended', { value: false, configurable: true });
+    fireEnded(created[0]);
+    expect(session.hasActivePlayback).toBe(true);
+    Object.defineProperty(created[0], 'ended', { value: true, configurable: true });
+    fireEnded(created[0]);
+    await expect(second).resolves.toBe(true);
+  });
   it('returns false and cleans up when playback fails', async () => {
     const { session, revoked } = createHarness({ rejectPlay: () => true });
 
@@ -149,4 +162,31 @@ it('reports real media progress and stops the old chunk from publishing after re
   fireEnded(audio);
   await second;
   expect(audio.ontimeupdate).toBeNull();
+});
+
+it('changes speed on the same playing or paused audio without a new source or play call', async () => {
+  const { session, created, revoked } = createHarness();
+  const playing = session.playBlob(blob());
+  const audio = created[0] as FakeAudio & {
+    playbackRate: number;
+    defaultPlaybackRate: number;
+    preservesPitch: boolean;
+  };
+  session.setPlaybackRate(1.5);
+  expect(audio.playbackRate).toBe(1.5);
+  expect(audio.preservesPitch).toBe(true);
+  expect(audio.src).toBe('blob:test-1');
+  expect(audio.playCalls).toBe(1);
+  expect(revoked).toHaveLength(0);
+  session.pause();
+  session.setPlaybackRate(0.8);
+  expect(audio.playbackRate).toBe(0.8);
+  expect(audio.defaultPlaybackRate).toBe(0.8);
+  fireEnded(audio);
+  await playing;
+  const next = session.playBlob(blob());
+  expect(created).toHaveLength(1);
+  expect(audio.playbackRate).toBe(0.8);
+  fireEnded(audio);
+  await next;
 });

@@ -24,7 +24,7 @@ const GROUPS: readonly { title: string; ids: readonly SettingsTab[] }[] = [
   { title: '계정', ids: ['account'] },
   { title: '일반', ids: ['appearance'] },
   { title: '읽기', ids: ['layout', 'gesture'] },
-  { title: '콘텐츠', ids: ['sources', 'extensions'] },
+  { title: '콘텐츠', ids: ['sources', 'extensions', 'translation'] },
   { title: '데이터', ids: ['storage', 'sync', 'remote-access'] },
   { title: '관리', ids: ['server'] },
   { title: '정보', ids: ['application'] },
@@ -53,12 +53,13 @@ export default function UiNextSettingsPanel(props: ReaderSettingsPanelProps) {
 
   const sections = SETTINGS_SECTIONS.filter((section) => {
     if (section.id === 'remote-access') return Boolean(embedded) || Boolean(props.serverApiBaseUrl);
+    if (section.id === 'translation') return serverManaged && canManageServer;
     if (section.id === 'server') return serverManaged && canManageServer;
     if (section.id === 'account') return Boolean(selfHostAuth?.session);
     return true;
   });
   const current = sections.find((section) => section.id === tab) ?? sections[0];
-  const status = saveStatusLabel(controller);
+  const status = current.id === 'translation' ? '저장 버튼으로 적용' : saveStatusLabel(controller);
 
   const focusTitle = () =>
     requestAnimationFrame(() => {

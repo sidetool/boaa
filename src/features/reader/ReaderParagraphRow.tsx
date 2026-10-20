@@ -1,4 +1,14 @@
-import { memo, useCallback, useEffect, useMemo, useState, useSyncExternalStore, type ReactNode } from 'react';
+import { ReaderTranslationContext } from '../translation/reader-translation-context';
+import {
+  useContext,
+  memo,
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+  useSyncExternalStore,
+  type ReactNode,
+} from 'react';
 import type { Character, LabeledSegment, Paragraph } from '../../domain/types';
 import type { BookAssetRepository } from '../../repositories/book-asset-repository';
 import { composePluginText, type ComposedReaderSegment } from '../../reader/plugin-text-composition';
@@ -228,6 +238,8 @@ function ReaderParagraphRowComponent({
   sourceOffset = 0,
   sourceText,
 }: ReaderParagraphRowProps) {
+  const translations = useContext(ReaderTranslationContext);
+  const translated = translations?.get(paragraph.id);
   const [imageReady, setImageReady] = useState(false);
   const subscribe = useCallback(
     (listener: () => void) => decorationStore.subscribe(paragraph.id, listener),
@@ -252,14 +264,17 @@ function ReaderParagraphRowComponent({
     () => composePluginText(paragraph.text, decoratedText, decoration.pluginLayers ?? [], sourceOffset),
     [paragraph.text, decoratedText, decoration.pluginLayers, sourceOffset],
   );
-  const textContent = useMemo(
+  const originalTextContent = useMemo(
     () => <InlineEpubText paragraph={paragraph} onLink={onDocumentLink} segments={composedText} />,
     [composedText, onDocumentLink, paragraph],
   );
 
+  const textContent =
+    translated === undefined ? originalTextContent : <span className="reader-translated-text">{translated}</span>;
+  // Translated offsets must never create annotations against the original text.
   // Annotate the existing text element without adding wrappers or changing pagination layout.
   const textAnchor = {
-    'data-reader-text': paragraph.id,
+    'data-reader-text': translated === undefined ? paragraph.id : undefined,
     'data-reader-book': paragraph.novelId,
     'data-reader-chapter': paragraph.chapterId,
     'data-reader-source-offset': sourceOffset,

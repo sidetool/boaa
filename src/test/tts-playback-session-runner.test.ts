@@ -445,3 +445,29 @@ it('starts next-chapter preparation once near the end, while current audio is st
   expect(result.completed).toBe(true);
   expect(preparedAt).toEqual([4]);
 });
+
+it.each([false, true])(
+  'does not report chapter completion when an expected paragraph is missing (sequence=%s)',
+  async (sequence) => {
+    let finished = false;
+    const result = await runTTSPlaybackSession({
+      startIndex: 0,
+      paragraphCount: 2,
+      getParagraph: async (i) => (i === 0 ? paragraphs[0] : undefined),
+      buildPlayableSegments: playableForParagraph,
+      shouldContinue: () => true,
+      waitForResume: async () => true,
+      playHostedSegment: sequence ? undefined : async () => true,
+      allowSystemFallback: false,
+      speakSystemSequence: sequence ? async () => undefined : undefined,
+      buildSystemFallbackInput: (p) => ({ text: p.text, rate: 1 }),
+      speakSystem: async () => undefined,
+      onFinished: () => {
+        finished = true;
+      },
+    });
+    expect(result.completed).toBe(false);
+    expect(result.errorMessage).toBeTruthy();
+    expect(finished).toBe(false);
+  },
+);

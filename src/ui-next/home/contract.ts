@@ -55,6 +55,7 @@ export interface HomeHeroItem {
 
 /** Source works shown on home that are not in the library yet. */
 export interface HomeDiscoveryItem {
+  translateTitle?: boolean;
   id: string;
   title: string;
   author?: string;

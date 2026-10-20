@@ -5,7 +5,16 @@ import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 import { atomicJson, readJson, validateRequest } from './files.mjs';
 import { compareVersions, ReleaseFeed } from './feed.mjs';
-import { COMPONENTS, CORE, DockerDeployment, componentConfiguration, imageFor, prepareMailbox } from './deployment.mjs';
+import {
+  COMPONENTS,
+  CORE,
+  DockerDeployment,
+  componentConfiguration,
+  configuredBrowserEngine,
+  browserImage,
+  imageFor,
+  prepareMailbox,
+} from './deployment.mjs';
 import { OPERATION_RESULT_LIMIT, recordOperationResult } from './operation-results.mjs';
 
 const safeError = (error) =>
@@ -136,13 +145,35 @@ export class ServerUpdater {
     if (this.state.phase !== 'recovery-required') await this.releaseLease();
     await this.publish();
   }
+  // Only an operator with write access to private updater state can register local builds.
+  // Never accept image references from the API request or reuse them across releases.
+  localBrowserImage(engine) {
+    const { current, platform } = this.deployment;
+    const entry = current?.localBrowserImages?.[engine];
+    return entry?.version === current.version &&
+      entry.platform === platform &&
+      /^sha256:[a-f0-9]{64}$/.test(entry.image)
+      ? entry
+      : undefined;
+  }
+  localComponentImage(id) {
+    const { current, platform } = this.deployment;
+    const entry = current?.localComponentImages?.[id];
+    return id === 'metadata' &&
+      entry?.version === current.version &&
+      entry.platform === platform &&
+      /^sha256:[a-f0-9]{64}$/.test(entry.image)
+      ? entry
+      : undefined;
+  }
   refreshComponents(manifest) {
     const { current, config, platform } = this.deployment;
     if (!current) return;
     const env = config.services.api.environment;
     this.state.components = Object.keys(COMPONENTS).map((id) => {
       const before = this.state.components.find((component) => component.id === id);
-      const image = manifest?.images[id];
+      const engine = current.browserEngine ?? configuredBrowserEngine(config);
+      const image = id === 'browser' ? browserImage(manifest, engine) : manifest?.images[id];
       const endpoint =
         id === 'browser'
           ? env.BOAA_SOURCE_BROWSER_ENDPOINT
@@ -154,6 +185,28 @@ export class ServerUpdater {
       );
       return {
         id,
+        ...(id === 'browser'
+          ? {
+              engine,
+              installedEngines:
+                current.installedBrowserEngines ??
+                (current.installed.includes(id) || current.enabled.includes(id) ? [engine] : []),
+              browserChoices: ['patchright', 'camoufox'].map((choice) => ({
+                engine: choice,
+                version:
+                  current.browserVersions?.[choice] ??
+                  (engine === choice ? current.componentVersions?.browser : undefined),
+                supported: this.localBrowserImage(choice)
+                  ? true
+                  : manifest
+                    ? Boolean(browserImage(manifest, choice)?.platforms.includes(platform))
+                    : (before?.browserChoices?.find((row) => row.engine === choice)?.supported ?? true),
+                downloadBytes:
+                  browserImage(manifest, choice)?.downloadBytes ??
+                  before?.browserChoices?.find((row) => row.engine === choice)?.downloadBytes,
+              })),
+            }
+          : {}),
         installed: current.installed.includes(id) || current.enabled.includes(id),
         enabled: current.enabled.includes(id),
         running: current.enabled.includes(id) && Boolean(before?.running),
@@ -298,18 +351,49 @@ export class ServerUpdater {
     const previous = this.deployment.current;
     let config = structuredClone(this.deployment.config),
       target = { ...previous, enabled: [...previous.enabled], installed: [...previous.installed] };
-    let release;
+    let release, localImage;
     if (request.action === 'component') {
       const item = this.state.components.find((item) => item.id === request.componentId);
       if (!item?.managed) throw new Error('component_external');
       if (!item.supported) throw new Error('component_unsupported');
-      if (item.enabled === request.enabled && (!request.enabled || (item.running && !item.error))) return;
-      config = componentConfiguration(config, request.componentId, request.enabled);
+      const engine = request.engine ?? item.engine ?? 'patchright';
+      if (request.componentId === 'browser' && !request.enabled && engine !== item.engine)
+        throw new Error('management_request_invalid');
+      if (
+        item.enabled === request.enabled &&
+        (!request.enabled || (item.running && !item.error)) &&
+        (request.componentId !== 'browser' || engine === item.engine)
+      )
+        return;
+      config = componentConfiguration(config, request.componentId, request.enabled, engine);
+      if (request.componentId === 'browser') {
+        target.browserEngine = engine;
+        target.installedBrowserEngines = item.installedEngines ?? [];
+        if (request.enabled) {
+          target.installedBrowserEngines = [...new Set([...target.installedBrowserEngines, engine])];
+          target.browserVersions = { ...target.browserVersions, [engine]: previous.version };
+        }
+      }
       if (request.enabled) {
-        const releases = await this.feed.releases('beta');
-        const current = releases.find((row) => compareVersions(row.tag_name, previous.version) === 0);
-        if (!current) throw new Error('release_not_found');
-        release = await this.sealed(current.tag_name);
+        localImage =
+          request.componentId === 'browser'
+            ? this.localBrowserImage(engine)
+            : this.localComponentImage(request.componentId);
+        if (localImage) {
+          const actual = JSON.parse(await this.deployment.run(['image', 'inspect', localImage.image]));
+          if (
+            actual.length !== 1 ||
+            actual[0].Id !== localImage.image ||
+            `${actual[0].Os}/${actual[0].Architecture}` !== this.deployment.platform
+          )
+            throw new Error('component_unsupported');
+          config.services[COMPONENTS[request.componentId]].image = localImage.image;
+        } else {
+          const releases = await this.feed.releases('beta');
+          const current = releases.find((row) => compareVersions(row.tag_name, previous.version) === 0);
+          if (!current) throw new Error('release_not_found');
+          release = await this.sealed(current.tag_name);
+        }
         target.enabled = [...new Set([...target.enabled, request.componentId])];
         target.installed = [...new Set([...target.installed, request.componentId])];
         target.componentVersions = { ...target.componentVersions, [request.componentId]: previous.version };
@@ -320,12 +404,24 @@ export class ServerUpdater {
       if (!this.candidate) throw new Error('release_not_found');
       release = await this.sealed(this.candidate.tag);
       this.compatible(release.manifest);
+      delete target.localBrowserImages;
+      delete target.localComponentImages;
       target.version = release.manifest.version;
       target.schemaEpoch = release.manifest.schemaEpoch;
       target.componentVersions = {
         ...target.componentVersions,
         ...Object.fromEntries(target.enabled.map((id) => [id, target.version])),
       };
+    }
+    // A legacy Camoufox installation stays on its engine across an app update.
+    if (target.enabled.includes('browser') || target.installed.includes('browser')) {
+      target.browserEngine ??=
+        this.state.components.find((item) => item.id === 'browser')?.engine ??
+        configuredBrowserEngine(this.deployment.config);
+      config = componentConfiguration(config, 'browser', target.enabled.includes('browser'), target.browserEngine);
+      target.installedBrowserEngines ??= [target.browserEngine];
+      if (target.enabled.includes('browser'))
+        target.browserVersions = { ...target.browserVersions, [target.browserEngine]: target.version };
     }
     const services =
       request.action === 'component'
@@ -335,8 +431,17 @@ export class ServerUpdater {
         : [...CORE, ...target.enabled.map((id) => COMPONENTS[id])];
     if (release) {
       for (const service of services) {
-        const image = release.manifest.images[imageFor(service)];
+        const image =
+          service === 'runtime-browser'
+            ? browserImage(release.manifest, target.browserEngine ?? configuredBrowserEngine(config))
+            : release.manifest.images[imageFor(service)];
         if (!image?.platforms.includes(this.deployment.platform)) throw new Error('component_unsupported');
+        if (
+          service === 'runtime-metadata' &&
+          target.enabled.includes('browser') &&
+          !image.browserEngines?.includes(target.browserEngine ?? configuredBrowserEngine(config))
+        )
+          throw new Error('component_unsupported');
         config.services[service].image = `${image.image}@${image.digest}`;
       }
     }
@@ -344,7 +449,7 @@ export class ServerUpdater {
       for (const service of CORE) (config.services[service].environment ??= {}).BOAA_RELEASE_VERSION = target.version;
     }
     await this.phase('downloading');
-    await this.deployment.pull(config, services);
+    if (!localImage) await this.deployment.pull(config, services);
     target = await this.deployment.stage(config, target, randomUUID());
     await this.phase('preflight');
     let transaction;
@@ -387,6 +492,7 @@ export class ServerUpdater {
       id,
       action: request.action,
       ...(request.componentId ? { componentId: request.componentId, enabled: request.enabled } : {}),
+      ...(request.engine ? { engine: request.engine } : {}),
       startedAt: iso(),
     };
     await this.publish();

@@ -1,3 +1,4 @@
+import { startTranslationWorker } from './translation/worker.js';
 import { randomUUID } from 'node:crypto';
 import { loadConfig, providerJobAdmissionLimits } from './config.js';
 import { createPool } from './db/pool.js';
@@ -33,6 +34,7 @@ const pool = createPool(config);
 const importQueue = createImportQueue(config);
 const providerQueue = createProviderQueue(config);
 const logger = createStructuredLogger({ service: 'worker' });
+const translationWorker = startTranslationWorker(pool, config, () => logger.error('translation_worker_error', {}));
 const metrics = metricsFromQueue(providerQueue, logger);
 const heartbeat = startWorkerProcessHeartbeat(metrics, logger);
 const reviewReconcilerOwner = `worker:${process.pid}:${randomUUID()}`;
@@ -186,6 +188,7 @@ async function closeWorker(): Promise<void> {
   await ttsMaintenancePromise;
   await objectDeletePromise;
   heartbeat.stop();
+  await translationWorker.close();
   await providerWorker.close();
   await importWorker.close();
   await providerQueue.close();

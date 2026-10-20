@@ -1,3 +1,4 @@
+import { interactionAudioResponse } from './gemini-audio-response.js';
 import { wavFromPcm16 } from './tts-audio.js';
 import { GEMINI_VOICES, namedVoices } from './tts-voices.js';
 import type { TTSSynthesisInput, TTSSynthesisProvider, TTSSynthesisResult } from '../../../../src/providers/tts';
@@ -87,7 +88,7 @@ export class GeminiTTSProvider implements TTSSynthesisProvider {
       throw new Error(`Gemini TTS request failed with ${response.status}: ${errorText.slice(0, 500)}`);
     }
     const json = await response.json().catch(() => undefined);
-    const pcm = audioDataFromGeminiInteraction(json);
+    const { buffer: pcm } = interactionAudioResponse(json);
     if (!pcm.byteLength) throw new Error('Gemini TTS returned no audio data');
     const isWav = pcm.toString('ascii', 0, 4) === 'RIFF' && pcm.toString('ascii', 8, 12) === 'WAVE';
     const wav = isWav ? pcm : wavFromPcm16(pcm, sampleRate);
@@ -132,40 +133,4 @@ function speechInstructions(input: TTSSynthesisInput): string | undefined {
     (part): part is string => Boolean(part && part.trim()),
   );
   return parts.length ? `Read the following text exactly with this delivery: ${parts.join(', ')}.` : undefined;
-}
-
-function audioDataFromGeminiInteraction(value: unknown): Buffer {
-  const body = value && typeof value === 'object' ? (value as Record<string, unknown>) : {};
-  const outputAudio = (body.output_audio ?? body.outputAudio) as unknown;
-  if (outputAudio && typeof outputAudio === 'object' && !Array.isArray(outputAudio)) {
-    const data = (outputAudio as Record<string, unknown>).data;
-    if (typeof data === 'string') return Buffer.from(data, 'base64');
-  }
-  const data = findBase64AudioData(body);
-  if (data) return Buffer.from(data, 'base64');
-  return Buffer.alloc(0);
-}
-
-function findBase64AudioData(value: unknown): string | undefined {
-  if (!value || typeof value !== 'object') return undefined;
-  if (Array.isArray(value)) {
-    for (const item of value) {
-      const found = findBase64AudioData(item);
-      if (found) return found;
-    }
-    return undefined;
-  }
-  const record = value as Record<string, unknown>;
-  const mimeType = record.mimeType ?? record.mime_type;
-  if (
-    typeof record.data === 'string' &&
-    ((typeof mimeType === 'string' && mimeType.startsWith('audio/')) || record.type === 'audio')
-  ) {
-    return record.data;
-  }
-  for (const item of Object.values(record)) {
-    const found = findBase64AudioData(item);
-    if (found) return found;
-  }
-  return undefined;
 }

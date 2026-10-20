@@ -1,3 +1,7 @@
+import {
+  MIN_PLAIN_TTS_BATCH_CHARACTERS,
+  MAX_PLAIN_TTS_BATCH_CHARACTERS,
+} from '../../../../../src/providers/plain-tts-limits.js';
 import { validateSpokenTextFilter } from '@boaa/text-core/spoken-text-filter';
 import path from 'node:path';
 import { createPlainTTSAudioCache } from '../../providers/plain-tts-audio-cache.js';
@@ -316,6 +320,15 @@ export async function registerPlainTTSRoutes(
               body.chunking !== 'batch'
             )
               throw new PlainTTSError(400, '낭독 단위를 확인하세요.');
+            if (
+              body.batchCharacters !== undefined &&
+              (body.chunking !== 'batch' ||
+                typeof body.batchCharacters !== 'number' ||
+                !Number.isInteger(body.batchCharacters) ||
+                body.batchCharacters < MIN_PLAIN_TTS_BATCH_CHARACTERS ||
+                body.batchCharacters > MAX_PLAIN_TTS_BATCH_CHARACTERS)
+            )
+              throw new PlainTTSError(400, '묶음 크기는 200~2000자로 설정해 주세요.');
             const rules = parsePlainTTSRules(body.rules);
             const { row, paragraph } = await loadSource();
             let item;
@@ -343,6 +356,7 @@ export async function registerPlainTTSRoutes(
                 throw new PlainTTSError(400, '묶음 원문 순서가 올바르지 않습니다.');
               item = buildPlainTTSBatch({
                 paragraphs: loaded.map((entry) => entry.paragraph),
+                batchCharacters: body.batchCharacters as number | undefined,
                 language: row.language,
                 rules,
                 rate,
@@ -355,6 +369,7 @@ export async function registerPlainTTSRoutes(
                 rules,
                 rate,
                 chunking: body.chunking,
+                batchCharacters: body.batchCharacters as number | undefined,
               }).find((item) => item.spokenTextFingerprint === body.chunkHash);
             }
             if (!item) throw new PlainTTSError(409, '낭독할 문장이 원문과 일치하지 않습니다.');
@@ -371,6 +386,7 @@ export async function registerPlainTTSRoutes(
           }
           const key = structuredIntegrityHash({
             version: 'plain-tts-v1',
+            ...(source.id.startsWith('gemini') ? { audioValidation: 2 } : {}),
             user: config.defaultUserId,
             sourceKey,
             provider: source.id,
@@ -468,6 +484,13 @@ export function classifyPlainTTSFailure(error: unknown): {
     error && typeof error === 'object'
       ? (error as { status?: unknown; code?: unknown; name?: unknown; message?: unknown })
       : {};
+  if (value.code === 'tts_incomplete_audio')
+    return {
+      status: 502,
+      code: 'tts_incomplete_audio',
+      message:
+        '음성 생성이 끝까지 완료되지 않았습니다. 읽던 묶음에서 다시 시도하거나 세부 청취 설정의 묶음 크기를 줄여 주세요.',
+    };
   const rawStatus = value.status ?? value.code;
   const upstreamStatus = typeof rawStatus === 'number' && Number.isInteger(rawStatus) ? rawStatus : undefined;
   if (upstreamStatus === 429)

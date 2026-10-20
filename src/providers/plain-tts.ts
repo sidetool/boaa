@@ -1,3 +1,4 @@
+import { normalizePlainTTSBatchCharacters, DEFAULT_PLAIN_TTS_BATCH_CHARACTERS } from './plain-tts-limits';
 import { hasSpokenContent } from './tts-spoken-content';
 import type { Paragraph, SpokenTextRule } from '../domain/types';
 import { projectSpokenText } from '@boaa/text-core/spoken-text';
@@ -41,6 +42,7 @@ export interface PlainTTSRequest {
   contentRevision?: string;
   chunkHash: string;
   chunking?: 'sentence' | 'paragraph' | 'batch';
+  batchCharacters?: number;
   batch?: readonly { paragraphId: string; paragraphHash: string }[];
   rules: readonly SpokenTextRule[];
 }
@@ -55,6 +57,7 @@ export function buildPlainTTSItems(input: {
   rate: number;
   voiceURI?: string;
   chunking?: 'sentence' | 'paragraph' | 'batch';
+  batchCharacters?: number;
 }): PlayableTtsSegment[] {
   const { paragraph } = input;
   const projection = projectSpokenText({
@@ -69,7 +72,10 @@ export function buildPlainTTSItems(input: {
   // Bound synthesis latency even for an entire chapter imported as one paragraph.
   const chunks = projection.spokenText.matchAll(
     input.chunking === 'paragraph' || input.chunking === 'batch'
-      ? /[\s\S]{1,700}/gu
+      ? new RegExp(
+          `[\\s\\S]{1,${input.chunking === 'batch' ? normalizePlainTTSBatchCharacters(input.batchCharacters) : 700}}`,
+          'gu',
+        )
       : /[^.!?…。！？\n]{1,240}(?:[.!?…。！？]+["'”’」』》)]*|\n+|$)|[^.!?…。！？\n]{1,240}|[.!?…。！？]+/gu,
   );
   for (const match of chunks) {
@@ -118,12 +124,13 @@ export function plainTTSParagraphHash(paragraph: Paragraph): string {
   return integrityHash(paragraph.text);
 }
 
-export const PLAIN_TTS_BATCH_LIMIT = 700;
+export const PLAIN_TTS_BATCH_LIMIT = DEFAULT_PLAIN_TTS_BATCH_CHARACTERS;
 export const PLAIN_TTS_BATCH_PARAGRAPHS = 16;
 
 /** Rebuilt from owned source paragraphs on the server; no client-supplied narration text. */
 export function buildPlainTTSBatch(input: {
   paragraphs: readonly Paragraph[];
+  batchCharacters?: number;
   language?: string;
   rules?: readonly SpokenTextRule[];
   rate: number;
@@ -140,11 +147,11 @@ export function buildPlainTTSBatch(input: {
     )
   )
     return;
-  const parts = input.paragraphs.map((paragraph) => buildPlainTTSItems({ ...input, paragraph, chunking: 'paragraph' }));
+  const parts = input.paragraphs.map((paragraph) => buildPlainTTSItems({ ...input, paragraph, chunking: 'batch' }));
   // Do not silently consume skipped paragraphs or split a paragraph within a batch.
   if (parts.some((items) => items.length !== 1)) return;
   const text = parts.map((items) => items[0].text).join('\n\n');
-  if ([...text].length > PLAIN_TTS_BATCH_LIMIT) return;
+  if ([...text].length > normalizePlainTTSBatchCharacters(input.batchCharacters)) return;
   const plainBatch = input.paragraphs.map((p) => ({ paragraphId: p.id, paragraphHash: plainTTSParagraphHash(p) }));
   return {
     ...parts[0][0],
@@ -168,6 +175,7 @@ export function buildPlainTTSBatch(input: {
 
 export async function preparePlainTTSBatch(input: {
   index: number;
+  batchCharacters?: number;
   paragraph: Paragraph;
   paragraphCount: number;
   getParagraph(index: number): Promise<Paragraph | undefined>;
@@ -198,7 +206,7 @@ export async function preparePlainTTSBatch(input: {
     nextParagraphIndex = index + 1;
   }
   return {
-    playables: batch ? [batch] : buildPlainTTSItems({ ...input, chunking: 'paragraph' }),
+    playables: batch ? [batch] : buildPlainTTSItems({ ...input, chunking: 'batch' }),
     nextParagraphIndex,
   };
 }

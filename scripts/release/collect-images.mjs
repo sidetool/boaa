@@ -48,7 +48,11 @@ for (const name of IMAGE_NAMES) {
   )
     throw new Error('release_index_invalid');
   images[name] = {
+    ...(name === 'metadata' ? { browserEngines: ['patchright', 'camoufox'] } : {}),
     image,
+    ...(['browser', 'browser-camoufox'].includes(name)
+      ? { engine: name === 'browser' ? 'patchright' : 'camoufox' }
+      : {}),
     digest: `sha256:${createHash('sha256').update(raw).digest('hex')}`,
     platforms: ['linux/amd64', 'linux/arm64'],
     downloadBytes: Math.max(...sizes),

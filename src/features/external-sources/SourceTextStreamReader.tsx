@@ -1,3 +1,4 @@
+import { translationSnapshot } from '../translation/translation-snapshot';
 import { preloadBookWorkspaceReaderBody } from '../book-workspace/book-workspace-reader-preload';
 import { packageOperationMessage } from '../../extensions/packages/package-operation-error';
 import { stableId } from '../../domain/hash';
@@ -275,6 +276,32 @@ export function SourceTextStreamReader(
           scope: `source-text:${profileKey}:${opened.epoch}`,
           nextScope: `source-text:${profileKey}:${opened.epoch + 1}`,
           openNext: (isCurrent) => move(next, isCurrent),
+          prepareTranslationNext: async (signal) => {
+            const episode = latest.current.nextEpisode;
+            if (!episode || latest.current.historyKey !== props.historyKey) return undefined;
+            const { value } = await cache.read(
+              JSON.stringify([episode.remoteId, episode.remoteRevision]),
+              120000,
+              120000,
+              signal,
+              false,
+              (inner) => port.open(episode.remoteId, inner, episode.remoteRevision),
+            );
+            signal.throwIfAborted();
+            const prepared = await sourceTextDocument({
+              text: value.text,
+              title: episode.title,
+              workId: profileKey,
+              episodeId: episode.remoteId,
+              historyKey: `${profileKey}:translation-preview`,
+              settings: latest.current.textReader.settings,
+              fromStart: true,
+              signal,
+            });
+            const paragraphs = await translationSnapshot(prepared.repository, prepared.chapter, signal);
+            signal.throwIfAborted();
+            return { workKey: prepared.novel.id, chapterKey: prepared.chapter.id, paragraphs };
+          },
           busy: moving || Boolean(navigationBusy) || opened.key !== historyKey,
           // Same "N화 여는 중" indicator as library episodes while the next stream opens.
           pending:

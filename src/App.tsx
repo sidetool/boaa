@@ -905,6 +905,10 @@ export default function App() {
     bookId: selectedNovel?.id,
     chapterId: ttsControllerChapterId,
     volume: ttsPlaybackSettings.volume,
+    playbackRate:
+      ttsPlaybackSettings.mode !== 'cast' && ttsPlaybackSettings.voiceSource === 'server'
+        ? ttsPlaybackSettings.rate
+        : 1,
     sleepTimerPreset: ttsPlaybackSettings.sleepTimerDefault,
     preserveSystemPlaybackOnUnmount: platformRuntime.kind === 'tauri-mobile',
   });
@@ -2259,7 +2263,15 @@ export default function App() {
     : true;
   const ttsBookOverrideEnabled = hasBookTTSPlaybackOverride(settings, selectedNovel?.id);
   const changeTTSPlaybackSettings = (patch: TTSPlaybackSettingsOverride) => {
-    if ('mode' in patch || 'voiceSource' in patch || 'serverVoiceId' in patch || 'plainChunking' in patch)
+    if ('sleepTimerDefault' in patch && ttsPlaying)
+      ttsExecutionController.setSleepTimer(patch.sleepTimerDefault ?? undefined);
+    if (
+      'mode' in patch ||
+      'voiceSource' in patch ||
+      'serverVoiceId' in patch ||
+      'plainChunking' in patch ||
+      'plainBatchCharacters' in patch
+    )
       ttsExecutionController.stopAll();
     updateSettings((previous) =>
       selectedNovel && hasBookTTSPlaybackOverride(previous, selectedNovel.id)
@@ -2638,6 +2650,7 @@ export default function App() {
   const plainMode = ttsPlaybackSettings.mode !== 'cast';
   const plainServerSelected = plainMode && ttsPlaybackSettings.voiceSource === 'server';
   const plainTTS = usePlainTTS({
+    owner: ttsSessionOwner,
     client: readerRuntime.mode === 'remote' ? providerApiClient : undefined,
     enabled: (addonOpen && addonTab === 'tts') || plainServerSelected,
     settings: ttsPlaybackSettings,
@@ -4329,6 +4342,7 @@ export default function App() {
         plainServerSelected && ttsPlaybackSettings.plainChunking === 'batch'
           ? (index, paragraph) =>
               preparePlainTTSBatch({
+                batchCharacters: ttsPlaybackSettings.plainBatchCharacters,
                 index,
                 paragraph,
                 paragraphCount,
@@ -4346,6 +4360,7 @@ export default function App() {
             language: selectedNovel?.language,
             rules: spokenTextRules,
             chunking: ttsPlaybackSettings.voiceSource === 'server' ? ttsPlaybackSettings.plainChunking : 'sentence',
+            batchCharacters: ttsPlaybackSettings.plainBatchCharacters,
             rate: ttsPlaybackSettings.rate,
             voiceURI: settings.ttsVoiceURI,
           });
@@ -4386,7 +4401,7 @@ export default function App() {
               )
                 return;
               followedParagraphId = target.paragraphId;
-              ttsExecutionController.setParagraph(sessionId, target.paragraphIndex);
+              ttsExecutionController.setFollowedParagraph(sessionId, target.paragraphIndex);
               ttsExecutionController.setActivePlayback(sessionId, {
                 paragraphId: target.paragraphId,
                 speakerLabel: playable.speakerLabel,
@@ -4554,7 +4569,13 @@ export default function App() {
       showToast('수면 타이머에 따라 재생을 마쳤습니다.', 'info');
       return;
     }
-    if (!result.completed) return;
+    if (!result.completed) {
+      if (result.errorMessage) {
+        ttsExecutionController.finishSession(sessionId, { preserveIndex: true, errorMessage: result.errorMessage });
+        showToast(result.errorMessage, 'warning');
+      }
+      return;
+    }
     const stopAtChapterEnd = ttsExecutionController.shouldStopAtChapterEnd();
     let preparedNext: PreparedTTSChapter | undefined;
     if (!stopAtChapterEnd && ttsPlaybackSettings.chapterEndBehavior === 'continue') {
@@ -4637,7 +4658,8 @@ export default function App() {
       showToast(status.message, 'warning');
       return;
     }
-    const startIndex = requestedIndex ?? ttsIndex ?? readerScreenHandle.getLocation()?.ttsIndex ?? 0;
+    const requestedStart = requestedIndex ?? ttsIndex ?? readerScreenHandle.getLocation()?.ttsIndex ?? 0;
+    const startIndex = plainServerSelected ? plainTTS.reusableStart(requestedStart) : requestedStart;
     const sessionId = ttsExecutionController.beginSession(chapter.novelId, chapter.id, startIndex, {
       preserveSleepTimer: options.preserveSleepTimer,
     });
@@ -4948,14 +4970,16 @@ export default function App() {
     const paragraphCount = chapter?.paragraphCount ?? 0;
     if (!paragraphCount) return;
     stopProviderSamples();
-    const nextIndex = clamp(
-      (ttsIndex ?? readerScreenHandle.getLocation()?.ttsIndex ?? 0) + direction,
-      0,
-      paragraphCount - 1,
-    );
+    const currentIndex = ttsIndex ?? readerScreenHandle.getLocation()?.ttsIndex ?? 0;
+    const requestedNextIndex = plainServerSelected
+      ? plainTTS.jumpIndex(currentIndex, direction)
+      : currentIndex + direction;
+    // At the final prepared batch, clamping to its last paragraph would synthesize a new tail batch.
+    if (plainServerSelected && direction === 1 && requestedNextIndex >= paragraphCount) return;
+    const nextIndex = clamp(requestedNextIndex, 0, paragraphCount - 1);
     const status = await refreshTTSState();
     if (!status) return;
-    if (!status.canSpeak && !hostedTTSPlaybackReady) {
+    if (!status.canSpeak && !selectedTTSPlaybackReady) {
       showToast(status.message, 'warning');
       return;
     }

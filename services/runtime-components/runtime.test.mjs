@@ -1,3 +1,4 @@
+import { BROWSER_ENGINE } from '../../packages/browser-runtime/index.mjs';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter, once } from 'node:events';
@@ -29,10 +30,10 @@ test('browser control authenticates health and constrains protocol, path, engine
     assert.equal(manifest.protocolVersion, 1);
     assert.equal((await fetch(worker.endpoint + '/other', { headers: worker.headers })).status, 404);
     for (const input of [
-      { protocolVersion: 2, engine: 'camoufox' },
+      { protocolVersion: 2, engine: BROWSER_ENGINE },
       { protocolVersion: 1, engine: 'shell' },
-      { protocolVersion: 1, engine: 'camoufox', args: ['--proxy-server=unsafe'] },
-      { protocolVersion: 1, engine: 'camoufox', proxyBridge: { origins: ['file:///tmp/test'] } },
+      { protocolVersion: 1, engine: BROWSER_ENGINE, args: ['--proxy-server=unsafe'] },
+      { protocolVersion: 1, engine: BROWSER_ENGINE, proxyBridge: { origins: ['file:///tmp/test'] } },
     ])
       assert.equal(
         (
@@ -70,7 +71,7 @@ test('unclaimed browser leases expire and release their process and proxy', asyn
     const response = await fetch(worker.endpoint + '/v1/browsers', {
       method: 'POST',
       headers: worker.headers,
-      body: JSON.stringify({ protocolVersion: 1, engine: 'camoufox', proxyBridge: { origins: [] } }),
+      body: JSON.stringify({ protocolVersion: 1, engine: BROWSER_ENGINE, proxyBridge: { origins: [] } }),
     });
     assert.equal(response.status, 201);
     await new Promise((done) => setTimeout(done, 70));
@@ -94,7 +95,7 @@ test('cancelled browser launches cannot leave an orphan process', async () => {
       method: 'POST',
       headers: worker.headers,
       signal: controller.signal,
-      body: JSON.stringify({ protocolVersion: 1, engine: 'camoufox' }),
+      body: JSON.stringify({ protocolVersion: 1, engine: BROWSER_ENGINE }),
     });
     await new Promise((done) => setTimeout(done, 20));
     controller.abort();
@@ -145,7 +146,7 @@ test('one process slot includes cancelled launches and shutdown, with bounded ca
       method: 'POST',
       headers: worker.headers,
       signal,
-      body: JSON.stringify({ protocolVersion: 1, engine: 'camoufox' }),
+      body: JSON.stringify({ protocolVersion: 1, engine: BROWSER_ENGINE }),
     });
   const first = new AbortController(),
     second = new AbortController();
@@ -201,7 +202,7 @@ test('queued browser leases expire without launching another process', async () 
     fetch(worker.endpoint + '/v1/browsers', {
       method: 'POST',
       headers: worker.headers,
-      body: JSON.stringify({ protocolVersion: 1, engine: 'camoufox' }),
+      body: JSON.stringify({ protocolVersion: 1, engine: BROWSER_ENGINE }),
     });
   try {
     assert.equal((await request()).status, 201);

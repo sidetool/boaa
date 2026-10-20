@@ -25,7 +25,10 @@ it('does not launch for a cancelled request after an idle browser finishes closi
       }),
   } as unknown as Browser;
   const host = new SourceWebViewHost();
-  (host as unknown as { browsers: Map<string, Promise<Browser>> }).browsers.set('camoufox:0', Promise.resolve(browser));
+  (host as unknown as { browsers: Map<string, Promise<Browser>> }).browsers.set(
+    `${process.env.BOAA_BROWSER_ENGINE || (process.env.BOAA_CAMOUFOX_EXECUTABLE || process.env.BOAA_SOURCE_BROWSER_ENDPOINT ? 'camoufox' : 'patchright')}:0`,
+    Promise.resolve(browser),
+  );
   const launch = vi.spyOn(browserLaunch, 'launchSourceBrowser').mockRejectedValue(new Error('unexpected launch'));
   const retiring = host.close();
   await vi.waitFor(() => expect(finishClose).toBeTypeOf('function'));

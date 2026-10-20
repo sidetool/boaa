@@ -349,6 +349,10 @@ describe('UiNextListenPanel plain engine voices', () => {
     expect(hint).toContain('문단을 대략 따라가요');
     expect(hint).toContain('이어듣기는 묶음 첫 문단부터');
     expect(hint).toContain('쉬는 간격이 적용되지 않아요');
+    const size = root.findByProps({ label: '묶음 크기' });
+    expect(size.props.value).toBe(700);
+    act(() => size.props.onChange(1200));
+    expect(props.changePlaybackSettings).toHaveBeenLastCalledWith({ plainBatchCharacters: 1200 });
   });
   it('hides synthesis units for device voices', () => {
     const { root } = mount();

@@ -120,7 +120,7 @@ x-server-volumes: &id003
     read_only: true
 services:
   web:
-    image: ghcr.io/${BOAA_IMAGE_OWNER:-sidetool}/boaa-web:${BOAA_VERSION:-0.1.1-beta.3}
+    image: ghcr.io/${BOAA_IMAGE_OWNER:-sidetool}/boaa-web:${BOAA_VERSION:-0.1.1-beta.5}
     environment:
       BOAA_DROPBOX_APP_KEY: ${BOAA_DROPBOX_APP_KEY-${MOYA_DROPBOX_APP_KEY-${VITE_DROPBOX_APP_KEY:-}}}
       BOAA_DROPBOX_SOURCE_APP_KEY: ${BOAA_DROPBOX_SOURCE_APP_KEY-${MOYA_DROPBOX_SOURCE_APP_KEY-${VITE_DROPBOX_SOURCE_APP_KEY:-}}}
@@ -128,7 +128,7 @@ services:
       BOAA_GOOGLE_DRIVE_APP_ID: ${BOAA_GOOGLE_DRIVE_APP_ID-${MOYA_GOOGLE_DRIVE_APP_ID-${VITE_GOOGLE_DRIVE_APP_ID:-}}}
       BOAA_GOOGLE_DRIVE_DEVELOPER_KEY: ${BOAA_GOOGLE_DRIVE_DEVELOPER_KEY-${MOYA_GOOGLE_DRIVE_DEVELOPER_KEY-${VITE_GOOGLE_DRIVE_DEVELOPER_KEY:-}}}
       BOAA_SUWAYOMI_DEFAULT_URL: ${BOAA_SUWAYOMI_DEFAULT_URL-${MOYA_SUWAYOMI_DEFAULT_URL-${VITE_SUWAYOMI_DEFAULT_URL:-}}}
-      BOAA_RELEASE_VERSION: ${BOAA_VERSION:-0.1.1-beta.3}
+      BOAA_RELEASE_VERSION: ${BOAA_VERSION:-0.1.1-beta.5}
     ports:
       - ${WEB_BIND_ADDRESS:-127.0.0.1}:8080:80
     depends_on:
@@ -149,7 +149,7 @@ services:
     mem_limit: ${WEB_MEMORY_LIMIT:-256m}
     logging: *id001
   api:
-    image: ghcr.io/${BOAA_IMAGE_OWNER:-sidetool}/boaa-server:${BOAA_VERSION:-0.1.1-beta.3}
+    image: ghcr.io/${BOAA_IMAGE_OWNER:-sidetool}/boaa-server:${BOAA_VERSION:-0.1.1-beta.5}
     command:
       - node
       - dist/index.js
@@ -275,13 +275,14 @@ services:
       CONTENT_PROVIDER_KEY: ${CONTENT_PROVIDER_KEY:-}
       CONTENT_PROVIDERS: ${CONTENT_PROVIDERS:-[]}
       SOURCE_OUTBOUND_PROXY: ${SOURCE_OUTBOUND_PROXY:-}
-      BOAA_RELEASE_VERSION: ${BOAA_VERSION:-0.1.1-beta.3}
+      BOAA_RELEASE_VERSION: ${BOAA_VERSION:-0.1.1-beta.5}
       BOAA_UPDATER_MAILBOX: /run/boaa-updater
       BOAA_APK_RUNTIME_MANAGED: '1'
       BOAA_APK_RUNTIME_ENABLED: ${BOAA_APK_RUNTIME_ENABLED:-0}
       BOAA_APK_RUNTIME_DIR: /opt/boaa-runtimes/apk/current/runtime
       BOAA_APK_JAVA: /opt/boaa-runtimes/apk/current/java/bin/java
       BOAA_SOURCE_BROWSER_ENDPOINT: ${BOAA_SOURCE_BROWSER_ENDPOINT:-}
+      BOAA_BROWSER_ENGINE: ${BOAA_BROWSER_ENGINE:-patchright}
       BOAA_SOURCE_BROWSER_PROXY_BIND: 0.0.0.0
       BOAA_SOURCE_BROWSER_PROXY_HOST: api
       BOAA_RUNTIME_TOKEN_FILE: /run/secrets/boaa-runtime-token
@@ -324,7 +325,7 @@ services:
     mem_limit: ${API_MEMORY_LIMIT:-2g}
     logging: *id001
   worker:
-    image: ghcr.io/${BOAA_IMAGE_OWNER:-sidetool}/boaa-server:${BOAA_VERSION:-0.1.1-beta.3}
+    image: ghcr.io/${BOAA_IMAGE_OWNER:-sidetool}/boaa-server:${BOAA_VERSION:-0.1.1-beta.5}
     command:
       - node
       - dist/worker.js
@@ -435,7 +436,7 @@ services:
       MAX_ARCHIVE_UPLOAD_BYTES: ${MAX_ARCHIVE_UPLOAD_BYTES:-4294967296}
       STALE_UPLOAD_MAX_AGE_MS: ${STALE_UPLOAD_MAX_AGE_MS:-604800000}
       RUN_MIGRATIONS_ON_START: 'false'
-      BOAA_RELEASE_VERSION: ${BOAA_VERSION:-0.1.1-beta.3}
+      BOAA_RELEASE_VERSION: ${BOAA_VERSION:-0.1.1-beta.5}
     volumes: *id003
     depends_on:
       api:
@@ -508,7 +509,7 @@ services:
     mem_limit: ${MINIO_MEMORY_LIMIT:-1g}
     logging: *id001
   runtime-bootstrap:
-    image: ghcr.io/${BOAA_IMAGE_OWNER:-sidetool}/boaa-updater:${BOAA_VERSION:-0.1.1-beta.3}
+    image: ghcr.io/${BOAA_IMAGE_OWNER:-sidetool}/boaa-updater:${BOAA_VERSION:-0.1.1-beta.5}
     command:
       - node
       - scripts/release/bootstrap.mjs
@@ -518,7 +519,7 @@ services:
     restart: 'no'
     network_mode: none
   updater:
-    image: ghcr.io/${BOAA_IMAGE_OWNER:-sidetool}/boaa-updater:${BOAA_VERSION:-0.1.1-beta.3}
+    image: ghcr.io/${BOAA_IMAGE_OWNER:-sidetool}/boaa-updater:${BOAA_VERSION:-0.1.1-beta.5}
     user: 0:1000
     init: true
     read_only: true
@@ -533,7 +534,7 @@ services:
       - scripts/release/updater.mjs
     environment:
       BOAA_MANAGED_RELEASE: '1'
-      BOAA_RELEASE_VERSION: ${BOAA_VERSION:-0.1.1-beta.3}
+      BOAA_RELEASE_VERSION: ${BOAA_VERSION:-0.1.1-beta.5}
       BOAA_RELEASE_REPOSITORY: ${BOAA_RELEASE_REPOSITORY:-sidetool/boaa}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
@@ -552,7 +553,7 @@ services:
   runtime-apk:
     profiles:
       - apk
-    image: ghcr.io/${BOAA_IMAGE_OWNER:-sidetool}/boaa-apk:${BOAA_VERSION:-0.1.1-beta.3}
+    image: ghcr.io/${BOAA_IMAGE_OWNER:-sidetool}/boaa-apk:${BOAA_VERSION:-0.1.1-beta.5}
     volumes:
       - apk-runtime:/opt/boaa-runtimes/apk
     restart: 'no'
@@ -568,9 +569,10 @@ services:
         max-file: '3'
     profiles:
       - browser
-    image: ghcr.io/${BOAA_IMAGE_OWNER:-sidetool}/boaa-browser:${BOAA_VERSION:-0.1.1-beta.3}
+    image: ghcr.io/${BOAA_IMAGE_OWNER:-sidetool}/boaa-browser:${BOAA_VERSION:-0.1.1-beta.5}
     environment:
       BOAA_RUNTIME_PORT: '8791'
+      BOAA_BROWSER_ENGINE: ${BOAA_BROWSER_ENGINE:-patchright}
       BOAA_RUNTIME_TOKEN_FILE: /run/secrets/boaa-runtime-token
     volumes:
       - runtime-secrets:/run/secrets:ro
@@ -585,9 +587,10 @@ services:
     logging: *id004
     profiles:
       - metadata
-    image: ghcr.io/${BOAA_IMAGE_OWNER:-sidetool}/boaa-metadata:${BOAA_VERSION:-0.1.1-beta.3}
+    image: ghcr.io/${BOAA_IMAGE_OWNER:-sidetool}/boaa-metadata:${BOAA_VERSION:-0.1.1-beta.5}
     environment:
       BOAA_RUNTIME_PORT: '8792'
+      BOAA_BROWSER_ENGINE: ${BOAA_BROWSER_ENGINE:-patchright}
       BOAA_RUNTIME_TOKEN_FILE: /run/secrets/boaa-runtime-token
       BOAA_METADATA_PROVIDER: /providers/provider.py
       BOAA_METADATA_DATA_DIR: /data

@@ -1,12 +1,11 @@
 /** useDiscoverySection({ section, source, session, query, refresh, positions }) manages a discovery rail.
  * Returns page/candidate/loading/error/unsupported/unavailable, title/eyebrow, input,
- * expanded/setExpanded/collapse, refreshSection (apply candidate or retry; undefined when unavailable),
+ * refreshSection (apply candidate or retry; undefined when unavailable),
  * ref (near-observed section), rail (scroll-restored rail), near and itemOpenArgs(item).
  * itemOpenArgs returns [sourceId, input, title] for the existing open callback.
  */
 import { useEffect, useRef, useState } from 'react';
 import { useNear } from './useDiscoveryCover';
-import { useNavigationViewState } from '../navigation/navigation-view-state';
 import type { ExternalItemPage, ExternalItemSummary, ExternalSourceListInput } from '../../external-sources/contracts';
 import type { ExternalSourceView } from '../external-sources/useExternalSourceController';
 import type { DiscoverySession } from './discovery-session';
@@ -30,11 +29,6 @@ export function useDiscoverySection({
   const ref = useRef<HTMLElement>(null);
   const rail = useRef<HTMLDivElement>(null);
   const near = useNear(ref);
-  const [expanded, setExpanded] = useNavigationViewState(`expanded:${session.scope}:${section.id}:${query}`, false);
-  const collapse = () => {
-    setExpanded(false);
-    requestAnimationFrame(() => ref.current?.scrollIntoView({ block: 'start' }));
-  };
   const input: ExternalSourceListInput = {
     parentRef: section.parentRef,
     browseMode: query ? 'search' : section.mode,
@@ -62,7 +56,7 @@ export function useDiscoverySection({
   const latest = useRef({ input, page });
   latest.current = { input, page };
   useEffect(() => {
-    if (expanded || !near || unsupported || source?.connection.state !== 'connected') return;
+    if (!near || unsupported || source?.connection.state !== 'connected') return;
     let active = true;
     const force = previous.current.refresh !== refresh || previous.current.retry !== retry;
     previous.current = { refresh, retry };
@@ -118,7 +112,6 @@ export function useDiscoverySection({
     };
   }, [
     near,
-    expanded,
     unsupported,
     session,
     section.sourceId,
@@ -172,9 +165,6 @@ export function useDiscoverySection({
     unavailable,
     title,
     eyebrow,
-    expanded,
-    setExpanded,
-    collapse,
     refreshSection,
     itemOpenArgs,
   };

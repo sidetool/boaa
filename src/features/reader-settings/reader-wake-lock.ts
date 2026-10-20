@@ -4,7 +4,7 @@ export interface ReaderWakeLockSentinel {
   addEventListener(type: 'release', listener: () => void, options?: { once: boolean }): void;
 }
 
-/** User intent belongs to the reader, not the transient settings panel. */
+/** Persist user intent independently of the browser's temporary screen lock. */
 export class ReaderWakeLock {
   private requested = false;
   private active = false;
@@ -16,7 +16,14 @@ export class ReaderWakeLock {
   constructor(
     private readonly request: () => Promise<ReaderWakeLockSentinel>,
     private readonly visible: () => boolean,
-  ) {}
+    private readonly preference?: { read(): boolean; write(enabled: boolean): void },
+  ) {
+    try {
+      this.requested = preference?.read() === true;
+    } catch {
+      // Storage may be unavailable; the control still works for this session.
+    }
+  }
 
   readonly snapshot = () => this.requested;
   readonly subscribe = (listener: () => void) => {
@@ -28,6 +35,11 @@ export class ReaderWakeLock {
 
   async toggle(): Promise<void> {
     this.requested = !this.requested;
+    try {
+      this.preference?.write(this.requested);
+    } catch {
+      // A storage failure must not prevent changing the live screen lock.
+    }
     this.emit();
     if (!this.requested) this.release();
     else await this.reacquire();

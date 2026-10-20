@@ -54,6 +54,9 @@ export async function install({
     if (['api', 'worker', 'web', 'updater'].includes(service))
       services[service].environment = { BOAA_RELEASE_VERSION: manifest.version };
   }
+  const engine = manifest.images.browser.engine ?? 'patchright';
+  for (const service of ['api', 'runtime-browser', 'runtime-metadata'])
+    (services[service].environment ??= {}).BOAA_BROWSER_ENGINE = engine;
   services.updater.environment.BOAA_RELEASE_REPOSITORY = repository;
   services.updater.environment.BOAA_RELEASE_SCHEMA_EPOCH = String(manifest.schemaEpoch);
   const override = path.join(state, 'bootstrap.json');

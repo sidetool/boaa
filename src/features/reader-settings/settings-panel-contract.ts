@@ -1,4 +1,5 @@
 import {
+  Languages,
   Hand,
   Info,
   HardDrive,
@@ -36,6 +37,7 @@ export type SettingsTab =
   | 'downloads'
   | 'sync'
   | 'remote-access'
+  | 'translation'
   | 'server'
   | 'application';
 
@@ -83,6 +85,7 @@ export const SETTINGS_SECTIONS: readonly SettingsSection[] = [
     detail: '부가 기능, 권한',
     icon: Puzzle,
   },
+  { id: 'translation', label: '작품 번역', detail: '번역 엔진, 언어, 미리 번역', icon: Languages },
   { id: 'storage', label: '저장공간', detail: '사용량, 백업, 다운로드', icon: HardDrive },
   {
     id: 'sync',

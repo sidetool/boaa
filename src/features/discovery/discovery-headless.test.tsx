@@ -66,6 +66,25 @@ it('exposes search, quick navigation, refresh and pin failure commands without s
   expect(state.query).toBe('query');
   expect(state.rows.map((row) => row.id)).toEqual(['search:example.source']);
   expect(state.owned(item('owned'))).toBe(true);
+  const filtered = {
+    ...section,
+    mode: 'latest' as const,
+    filters: [{ position: 0, value: 1 }],
+    filterSignature: 'schema',
+  };
+  act(() => state.openSection(filtered));
+  expect(state.dedicated).toMatchObject({
+    ...filtered,
+    id: expect.stringContaining('source-destination:'),
+    query: 'query',
+  });
+  expect(state.quickSource).toBe('example.source');
+  expect(state.query).toBe('query');
+  act(() => state.setQuickSource(undefined));
+  expect(state.dedicated).toBeUndefined();
+  expect(state.selected).toBe('tab');
+  expect(state.query).toBe('query');
+
   await act(async () => {
     await state.openQuick('example.source', {});
   });

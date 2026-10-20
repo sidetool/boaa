@@ -4,7 +4,7 @@ import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { authorized, jsonResponse, readJson, runtimeManifest, runtimeToken } from './common.mjs';
 
-import { camoufoxLaunchOptions, BROWSER_ENGINE, BROWSER_DRIVER_VERSION } from '@boaa/browser-runtime';
+import { browserLaunchOptions, browserLauncher, BROWSER_ENGINE, browserDriverVersion } from '@boaa/browser-runtime';
 const ENGINES = new Set([BROWSER_ENGINE]);
 
 export async function createBrowserWorker({
@@ -12,9 +12,9 @@ export async function createBrowserWorker({
   openProxy = async (scope, signal) =>
     (await import('./source-browser-proxy.js')).openSourceBrowserProxy(scope, signal),
   launch = async () => {
-    const { firefox } = await import('playwright-core');
-    return firefox.launchServer({
-      ...(await camoufoxLaunchOptions()),
+    const launcher = await browserLauncher();
+    return launcher.launchServer({
+      ...(await browserLaunchOptions()),
       host: '127.0.0.1',
       port: 0,
       timeout: 30000,
@@ -29,7 +29,10 @@ export async function createBrowserWorker({
 } = {}) {
   token ??= await runtimeToken();
   const sessions = new Map();
-  const manifest = { ...runtimeManifest('browser'), engines: { [BROWSER_ENGINE]: BROWSER_DRIVER_VERSION } };
+  const manifest = {
+    ...runtimeManifest('browser'),
+    engines: { [BROWSER_ENGINE]: browserDriverVersion(BROWSER_ENGINE) },
+  };
   let closing = false;
   let active = 0;
   const waiting = [];

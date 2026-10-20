@@ -1,4 +1,9 @@
 import {
+  normalizePlainTTSBatchCharacters,
+  MIN_PLAIN_TTS_BATCH_CHARACTERS,
+  MAX_PLAIN_TTS_BATCH_CHARACTERS,
+} from '../../providers/plain-tts-limits';
+import {
   AlertCircle,
   ChevronLeft,
   ChevronRight,
@@ -70,13 +75,13 @@ const SKIP_KIND_LABEL: Record<SkipKind, string> = {
   skip_line: '문장 전체 일치',
 };
 
-// 'batch' joins short paragraphs of one chapter (≤700자, ≤16문단) so rate-limited engines get fewer requests.
+// Batch size is shared with server reconstruction and saved with other listening settings.
 type PlainChunking = NonNullable<TTSPlaybackSettings['plainChunking']>;
 const CHUNKING_HINT: Record<PlainChunking, string> = {
   sentence: '첫 소리가 빠르고 문장마다 따라 표시돼요. 재생 중 자주 끊기면 문단이나 묶음을 써 보세요.',
   paragraph: '요청이 줄어 끊김이 덜할 수 있어요. 첫 소리가 늦고 문단 단위로 표시돼요. 700자가 넘는 문단은 나눠 읽어요.',
   batch:
-    '짧은 문단을 700자까지 한 번에 합성해 요청이 가장 적어요. 첫 소리가 더 늦고, 화면은 재생 진행에 맞춰 문단을 대략 따라가요. 이어듣기는 묶음 첫 문단부터이고, 묶음 안에서는 문장·문단 쉬는 간격이 적용되지 않아요.',
+    '짧은 문단을 설정한 글자 수까지, 최대 16문단씩 합성해 요청을 줄여요. 첫 소리가 더 늦고, 화면은 재생 진행에 맞춰 문단을 대략 따라가요. 이어듣기는 묶음 첫 문단부터이며 이전·다음은 준비된 묶음 단위로 이동해요. 묶음 안에서는 문장·문단 쉬는 간격이 적용되지 않아요.',
 };
 
 const clampSpeed = (value: number) => Math.round(Math.min(1.8, Math.max(0.6, value)) * 10) / 10;
@@ -674,6 +679,17 @@ function ListenDetails(props: TTSAddonPanelProps & { serverPlain: boolean }) {
             />
             <small className="un-listen-hint">{CHUNKING_HINT[plainChunking]}</small>
           </div>
+        )}
+        {props.serverPlain && plainChunking === 'batch' && (
+          <SettingsSlider
+            label="묶음 크기"
+            min={MIN_PLAIN_TTS_BATCH_CHARACTERS}
+            max={MAX_PLAIN_TTS_BATCH_CHARACTERS}
+            step={100}
+            suffix="자"
+            value={normalizePlainTTSBatchCharacters(settings.plainBatchCharacters)}
+            onChange={(plainBatchCharacters) => props.changePlaybackSettings({ plainBatchCharacters })}
+          />
         )}
         <div className="un-listen-row is-stacked">
           <span className="un-listen-label">EPUB 각주</span>

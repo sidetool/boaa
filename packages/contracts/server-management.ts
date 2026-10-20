@@ -1,5 +1,6 @@
 /** Public status only. Deployment paths, credentials and raw helper logs never cross this boundary. */
 export type ReleaseChannel = 'stable' | 'beta';
+export type BrowserEngine = 'patchright' | 'camoufox';
 export type OptionalComponentId = 'apk' | 'browser' | 'metadata';
 export type ManagementPhase =
   | 'idle'
@@ -23,6 +24,9 @@ export interface ServerRelease {
 
 export interface ServerComponent {
   id: OptionalComponentId;
+  engine?: BrowserEngine;
+  installedEngines?: BrowserEngine[];
+  browserChoices?: { engine: BrowserEngine; supported: boolean; downloadBytes?: number; version?: string }[];
   installed: boolean;
   enabled: boolean;
   running: boolean;
@@ -38,6 +42,7 @@ export interface ServerManagementOperationResult {
   id: string;
   action: 'check' | 'update' | 'channel' | 'component';
   componentId?: OptionalComponentId;
+  engine?: BrowserEngine;
   enabled?: boolean;
   startedAt: string;
   completedAt: string;
@@ -59,6 +64,7 @@ export interface ServerManagementStatus {
     id: string;
     action: 'check' | 'update' | 'channel' | 'component';
     componentId?: OptionalComponentId;
+    engine?: BrowserEngine;
     enabled?: boolean;
     startedAt: string;
     completedAt?: string;
@@ -71,5 +77,6 @@ export interface ServerManagementRequest {
   action: 'check' | 'update' | 'channel' | 'component';
   channel?: ReleaseChannel;
   componentId?: OptionalComponentId;
+  engine?: BrowserEngine;
   enabled?: boolean;
 }

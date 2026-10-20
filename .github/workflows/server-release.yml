@@ -69,7 +69,7 @@ jobs:
           if changed-allowed: raise SystemExit('application_changed_rebuild_required: '+str(sorted(changed-allowed)))
           jobs=api(f'repos/{repo}/actions/runs/{run}/jobs?per_page=100')['jobs']
           passed={j['name'] for j in jobs if j['conclusion']=='success'}
-          expected={'validate'}|{f'build ({c}, {a})' for c in ['server','web','updater','apk','browser','metadata'] for a in ['amd64','arm64']}
+          expected={'validate'}|{f'build ({c}, {a})' for c in ['server','web','updater','apk','browser','browser-camoufox','metadata'] for a in ['amd64','arm64']}
           if not expected<=passed: raise SystemExit('native_matrix_incomplete')
           with open(os.environ['GITHUB_OUTPUT'],'a') as out: out.write('commit='+commit+'\n')
           print('Reusing verified application commit',commit,'with fixture commit',os.environ['GITHUB_SHA'])
@@ -113,6 +113,11 @@ jobs:
           src/features/tts src/providers src/ui-next/reader src/features/providers
           packages/text-core/spoken-text-filter.test.ts
           apps/server/src/providers apps/server/src/routes/ai/plain-tts-routes.test.ts
+          apps/server/src/translation apps/server/test/translation.integration.test.ts
+          src/translation src/ui-next/settings/pages/TranslationPage.test.tsx
+          src/ui-next/discovery/DiscoveryPagination.test.tsx
+          apps/server/src/extensions/source-browser-cookies.test.ts
+          apps/server/src/extensions/source-browser-sdk-transport.test.ts
           --maxWorkers=2
       - name: Real account invitation and two-tab browser acceptance
         run: |
@@ -173,7 +178,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        component: [server, web, apk, browser, metadata, updater]
+        component: [server, web, apk, browser, browser-camoufox, metadata, updater]
         architecture: [amd64, arm64]
     runs-on: ${{ matrix.architecture == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
     timeout-minutes: 90
@@ -189,7 +194,7 @@ jobs:
         run: |
           set -euo pipefail
           recipe="deploy/$COMPONENT.Dockerfile"
-          case "$COMPONENT" in apk|browser|metadata) recipe="deploy/runtime-$COMPONENT.Dockerfile" ;; esac
+          case "$COMPONENT" in apk|browser|browser-camoufox|metadata) recipe="deploy/runtime-$COMPONENT.Dockerfile" ;; esac
           docker buildx create --use
           docker buildx build --load --platform "linux/$ARCHITECTURE" -f "$recipe" \
             --build-arg "BOAA_COMPONENT_VERSION=${RELEASE_VERSION#v}" \
@@ -294,7 +299,7 @@ jobs:
           set -euo pipefail
           printf '%s' "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
           owner=$(printf '%s' "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')
-          for component in server web apk browser metadata updater; do
+          for component in server web apk browser browser-camoufox metadata updater; do
             digest=$(jq -r '."containerimage.digest"' "evidence/$component-$ARCHITECTURE.json")
             docker pull "ghcr.io/$owner/boaa-$component@$digest"
             docker tag "ghcr.io/$owner/boaa-$component@$digest" "boaa-$component:final"
@@ -360,7 +365,7 @@ jobs:
           printf '%s' "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
           gh release download "$RELEASE_VERSION" --dir release --skip-existing
           mkdir image-metadata
-          cp release/{server,web,updater,apk,browser,metadata}-{amd64,arm64}.json image-metadata/
+          cp release/{server,web,updater,apk,browser,browser-camoufox,metadata}-{amd64,arm64}.json image-metadata/
           export BOAA_IMAGE_TAG="candidate-$(git rev-parse HEAD)"
           node scripts/release/collect-images.mjs
           node scripts/release/bundle.mjs

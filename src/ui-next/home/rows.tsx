@@ -1,3 +1,4 @@
+import { useTranslatedTitle } from '../../features/translation/use-translated-title';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { cx } from '../components/primitives';
@@ -44,6 +45,7 @@ export function DiscoveryCard({
 }) {
   const ref = useRef<HTMLButtonElement>(null);
   const near = useNearOnce(ref);
+  const title = useTranslatedTitle(work.title, near && work.translateTitle !== false);
   const [cover, setCover] = useState(work.thumbnailUrl);
   useEffect(() => {
     if (!near || !work.loadCover) return;
@@ -61,7 +63,7 @@ export function DiscoveryCard({
       ref={ref}
       type="button"
       className={cx('un-poster', ranked && 'has-rank')}
-      aria-label={`${work.title} 상세 보기`}
+      aria-label={`${title} 상세 보기`}
       onClick={() => void work.open()}
     >
       {ranked && (
@@ -70,7 +72,7 @@ export function DiscoveryCard({
         </span>
       )}
       <span className="un-tile-art">
-        <RemoteCover title={work.title} author={work.author} url={near ? cover : undefined} />
+        <RemoteCover title={title} author={work.author} url={near ? cover : undefined} />
         {work.owned ? (
           <span className="un-tile-flag is-owned">보관 중</span>
         ) : (
@@ -78,7 +80,9 @@ export function DiscoveryCard({
         )}
       </span>
       <span className="un-tile-meta">
-        <span className="un-tile-title">{work.title}</span>
+        <span className="un-tile-title" title={title !== work.title ? work.title : undefined}>
+          {title}
+        </span>
         {(work.subline ?? work.author) && <span className="un-tile-sub">{work.subline ?? work.author}</span>}
       </span>
     </button>

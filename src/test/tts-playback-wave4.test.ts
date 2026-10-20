@@ -162,3 +162,32 @@ describe('W4 TTS playback contracts', () => {
     expect(handlers.get('play')).toBeNull();
   });
 });
+
+it('persists batch size globally and per book and invalidates the resume identity on change', () => {
+  expect(resolveTTSPlaybackSettings(defaultSettings).plainBatchCharacters).toBe(700);
+  const global = updateGlobalTTSPlaybackSettings(defaultSettings, {
+    plainChunking: 'batch',
+    plainBatchCharacters: 1200,
+  });
+  const stored = JSON.parse(
+    JSON.stringify(updateBookTTSPlaybackOverride(global, 'book', { plainBatchCharacters: 300 })),
+  );
+  expect(resolveTTSPlaybackSettings(stored, 'book').plainBatchCharacters).toBe(300);
+  expect(resolveTTSPlaybackSettings(stored, 'another').plainBatchCharacters).toBe(1200);
+  const fingerprint = (settings: typeof global.ttsPlayback) =>
+    ttsPlaybackSettingsFingerprint({ settings, voiceRevision: 'v' });
+  expect(fingerprint(resolveTTSPlaybackSettings(stored, 'book'))).not.toBe(
+    fingerprint(resolveTTSPlaybackSettings(global)),
+  );
+});
+
+it('keeps ordinary server audio resume identity across live speed and timer changes', () => {
+  const settings = { ...defaultSettings.ttsPlayback, mode: 'plain' as const, voiceSource: 'server' as const };
+  const fingerprint = ttsPlaybackSettingsFingerprint({ settings, voiceRevision: 'v' });
+  expect(
+    ttsPlaybackSettingsFingerprint({ settings: { ...settings, rate: 1.8, sleepTimerDefault: 30 }, voiceRevision: 'v' }),
+  ).toBe(fingerprint);
+  expect(
+    ttsPlaybackSettingsFingerprint({ settings: { ...settings, serverVoiceId: 'other' }, voiceRevision: 'v' }),
+  ).not.toBe(fingerprint);
+});

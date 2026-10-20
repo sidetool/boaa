@@ -4,3 +4,4 @@ fastapi==0.119.1
 beautifulsoup4==4.14.2
 lxml==6.0.2
 playwright==1.62.0
+patchright==1.61.1

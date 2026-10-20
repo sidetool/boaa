@@ -1,4 +1,4 @@
-"""Fail-closed artifact gate for the six hosted images; desktop/mobile gate is unchanged."""
+"""Fail-closed artifact gate for the seven hosted images; desktop/mobile gate is unchanged."""
 import argparse
 import hashlib
 import json
@@ -7,7 +7,7 @@ import re
 import subprocess
 import tarfile
 
-COMPONENTS = ('server', 'web', 'updater', 'apk', 'browser', 'metadata')
+COMPONENTS = ('server', 'web', 'updater', 'apk', 'browser', 'browser-camoufox', 'metadata')
 ARCHITECTURES = ('amd64', 'arm64')
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -33,7 +33,7 @@ def verify(prefix, directory, commit):
         raise ValueError('embedded_sources_hash_mismatch')
     if component == 'apk' and not any(p.startswith('payload/runtime/source/') for p in evidence['embeddedSources']):
         raise ValueError('modified_mpl_sources_missing')
-    if component == 'browser' and not {
+    if component == 'browser-camoufox' and not {
         'opt/camoufox/boaa-source/NetworkObserver.js',
         'opt/camoufox/boaa-source/LICENSE',
         'licenses/camoufox/harden-browser.py',
@@ -156,7 +156,7 @@ def main():
         'sourceInstructions': 'third_party/server-sources.md in boaa-server-sources.tar.gz and /licenses in images (web: /licenses/)',
         'decisions': 'Every final Syft component has a retained notice mapping and license evidence; all Debian binary versions have corresponding source packages. Additional compiled libraries are mapped by pinned source and supplemental evidence inventories.',
     }, indent=2) + '\n')
-    print('Verified twelve final images and wrote server-evidence.json')
+    print('Verified fourteen final images and wrote server-evidence.json')
 
 
 if __name__ == '__main__':

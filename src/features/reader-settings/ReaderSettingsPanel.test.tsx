@@ -1,3 +1,6 @@
+import { RuntimeProvider } from '../../app/runtime/RuntimeProvider';
+import type { AppRuntime } from '../../app/runtime/app-runtime';
+import { RemoteApiClient } from '../../services/remote/remote-api-client';
 import type { ReactNode } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
@@ -67,6 +70,37 @@ describe('ReaderSettingsPanel', () => {
     expect(markup).not.toContain('aria-label="테마 적용 대상"');
     expect(markup).not.toContain('aria-label="본문 글꼴"');
     expect(markup).not.toContain('이 책에만 적용');
+  });
+
+  it('exposes translation in the hosted content navigation even before enabling translation', () => {
+    const runtime = {
+      platformRuntime: { kind: 'browser' },
+      readerRuntime: { mode: 'remote', remoteApiClient: new RemoteApiClient('/api') },
+    } as unknown as AppRuntime;
+    const markup = renderToStaticMarkup(
+      <RuntimeProvider runtime={runtime}>
+        <ReaderSettingsPanel
+          controller={controller()}
+          profile={DEFAULT_READING_PROFILE}
+          bookOverrideEnabled={false}
+          contrastWarning={false}
+          gestureBindings={DEFAULT_GESTURE_BINDINGS}
+          platformRuntime={{ kind: 'browser', hasTauri: false, isMobileWebView: false, userAgent: 'Test browser' }}
+          providerExecutionRuntime="server"
+          extensions={[]}
+          externalSources={externalSources}
+          openSync={vi.fn()}
+          openBackup={vi.fn()}
+          updateProfile={vi.fn()}
+          setBookOverrideEnabled={vi.fn()}
+          resetProfile={vi.fn()}
+          updateGestureBindings={vi.fn()}
+          setExtensionEnabled={vi.fn()}
+        />
+      </RuntimeProvider>,
+    );
+    expect(markup).toMatch(/aria-label="콘텐츠"[\s\S]*?id="un-settings-tab-translation"/);
+    expect(markup).toContain('작품 번역');
   });
 
   it('announces the actual draft save state and keeps book controls out of the app theme scope', () => {

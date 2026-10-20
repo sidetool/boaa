@@ -1,4 +1,4 @@
-"""Opt-in isolated Camoufox check; no real accounts or external requests."""
+"""Opt-in isolated selected-engine check; no real accounts or external requests."""
 import asyncio
 import os
 
@@ -7,7 +7,7 @@ import pytest
 from app.auth_session import AuthSessionManager
 
 
-@pytest.mark.skipif(os.environ.get("BOAA_TEST_AUTH_BROWSER") != "1", reason="opt-in local Camoufox")
+@pytest.mark.skipif(os.environ.get("BOAA_TEST_AUTH_BROWSER") != "1", reason="opt-in installed browser")
 def test_real_browser_input_popup_and_restart(tmp_path):
     async def run():
         manager = AuthSessionManager(tmp_path)

@@ -1,4 +1,8 @@
-import { discoverySourceDestinationKey, type DiscoverySourceDestination } from './source-view-navigation';
+import {
+  discoverySourceDestinationKey,
+  rememberDiscoverySourceDestination,
+  type DiscoverySourceDestination,
+} from './source-view-navigation';
 /** useDiscoveryScreenState({ library, discovery, sources, open }) owns discovery screen state/commands.
  * Returns config/scope/session, tabs/selected/setSelected/tab/selectTab, quickSource/setQuickSource,
  * viewMode/setViewMode, draftQuery/setDraftQuery/query/setQuery/submitSearch/resetSearch,
@@ -16,7 +20,7 @@ import type { LibraryScreenProps } from '../library/library-screen-contract';
 import type { ExternalSourceController, ExternalSourceView } from '../external-sources/useExternalSourceController';
 import type { ExternalSourceListInput, ExternalItemSummary } from '../../external-sources/contracts';
 import type { DiscoveryController } from './useDiscoveryController';
-import { pinnedSource, togglePinnedSource } from './discovery-config';
+import { pinnedSource, togglePinnedSource, type DiscoverySection } from './discovery-config';
 export interface DiscoveryScreenProps {
   library: LibraryScreenProps;
   discovery: DiscoveryController;
@@ -87,6 +91,10 @@ export function useDiscoveryScreenState({ discovery, sources, open }: DiscoveryS
       setQuickSource(undefined);
     } else setQuickSource(sourceId);
   };
+  const openSection = (section: DiscoverySection) => {
+    setQuickSection(rememberDiscoverySourceDestination(scope, section, query || undefined));
+    setQuickSource(section.sourceId);
+  };
   const owned = (item: ExternalItemSummary) =>
     sources.libraryWorks.some(
       (work) =>
@@ -154,6 +162,7 @@ export function useDiscoveryScreenState({ discovery, sources, open }: DiscoveryS
     positions,
     dedicated,
     openQuick,
+    openSection,
     owned,
     sectionSources,
     rows,

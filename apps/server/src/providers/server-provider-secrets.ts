@@ -403,7 +403,7 @@ function normalizeMasterKey(value: string): Buffer {
   return crypto.createHash('sha256').update(trimmed).digest();
 }
 
-function encryptProviderSecret(
+export function encryptProviderSecret(
   key: Buffer,
   value: string,
   aad: string,
@@ -419,7 +419,11 @@ function encryptProviderSecret(
   };
 }
 
-function decryptProviderSecret(key: Buffer, row: ProviderSecretRow, aad: string): string {
+export function decryptProviderSecret(
+  key: Buffer,
+  row: Pick<ProviderSecretRow, 'key_version' | 'iv' | 'auth_tag' | 'ciphertext'>,
+  aad: string,
+): string {
   if (row.key_version !== keyVersion) throw new Error(`Unsupported provider secret key version: ${row.key_version}`);
   const decipher = crypto.createDecipheriv('aes-256-gcm', key, Buffer.from(row.iv, 'base64'));
   decipher.setAAD(Buffer.from(aad));

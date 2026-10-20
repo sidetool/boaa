@@ -1,12 +1,12 @@
 import type { Browser } from 'playwright-core';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { launchSourceBrowser } from './source-browser-launch.js';
-import { camoufoxLaunchOptions } from '@boaa/browser-runtime';
+import { browserLaunchOptions } from '@boaa/browser-runtime';
 
 vi.mock('@boaa/browser-runtime', () => ({
-  BROWSER_ENGINE: 'camoufox',
-  BROWSER_DRIVER_VERSION: '1.62.0',
-  camoufoxLaunchOptions: vi.fn(),
+  browserEngine: () => 'camoufox',
+  browserDriverVersion: () => '1.62.0',
+  browserLaunchOptions: vi.fn(),
 }));
 afterEach(() => {
   vi.unstubAllEnvs();
@@ -18,7 +18,7 @@ describe('Camoufox source browser', () => {
     vi.stubEnv('BOAA_SOURCE_BROWSER_ENDPOINT', '');
     vi.stubEnv('BOAA_SOURCE_BROWSER_EXECUTABLE', '/legacy/chromium');
     const options = { executablePath: '/camoufox', headless: true, env: { CAMOU_CONFIG_1: '{}' } };
-    vi.mocked(camoufoxLaunchOptions).mockResolvedValue(options);
+    vi.mocked(browserLaunchOptions).mockResolvedValue(options);
     const browser = {} as Browser;
     const launch = vi.fn().mockResolvedValue(browser);
     expect(await launchSourceBrowser({ launch }, [], 'win32')).toBe(browser);
@@ -27,7 +27,7 @@ describe('Camoufox source browser', () => {
 
   it('fails closed without selecting another engine when Camoufox is unavailable', async () => {
     vi.stubEnv('BOAA_SOURCE_BROWSER_ENDPOINT', '');
-    vi.mocked(camoufoxLaunchOptions).mockRejectedValue(new Error('source_browser_unavailable'));
+    vi.mocked(browserLaunchOptions).mockRejectedValue(new Error('source_browser_unavailable'));
     const launch = vi.fn();
     await expect(launchSourceBrowser({ launch })).rejects.toThrow('source_browser_unavailable');
     expect(launch).not.toHaveBeenCalled();

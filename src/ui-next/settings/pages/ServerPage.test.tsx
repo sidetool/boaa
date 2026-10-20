@@ -147,7 +147,7 @@ it('labels optional runtimes by state with download size and preserved data', as
   const page = text(root);
   expect(page).toContain('APK 확장 실행기설치 안 됨');
   expect(page).toContain('받을 용량 180MB');
-  expect(page).toContain('브라우저 실행 환경사용 중');
+  expect(page).toContain('브라우저 인증사용 중');
   expect(page).toContain('지금 실행 중');
   expect(page).toContain('작품 정보 수집기중지됨');
   expect(page).toContain('로그인 정보, 서재는 그대로 남아요');
@@ -635,4 +635,36 @@ it('reaches the result when every status GET takes longer than the poll interval
     });
   expect(text(root)).toContain('APK 확장 실행기사용 중');
   expect(text(root)).not.toContain('요청 보냄');
+});
+
+it('offers separate browser downloads and switches without marking both engines active', async () => {
+  const client = fakeClient(
+    status({
+      components: [
+        component({
+          id: 'browser',
+          engine: 'camoufox',
+          installed: true,
+          enabled: true,
+          running: true,
+          installedEngines: ['camoufox'],
+          browserChoices: [
+            { engine: 'patchright', supported: true, downloadBytes: 100 * 1024 ** 2 },
+            { engine: 'camoufox', supported: true, downloadBytes: 400 * 1024 ** 2 },
+          ],
+        }),
+      ],
+    }),
+  );
+  const root = await mount(client);
+  expect(text(root)).toContain('브라우저 인증설치 안 됨');
+  expect(text(root)).toContain('Camoufox (실험)사용 중');
+  await click(button(root, '설치'));
+  await click(button(root, '확인:설치'));
+  expect(client.request).toHaveBeenLastCalledWith({
+    action: 'component',
+    componentId: 'browser',
+    engine: 'patchright',
+    enabled: true,
+  });
 });

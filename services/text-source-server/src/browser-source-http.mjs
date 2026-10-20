@@ -1,10 +1,13 @@
-import { firefox } from 'playwright-core';
-import { camoufoxLaunchOptions } from '../../../packages/browser-runtime/index.mjs';
+import {
+  browserLaunchOptions,
+  browserEngine,
+  evaluateBrowserScript,
+} from '../../../packages/browser-runtime/index.mjs';
 import { SourceError } from './catalog.mjs';
 
 const MAX_BYTES = 1024 * 1024;
-// Legacy names are accepted only for configuration migration; every launch uses Camoufox.
-const CHANNELS = new Set(['camoufox', 'chromium', 'chrome', 'msedge']);
+// Older channel names are accepted; the installed engine is selected by the operator.
+const CHANNELS = new Set(['patchright', 'camoufox', 'chromium', 'chrome', 'msedge']);
 
 function abortable(operation, signal) {
   let cancel;
@@ -120,12 +123,16 @@ export function createBrowserSourceHttp({ channel, timeoutMs = 15_000 } = {}) {
       const launching = retiring
         .then(() => {
           shutdown.signal.throwIfAborted();
-          return camoufoxLaunchOptions();
+          return browserLaunchOptions();
         })
-        .then((options) => {
+        .then(async (options) => {
           shutdown.signal.throwIfAborted();
           if (browserPromise !== launching) throw new Error('cancelled');
-          return firefox.launch({ ...options, timeout: 15_000 });
+          const launcher =
+            browserEngine() === 'patchright'
+              ? (await import('patchright-core')).chromium
+              : (await import('playwright-core')).firefox;
+          return launcher.launch({ ...options, timeout: 15_000 });
         })
         .then(async (instance) => {
           if (shutdown.signal.aborted) {
@@ -284,7 +291,7 @@ export function createBrowserSourceHttp({ channel, timeoutMs = 15_000 } = {}) {
         idleMs: Math.min(timeoutMs, 10000),
       };
       const result = await abortable(
-        page.evaluate('mw:(' + readResponse.toString() + ')(' + JSON.stringify(parameters) + ')'),
+        evaluateBrowserScript(page, '(' + readResponse.toString() + ')(' + JSON.stringify(parameters) + ')'),
         signal,
       );
       if (result.error) throw new SourceError(result.error === 'source_timeout' ? 504 : 502, result.error);

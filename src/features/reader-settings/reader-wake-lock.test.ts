@@ -13,6 +13,50 @@ function sentinel() {
   return lock;
 }
 describe('reader-owned wake lock', () => {
+  it('restores device intent after reload and saves disabling without clearing it on exit', async () => {
+    let saved = false;
+    const preference = {
+      read: () => saved,
+      write: (value: boolean) => {
+        saved = value;
+      },
+    };
+    const first = new ReaderWakeLock(
+      async () => sentinel(),
+      () => true,
+      preference,
+    );
+    await first.toggle();
+    first.dispose();
+    expect(saved).toBe(true);
+    const request = vi.fn(async () => sentinel());
+    const restored = new ReaderWakeLock(request, () => true, preference);
+    expect(restored.snapshot()).toBe(true);
+    expect(request).not.toHaveBeenCalled();
+    restored.setActive(true);
+    expect(request).toHaveBeenCalledOnce();
+    await restored.toggle();
+    expect(saved).toBe(false);
+    expect(new ReaderWakeLock(request, () => true, preference).snapshot()).toBe(false);
+  });
+
+  it('keeps working when device storage is blocked', async () => {
+    const request = vi.fn(async () => sentinel());
+    const owner = new ReaderWakeLock(request, () => true, {
+      read: () => {
+        throw Error('blocked');
+      },
+      write: () => {
+        throw Error('blocked');
+      },
+    });
+    owner.setActive(true);
+    await owner.toggle();
+    expect(request).toHaveBeenCalledOnce();
+    expect(owner.snapshot()).toBe(true);
+    owner.dispose();
+  });
+
   it('survives settings unsubscription and reacquires after background revocation', async () => {
     let visible = true;
     const locks: ReturnType<typeof sentinel>[] = [];

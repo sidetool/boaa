@@ -9,7 +9,7 @@ services:
   metadata-collector:
     build:
       context: .
-      dockerfile: deploy/metadata-collector-auth.Dockerfile
+      dockerfile: ${METADATA_AUTH_DOCKERFILE:-deploy/metadata-collector-auth.Dockerfile}
     environment:
       BOAA_COLLECTOR_REMOTE_AUTH: '1'
       BOAA_COLLECTOR_REMOTE_AUTH_HEADLESS: '0'

@@ -1,3 +1,4 @@
+import { PlainTTSSessionCache, waitForPlainTTSAudio } from '../../providers/plain-tts-session-cache';
 import { requestPlainTTSWithRetry } from '../../providers/plain-tts-retry';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Paragraph, SpokenTextRule, TTSPlaybackSettings } from '../../domain/types';
@@ -16,6 +17,7 @@ import type { useTTSExecutionController } from './useTTSExecutionController';
 
 export function usePlainTTS(input: {
   client?: RemoteApiClient;
+  owner?: object;
   enabled: boolean;
   settings: TTSPlaybackSettings;
   contentRevision?: string;
@@ -26,9 +28,19 @@ export function usePlainTTS(input: {
   voiceURI?: string;
   onError(message: string): void;
 }) {
+  // Own the resource by account/runtime/content identity, not by playback or speed.
+  const { audio: audioCache } = useMemo(
+    () => ({ client: input.client, owner: input.owner, audio: new PlainTTSSessionCache() }),
+    [input.client, input.owner],
+  );
+  useEffect(() => () => audioCache.clear(), [audioCache]);
   const [catalog, setCatalog] = useState<PlainTTSVoices>();
   const [previewBusy, setPreviewBusy] = useState(false);
   const previewAudio = useMemo(() => new BrowserAudioSession(), []);
+  useEffect(() => {
+    previewAudio.setPlaybackRate(input.settings.rate);
+    previewAudio.setVolume(input.settings.volume);
+  }, [previewAudio, input.settings.rate, input.settings.volume]);
   const previewAbort = useRef<AbortController>();
   const refreshGeneration = useRef(0);
   const refresh = useCallback(async () => {
@@ -80,6 +92,22 @@ export function usePlainTTS(input: {
   );
   const latestContent = useRef({ chapterId: input.chapterId, revision: input.contentRevision });
   latestContent.current = { chapterId: input.chapterId, revision: input.contentRevision };
+  const scopeFor = (revision = input.contentRevision) =>
+    structuredIntegrityHash({
+      voiceId,
+      modelRevision: catalog?.revision,
+      rules: input.rules,
+      chunking: input.settings.plainChunking ?? 'sentence',
+      batchCharacters: input.settings.plainBatchCharacters,
+      contentRevision: revision,
+    });
+  const reusableStart = (index: number) => audioCache.batch(scopeFor(), input.chapterId ?? '', index)?.[0] ?? index;
+  const jumpIndex = (index: number, direction: -1 | 1) => {
+    const positions = audioCache.batch(scopeFor(), input.chapterId ?? '', index);
+    if (!positions || positions.length < 2) return index + direction;
+    if (direction === 1) return positions[positions.length - 1] + 1;
+    return index > positions[0] ? positions[0] : reusableStart(index - 1);
+  };
   const requestFor = (playable: PlayableTtsSegment, paragraph: Paragraph): PlainTTSRequest => {
     if (!ready || !voiceId || !catalog?.revision || !playable.spokenTextFingerprint)
       throw new Error('서버 목소리를 선택하고 목록을 새로고침하세요.');
@@ -88,7 +116,7 @@ export function usePlainTTS(input: {
     return {
       voiceId,
       modelRevision: catalog.revision,
-      rate: playable.rate,
+      rate: 1,
       paragraphId: paragraph.id,
       paragraphHash: plainTTSParagraphHash(paragraph),
       contentRevision:
@@ -98,6 +126,7 @@ export function usePlainTTS(input: {
       chunkHash: playable.spokenTextFingerprint,
       chunking: input.settings.plainChunking ?? 'sentence',
       batch: playable.plainBatch,
+      batchCharacters: input.settings.plainChunking === 'batch' ? input.settings.plainBatchCharacters : undefined,
       rules: input.rules,
     };
   };
@@ -112,17 +141,24 @@ export function usePlainTTS(input: {
     try {
       const request = requestFor(playable, paragraph);
       const key = structuredIntegrityHash({ chapter: paragraph.chapterId, request });
-      const prefetched = input.controller.takePrefetched(key);
-      const blob =
-        prefetched?.blob ??
-        (await requestPlainTTSWithRetry(
-          () => input.client!.synthesizePlainTTS(paragraph.chapterId, request, operation.controller.signal),
-          {
-            signal: operation.controller.signal,
-            onWait: (seconds) =>
-              input.controller.setHostedStatus(operation, `음성 제공자 대기 중 · ${Math.ceil(seconds)}초 후 다시 시도`),
-          },
-        ));
+      const blob = await waitForPlainTTSAudio(
+        audioCache.getOrCreate({
+          key,
+          chapter: paragraph.chapterId,
+          scope: scopeFor(request.contentRevision),
+          positions: playable.plainBatchPositions?.map((p) => p.paragraphIndex) ?? [],
+          fetch: (signal) =>
+            requestPlainTTSWithRetry(() => input.client!.synthesizePlainTTS(paragraph.chapterId, request, signal), {
+              signal,
+              onWait: (seconds) =>
+                input.controller.setHostedStatus(
+                  operation,
+                  `음성 제공자 대기 중 · ${Math.ceil(seconds)}초 후 다시 시도`,
+                ),
+            }),
+        }),
+        operation.controller.signal,
+      );
       if (!input.controller.isSessionCurrent(sessionId)) return true;
       input.controller.setHostedStatus(operation, undefined);
       return await input.controller.playAudio(blob, sessionId, onProgress);
@@ -155,17 +191,20 @@ export function usePlainTTS(input: {
       return;
     }
     const key = structuredIntegrityHash({ chapter: paragraph.chapterId, request });
-    const abort = input.controller.beginPrefetch(sessionId, key);
-    if (!abort) return;
+    if (!input.controller.isSessionCurrent(sessionId)) return;
     try {
-      const blob = await input.client!.synthesizePlainTTS(paragraph.chapterId, request, abort.signal);
-      input.controller.rememberPrefetched(sessionId, key, { cacheKey: key, blob });
+      await audioCache.getOrCreate({
+        key,
+        chapter: paragraph.chapterId,
+        scope: scopeFor(request.contentRevision),
+        positions: playable.plainBatchPositions?.map((p) => p.paragraphIndex) ?? [],
+        fetch: (signal) => input.client!.synthesizePlainTTS(paragraph.chapterId, request, signal),
+      });
     } catch {
       /* Foreground playback reports failures; speculative requests stay silent. */
-    } finally {
-      input.controller.finishPrefetch(key, abort);
     }
   };
+
   const preview = async () => {
     stopPreview();
     input.controller.stopAll();
@@ -178,11 +217,12 @@ export function usePlainTTS(input: {
         if (!ready || !voiceId || !catalog?.revision) throw new Error('서버 목소리를 선택하세요.');
         const blob = await input.client!.synthesizePlainTTS(
           undefined,
-          { voiceId, modelRevision: catalog.revision, rate: input.settings.rate },
+          { voiceId, modelRevision: catalog.revision, rate: 1 },
           abort.signal,
         );
         if (!abort.signal.aborted) {
           previewAudio.setVolume(input.settings.volume);
+          previewAudio.setPlaybackRate(input.settings.rate);
           if (!(await previewAudio.playBlob(blob))) throw new Error('음성 미리듣기를 재생하지 못했습니다.');
         }
       } else {
@@ -224,5 +264,5 @@ export function usePlainTTS(input: {
       }
     }
   };
-  return { catalog, ready, refresh, play, prefetch, preview, previewBusy, stopPreview };
+  return { catalog, ready, refresh, play, prefetch, preview, previewBusy, stopPreview, reusableStart, jumpIndex };
 }

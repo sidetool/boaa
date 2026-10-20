@@ -104,7 +104,7 @@ export function GesturePage({
       </PrefSection>
 
       {(device.wakeLockAvailable || device.orientationAvailable) && (
-        <PrefSection title="화면" hint="지금 읽는 동안만 적용되고, 앱을 닫으면 풀려요.">
+        <PrefSection title="화면" hint="이 기기에 저장하고, 다음에 읽을 때도 적용해요.">
           <PrefGroup>
             {device.wakeLockAvailable && (
               <PrefSwitch

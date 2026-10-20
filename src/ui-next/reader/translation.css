@@ -1,0 +1,7 @@
+.un-translation-controls {
+  display: grid;
+  gap: 16px;
+}
+.reader-translated-text {
+  white-space: pre-wrap;
+}

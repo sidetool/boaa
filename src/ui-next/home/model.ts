@@ -13,6 +13,7 @@ import type { HomeRowConfig, UiNextHomeAdapter, HomeHeroItem, HomeRowView } from
 import { defaultHomeRows, resolveHomeRows, homeRowOptions, homeRowLabel, mergeHomeRowEdits } from './config';
 
 export interface HomeAdapterInput {
+  showSourceRanks?: boolean;
   sourcePositions?: ReadonlyMap<string, HomeSourcePosition>;
   discoveryRows?: HomeDiscoveryAdapter;
   /** Required full catalog inputs: never pass the current library's visibleBooks/libraryWorks. */
@@ -125,7 +126,10 @@ export function createUiNextHomeAdapter(props: LibraryScreenProps, input: HomeAd
   const rows: HomeRowView[] = config
     .filter((row) => row.visible)
     .map((row) => {
-      if (row.kind === 'discovery' || row.kind === 'source') return input.discoveryRows!.row(row);
+      if (row.kind === 'discovery' || row.kind === 'source') {
+        const view = input.discoveryRows!.row(row);
+        return { ...view, ranked: input.showSourceRanks === true && view.ranked === true };
+      }
       const ids = new Set(
         input.memberships.filter((member) => member.shelfId === row.shelfId).map((member) => member.bookId),
       );

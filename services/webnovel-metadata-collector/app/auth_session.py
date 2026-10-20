@@ -19,11 +19,18 @@ from app.novelpia_auth import (
     NovelpiaLoginRequired,
 )
 
+from app.browser_runtime import browser_engine, persistent_options
+
 try:
-    from playwright.async_api import Error as PlaywrightError
-    from playwright.async_api import TimeoutError as PlaywrightTimeoutError
-    from playwright.async_api import async_playwright
-    from camoufox.utils import launch_options as _camoufox_available
+    if browser_engine() == 'patchright':
+        from patchright.async_api import Error as PlaywrightError
+        from patchright.async_api import TimeoutError as PlaywrightTimeoutError
+        from patchright.async_api import async_playwright
+    else:
+        from playwright.async_api import Error as PlaywrightError
+        from playwright.async_api import TimeoutError as PlaywrightTimeoutError
+        from playwright.async_api import async_playwright
+        from camoufox.utils import launch_options as _camoufox_available
 except ImportError:  # 선택 기능이므로 기본 실행은 Playwright 없이도 가능하다.
     PlaywrightError = RuntimeError
     PlaywrightTimeoutError = TimeoutError
@@ -115,9 +122,10 @@ class AuthSessionManager:
                     else Path.home() / ".webnovel-metadata-collector" / "auth"
                 )
         self.data_dir = data_dir
-        self.profile_dir = data_dir / "camoufox-profile"
+        self.engine = browser_engine()
+        self.profile_dir = data_dir / f"{self.engine}-profile"
         self.settings_path = data_dir / "settings.json"
-        self.session_path = data_dir / "camoufox-session-cookies.json"
+        self.session_path = data_dir / f"{self.engine}-session-cookies.json"
         self.novelpia_auth = NovelpiaAuthManager(data_dir / "novelpia-auth.json")
         self.enabled_platforms = self._load_enabled_platforms()
         if not self.novelpia_auth.configured:
@@ -353,11 +361,8 @@ class AuthSessionManager:
             context = await self._ensure_context(visible=False)
             await self._save_session(context)
             self._remote_login_active = False
-            for page in list(context.pages):
-                try:
-                    await page.close()
-                except PlaywrightError:
-                    pass
+            # Closing the last Chromium tab can discard session cookies before
+            # the second checkpoint. Close the context once, with its tabs intact.
             self._remote_frame_digest = None
             self.last_error = None
             # Flush the persistent profile too, before reporting completion.
@@ -379,7 +384,7 @@ class AuthSessionManager:
 
         message = (
             "로그인 브라우저의 프로필이 아직 사용 중입니다. "
-            "전용 Camoufox 창을 완전히 닫고 다시 체크해 주세요."
+            "전용 인증 창을 완전히 닫고 다시 체크해 주세요."
         )
         self.last_error = message
         raise AuthFeatureUnavailable(message) from last_error
@@ -519,7 +524,7 @@ class AuthSessionManager:
             )
         profile = self.profile_dir.resolve()
         root = self.data_dir.resolve()
-        if profile.name != "camoufox-profile" or profile.parent != root:
+        if profile.name != f"{self.engine}-profile" or profile.parent != root:
             raise RuntimeError("인증 프로필 경로를 안전하게 확인하지 못했습니다.")
         if profile.exists():
             shutil.rmtree(profile)
@@ -684,12 +689,12 @@ class AuthSessionManager:
 
             context = None
             try:
-                from app.camoufox_runtime import persistent_options
                 options = await asyncio.to_thread(
                     persistent_options, self.profile_dir,
                     headless=self.remote_auth_headless if self.remote_auth else not visible,
                 )
-                context = await self._playwright.firefox.launch_persistent_context(
+                launcher = self._playwright.chromium if self.engine == 'patchright' else self._playwright.firefox
+                context = await launcher.launch_persistent_context(
                     user_data_dir=str(self.profile_dir), **options,
                 )
                 session = self._load_session()

@@ -636,6 +636,8 @@ export interface ReaderSettings {
   /** Device startup destination; absent uses ui-next home or the classic last library shelf. */
   startupScreen?: { kind: 'home' } | { kind: 'library'; shelfId?: string } | { kind: 'discovery'; tabId?: string };
   homeRows?: ReaderHomeRowConfig[];
+  /** Show popular-source rank numerals on home on this device (default: false). */
+  showHomeSourceRanks?: boolean;
   /** Newest first; shared across the reader's settings scope. */
   recentSearches?: string[];
   /** Custom application colors. Kept separate from book-specific Reader colors. */
@@ -672,6 +674,8 @@ export interface TTSPlaybackSettings {
   voiceSource?: 'system' | 'server';
   serverVoiceId?: string;
   plainChunking?: 'sentence' | 'paragraph' | 'batch';
+  /** Maximum Unicode characters per batch synthesis request (200–2000, default 700). */
+  plainBatchCharacters?: number;
   rate: number;
   pitch: number;
   volume: number;

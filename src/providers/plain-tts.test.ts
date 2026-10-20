@@ -175,3 +175,32 @@ describe('multi paragraph plain TTS', () => {
     expect(result.nextParagraphIndex).toBe(1);
   });
 });
+
+it('honors configurable batch bounds without dropping source text, including long Unicode paragraphs', async () => {
+  const rows = ['가'.repeat(350), '😀'.repeat(450), '끝'.repeat(230)].map((text, index) =>
+    paragraph(text, { id: `p${index}`, index: index + 1 }),
+  );
+  for (const batchCharacters of [200, 700, 1200, 2000]) {
+    let index = 0;
+    const spoken: string[] = [];
+    while (index < rows.length) {
+      const prepared = await preparePlainTTSBatch({
+        index,
+        paragraph: rows[index],
+        paragraphCount: rows.length,
+        getParagraph: async (i) => rows[i],
+        rate: 1,
+        batchCharacters,
+        shouldContinue: () => true,
+      });
+      for (const item of prepared.playables) {
+        expect([...item.text].length).toBeLessThanOrEqual(batchCharacters);
+        expect(item.text).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/u);
+        spoken.push(item.text);
+      }
+      expect(prepared.nextParagraphIndex).toBeGreaterThan(index);
+      index = prepared.nextParagraphIndex;
+    }
+    expect(spoken.join('').replace(/\n/g, '')).toBe(rows.map((p) => p.text).join(''));
+  }
+});

@@ -133,3 +133,16 @@ openssl pkey -in /secure/boaa-release-private.pem -pubout -out deploy/release-pu
 기존 `third_party/license-release-policy.json`의 배포 차단 항목(바이너리 대응 소스/재링크 제공, container/Python 의존성 목록 등)이 해결되지 않으면 workflow의 `check:licenses:release`가 발행 준비를 차단한다. 소스 검사 통과만으로 바이너리 배포 준비가 끝났다고 간주하지 않는다. 서명 키 설정 및 실제 GitHub Release 발행은 코드 구현과 별도의 운영 단계다.
 
 구현 참고: [Docker의 다중 아키텍처 CI 문서](https://docs.docker.com/build/ci/github-actions/multi-platform/), [GitHub artifact 다운로드](https://github.com/actions/download-artifact).
+
+
+## beta.4 → beta.5: upgrade the updater first
+
+Beta.5 adds a separately downloadable Camoufox image and the matching metadata browser protocol. The old updater cannot validate that image set. Verify and extract the beta.5 installer bundle into a separate directory, retaining the installed trusted public key, then run:
+
+```sh
+node scripts/release/upgrade-updater.mjs --container <current-updater-container> --version v0.1.1-beta.5 --key /trusted/boaa-release-public.pub
+```
+
+The tool verifies the signed release manifest, pulls its immutable updater image, takes the existing updater lock, preserves the managed deployment and recreates only the updater. Application images, database, credentials and volumes remain in place. Then use the normal beta-channel update action to install beta.5. Do not rerun the new-install command over an existing installation or reapply bootstrap Compose. If an update/recovery operation is already active, the tool refuses to modify it.
+
+Beta.5 metadata images explicitly advertise support for Patchright and Camoufox. The updater refuses an older incompatible metadata image before stopping services. All local translation/TTS/discovery/home changes and additive database migrations 61/62 are included in this release.

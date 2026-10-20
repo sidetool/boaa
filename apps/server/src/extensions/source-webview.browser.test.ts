@@ -1,7 +1,8 @@
 import { mangayomiWebViewScript } from './mangayomi/webview-script.js';
 import { createServer, type Server } from 'node:http';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
-import { firefox, type Browser } from 'playwright-core';
+import type { Browser } from 'playwright-core';
+import { browserEngine, browserLauncher } from '@boaa/browser-runtime';
 import { launchSourceBrowser, sourceBrowserUsesRemote } from './source-browser-launch.js';
 import { SourceWebViewHost } from './source-webview.js';
 import { sourceBrowserHttp } from './source-browser-cookies.js';
@@ -187,7 +188,7 @@ describe.skipIf(!process.env.BOAA_TEST_SOURCE_BROWSER)('production source WebVie
       ]);
     }
   });
-  it('supports maker callbacks and shares Camoufox identity with HTTP requests', async () => {
+  it('supports maker callbacks and shares the selected browser identity with HTTP requests', async () => {
     for (const browserMode of ['camoufox'] as const) {
       const current = { ...scope('engine-' + browserMode), browserMode };
       const script = mangayomiWebViewScript([
@@ -212,7 +213,7 @@ describe.skipIf(!process.env.BOAA_TEST_SOURCE_BROWSER)('production source WebVie
       );
       expect(result.ok).toBe(true);
       expect(result.decoded).toBe('본문 이미지 키');
-      expect(result.ua).toContain('Firefox/');
+      expect(result.ua).toContain(browserEngine() === 'camoufox' ? 'Firefox/' : 'Chrome/');
       expect(result.ua).not.toBe('Boaa-test-agent');
       await sourceBrowserHttp({ url: origin }, AbortSignal.timeout(1000), current, 1024, async (input) => {
         expect(input.headers).toMatchObject({ cookie: 'callback=done', 'user-agent': result.ua });
@@ -229,7 +230,8 @@ describe.skipIf(!process.env.BOAA_TEST_SOURCE_BROWSER)('production source WebVie
         return;
       }
       challenges++;
-      if (request.headers['user-agent']?.includes('Firefox/')) browserAgent = request.headers['user-agent'];
+      if (request.headers['user-agent']?.includes(browserEngine() === 'camoufox' ? 'Firefox/' : 'Chrome/'))
+        browserAgent = request.headers['user-agent'];
       response
         .writeHead(403, { 'content-type': 'text/html', 'cf-mitigated': 'challenge' })
         .end('<script>document.cookie="verified=yes; Path=/";location.reload();</script>');
@@ -339,7 +341,13 @@ describe.skipIf(!process.env.BOAA_TEST_SOURCE_BROWSER)('production source WebVie
       let other: Browser | undefined;
       try {
         await warm.evaluate({ url: origin, script: 'true' }, scope('remote-warm-yield'), AbortSignal.timeout(15000));
-        other = await launchSourceBrowser(firefox, [], process.platform, 'camoufox', AbortSignal.timeout(15000));
+        other = await launchSourceBrowser(
+          await browserLauncher(),
+          [],
+          process.platform,
+          browserEngine(),
+          AbortSignal.timeout(15000),
+        );
         expect(other.isConnected()).toBe(true);
       } finally {
         await other?.close();

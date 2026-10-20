@@ -37,21 +37,30 @@ def main() -> None:
         runpy.run_path(str(root / "launch-options.py"), run_name="__main__")
         return
     if arguments.check_runtime:
-        from playwright.sync_api import sync_playwright
+        from app.browser_runtime import browser_engine
+        if browser_engine() == 'patchright':
+            from patchright.sync_api import sync_playwright
+        else:
+            from playwright.sync_api import sync_playwright
         with sync_playwright() as runtime:
-            if not runtime.firefox.executable_path:
+            if not (runtime.chromium if browser_engine() == 'patchright' else runtime.firefox).executable_path:
                 raise RuntimeError("Browser driver did not initialize")
         return
     if arguments.check_browser:
-        from playwright.async_api import async_playwright
+        from app.browser_runtime import browser_engine
+        if browser_engine() == 'patchright':
+            from patchright.async_api import async_playwright
+        else:
+            from playwright.async_api import async_playwright
 
         async def check_browser() -> None:
             with tempfile.TemporaryDirectory(prefix="boaa-collector-browser-check-") as profile:
                 async with async_playwright() as runtime:
                     from pathlib import Path
-                    from app.camoufox_runtime import persistent_options
+                    from app.browser_runtime import persistent_options
                     options = await asyncio.to_thread(persistent_options, Path(profile), headless=True)
-                    context = await runtime.firefox.launch_persistent_context(profile, **options)
+                    launcher = runtime.chromium if browser_engine() == 'patchright' else runtime.firefox
+                    context = await launcher.launch_persistent_context(profile, **options)
                     try:
                         page = context.pages[0] if context.pages else await context.new_page()
                         await page.goto("about:blank")

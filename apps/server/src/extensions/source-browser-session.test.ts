@@ -1,11 +1,11 @@
-import { expect, it } from 'vitest';
+import { afterEach, expect, it, vi } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { EncryptedSourceCredentialVault } from './source-credential-vault';
 import { sourceBrowserHttp } from './source-browser-cookies';
 import { readBrowserSession, mergeBrowserSession, writeBrowserSession } from './source-browser-session';
-it('retains cookies from redirect hops and the browser identity without overwriting maker headers', async () => {
+it('retains cookies from redirect hops and the browser identity in preference to stale maker identity', async () => {
   let secret = '';
   const scope = {
     key: 'one',
@@ -44,8 +44,8 @@ it('retains cookies from redirect hops and the browser identity without overwrit
     scope,
     1024,
     async (input) => {
-      expect(input.headers?.['User-Agent']).toBe('Maker UA');
-      expect(input.headers?.['user-agent']).toBeUndefined();
+      expect(input.headers?.['User-Agent']).toBeUndefined();
+      expect(input.headers?.['user-agent']).toBe('Browser UA');
       return { statusCode: 200, headers: {}, bytes: Buffer.from('done'), contentType: 'text/plain', url: input.url };
     },
   );
@@ -103,4 +103,28 @@ it('starts a separate Camoufox session and leaves the previous engine state avai
   expect(readBrowserSession(scope)).toEqual(current);
   expect(entries.get(key)?.secret).toBe(previous);
   expect(entries.size).toBe(2);
+});
+
+afterEach(() => vi.unstubAllEnvs());
+it('keeps both engine sessions and restores each identity after switching back', () => {
+  const entries = new Map<string, { secret: string }>();
+  const scope = {
+    key: JSON.stringify(['package', 'browser:source', 'epoch']),
+    vault: {
+      read: (key: string) => entries.get(key),
+      write: (key: string, value?: { secret: string }) => {
+        if (value) entries.set(key, value);
+      },
+    },
+  };
+  vi.stubEnv('BOAA_BROWSER_ENGINE', 'camoufox');
+  const state = { cookies: [], origins: [], userAgents: { 'https://fixture.invalid': 'Firefox fixture' } };
+  writeBrowserSession(scope, state);
+  vi.stubEnv('BOAA_BROWSER_ENGINE', 'patchright');
+  expect(readBrowserSession(scope)).toEqual({ cookies: [], origins: [] });
+  writeBrowserSession(scope, { ...state, userAgents: { 'https://fixture.invalid': 'Chromium fixture' } });
+  vi.stubEnv('BOAA_BROWSER_ENGINE', 'camoufox');
+  expect(readBrowserSession(scope)).toEqual(state);
+  vi.stubEnv('BOAA_BROWSER_ENGINE', 'patchright');
+  expect(readBrowserSession(scope).userAgents?.['https://fixture.invalid']).toBe('Chromium fixture');
 });

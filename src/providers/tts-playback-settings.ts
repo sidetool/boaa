@@ -1,3 +1,4 @@
+import { normalizePlainTTSBatchCharacters } from './plain-tts-limits';
 import type {
   ReaderSettings,
   TTSSkippedContentType,
@@ -28,6 +29,7 @@ export function normalizeTTSPlaybackSettings(
     serverVoiceId: typeof value?.serverVoiceId === 'string' ? value.serverVoiceId.slice(0, 160) : undefined,
     plainChunking:
       value?.plainChunking === 'batch' ? 'batch' : value?.plainChunking === 'paragraph' ? 'paragraph' : 'sentence',
+    plainBatchCharacters: normalizePlainTTSBatchCharacters(value?.plainBatchCharacters),
     rate: clamp(finiteNumber(value?.rate, legacyRate), 0.5, 2.5),
     pitch: clamp(finiteNumber(value?.pitch, 1), 0.5, 2),
     volume: clamp(finiteNumber(value?.volume, 1), 0, 1),

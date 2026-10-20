@@ -1,3 +1,4 @@
+import type { HomeRowItem } from './contract';
 import { describe, expect, it, vi } from 'vitest';
 import { actions, model, novel } from '../test-fixtures';
 import { buildLibraryBookView } from '../../features/library/library-screen-model';
@@ -232,4 +233,33 @@ it('preserves unavailable shelf/discovery rows when editing an available row', (
   ]);
   before.setConfig([]);
   expect(input.setConfig).toHaveBeenLastCalledWith([input.config[1], input.config[2]]);
+});
+
+it('hides home source ranks by default and toggles only eligible rows without changing their content', () => {
+  const { input, adapter } = fixture();
+  input.config = [{ id: 'popular', kind: 'discovery', visible: true, discoveryTabId: 'list' }];
+  const items: HomeRowItem[] = [];
+  let eligible = true;
+  input.discoveryRows = {
+    sections: [
+      {
+        id: 'list',
+        tabId: 'tab',
+        tabTitle: '탐색',
+        title: '인기',
+        sourceLabel: '소스',
+        section: { id: 'section', sourceId: 'source', mode: 'popular', title: '인기' },
+      },
+    ],
+    row: (config) => ({ config, title: '인기', status: 'ready', ranked: eligible, items }),
+  };
+  expect(adapter().rows[0].ranked).toBe(false);
+  input.showSourceRanks = true;
+  expect(adapter().rows[0].ranked).toBe(true);
+  expect(adapter().rows[0].items).toBe(items);
+  eligible = false;
+  expect(adapter().rows[0].ranked).toBe(false);
+  input.showSourceRanks = false;
+  eligible = true;
+  expect(adapter().rows[0].ranked).toBe(false);
 });

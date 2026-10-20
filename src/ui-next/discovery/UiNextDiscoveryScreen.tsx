@@ -1,3 +1,5 @@
+import { useTranslatedTitle } from '../../features/translation/use-translated-title';
+import { DiscoveryPagination } from './DiscoveryPagination';
 import {
   ChevronLeft,
   ChevronRight,
@@ -49,6 +51,7 @@ function Poster({
   open(): void;
 }) {
   const cover = useDiscoveryCover({ item, session, showCover });
+  const title = useTranslatedTitle(item.title, cover.near && item.kind === 'work');
   const sub = item.author ?? item.subtitle ?? (item.kind === 'folder' ? '폴더 열기' : '');
   return (
     <button
@@ -56,7 +59,7 @@ function Poster({
       type="button"
       className={cx('un-poster', rank !== undefined && 'has-rank')}
       onClick={open}
-      aria-label={`${rank !== undefined ? `${rank}위 ` : ''}${item.title} 상세 보기`}
+      aria-label={`${rank !== undefined ? `${rank}위 ` : ''}${title} 상세 보기`}
     >
       {rank !== undefined && (
         <span className="un-poster-rank" aria-hidden="true">
@@ -69,7 +72,7 @@ function Poster({
             <img src={cover.url} alt="" loading="lazy" decoding="async" draggable={false} onError={cover.onError} />
           ) : (
             <span className="un-cover-fallback" aria-hidden="true">
-              <strong>{item.title}</strong>
+              <strong>{title}</strong>
               {item.author && <small>{item.author}</small>}
             </span>
           )}
@@ -77,7 +80,9 @@ function Poster({
         {owned && <span className="un-tile-flag is-owned">보관 중</span>}
       </span>
       <span className="un-tile-meta">
-        <span className="un-tile-title">{item.title}</span>
+        <span className="un-tile-title" title={title !== item.title ? item.title : undefined}>
+          {title}
+        </span>
         {sub && <span className="un-tile-sub">{sub}</span>}
       </span>
     </button>
@@ -202,13 +207,7 @@ function SourceView({
         </p>
       )}
       {view.data.hasPage && !view.data.items.length && <p className="un-discover-note">조건에 맞는 작품이 없어요.</p>}
-      {view.data.more && !view.data.error && (
-        <div className="un-discover-more">
-          <button type="button" className="un-btn is-ghost" disabled={view.data.busy} onClick={view.data.loadMore}>
-            {view.data.busy ? '불러오는 중…' : '더 불러오기'}
-          </button>
-        </div>
-      )}
+      <DiscoveryPagination data={view.data} />
 
       <Sheet
         open={view.filtersOpen}
@@ -248,7 +247,7 @@ function SourceView({
   );
 }
 
-/** A horizontally scrolling list from one source; expands into the full catalog in place. */
+/** A horizontally scrolling list from one source; opens a dedicated source catalog. */
 function SectionRow({
   section,
   source,
@@ -259,6 +258,7 @@ function SectionRow({
   open,
   owned,
   density,
+  openSection,
 }: {
   section: Section;
   source?: ExternalSourceView;
@@ -269,6 +269,7 @@ function SectionRow({
   open: Open;
   owned(item: ExternalItemSummary): boolean;
   density: Density;
+  openSection(section: Section): void;
 }) {
   const state = useDiscoverySection({ section, source, session, query, refresh, positions });
   const [edges, setEdges] = useState({ start: true, end: true });
@@ -320,30 +321,15 @@ function SectionRow({
             <button
               type="button"
               className="un-row-more"
-              aria-expanded={folder ? undefined : state.expanded}
-              onClick={() =>
-                folder ? open(section.sourceId, {}) : state.expanded ? state.collapse() : state.setExpanded(true)
-              }
+              onClick={() => (folder ? open(section.sourceId, {}) : openSection(section))}
             >
-              {folder ? '폴더 보기' : state.expanded ? '접기' : '전체 보기'}
+              {folder ? '폴더 보기' : '전체 보기'}
             </button>
           )}
         </div>
       </header>
 
-      {state.expanded && live ? (
-        <SourceView
-          section={section}
-          source={source}
-          session={session}
-          refresh={refresh}
-          open={open}
-          owned={owned}
-          density={density}
-          controls={false}
-          query={query}
-        />
-      ) : state.unsupported ? (
+      {state.unsupported ? (
         <p className="un-discover-note">{state.unsupported}</p>
       ) : state.unavailable ? (
         <p className="un-discover-note">소스를 쓸 수 없어요. 소스 관리에서 연결을 확인해 주세요.</p>
@@ -599,6 +585,7 @@ export default function UiNextDiscoveryScreen(props: DiscoveryScreenProps) {
                 query={state.query}
                 refresh={state.refresh}
                 positions={state.positions}
+                openSection={state.openSection}
                 open={open}
                 owned={state.owned}
                 density={density}

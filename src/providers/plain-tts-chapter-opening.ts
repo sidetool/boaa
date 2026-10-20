@@ -23,6 +23,7 @@ export async function preparePlainTTSChapterOpening(input: {
       input.settings.plainChunking === 'batch'
         ? (
             await preparePlainTTSBatch({
+              batchCharacters: input.settings.plainBatchCharacters,
               index,
               paragraph,
               paragraphCount: paragraphs.length,

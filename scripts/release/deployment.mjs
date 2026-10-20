@@ -46,7 +46,25 @@ export function escapeCompose(value) {
   return value;
 }
 
-export function componentConfiguration(config, id, enabled) {
+export function configuredBrowserEngine(config) {
+  const env = config.services.api.environment ?? {};
+  const runtime = config.services['runtime-browser']?.environment ?? {};
+  const value =
+    env.BOAA_BROWSER_ENGINE ||
+    runtime.BOAA_BROWSER_ENGINE ||
+    (env.BOAA_CAMOUFOX_EXECUTABLE || runtime.BOAA_CAMOUFOX_EXECUTABLE ? 'camoufox' : 'patchright');
+  if (!['patchright', 'camoufox'].includes(value)) throw new Error('component_unsupported');
+  return value;
+}
+export function browserImage(manifest, engine) {
+  if (engine === 'patchright')
+    return manifest?.images.browser?.engine === 'patchright' ? manifest.images.browser : undefined;
+  return (
+    manifest?.images['browser-camoufox'] ??
+    (manifest?.images.browser?.engine !== 'patchright' ? manifest?.images.browser : undefined)
+  );
+}
+export function componentConfiguration(config, id, enabled, engine = configuredBrowserEngine(config)) {
   const next = structuredClone(config);
   const environment = (next.services.api.environment ??= {});
   if (!next.services[COMPONENTS[id]]) throw new Error('component_unsupported');
@@ -56,8 +74,11 @@ export function componentConfiguration(config, id, enabled) {
     const existing = environment.BOAA_SOURCE_BROWSER_ENDPOINT;
     if (existing && existing !== 'http://runtime-browser:8791') throw new Error('component_external');
     environment.BOAA_SOURCE_BROWSER_ENDPOINT = enabled ? 'http://runtime-browser:8791' : '';
+    environment.BOAA_BROWSER_ENGINE = engine;
+    (next.services['runtime-browser'].environment ??= {}).BOAA_BROWSER_ENGINE = engine;
     if (next.services['runtime-metadata']) {
-      (next.services['runtime-metadata'].environment ??= {}).BOAA_SOURCE_BROWSER_ENDPOINT = enabled
+      (next.services['runtime-metadata'].environment ??= {}).BOAA_BROWSER_ENGINE = engine;
+      next.services['runtime-metadata'].environment.BOAA_SOURCE_BROWSER_ENDPOINT = enabled
         ? 'http://runtime-browser:8791'
         : '';
     }

@@ -16,6 +16,8 @@ const files = [
   'services/runtime-components/README.md',
   'scripts/init-env.mjs',
   'scripts/release/install.mjs',
+  'scripts/release/upgrade-updater.mjs',
+  'scripts/release/deployment.mjs',
   'scripts/release/feed.mjs',
   'scripts/release/files.mjs',
   'scripts/release/verify-bundle.mjs',

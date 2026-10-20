@@ -1,4 +1,5 @@
 import {
+  Languages,
   BookmarkIcon,
   ChevronLeft,
   ChevronsLeft,
@@ -57,6 +58,7 @@ export function UiNextReaderChrome({
   onOverflowOpenChanged,
   onGoToSavedPosition,
   onOpenAutoScroll,
+  onOpenTranslation,
 }: ReaderChromeProps) {
   const [bookmarkPending, setBookmarkPending] = useState(false);
   const [highlightPending, setHighlightPending] = useState(false);
@@ -98,6 +100,9 @@ export function UiNextReaderChrome({
   };
 
   const more: ActionEntry[] = [
+    ...(onOpenTranslation
+      ? [{ id: 'translation', label: '작품 번역', icon: <Languages size={20} />, run: onOpenTranslation }]
+      : []),
     {
       id: 'start',
       label: '이번 화 처음으로',

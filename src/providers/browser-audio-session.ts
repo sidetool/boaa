@@ -5,11 +5,15 @@ export interface BrowserAudioElement {
   ontimeupdate?: HTMLAudioElement['ontimeupdate'];
   readonly currentTime?: number;
   readonly duration?: number;
+  readonly ended?: boolean;
   play(): Promise<void>;
   pause(): void;
   removeAttribute(name: string): void;
   load(): void;
   volume?: number;
+  playbackRate?: number;
+  defaultPlaybackRate?: number;
+  preservesPitch?: boolean;
 }
 
 export interface BrowserAudioSessionDependencies {
@@ -29,6 +33,7 @@ export class BrowserAudioSession {
   private active?: ActiveBrowserAudio;
   private audio?: BrowserAudioElement;
   private volume = 1;
+  private playbackRate = 1;
 
   constructor(
     private readonly dependencies: BrowserAudioSessionDependencies = createDefaultBrowserAudioSessionDependencies(),
@@ -49,6 +54,9 @@ export class BrowserAudioSession {
       audio = this.audio ??= this.dependencies.createAudio(url);
       audio.src = url;
       audio.volume = this.volume;
+      audio.defaultPlaybackRate = this.playbackRate;
+      audio.playbackRate = this.playbackRate;
+      audio.preservesPitch = true;
     } catch {
       if (url) this.revoke(url);
       return false;
@@ -57,7 +65,11 @@ export class BrowserAudioSession {
     return new Promise((resolve) => {
       const active: ActiveBrowserAudio = { audio, url, resolve, settled: false };
       this.active = active;
-      audio.onended = () => this.finish(active, true);
+      audio.onended = () => {
+        // The reused element can dispatch an old queued event after its source changes.
+        if (this.active !== active || audio.ended === false) return;
+        this.finish(active, true);
+      };
       audio.onerror = () => this.finish(active, false);
       audio.ontimeupdate = () => {
         if (this.active !== active || active.settled || !Number.isFinite(audio.duration) || !audio.duration) return;
@@ -74,6 +86,15 @@ export class BrowserAudioSession {
   setVolume(value: number): void {
     this.volume = Math.max(0, Math.min(1, Number.isFinite(value) ? value : 1));
     if (this.active) this.active.audio.volume = this.volume;
+  }
+
+  setPlaybackRate(value: number): void {
+    this.playbackRate = Math.max(0.5, Math.min(2.5, Number.isFinite(value) ? value : 1));
+    if (this.audio) {
+      this.audio.defaultPlaybackRate = this.playbackRate;
+      this.audio.playbackRate = this.playbackRate;
+      this.audio.preservesPitch = true;
+    }
   }
 
   pause(): void {

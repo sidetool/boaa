@@ -106,6 +106,7 @@ export function useDiscoveryPages(
     error,
     hasPage: pages.length > 0,
     more,
+    pageKey: JSON.stringify([key, pages.length, next]),
     loadMore: () => {
       if (more && !busy) setDepth(pages.length + 1);
     },

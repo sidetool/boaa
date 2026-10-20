@@ -96,6 +96,7 @@ export function readerSettingsEqual(left: ReaderSettings, right: ReaderSettings)
     left.applicationTheme === right.applicationTheme &&
     Boolean(left.hideAppLogo) === Boolean(right.hideAppLogo) &&
     JSON.stringify(left.homeRows) === JSON.stringify(right.homeRows) &&
+    (left.showHomeSourceRanks === true) === (right.showHomeSourceRanks === true) &&
     JSON.stringify(left.recentSearches) === JSON.stringify(right.recentSearches) &&
     JSON.stringify(left.startupScreen) === JSON.stringify(right.startupScreen) &&
     Boolean(left.showLibraryReadingCounts) === Boolean(right.showLibraryReadingCounts) &&

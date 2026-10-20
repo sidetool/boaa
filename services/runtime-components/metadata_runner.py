@@ -66,7 +66,14 @@ class ProviderContext:
     async def open_browser(self, *, origins, private_origins=(), storage_state=None):
         """An isolated context through the shared DNS-pinned, authenticated browser proxy."""
         import httpx
-        from playwright.async_api import async_playwright
+        engine = os.environ.get('BOAA_BROWSER_ENGINE', 'camoufox')
+        if engine not in {'patchright', 'camoufox'}:
+            raise RuntimeError('source_browser_engine_invalid')
+        if engine == 'patchright':
+            from patchright.async_api import async_playwright
+        else:
+            from playwright.async_api import async_playwright
+        driver_version = '1.61.1' if engine == 'patchright' else '1.62.0'
         endpoint = os.environ.get("BOAA_SOURCE_BROWSER_ENDPOINT", "")
         url = urlsplit(endpoint)
         if (url.scheme not in {"http", "https"} or not url.hostname or url.username or url.password or
@@ -76,7 +83,7 @@ class ProviderContext:
         # Control traffic always goes to the explicitly configured internal worker, outside the source proxy.
         async with httpx.AsyncClient(trust_env=False, timeout=60) as client:
             async with client.stream("POST", endpoint.rstrip("/") + "/v1/browsers", headers=headers, json={
-                "protocolVersion": 1, "engine": "camoufox", "proxyBridge": {
+                "protocolVersion": 1, "engine": engine, "proxyBridge": {
                     "origins": list(origins), "privateOrigins": list(private_origins),
                     "outboundProxy": self.outbound_proxy}}) as response:
                 response.raise_for_status()
@@ -87,15 +94,15 @@ class ProviderContext:
                         raise RuntimeError("runtime_manifest_invalid")
         manifest = json.loads(body)
         if (manifest.get("schemaVersion") != 1 or manifest.get("protocolVersion") != 1 or
-                manifest.get("component") != "browser" or manifest.get("engines", {}).get("camoufox") != "1.62.0" or
-                manifest.get("engine") != "camoufox" or
+                manifest.get("component") != "browser" or manifest.get("engines", {}).get(engine) != driver_version or
+                manifest.get("engine") != engine or
                 not re.fullmatch(r"/v1/browsers/[a-f0-9-]{36}/ws", manifest.get("wsPath", "")) or
                 not re.fullmatch(r"http://boaa-browser.invalid/[a-f0-9]{48}", manifest.get("proxyBootstrapUrl", "")) or
                 not isinstance(manifest.get("proxy"), dict)):
             raise RuntimeError("runtime_manifest_invalid")
         websocket = ("wss://" if url.scheme == "https" else "ws://") + url.netloc + manifest["wsPath"]
         async with async_playwright() as driver:
-            browser = await driver.firefox.connect(websocket, headers=headers, timeout=15000)
+            browser = await (driver.chromium if engine == 'patchright' else driver.firefox).connect(websocket, headers=headers, timeout=15000)
             try:
                 context = await browser.new_context(proxy=manifest["proxy"], storage_state=storage_state,
                                                     service_workers="block", accept_downloads=False, no_viewport=True)

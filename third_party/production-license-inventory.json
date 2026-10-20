@@ -9,10 +9,10 @@
     "libc": "glibc"
   },
   "summary": {
-    "componentCount": 214,
+    "componentCount": 215,
     "byLicense": {
       "0BSD": 1,
-      "Apache-2.0": 43,
+      "Apache-2.0": 44,
       "Apache-2.0 OR MIT": 1,
       "BSD-2-Clause": 9,
       "BSD-3-Clause": 16,
@@ -1044,6 +1044,13 @@
       "version": "4.6.2",
       "license": "MIT",
       "homepage": "https://github.com/sindresorhus/p-retry#readme"
+    },
+    {
+      "ecosystem": "npm",
+      "name": "patchright-core",
+      "version": "1.61.1",
+      "license": "Apache-2.0",
+      "homepage": "https://github.com/Kaliiiiiiiiii-Vinyzu/patchright"
     },
     {
       "ecosystem": "npm",

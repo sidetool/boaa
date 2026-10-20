@@ -10,6 +10,7 @@ export const PARAGRAPHS_PER_PAGE = 120;
 export const defaultSettings: ReaderSettings = {
   id: 'reader-settings',
   applicationTheme: 'dark',
+  showHomeSourceRanks: false,
   theme: 'dark',
   font: 'serif',
   fontSize: 18,
@@ -37,6 +38,7 @@ export function normalizeReaderSettings(settings: Partial<ReaderSettings> = {}):
     ...defaultSettings,
     ...settings,
     homeRows: normalizeHomeRows(settings.homeRows),
+    showHomeSourceRanks: settings.showHomeSourceRanks === true,
     recentSearches:
       settings.recentSearches === undefined ? undefined : normalizeRecentSearches(settings.recentSearches),
     startupScreen: normalizeStartupScreen(settings.startupScreen),

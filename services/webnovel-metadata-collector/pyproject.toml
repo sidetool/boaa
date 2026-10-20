@@ -17,7 +17,8 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-auth = [
+auth = ["patchright==1.61.1"]
+auth-camoufox = [
     "playwright==1.62.0",
     "camoufox==0.5.8",
     "fpgen==1.3.0",

@@ -19,7 +19,9 @@ vi.mock('./source-text-document', () => ({
   sourceTextDocument: vi.fn(async ({ episodeId, title }: { episodeId: string; title: string }) => ({
     chapter: { id: episodeId, documentSectionId: episodeId, textHash: episodeId, index: 2, paragraphCount: 1, title },
     novel: { id: 'synthetic-work', title },
-    repository: { getParagraphPage: vi.fn(async () => ({ paragraphs: [{ index: 1, text: 'Synthetic' }] })) },
+    repository: {
+      getParagraphPage: vi.fn(async () => ({ paragraphs: [{ id: `${episodeId}-p1`, index: 1, text: 'Synthetic' }] })),
+    },
     flushSavedPosition: vi.fn().mockResolvedValue(undefined),
   })),
 }));
@@ -264,7 +266,7 @@ describe('SourceTextStreamReader loading and transition UI', () => {
         displayed.model.chapter,
         displayed.screenHandle.peekOpen(displayed.model.chapter.id),
       )?.paragraphs,
-    ).toEqual([{ index: 1, text: 'Synthetic' }]);
+    ).toEqual([{ id: 'second-p1', index: 1, text: 'Synthetic' }]);
   });
   it('shows an initial open failure in the text loading screen and retries it', async () => {
     const props = loadingProps({
@@ -285,4 +287,29 @@ describe('SourceTextStreamReader loading and transition UI', () => {
     expect(root.findAllByType(UiNextStreamLoading)).toHaveLength(0);
     expect(root.findByType(ReaderScreen).props.model.novel.title).toBe('테스트 작품');
   });
+});
+
+it('prepares the authorized next text for translation without navigating or saving it', async () => {
+  const h = await harness();
+  try {
+    const model = h.renderer.root.findByType(ReaderScreen).props.model;
+    let prepared!: Promise<unknown>;
+    await act(async () => {
+      prepared = model.navigation.prepareTranslationNext(new AbortController().signal);
+      await vi.advanceTimersByTimeAsync(1000);
+    });
+    expect(await prepared).toMatchObject({
+      workKey: 'synthetic-work',
+      chapterKey: 'next',
+      paragraphs: [{ id: 'next-p1', text: 'Synthetic' }],
+    });
+    expect(h.renderer.root.findByType(ReaderScreen).props.model.chapter.id).toBe('first');
+    expect(h.props.onSave).not.toHaveBeenCalled();
+    expect(h.open).toHaveBeenCalledTimes(2);
+    expect(sourceTextDocument).toHaveBeenLastCalledWith(
+      expect.objectContaining({ episodeId: 'next', fromStart: true }),
+    );
+  } finally {
+    await act(async () => h.renderer.unmount());
+  }
 });

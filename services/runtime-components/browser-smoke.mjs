@@ -1,10 +1,9 @@
 import { createServer } from 'node:http';
 import { once } from 'node:events';
-import { createRequire } from 'node:module';
+import { browserEngine, browserLauncher } from '@boaa/browser-runtime';
 import assert from 'node:assert/strict';
 import { createBrowserWorker } from './browser-worker.mjs';
 
-const require = createRequire(import.meta.url);
 const token = 'a'.repeat(64);
 const headers = { authorization: `Bearer ${token}`, 'content-type': 'application/json' };
 // This isolated fixture has no user credentials. Production never prints launch failures.
@@ -19,8 +18,8 @@ await Promise.all([once(fixture, 'listening'), once(worker.server, 'listening')]
 const origin = `http://127.0.0.1:${fixture.address().port}`;
 const endpoint = `http://127.0.0.1:${worker.server.address().port}`;
 try {
-  for (const engine of ['camoufox']) {
-    const { firefox } = require('playwright-core');
+  for (const engine of [browserEngine()]) {
+    const launcher = await browserLauncher(engine);
     const response = await fetch(endpoint + '/v1/browsers', {
       method: 'POST',
       headers,
@@ -34,8 +33,8 @@ try {
     assert.equal(response.status, 201);
     const lease = await response.json();
     const websocket = endpoint.replace('http:', 'ws:') + lease.wsPath;
-    await assert.rejects(firefox.connect(websocket, { timeout: 3000 }));
-    const browser = await firefox.connect(websocket, { headers, timeout: 10000 });
+    await assert.rejects(launcher.connect(websocket, { timeout: 3000 }));
+    const browser = await launcher.connect(websocket, { headers, timeout: 10000 });
     try {
       const context = await browser.newContext({ proxy: lease.proxy, serviceWorkers: 'block', acceptDownloads: false });
       const page = await context.newPage();

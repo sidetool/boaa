@@ -21,5 +21,8 @@
   ],
   "peerDependencies": {
     "playwright-core": "1.62.0"
+  },
+  "dependencies": {
+    "patchright-core": "1.61.1"
   }
 }

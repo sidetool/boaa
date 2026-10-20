@@ -2,7 +2,11 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import { gzipSync } from 'node:zlib';
-import { firefox } from 'playwright-core';
+import { browserEngine } from '../../../packages/browser-runtime/index.mjs';
+const launcher =
+  browserEngine() === 'patchright'
+    ? (await import('patchright-core')).chromium
+    : (await import('playwright-core')).firefox;
 import { createBrowserSourceHttp } from '../src/browser-source-http.mjs';
 
 test('browser metadata transport validates configuration without launching a browser', async () => {
@@ -31,7 +35,7 @@ test(
       entered = resolve;
     });
     let browserCloses = 0;
-    t.mock.method(firefox, 'launch', async () => ({
+    t.mock.method(launcher, 'launch', async () => ({
       on() {},
       async close() {
         browserCloses++;
@@ -61,9 +65,9 @@ test(
 );
 
 test(
-  'Camoufox metadata transport against an isolated loopback server',
+  'Selected browser metadata transport against an isolated loopback server',
   {
-    skip: enabled ? false : 'Opt-in: RUN_SOURCE_BROWSER_TESTS=1 and an installed Camoufox browser are required.',
+    skip: enabled ? false : 'Opt-in: RUN_SOURCE_BROWSER_TESTS=1 and the selected installed browser are required.',
     timeout: 120_000,
   },
   async (t) => {

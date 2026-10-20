@@ -293,7 +293,14 @@ try {
         images: Object.fromEntries(
           Object.keys(images).map((name) => [
             name,
-            { image: name, digest: 'sha256:' + 'a'.repeat(64), platforms: [deployment.platform], downloadBytes: 1 },
+            {
+              image: name,
+              digest: 'sha256:' + 'a'.repeat(64),
+              platforms: [deployment.platform],
+              downloadBytes: 1,
+              ...(name === 'browser' ? { engine: 'patchright' } : {}),
+              ...(name === 'metadata' ? { browserEngines: ['patchright', 'camoufox'] } : {}),
+            },
           ]),
         ),
       },

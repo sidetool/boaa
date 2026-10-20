@@ -212,3 +212,111 @@ it('carries completed opening audio across automatic chapter transitions but cle
   expect(controller.takePrefetched('opening')).toBeUndefined();
   await act(async () => renderer.unmount());
 });
+
+it('restores the batch start after failure instead of resuming from estimated highlighting', async () => {
+  let controller!: ReturnType<typeof useTTSExecutionController>;
+  const input = { bookId: 'book', chapterId: 'chapter', systemTTS: { pause: vi.fn(), resume: vi.fn(), stop: vi.fn() } };
+  function Harness() {
+    controller = useTTSExecutionController(input);
+    return null;
+  }
+  let renderer!: ReactTestRenderer;
+  await act(async () => {
+    renderer = create(<Harness />);
+  });
+  let session!: number;
+  act(() => {
+    session = controller.beginSession('book', 'chapter', 3)!;
+    controller.setParagraph(session, 3);
+  });
+  act(() => {
+    controller.setFollowedParagraph(session, 9);
+  });
+  expect(controller.index).toBe(9);
+  act(() => {
+    controller.finishSession(session, { preserveIndex: true, errorMessage: 'incomplete audio' });
+  });
+  expect(controller.index).toBe(3);
+  act(() => renderer.unmount());
+});
+
+it('applies speed and sleep timer changes to a live item without restarting it', async () => {
+  const audio = new TestAudioSession();
+  const setPlaybackRate = vi.fn();
+  Object.assign(audio, { setPlaybackRate });
+  const systemTTS = { pause: vi.fn(), resume: vi.fn(), stop: vi.fn() };
+  let controller!: ReturnType<typeof useTTSExecutionController>;
+  function Harness({ rate, timer }: { rate: number; timer?: 10 | 30 }) {
+    controller = useTTSExecutionController({
+      systemTTS,
+      audioSession: audio,
+      bookId: 'b',
+      chapterId: 'c',
+      playbackRate: rate,
+      sleepTimerPreset: timer,
+    });
+    return null;
+  }
+  let root!: ReactTestRenderer;
+  await act(async () => {
+    root = create(<Harness rate={1} />);
+  });
+  let id!: number;
+  act(() => {
+    id = controller.beginSession('b', 'c', 0)!;
+  });
+  act(() => {
+    void controller.playAudio(new Blob(['audio']), id);
+  });
+  await act(async () => {
+    await Promise.resolve();
+  });
+  expect(audio.active).toBe(true);
+  const stopCount = audio.stopCount;
+  const systemStops = systemTTS.stop.mock.calls.length;
+  await act(async () => {
+    root.update(<Harness rate={1.5} timer={10} />);
+  });
+  expect(controller.isSessionCurrent(id)).toBe(true);
+  expect(controller.sleepTimerPreset).toBe(10);
+  expect(controller.sleepTimerRemainingSeconds).toBeGreaterThan(599);
+  expect(setPlaybackRate).toHaveBeenLastCalledWith(1.5);
+  expect(audio.stopCount).toBe(stopCount);
+  expect(systemTTS.stop).toHaveBeenCalledTimes(systemStops);
+  act(() => controller.pause());
+  await act(async () => {
+    root.update(<Harness rate={0.8} timer={30} />);
+  });
+  expect(controller.paused).toBe(true);
+  expect(controller.sleepTimerRemainingSeconds).toBe(1800);
+  await act(async () => {
+    root.update(<Harness rate={0.8} />);
+  });
+  expect(controller.sleepTimerPreset).toBeUndefined();
+  expect(controller.isSessionCurrent(id)).toBe(true);
+  act(() => root.unmount());
+});
+
+it('does not let an old play continuation replace the audio of a newly selected batch', async () => {
+  const audio = new TestAudioSession();
+  const play = vi.spyOn(audio, 'playBlob');
+  let controller!: ReturnType<typeof useTTSExecutionController>;
+  const systemTTS = { pause: vi.fn(), resume: vi.fn(), stop: vi.fn() };
+  function Harness() {
+    controller = useTTSExecutionController({ systemTTS, audioSession: audio, bookId: 'b', chapterId: 'c' });
+    return null;
+  }
+  let root!: ReactTestRenderer;
+  await act(async () => {
+    root = create(<Harness />);
+  });
+  await act(async () => {
+    const old = controller.beginSession('b', 'c', 0)!;
+    const oldPlay = controller.playAudio(new Blob(['old']), old);
+    controller.beginSession('b', 'c', 3);
+    await oldPlay;
+  });
+  expect(play).not.toHaveBeenCalled();
+  expect(controller.itemActive).toBe(false);
+  act(() => root.unmount());
+});

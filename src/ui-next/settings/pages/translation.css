@@ -1,0 +1,61 @@
+.un-translation-settings {
+  display: grid;
+  gap: 24px;
+}
+.un-translation-field {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  margin: 12px 0;
+}
+.un-translation-field > span {
+  font-weight: 600;
+}
+.un-translation-field small,
+.un-translation-key > small,
+.un-translation-help {
+  color: var(--un-text-2);
+  font-size: 12px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+.un-translation-field .un-input {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+}
+.un-translation-field textarea {
+  resize: vertical;
+}
+.un-translation-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0 16px;
+}
+.un-translation-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.un-translation-key {
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid var(--un-line-2);
+  border-radius: 16px;
+}
+.un-translation-help {
+  display: block;
+}
+@media (max-width: 480px) {
+  .un-translation-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.un-translation-automatic-options {
+  margin: 0 16px 16px;
+  padding-inline-start: 16px;
+  border-inline-start: 2px solid var(--un-line-2);
+}

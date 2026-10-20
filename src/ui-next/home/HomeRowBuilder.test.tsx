@@ -24,6 +24,7 @@ beforeEach(() => {
     error: '',
     hasPage: true,
     more: false,
+    pageKey: 'row-builder',
     retry: vi.fn(),
     loadMore: vi.fn(),
   });

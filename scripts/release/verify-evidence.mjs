@@ -11,10 +11,10 @@ const signature = Buffer.from(
 if (!verify(null, bytes, key, signature)) throw new Error('evidence_signature_invalid');
 const evidence = JSON.parse(bytes);
 const identities = new Set(evidence.images.map((row) => `${row.component}/${row.architecture}`));
-const expected = ['server', 'web', 'updater', 'apk', 'browser', 'metadata'].flatMap((name) =>
+const expected = ['server', 'web', 'updater', 'apk', 'browser', 'browser-camoufox', 'metadata'].flatMap((name) =>
   ['amd64', 'arm64'].map((arch) => `${name}/${arch}`),
 );
-if (evidence.images.length !== 12 || identities.size !== 12 || expected.some((id) => !identities.has(id)))
+if (evidence.images.length !== 14 || identities.size !== 14 || expected.some((id) => !identities.has(id)))
   throw new Error('evidence_image_matrix_invalid');
 for (const [name, expected] of Object.entries(evidence.artifacts)) {
   if (path.basename(name) !== name) throw new Error('evidence_artifact_path_invalid');
@@ -22,4 +22,4 @@ for (const [name, expected] of Object.entries(evidence.artifacts)) {
   if (data.length !== expected.bytes || createHash('sha256').update(data).digest('hex') !== expected.sha256)
     throw new Error(`evidence_artifact_changed: ${name}`);
 }
-console.log(`Verified signed evidence and all asset hashes for ${evidence.commit}; twelve native image receipts.`);
+console.log(`Verified signed evidence and all asset hashes for ${evidence.commit}; fourteen native image receipts.`);
