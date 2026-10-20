@@ -9,12 +9,30 @@ binary gate is unchanged and remains closed.
 
 ## Review the candidate
 
-1. Record the candidate workflow run and its commit. Download every draft asset
-   into one empty directory; do not mix assets from different candidate runs.
-2. Run `node scripts/release/verify-evidence.mjs <asset-directory>` with the
-   committed trust key. It verifies the evidence signature, the fourteen component /
-   architecture receipts and the SHA-256/size of every companion asset. Verify the
-   signed installer with `verify-bundle.mjs` as well.
+1. Record the successful candidate workflow run and its exact image commit.
+   Use the read-only review command with a new output directory:
+
+   ```sh
+   node scripts/release/review-release.mjs \
+     --tag v0.1.1-beta.5 --commit <reviewed-image-commit> \
+     --directory /tmp/boaa-release-review
+   ```
+
+2. The command verifies the evidence signature against the committed trust key,
+   expected commit, fourteen native receipts, integrations, signed manifest and
+   installer. It downloads review JSON/logs and the installer. For bulky source /
+   notice archives it compares the **live GitHub asset SHA-256 and size** against
+   signed evidence instead of downloading the same bytes CI just audited. Missing,
+   duplicated, changed or unuploaded assets fail review. Assets without a GitHub
+   digest are downloaded and hashed; they are never skipped. A second inventory
+   read detects asset replacement during review. `review-result.json` records bytes
+   downloaded/avoided. CI still downloads, hashes and audits all complete archives
+   before signing. The trust boundary is the release signing key plus GitHub's
+   authenticated asset digest, not an unverified local receipt.
+
+   For a full independent archive audit, download all assets into a separate
+   directory and run `node scripts/release/verify-evidence.mjs <asset-directory>`.
+   This remains the full-content verifier and streams hashes to bound memory.
 3. Inspect the substantive source diff, `server-evidence.json`, each
    `*-evidence.json`, `*-smoke.json`, both integration logs and `7z-rebuild.log`.
    Confirm the fourteen child/config digests and seven index digests belong to that
@@ -39,6 +57,19 @@ binary gate is unchanged and remains closed.
    prove PDF inspection/text still works. Desktop is excluded.
 
 A changed application commit requires a new candidate run and new evidence.
+Image layers are cached by component and architecture through BuildKit's GitHub
+Actions backend; Debian source downloads are also cached and rechecked against
+APT's SHA-256 before reuse. Cache hits do **not** bypass native smoke, license /
+source verification or final integration. Cache absence, eviction or export
+failure only affects performance. Warm caches avoid reinstalling/recompiling
+unchanged layers; this does not promise a fixed release duration.
+
+For transient failures at the **same commit**, use GitHub's **Re-run failed jobs**,
+not a new workflow dispatch: successful native jobs and validation are retained.
+Never rerun a successful candidate merely to publish it; image promotion uses
+`server-promote-images.yml`, which does no build. Do not edit a published version
+to apply pipeline changes; these apply to the next candidate.
+
 For a CI-fixture-only correction, `resume_from_run` may reuse a completed native
 matrix. The workflow rejects changes outside its own file, `docker-smoke.mjs`
 and this review document. It checks out the original image commit for packaging
@@ -79,10 +110,22 @@ ghcr.io/sidetool/boaa-<component>@<reviewed-index-digest>`. Verify the registry
    an organization uses `/orgs/sidetool/` instead. GitHub does not inherit package
    visibility from a public repository. Making a package public is irreversible.
 5. Run `python3 scripts/release/verify-public-images.py --directory
-<asset-directory>`. It uses no registry credentials and actually pulls all
-   fourteen child images while checking the seven index mappings against signed
-   evidence. Verify the public GitHub assets and release feed signature as well.
+<asset-directory>`. Native integration now pulls anonymously when the package is
+   public and signs that exact child-digest receipt with the integration result.
+   The publication checker authenticates the evidence and receipt hashes, then
+   checks all seven indexes, child manifests/config digests and anonymous access
+   to every layer. An already-proven CI download is not repeated. For old releases,
+   new private packages, missing/ambiguous receipts or different child digests,
+   it performs the full anonymous pull. `--full-pull` forces all fourteen downloads.
+   This preserves first-publication checks without routinely downloading both
+   browser architectures twice. Verify the public release feed signature as well.
    Report successful publication only after these checks pass.
+
+Archive storage is still component-specific so each image retains self-contained
+corresponding sources. This change avoids repeated **review transfers**, not all
+duplicate archive storage. Cross-version image reuse or source-pool deduplication
+would require changes to provenance/source mapping and is not inferred from a
+filename-only changed-path filter.
 
 No production Compose project, application container, service or daemon is
 restarted by these release operations. Integration tests own disposable projects,

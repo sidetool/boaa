@@ -100,6 +100,10 @@ jobs:
           RELEASE_CANDIDATE: ${{ inputs.mode == 'candidate' && 'true' || 'false' }}
           RELEASE_PRIVATE_KEY: ${{ secrets.BOAA_RELEASE_PRIVATE_KEY }}
         run: node scripts/release/preflight.mjs
+      # Fail inexpensive packaging/control-plane checks before the application suite.
+      - run: node --test --test-concurrency=2 scripts/release/*.test.mjs services/apk-worker/*.test.mjs services/runtime-components/runtime.test.mjs
+      - run: python3 -m unittest discover -s services/runtime-components -p 'test_*.py'
+      - run: python3 -m unittest discover -s scripts/release -p 'test_*.py'
       - run: pnpm check:web-server
       - name: Account isolation and TTS regression tests
         run: >-
@@ -129,10 +133,7 @@ jobs:
             node apps/server/node_modules/tsx/dist/cli.mjs scripts/smoke-multi-account-browser.mjs
       # The global desktop/mobile binary gate remains closed. This release has its own
       # fail-closed, final-image evidence verifier, executed for every native child below.
-      - run: pnpm check:licenses:source-release
-      - run: node --test --test-concurrency=2 scripts/release/*.test.mjs services/apk-worker/*.test.mjs services/runtime-components/runtime.test.mjs
-      - run: python3 -m unittest discover -s services/runtime-components -p 'test_*.py'
-      - run: python3 -m unittest discover -s scripts/release -p 'test_*.py'
+      # Source-license checks already run inside check:web-server.
       - name: Prepare pinned corresponding-source archive
         run: python3 scripts/release/prepare-server-sources.py
       - name: Demonstrate WASM replacement build
@@ -186,22 +187,41 @@ jobs:
       - uses: actions/checkout@v7
         with:
           ref: ${{ inputs.mode == 'release' && inputs.tag || github.sha }}
-      - name: Build final native image locally
+      - uses: docker/setup-buildx-action@v4.4.1
+      - id: build-inputs
+        name: Resolve final image inputs
         env:
           COMPONENT: ${{ matrix.component }}
-          ARCHITECTURE: ${{ matrix.architecture }}
           RELEASE_VERSION: ${{ inputs.tag }}
         run: |
           set -euo pipefail
           recipe="deploy/$COMPONENT.Dockerfile"
           case "$COMPONENT" in apk|browser|browser-camoufox|metadata) recipe="deploy/runtime-$COMPONENT.Dockerfile" ;; esac
-          docker buildx create --use
-          docker buildx build --load --platform "linux/$ARCHITECTURE" -f "$recipe" \
-            --build-arg "BOAA_COMPONENT_VERSION=${RELEASE_VERSION#v}" \
-            --label "org.opencontainers.image.source=https://github.com/$GITHUB_REPOSITORY" \
-            --label "org.opencontainers.image.version=${RELEASE_VERSION#v}" \
-            --label "org.opencontainers.image.revision=$(git rev-parse HEAD)" \
-            --provenance=false --sbom=false --tag "boaa-$COMPONENT:final" .
+          printf 'recipe=%s\nversion=%s\ncommit=%s\n' "$recipe" "${RELEASE_VERSION#v}" "$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      - name: Build final native image locally with reusable layers
+        uses: docker/build-push-action@v7.4.0
+        env:
+          DOCKER_BUILD_RECORD_UPLOAD: 'false'
+        with:
+          context: .
+          file: ${{ steps.build-inputs.outputs.recipe }}
+          platforms: linux/${{ matrix.architecture }}
+          load: true
+          tags: boaa-${{ matrix.component }}:final
+          build-args: BOAA_COMPONENT_VERSION=${{ steps.build-inputs.outputs.version }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.version=${{ steps.build-inputs.outputs.version }}
+            org.opencontainers.image.revision=${{ steps.build-inputs.outputs.commit }}
+          provenance: false
+          sbom: false
+          cache-from: type=gha,scope=server-${{ matrix.component }}-${{ matrix.architecture }}
+          cache-to: type=gha,scope=server-${{ matrix.component }}-${{ matrix.architecture }},mode=max,timeout=3m,ignore-error=true
+      - uses: actions/cache@v6.1.0
+        with:
+          path: .tmp/debian-sources
+          key: debian-sources-v1-${{ matrix.component }}-${{ matrix.architecture }}-${{ github.sha }}
+          restore-keys: debian-sources-v1-${{ matrix.component }}-${{ matrix.architecture }}-
       - name: Capture final image and native execution evidence
         env:
           COMPONENT: ${{ matrix.component }}
@@ -299,11 +319,8 @@ jobs:
           set -euo pipefail
           printf '%s' "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
           owner=$(printf '%s' "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')
-          for component in server web apk browser browser-camoufox metadata updater; do
-            digest=$(jq -r '."containerimage.digest"' "evidence/$component-$ARCHITECTURE.json")
-            docker pull "ghcr.io/$owner/boaa-$component@$digest"
-            docker tag "ghcr.io/$owner/boaa-$component@$digest" "boaa-$component:final"
-          done
+          git show "$GITHUB_SHA:scripts/release/pull-integration-images.py" > /tmp/boaa-pull-integration-images.py
+          python3 /tmp/boaa-pull-integration-images.py --directory evidence --architecture "$ARCHITECTURE" --owner "$owner"
           docker pull postgres:16-alpine
           docker pull redis:7-alpine
           docker pull ghcr.io/sidetool/boaa-minio@sha256:93435cecd3567b2f834a6a5d1e664575dd0d707ab058de2431f5944c5c183d7b
@@ -319,7 +336,7 @@ jobs:
           python3 - <<'PY'
           import json,os,subprocess
           from pathlib import Path
-          Path('evidence/integration-'+os.environ['ARCHITECTURE']+'.json').write_text(json.dumps({'commit':subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip(),'architecture':os.environ['ARCHITECTURE'],'testCommit':os.environ['GITHUB_SHA'],'passed':True}))
+          Path('evidence/integration-'+os.environ['ARCHITECTURE']+'.json').write_text(json.dumps({'commit':subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip(),'architecture':os.environ['ARCHITECTURE'],'testCommit':os.environ['GITHUB_SHA'],'passed':True,'pulls':json.loads(Path('evidence/pulls-'+os.environ['ARCHITECTURE']+'.json').read_text())}))
           PY
       - uses: actions/upload-artifact@v7
         if: always()
