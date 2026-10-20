@@ -128,6 +128,7 @@ export class MangayomiExtensionHost {
         description: 'Mangayomi JavaScript 소스',
         pageConcurrency: 3,
         transformCover: thumbnailCoverAsset,
+        combinedDetails: true,
       },
     );
   }
@@ -687,16 +688,26 @@ export class MangayomiExtensionHost {
       return { items: result.list.map(work), hasNextPage: result.hasNextPage === true, browse: result.browse };
     }
     // Mangayomi details may omit the name already supplied by the catalog listing.
-    if (method === 'detail')
-      return work({ ...result, name: result.name ?? result.title ?? params.title, link: params.workUrl });
+    const chapters = (rows: unknown[]) =>
+      rows.map((value) => {
+        const row = value as Record<string, unknown>;
+        return {
+          url: row?.url,
+          title: row?.name,
+          number: Number(row?.chapterNumber ?? row?.number ?? -1),
+        };
+      });
+    if (method === 'detail') {
+      const rows = result.chapters ?? result.episodes;
+      return {
+        ...work({ ...result, name: result.name ?? result.title ?? params.title, link: params.workUrl }),
+        ...(Array.isArray(rows) ? { chapterRows: chapters(rows) } : {}),
+      };
+    }
     if (method === 'chapters') {
       const rows = result.chapters ?? result.episodes;
       if (!Array.isArray(rows)) throw new Error('invalid_source_result');
-      return rows.map((row) => ({
-        url: row.url,
-        title: row.name,
-        number: Number(row.chapterNumber ?? row.number ?? -1),
-      }));
+      return chapters(rows);
     }
     if (method === 'pages') {
       if (!Array.isArray(output.result)) throw new Error('invalid_source_result');

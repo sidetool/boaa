@@ -26,6 +26,7 @@ const validUrl = (value) => string(value, 8192) && !Array.from(value).some((char
 const id = (value) => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
 const sourceId = (pkg, remote, namespace) => `${namespace}.${hash(pkg).slice(0, 24)}.${remote}`;
 const TTL = 6 * 60 * 60 * 1000;
+const DETAIL_SNAPSHOT_TTL = 2 * 60 * 1000;
 const generation = (record) => `${record.digest}:${record.activation ?? 'legacy'}`;
 
 /** Converts APK output to the shared Boaa source contract; all remote URLs stay in host-owned reference files. */
@@ -62,6 +63,7 @@ export class ApkSourceCatalog {
       description = '설치한 APK의 만화 페이지 소스',
       pageConcurrency = 1,
       transformCover = async (image) => image,
+      combinedDetails = false,
     } = {},
   ) {
     this.store = store;
@@ -72,6 +74,7 @@ export class ApkSourceCatalog {
     this.description = description;
     this.pageConcurrency = pageConcurrency;
     this.transformCover = transformCover;
+    this.combinedDetails = combinedDetails;
   }
   setCacheOwner(owner) {
     this.#covers.setOwner(owner);
@@ -401,6 +404,44 @@ export class ApkSourceCatalog {
       if (!id(input.workId)) throw new Error('invalid_source_work');
       const saved = await readReference(workPath(input.workId));
       if (!saved?.raw || hash(saved.raw.url) !== input.workId) throw new Error('source_work_unavailable');
+      // Some compatibility runtimes return work metadata and every chapter from one
+      // getDetail call. Share that result on disk, not in a growing resident cache.
+      const requestDetails = (requestSignal) => {
+        if (!this.combinedDetails)
+          return request('detail', { workUrl: saved.raw.url, title: saved.raw.title }, requestSignal);
+        const path = join(directory, `${input.workId}-snapshot.json`);
+        return joinTask(
+          this.#pending,
+          `snapshot:${contributionId}:${requestGeneration}:${input.workId}:${options.cacheMode ?? ''}`,
+          requestSignal,
+          async (sharedSignal) => {
+            const cached = await readReference(path);
+            if (
+              options.cacheMode !== 'reload' &&
+              cached?.generation === requestGeneration &&
+              Number.isFinite(cached.fetchedAt) &&
+              cached.fetchedAt <= Date.now() &&
+              cached.fetchedAt + DETAIL_SNAPSHOT_TTL > Date.now()
+            ) {
+              current(sharedSignal);
+              return cached.raw;
+            }
+            const raw = await request('detail', { workUrl: saved.raw.url, title: saved.raw.title }, sharedSignal);
+            if (!object(raw)) throw new Error('apk_work_invalid');
+            toWork({ ...saved.raw, ...raw, url: saved.raw.url });
+            current(sharedSignal);
+            // Do not retain an incomplete/invalid chapter result as a successful
+            // snapshot. A metadata-only detail can still be displayed.
+            if (
+              Array.isArray(raw.chapterRows) &&
+              raw.chapterRows.length <= 100000 &&
+              raw.chapterRows.every((row) => object(row) && validUrl(row.url) && string(row.title, 4096))
+            )
+              await this.#save(path, { raw, fetchedAt: Date.now(), generation: requestGeneration });
+            return raw;
+          },
+        );
+      };
       if (method === 'source.getWork' || method === 'source.getCover') {
         const fresh = (value, time = value?.fetchedAt) =>
           value?.generation === requestGeneration && Number.isFinite(time) && time + TTL > Date.now();
@@ -416,8 +457,10 @@ export class ApkSourceCatalog {
             async (sharedSignal) => {
               const cached = await readReference(detailPath);
               if (options.cacheMode !== 'reload' && fresh(cached)) return cached;
-              const raw = await request('detail', { workUrl: saved.raw.url, title: saved.raw.title }, sharedSignal);
-              if (!object(raw)) throw new Error('apk_work_invalid');
+              const response = await requestDetails(sharedSignal);
+              if (!object(response)) throw new Error('apk_work_invalid');
+              // Chapter URLs stay in the short-lived combined snapshot/reference.
+              const { chapterRows: _chapterRows, ...raw } = response;
               const value = {
                 raw: {
                   ...saved.raw,
@@ -473,9 +516,11 @@ export class ApkSourceCatalog {
           cache.generation !== requestGeneration ||
           (!input.cursor && (options.cacheMode === 'reload' || cache.fetchedAt + 2 * 60 * 1000 <= Date.now()))
         ) {
-          const key = `${contributionId}:${requestGeneration}:${input.workId}`;
+          const key = `${contributionId}:${requestGeneration}:${input.workId}:${options.cacheMode ?? ''}`;
           cache = await joinTask(this.#pending, key, signal, async (sharedSignal) => {
-            const rows = await request('chapters', { workUrl: saved.raw.url, title: saved.raw.title }, sharedSignal);
+            const rows = this.combinedDetails
+              ? (await requestDetails(sharedSignal)).chapterRows
+              : await request('chapters', { workUrl: saved.raw.url, title: saved.raw.title }, sharedSignal);
             if (
               !Array.isArray(rows) ||
               rows.length > 100000 ||
@@ -488,6 +533,7 @@ export class ApkSourceCatalog {
               snapshot: randomUUID(),
               generation: requestGeneration,
             };
+            current(sharedSignal);
             await this.#save(cachePath, value);
             return value;
           });

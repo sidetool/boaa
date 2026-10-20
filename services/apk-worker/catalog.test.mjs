@@ -140,6 +140,133 @@ test('large chapters pass the former count and byte limits and retain page order
   );
   assert.equal(new Uint8Array(await assets.get(result.assets[299].handle).arrayBuffer())[0], 299 % 256);
 });
+
+async function combinedFixture(t) {
+  const fixtureState = await fixture(t);
+  const { catalog, tools } = fixtureState;
+  catalog.combinedDetails = true;
+  const original = tools.worker;
+  tools.worker = (...args) => {
+    const worker = original(...args);
+    const request = worker.request;
+    worker.request = async (method, input, signal) => {
+      const result = await request(method, input, signal);
+      if (method === 'detail')
+        return {
+          ...result,
+          chapterRows: Array.from({ length: 1305 }, (_, index) => ({
+            url: `/chapter/${1305 - index}`,
+            title: `Chapter ${1305 - index}`,
+            number: 1305 - index,
+          })),
+        };
+      return result;
+    };
+    return worker;
+  };
+  const workId = (await fixtureState.invoke('listWorks')).result.items[0].id;
+  return { ...fixtureState, workId };
+}
+
+test('combined details share one fetch in either order and preserve large chapter cursors', async (t) => {
+  for (const firstMethod of ['getWork', 'listReleases']) {
+    await t.test(firstMethod, async (t) => {
+      const { invoke, calls, workId } = await combinedFixture(t);
+      await invoke(firstMethod, { workId });
+      await invoke(firstMethod === 'getWork' ? 'listReleases' : 'getWork', { workId });
+      const first = (await invoke('listReleases', { workId })).result;
+      const second = (await invoke('listReleases', { workId, cursor: first.nextCursor })).result;
+      const third = (await invoke('listReleases', { workId, cursor: second.nextCursor })).result;
+      assert.equal(first.items.length, 500);
+      assert.equal(second.items[0].order, 500);
+      assert.equal(third.items.length, 305);
+      assert.equal(new Set([...first.items, ...second.items, ...third.items].map((r) => r.id)).size, 1305);
+      assert.equal(calls.filter((c) => c.method === 'detail').length, 1);
+      assert.equal(calls.filter((c) => c.method === 'chapters').length, 0);
+    });
+  }
+});
+
+test('combined snapshots coalesce concurrent detail/release calls without coupling cancellation', async (t) => {
+  const { catalog, source, tools, invoke, calls, workId } = await combinedFixture(t);
+  // The listing already created a worker; use a new generation for the held request.
+  let network = 'a';
+  tools.networkIdentity = () => network;
+  const original = tools.worker;
+  let finish;
+  tools.worker = (...args) => {
+    const worker = original(...args);
+    const request = worker.request;
+    worker.request = async (method, input, signal) => {
+      if (method === 'detail') await new Promise((resolve) => (finish = resolve));
+      return request(method, input, signal);
+    };
+    return worker;
+  };
+  const controller = new AbortController();
+  const details = catalog.invoke(source, 'source.getWork', { workId }, controller.signal);
+  const rejected = assert.rejects(details, { name: 'AbortError' });
+  while (!finish) await new Promise((resolve) => setImmediate(resolve));
+  const chapters = invoke('listReleases', { workId });
+  // Let the second reader join the shared disk lookup/task before cancellation.
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  controller.abort();
+  finish();
+  await rejected;
+  assert.equal((await chapters).result.items.length, 500);
+  assert.equal(calls.filter((c) => c.method === 'detail').length, 1);
+  network = 'b';
+  const next = invoke('getWork', { workId });
+  const previous = finish;
+  while (finish === previous) await new Promise((resolve) => setImmediate(resolve));
+  finish();
+  await next;
+  assert.equal(calls.filter((c) => c.method === 'detail').length, 2);
+});
+
+test('combined snapshots expire and explicit reload bypasses them without replacing active cursor snapshots', async (t) => {
+  const { invoke, catalog, source, calls, workId } = await combinedFixture(t);
+  const now = Date.now();
+  t.mock.method(Date, 'now', () => now);
+  await invoke('getWork', { workId });
+  const first = (await invoke('listReleases', { workId })).result;
+  await catalog.invoke(source, 'source.getWork', { workId }, new AbortController().signal, { cacheMode: 'reload' });
+  assert.equal(calls.filter((c) => c.method === 'detail').length, 2);
+  assert.equal((await invoke('listReleases', { workId, cursor: first.nextCursor })).result.items.length, 500);
+  await catalog.invoke(source, 'source.listReleases', { workId }, new AbortController().signal, {
+    cacheMode: 'reload',
+  });
+  assert.equal(calls.filter((c) => c.method === 'detail').length, 3);
+  await assert.rejects(invoke('listReleases', { workId, cursor: first.nextCursor }), /source_catalog_changed/);
+  Date.now.mock.mockImplementation(() => now + 120001);
+  await invoke('listReleases', { workId });
+  assert.equal(calls.filter((c) => c.method === 'detail').length, 4);
+});
+
+test('the registry parallel reload flow shares one combined detail operation', async (t) => {
+  const { catalog, source, tools, calls, workId } = await combinedFixture(t);
+  tools.networkIdentity = () => 'reload-fixture';
+  const original = tools.worker;
+  tools.worker = (...args) => {
+    const worker = original(...args),
+      request = worker.request;
+    worker.request = async (...params) => {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      return request(...params);
+    };
+    return worker;
+  };
+  for (let count = 1; count <= 2; count++) {
+    const [detail, chapters] = await Promise.all(
+      ['source.getWork', 'source.listReleases'].map((method) =>
+        catalog.invoke(source, method, { workId }, new AbortController().signal, { cacheMode: 'reload' }),
+      ),
+    );
+    assert.equal(detail.result.id, workId);
+    assert.equal(chapters.result.items.length, 500);
+    assert.equal(calls.filter((call) => call.method === 'detail').length, count);
+  }
+});
 test('disable and re-enable fence already running results even for the same APK digest', async (t) => {
   const { store, tools, invoke } = await fixture(t);
   let finish;

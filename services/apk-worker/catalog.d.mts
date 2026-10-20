@@ -11,6 +11,8 @@ export class ApkSourceCatalog implements InstalledSourceCatalogPort {
       sourceFile?: string;
       description?: string;
       pageConcurrency?: 1 | 2 | 3;
+      /** The detail response also supplies normalized chapterRows. */
+      combinedDetails?: boolean;
       transformCover?: (
         image: { blob: Blob; sha256: string },
         signal: AbortSignal,
