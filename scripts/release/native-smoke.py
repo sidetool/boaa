@@ -86,8 +86,9 @@ await document.destroy();console.log('PDF inspection/text PASS without native Ca
     elif a.component == 'apk':
         execute('native JRE and modified APK worker class loading', '/payload/java/bin/java', ['-cp', '/payload/runtime/target/apk-worker-0.1.0.jar:/payload/runtime/dependencies/*:/payload/runtime/smoke', 'AndroidDispatcherSmoke'])
         execute('APK oneshot installation and manifest', 'sh', ['-ec', 'node apk-payload.mjs; test -f /opt/boaa-runtimes/apk/current/manifest.json'], ['BOAA_APK_RUNTIME_ROOT=/opt/boaa-runtimes/apk'])
-    elif a.component == 'browser':
-        execute('native Chromium, both drivers, proxy and authentication', 'node', ['browser-smoke.mjs'])
+    elif a.component in ('browser', 'browser-camoufox'):
+        engine = 'Patchright' if a.component == 'browser' else 'Camoufox'
+        execute(f'native {engine}, proxy and authentication', 'node', ['browser-smoke.mjs'])
     elif a.component == 'metadata':
         execute('Python native dependencies and synthetic provider', 'python', ['-c', r'''
 import fastapi,uvicorn,httpx,bs4,lxml.etree,playwright,json
