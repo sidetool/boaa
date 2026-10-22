@@ -9,6 +9,7 @@ const licenseNoticeAssets = [
   ['LICENSE', 'LICENSE'],
   ['THIRD_PARTY_NOTICES.md', 'THIRD_PARTY_NOTICES.md'],
   ['third_party/licenses/st-page-flip/LICENSE', 'third_party/licenses/st-page-flip/LICENSE'],
+  ['third_party/licenses/st-page-flip/LICENSE', 'licenses/npm/page-flip%402.0.7/LICENSE'],
   ['third_party/licenses/7z-wasm/License.txt', 'third_party/licenses/7z-wasm/License.txt'],
   ['third_party/licenses/common/LGPL-2.1.txt', 'third_party/licenses/common/LGPL-2.1.txt'],
   ['third_party/licenses/common/unRarLicense.txt', 'third_party/licenses/common/unRarLicense.txt'],

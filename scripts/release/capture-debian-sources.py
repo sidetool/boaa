@@ -16,7 +16,31 @@ apt-get update >&2
 printf 'BOAA_PACKAGES_BEGIN\n'
 dpkg-query -W -f='${binary:Package}\t${Version}\t${Architecture}\t${source:Package}\t${source:Version}\n'
 printf 'BOAA_PACKAGES_END\n'
-dpkg-query -W -f='${source:Package}=${source:Version}\n' | sort -u | xargs apt-get --print-uris --download-only source
+dpkg-query -W -f='${source:Package}=${source:Version}\n' | sort -u > /tmp/boaa-source-versions
+if ! xargs apt-get --print-uris --download-only source < /tmp/boaa-source-versions > /tmp/boaa-source-uris; then
+    # Pinned base images can outlive versions in the rolling Debian indexes.
+    # This signed snapshot retains the ca-certificates version in the pinned Python base.
+    # Disable expiry only for the historical index, never signature/hash verification.
+    . /etc/os-release
+    cat > /etc/apt/sources.list.d/boaa-source-snapshot.sources <<EOF
+Types: deb-src
+URIs: https://snapshot.debian.org/archive/debian/20260811T000000Z/
+Suites: ${VERSION_CODENAME} ${VERSION_CODENAME}-updates
+Components: main
+Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg
+Check-Valid-Until: no
+
+Types: deb-src
+URIs: https://snapshot.debian.org/archive/debian-security/20260811T000000Z/
+Suites: ${VERSION_CODENAME}-security
+Components: main
+Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg
+Check-Valid-Until: no
+EOF
+    apt-get update >&2
+    xargs apt-get --print-uris --download-only source < /tmp/boaa-source-versions > /tmp/boaa-source-uris
+fi
+cat /tmp/boaa-source-uris
 '''
 
 
