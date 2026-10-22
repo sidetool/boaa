@@ -23,7 +23,7 @@ import { voiceApprovalForProfile, type VoiceProductStateV1, type VoiceSampleKind
 import type { RemoteProviderJob, RemoteProviderSettings } from '../../services/remote/remote-api-client';
 import type { HostedTTSOfflineCacheStatus } from '../../storage/hosted-tts-offline-cache';
 import { formatBytes, formatCount } from '../../utils/format';
-import ProviderSettingsPanel, { type ProviderSettingsPanelController } from '../providers/ProviderSettingsPanel';
+import type { ProviderSettingsPanelController } from '../providers/ProviderSettingsPanel';
 import type { SpokenTextRuleImpactSummary } from './spoken-text-rule-impact';
 import type { VoiceCastingPoolView } from './useVoiceProductController';
 
@@ -553,13 +553,13 @@ export default function TTSAddonPanel(props: TTSAddonPanelProps) {
             >
               <Check size={14} /> {spokenPreviewAlreadySkipped ? '이미 건너뜀' : '이 문장 건너뛰기'}
             </button>
-            <small>현재 책의 원문 전체가 일치할 때만 건너뜁니다.</small>
+            <small>원문 전체가 일치할 때만 건너뛰어요.</small>
           </div>
           <div className="spoken-rule-impact" aria-live="polite">
             <div className="setting-line">
               <div>
                 <strong>책 전체 영향</strong>
-                <small>저장된 건너뛰기 규칙만 검사하며 음성 합성은 실행하지 않습니다.</small>
+                <small>저장된 건너뛰기 규칙만 검사해요. 음성은 만들지 않아요.</small>
               </div>
               <button
                 className="ghost-btn compact"
@@ -570,7 +570,7 @@ export default function TTSAddonPanel(props: TTSAddonPanelProps) {
                 {spokenRuleImpactBusy ? '확인 중…' : '영향 확인'}
               </button>
             </div>
-            {!hasActiveSkipRules && <small>활성 건너뛰기 규칙이 없습니다.</small>}
+            {!hasActiveSkipRules && <small>켜진 건너뛰기 규칙이 없어요.</small>}
             {spokenRuleImpactError && <small className="error-text">{spokenRuleImpactError}</small>}
             {spokenRuleImpact && (
               <div className="spoken-rule-impact-result">
@@ -627,9 +627,7 @@ export default function TTSAddonPanel(props: TTSAddonPanelProps) {
                 </label>
               );
             })}
-            {props.characters.length === 0 && (
-              <p className="muted">화자 라벨링 후 캐릭터별 음성을 지정할 수 있습니다.</p>
-            )}
+            {props.characters.length === 0 && <p className="muted">화자 라벨링 후 인물별 음성을 지정할 수 있어요.</p>}
           </div>
         </div>
 
@@ -656,11 +654,11 @@ export default function TTSAddonPanel(props: TTSAddonPanelProps) {
               }
               onClick={() => void props.generateVoiceDraft('hosted')}
             >
-              <Wand2 size={16} /> Hosted 음성 초안
+              <Wand2 size={16} /> 서버 음성 초안
             </button>
           </div>
           <p className="muted">
-            자동 초안은 직접 고른 음성을 유지합니다. 주요 음성은 샘플 승인 전 책 전체 캐시에 사용되지 않습니다.
+            자동 초안은 직접 고른 음성을 유지해요. 주요 음성은 샘플을 승인해야 책 전체 캐시에 쓰여요.
           </p>
           {props.voiceCastingSummary && (
             <p
@@ -695,7 +693,7 @@ export default function TTSAddonPanel(props: TTSAddonPanelProps) {
               )}
               자 · 책 전체 {formatCount(props.bookCharacterCount)}자
             </span>
-            <small>정확한 예상 요금은 provider가 가격 정보를 제공할 때 표시됩니다.</small>
+            <small>정확한 예상 요금은 엔진이 가격 정보를 줄 때 표시돼요.</small>
           </div>
           <div className="voice-approval-list">
             {(props.voiceProductState?.suggestions ?? [])
@@ -718,9 +716,7 @@ export default function TTSAddonPanel(props: TTSAddonPanelProps) {
                     <div>
                       <strong>{profile.label}</strong>
                       <small>
-                        {suggestion.metadataLimitations.length
-                          ? '특성 미확인 · 샘플 비교 권장'
-                          : 'Provider metadata 확인됨'}
+                        {suggestion.metadataLimitations.length ? '특성 미확인 · 샘플 비교 권장' : '엔진 정보 확인됨'}
                       </small>
                     </div>
                     <span
@@ -768,7 +764,7 @@ export default function TTSAddonPanel(props: TTSAddonPanelProps) {
                 );
               })}
             {(props.voiceProductState?.suggestions ?? []).filter((item) => item.major).length === 0 && (
-              <p className="muted">음성 목록을 불러온 뒤 자동 초안을 생성하세요.</p>
+              <p className="muted">음성 목록을 불러온 뒤 자동 초안을 만들어 보세요.</p>
             )}
           </div>
           <label className="setting-check">
@@ -777,7 +773,7 @@ export default function TTSAddonPanel(props: TTSAddonPanelProps) {
               checked={props.voiceProductState?.minorFallbackEnabled ?? false}
               onChange={(event) => void props.setMinorFallbackEnabled(event.target.checked)}
             />
-            <span>비주요 캐릭터에 fallback 음성 허용</span>
+            <span>비주요 캐릭터에 대체 음성 허용</span>
           </label>
         </div>
 
@@ -815,7 +811,7 @@ export default function TTSAddonPanel(props: TTSAddonPanelProps) {
         <div className="voice-profile-section pronunciation-section">
           <div className="setting-line">
             <h4>발음 사전</h4>
-            <span>revision {props.voiceProductState?.pronunciationProfile.revision ?? 0}</span>
+            <span>버전 {props.voiceProductState?.pronunciationProfile.revision ?? 0}</span>
           </div>
           <div className="pronunciation-editor">
             <input
@@ -869,17 +865,17 @@ export default function TTSAddonPanel(props: TTSAddonPanelProps) {
           <>
             <div className="voice-profile-section hosted-voice-section">
               <div className="setting-line">
-                <h4>Hosted 캐릭터 음성</h4>
+                <h4>서버 캐릭터 음성</h4>
                 <span>{props.hostedPlaybackReady ? props.selectedHostedProviderLabel : '대기'}</span>
               </div>
               <div className="addon-status">
-                <span>{props.hostedBusy ? 'Cache 작업 중' : 'Cache 재생'}</span>
+                <span>{props.hostedBusy ? '캐시 준비 중' : '캐시 재생'}</span>
                 <strong>
                   {props.hostedPlaybackReady
                     ? `${formatCount(hostedProfiles.length)}개 지정`
                     : props.selectedHostedProvider
                       ? '음성 ID 필요'
-                      : 'provider 미선택'}
+                      : '엔진 미선택'}
                 </strong>
               </div>
               {props.offlineDownloadPolicy && (
@@ -907,7 +903,7 @@ export default function TTSAddonPanel(props: TTSAddonPanelProps) {
                     />
                     충전 중에만 재개
                   </label>
-                  <small>앱을 다시 열 때의 음성 복구에 적용됩니다.</small>
+                  <small>앱을 다시 열 때 음성 복구에 적용돼요.</small>
                 </fieldset>
               )}
               <button
@@ -921,7 +917,7 @@ export default function TTSAddonPanel(props: TTSAddonPanelProps) {
                   props.hostedVoicesLoadingProvider === props.selectedHostedProvider?.providerId
                 }
               >
-                <RefreshCw size={16} /> Hosted 음성 새로고침
+                <RefreshCw size={16} /> 서버 음성 새로고침
               </button>
               {(['current', 'nearby', 'book'] as const).map((scope) => (
                 <button
@@ -1038,18 +1034,10 @@ export default function TTSAddonPanel(props: TTSAddonPanelProps) {
                   />
                 ))}
                 {props.characters.length === 0 && (
-                  <p className="muted">라벨링 후 등장인물별 hosted 음성을 지정할 수 있습니다.</p>
+                  <p className="muted">화자 라벨링 후 인물별 서버 음성을 지정할 수 있어요.</p>
                 )}
               </div>
             </div>
-
-            <ProviderSettingsPanel
-              scope="tts_synthesis"
-              title="TTS provider"
-              providers={props.providers}
-              draft={props.providerDraft}
-              controller={props.providerController}
-            />
           </>
         )}
       </div>

@@ -157,7 +157,7 @@
   transform: none !important;
 }
 
-.reader-screen.page-to-scroll-settling .reader-paginated-page.is-outgoing {
+.reader-screen.page-to-scroll-settling .reader-paginated-page:is(.is-outgoing, .is-preview) {
   display: none;
 }
 
@@ -198,8 +198,7 @@
 .reader-screen.immersive .reader-mobile-search,
 .reader-screen.immersive .reader-search-results-layer,
 .reader-screen.immersive .reader-footnote-backdrop,
-.reader-screen.immersive .reader-pagination-controls,
-.reader-screen.immersive .chapter-nav {
+.reader-screen.immersive .reader-pagination-controls {
   display: none;
 }
 

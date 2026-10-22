@@ -193,7 +193,7 @@ function SourceView({
             item={item}
             session={session}
             owned={owned(item)}
-            open={() => open(...view.itemOpenArgs(item))}
+            open={() => open(...view.itemOpenArgs(item), item)}
           />
         ))}
         {!view.data.hasPage && view.data.busy && <SkeletonPosters count={12} />}
@@ -346,7 +346,7 @@ function SectionRow({
                     session={session}
                     owned={owned(item)}
                     rank={ranked ? index + 1 : undefined}
-                    open={() => open(...state.itemOpenArgs(item))}
+                    open={() => open(...state.itemOpenArgs(item), item)}
                   />
                 ))
             ) : state.error ? (

@@ -62,7 +62,7 @@ export interface ApplicationThemeColors {
 /** @deprecated `screen_turn` is accepted only to migrate older saved settings. */
 export type ReadingProfileFlow = 'scroll' | 'screen_turn' | 'paginated';
 export type ReadingModeLock = 'auto' | 'scroll' | 'paginated';
-export type PageTurnMotion = 'instant' | 'smooth' | 'page';
+export type PageTurnMotion = 'instant' | 'smooth' | 'slide' | 'page';
 export type PageSpread = 'single' | 'double' | 'auto';
 
 export interface ReadingProfile {

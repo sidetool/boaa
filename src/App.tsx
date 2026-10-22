@@ -5866,10 +5866,11 @@ export default function App() {
             playing={ttsPlaying}
             paused={ttsPaused}
             busy={hostedTTSBusy}
+            waiting={ttsExecutionController.playbackWaiting}
             rate={ttsPlaybackSettings.rate}
             timerPreset={ttsExecutionController.sleepTimerPreset}
             timerRemainingSeconds={ttsExecutionController.sleepTimerRemainingSeconds}
-            status={ttsExecutionController.errorMessage ?? hostedTTSStatus}
+            status={ttsExecutionController.errorMessage ?? ttsExecutionController.playbackStatus}
             previous={() => void jumpTTS(-1)}
             next={() => void jumpTTS(1)}
             start={() => {

@@ -104,6 +104,7 @@ jobs:
       - run: node --test --test-concurrency=2 scripts/release/*.test.mjs services/apk-worker/*.test.mjs services/runtime-components/runtime.test.mjs
       - run: python3 -m unittest discover -s services/runtime-components -p 'test_*.py'
       - run: python3 -m unittest discover -s scripts/release -p 'test_*.py'
+      - run: node scripts/build-page-flip-core.mjs --check
       - run: pnpm check:web-server
       - name: Account isolation and TTS regression tests
         run: >-

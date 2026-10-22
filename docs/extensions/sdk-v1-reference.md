@@ -56,6 +56,12 @@
 긴 외부 본문 작업은 `providerText(url)`과 선언형 content service를 사용할 수 있다. 이는 모든 확장의
 필수 서버가 아니며, 일반 source는 host HTTP와 asset API만으로 동작한다.
 
+브라우저 권한을 선언한 소스의 기본 정책은 `자동`이다. 명시적 WebView는 설치된 브라우저를 사용하고,
+HTTP는 인증 후에도 차단이 계속될 때만 브라우저로 전환한다. 성공한 경로는 30분 동안 기억한다.
+[공통 자동 정책과 자원 제한](mangayomi-compatibility.md#실행-방식)은 SDK text와 호환 HTTP에 함께 적용된다.
+신규 관리형 Docker 설치에는 Patchright가 기본 제공되고 Camoufox는 선택 설치다.
+저장된 `사용 안 함` 설정과 manifest 네트워크 권한을 우회하지 않는다.
+
 ## 사용자에게 전달되는 오류 범주
 
 - `source_auth_required`, `source_auth_forbidden`: 연결 누락·만료 또는 권한 부족.

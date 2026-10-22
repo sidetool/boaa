@@ -5,6 +5,14 @@ third-party software under separate terms. This notice records the archive backe
 deployment, but it does not replace the license texts under `third_party/licenses/` or the generated production
 dependency inventory at `third_party/production-license-inventory.json`.
 
+## Reader page turning
+
+The reader uses the StPageFlip 2.0.7 calculation core (MIT, Copyright (c) 2020 Nodlik),
+from commit `ab30ecc1d9f6d98de1a99b8e296469382f41c120` of https://github.com/Nodlik/StPageFlip.
+The BOAA adapter follows its HTML page clipping and layer ordering. Unmodified source
+and build instructions are in `third_party/st-page-flip/`; the license accompanies Web
+builds at `third_party/licenses/st-page-flip/LICENSE`.
+
 ## Google identity verification
 
 The browser Web edition uses `jose` 6.2.12 (MIT, copyright Filip Skokan) to verify Google ID tokens.

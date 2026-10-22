@@ -25,7 +25,7 @@ export interface DiscoveryScreenProps {
   library: LibraryScreenProps;
   discovery: DiscoveryController;
   sources: ExternalSourceController;
-  open(source: string, input: ExternalSourceListInput, title?: string): void;
+  open(source: string, input: ExternalSourceListInput, title?: string, item?: ExternalItemSummary): void;
 }
 export function useDiscoveryScreenState({ discovery, sources, open }: DiscoveryScreenProps) {
   const { config, scope, session } = discovery;

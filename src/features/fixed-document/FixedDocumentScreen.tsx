@@ -1,3 +1,5 @@
+import { usePageTurn } from '../reader/use-page-turn';
+import { ReaderChapterEnd } from '../reader/ReaderChapterEnd';
 import { useOptionalAppRuntime } from '../../app/runtime/RuntimeProvider';
 import { createDocumentTextStore } from '../../storage/document-text-store';
 import { comicCropKey } from './comic-crop-key';
@@ -141,8 +143,10 @@ import '../../ui-next/reader/document.css';
 type FitMode = ComicReadingProfile['fit'];
 type ViewMode = ComicViewMode;
 
-const CONTINUOUS_SECTION_NAV_HEIGHT = 112;
-const CONTINUOUS_SECTION_BOUNDARY_HEIGHT = 196;
+// Reserve space for the chapter controls above the mobile toolbar and safe area.
+// Keep the virtual extent and auto-reading end calculation on these same heights.
+const CONTINUOUS_SECTION_NAV_HEIGHT = 180;
+const CONTINUOUS_SECTION_BOUNDARY_HEIGHT = 232;
 
 const OCR_LANGUAGE_LABELS: Record<OcrLanguageModel, string> = {
   kor: '한국어',
@@ -427,6 +431,20 @@ export default function FixedDocumentScreen({
   const [viewMode, setViewMode] = useState<ViewMode>('single');
   const [pageTurnDirection, setPageTurnDirection] = useState<-1 | 1>();
   const pageTurnTimerRef = useRef<number>();
+  const turnCommitRef = useRef<{
+    index: number;
+    pages: number[];
+    started: boolean;
+    resolve(): void;
+    reject(error: unknown): void;
+  }>();
+  const [turnRequest, setTurnRequest] = useState<{
+    index: number;
+    pages: number[];
+    signal: AbortSignal;
+    resolve(value: { index: number; pages: number[] }): void;
+    reject(error: Error): void;
+  }>();
   const [zoom, setZoom] = useState(1);
   const [rotation, setRotation] = useState(0);
   const [imageDimensions, setImageDimensions] = useState<Map<string, ContinuousImageDimensions>>(() => new Map());
@@ -586,19 +604,39 @@ export default function FixedDocumentScreen({
   const nextDocumentSection = documentSections[currentDocumentSectionIndex + 1];
   const hasPreviousSection = Boolean(previousDocumentSection || remoteNavigation?.previous);
   const hasNextSection = Boolean(nextDocumentSection || remoteNavigation?.next);
-  const navigateSection = (direction: -1 | 1) => {
-    if (remoteNavigation?.busy) return;
-    const section = direction === -1 ? previousDocumentSection : nextDocumentSection;
-    if (section) {
-      goToPage(section.startPageIndex);
-      return;
-    }
-    const action = direction === -1 ? remoteNavigation?.previous : remoteNavigation?.next;
-    setNavigationError('');
-    return action?.().catch((error: unknown) =>
-      setNavigationError(error instanceof Error ? error.message : '회차를 열지 못했습니다.'),
-    );
-  };
+  const sectionNavigationPending = useRef(false);
+  const navigateSection = useCallback(
+    (direction: -1 | 1) => {
+      if (remoteNavigation?.busy || sectionNavigationPending.current) return;
+      const section = direction === -1 ? previousDocumentSection : nextDocumentSection;
+      if (section) {
+        goToPage(section.startPageIndex);
+        return;
+      }
+      const action = direction === -1 ? remoteNavigation?.previous : remoteNavigation?.next;
+      setNavigationError('');
+      if (!action) return;
+      sectionNavigationPending.current = true;
+      return Promise.resolve()
+        .then(() => action())
+        .catch((error: unknown) =>
+          setNavigationError(error instanceof Error ? error.message : '회차를 열지 못했습니다.'),
+        )
+        .finally(() => {
+          sectionNavigationPending.current = false;
+        });
+    },
+    [remoteNavigation, previousDocumentSection, nextDocumentSection, goToPage],
+  );
+  const pageTurnTarget = useCallback(
+    (step: -1 | 1): number | undefined => {
+      if (effectiveViewMode === 'spread' && novel.format === 'image_archive')
+        return comicSpreads[comicSpreadForPage(comicSpreads, pageIndex) + step]?.readingOrder[0];
+      const target = pageIndex + step;
+      return target >= 0 && target < totalPages ? target : undefined;
+    },
+    [effectiveViewMode, novel.format, comicSpreads, pageIndex, totalPages],
+  );
   const continuousPageIndexes = useMemo(
     () =>
       continuousComicPageIndexes(
@@ -692,7 +730,11 @@ export default function FixedDocumentScreen({
             streamPrefetch,
           )
         : archiveFullImageWindow(displayed, pageIndex, totalPages);
-    if (!continuousView) return new Set(streamPrefetch === 0 ? wanted : [...wanted, ...nextAutoPages]);
+    if (!continuousView)
+      return new Set([
+        ...(streamPrefetch === 0 ? wanted : [...wanted, ...nextAutoPages]),
+        ...(turnRequest?.pages ?? []),
+      ]);
     if (!currentDocumentSection) return new Set(wanted);
     const sectionEnd = currentDocumentSection.startPageIndex + currentDocumentSection.pageCount;
     return new Set(wanted.filter((index) => index >= currentDocumentSection.startPageIndex && index < sectionEnd));
@@ -705,6 +747,7 @@ export default function FixedDocumentScreen({
     nextAutoPages,
     streamPrefetch,
     streamVisiblePageKey,
+    turnRequest,
   ]);
 
   const recordArchiveImageDimensions = useCallback(
@@ -865,8 +908,107 @@ export default function FixedDocumentScreen({
     savePosition: remoteNavigation?.savePosition,
   });
 
+  useEffect(() => {
+    if (!turnRequest || turnRequest.signal.aborted) return;
+    const failure = turnRequest.pages.map((index) => archiveImages.errors.get(index)).find(Boolean);
+    if (failure) {
+      turnRequest.reject(new Error(failure));
+      return;
+    }
+    if (turnRequest.pages.every((index) => archiveImages.pages.has(index)))
+      turnRequest.resolve({ index: turnRequest.index, pages: turnRequest.pages });
+  }, [turnRequest, archiveImages.pages, archiveImages.errors]);
+  const comicTurn = usePageTurn<{ index: number; pages: number[] }>({
+    stage: viewportRef,
+    curl: comicProfile.pageTurnMotion === 'page',
+    enabled:
+      novel.format === 'image_archive' &&
+      !continuousView &&
+      comicProfile.pageTurnMotion !== 'instant' &&
+      layoutReady &&
+      !remoteNavigation?.busy,
+    scope: `${novel.id}:${novel.activeContentRevisionId ?? novel.sourceContentHash ?? novel.rawTextHash}:${entryRequestVersion}:${effectiveViewMode}:${fit}:${zoom}:${rotation}:${comicProfile.direction}:${comicProfile.pageTurnMotion}`,
+    position: pageIndex,
+    rtl: comicProfile.direction === 'rtl',
+    manualReady: true,
+    prepare: (step, signal) => {
+      const spread =
+        effectiveViewMode === 'spread' ? comicSpreads[comicSpreadForPage(comicSpreads, pageIndex) + step] : undefined;
+      const index = pageTurnTarget(step);
+      if (index === undefined) return Promise.resolve(undefined);
+      const pages = spread ? comicSpreadPages(spread) : [index];
+      setNavigationError('');
+      // This explicit new turn is the retry action; a failed hidden preview has no page-level retry button.
+      for (const target of pages) if (archiveImages.errors.has(target)) archiveImages.retry(target);
+      return new Promise((resolve, reject) => {
+        const request = { index, pages, signal, resolve, reject };
+        signal.addEventListener(
+          'abort',
+          () => {
+            setTurnRequest((current) => (current === request ? undefined : current));
+            reject(new DOMException('Cancelled', 'AbortError'));
+          },
+          { once: true },
+        );
+        setTurnRequest(request);
+      });
+    },
+    commit: (next) =>
+      new Promise<void>((resolve, reject) => {
+        const signal = turnRequest?.signal;
+        const cleanup = () => {
+          signal?.removeEventListener('abort', abort);
+          if (turnCommitRef.current === request) turnCommitRef.current = undefined;
+        };
+        const request = {
+          ...next,
+          started: false,
+          resolve: () => {
+            cleanup();
+            resolve();
+          },
+          reject: (error: unknown) => {
+            cleanup();
+            reject(error);
+          },
+        };
+        const abort = () => request.reject(new DOMException('Cancelled', 'AbortError'));
+        if (signal?.aborted) {
+          abort();
+          return;
+        }
+        turnCommitRef.current = request;
+        signal?.addEventListener('abort', abort, { once: true });
+        goToPage(next.index);
+      }),
+    edge: navigateSection,
+    error: () => setNavigationError('페이지를 불러오지 못했습니다. 다시 시도하세요.'),
+  });
+  // A RAF alone does not guarantee that React has committed the requested page.
+  // Resolve only from the DOM belonging to the target index, after those exact images decode.
+  useLayoutEffect(() => {
+    const request = turnCommitRef.current;
+    if (!request || request.started || request.index !== pageIndex) return;
+    const images = request.pages.map((index) =>
+      viewportRef.current?.querySelector<HTMLImageElement>(`.is-turn-current article[data-page-index="${index}"] img`),
+    );
+    if (images.some((image) => !image)) return;
+    request.started = true;
+    void Promise.all(images.map((image) => image!.decode())).then(request.resolve, request.reject);
+  }, [pageIndex, comicTurn.preview, archiveImages.pages]);
   const turnPage = useCallback(
     (step: -1 | 1) => {
+      if (comicTurn.active || remoteNavigation?.busy || sectionNavigationPending.current) return;
+      const target = pageTurnTarget(step);
+      if (target === undefined) {
+        void navigateSection(step);
+        return;
+      }
+      if (novel.format === 'image_archive' && !continuousView && comicProfile.pageTurnMotion !== 'instant') {
+        setNavigationError('');
+        comicTurn.turn(step);
+        return;
+      }
       if (!continuousView && comicProfile.pageTurnMotion !== 'instant') {
         window.clearTimeout(pageTurnTimerRef.current);
         const visualStep: -1 | 1 =
@@ -874,23 +1016,18 @@ export default function FixedDocumentScreen({
         setPageTurnDirection(visualStep);
         pageTurnTimerRef.current = window.setTimeout(() => setPageTurnDirection(undefined), 240);
       }
-      if (effectiveViewMode === 'spread' && novel.format === 'image_archive') {
-        const currentSpread = comicSpreadForPage(comicSpreads, pageIndex);
-        const target = comicSpreads[Math.max(0, Math.min(comicSpreads.length - 1, currentSpread + step))];
-        if (target) goToPage(target.readingOrder[0]);
-        return;
-      }
-      goToPage(pageIndex + step);
+      goToPage(target);
     },
     [
-      comicProfile.direction,
-      comicProfile.pageTurnMotion,
-      comicSpreads,
-      continuousView,
-      effectiveViewMode,
-      goToPage,
+      comicTurn,
+      remoteNavigation?.busy,
+      pageTurnTarget,
+      navigateSection,
       novel.format,
-      pageIndex,
+      continuousView,
+      comicProfile.pageTurnMotion,
+      comicProfile.direction,
+      goToPage,
     ],
   );
 
@@ -1533,6 +1670,7 @@ export default function FixedDocumentScreen({
 
   const pointerDown = (event: ReactPointerEvent<HTMLElement>) => {
     if (isFixedDocumentInteractiveTarget(event.target)) return;
+    if (event.isPrimary) activePointersRef.current.clear();
     if (activePointersRef.current.size === 0) pointerPanAxisRef.current = undefined;
     event.currentTarget.setPointerCapture(event.pointerId);
     activePointersRef.current.set(event.pointerId, { x: event.clientX, y: event.clientY });
@@ -1543,8 +1681,11 @@ export default function FixedDocumentScreen({
       immersiveEligible: true,
     };
     if (activePointersRef.current.size === 1 && continuousView)
-      scrollSectionBoundary.onPointerDown(event.clientY, event.pointerType);
+      scrollSectionBoundary.onPointerDown(event.clientY, event.pointerType, event.target);
+    if (activePointersRef.current.size === 1 && !continuousView && zoom <= 1.02)
+      comicTurn.down(event.pointerId, event.clientX, event.clientY);
     if (activePointersRef.current.size === 2) {
+      comicTurn.cancel();
       pointerPanAxisRef.current = undefined;
       const [first, second] = [...activePointersRef.current.values()];
       const midpointX = (first.x + second.x) / 2;
@@ -1593,6 +1734,10 @@ export default function FixedDocumentScreen({
       event.preventDefault();
       return;
     }
+    if (!continuousView && zoom <= 1.02 && comicTurn.move(event.pointerId, event.clientX, event.clientY)) {
+      event.preventDefault();
+      return;
+    }
     const viewport = viewportRef.current;
     const start = pointerStartRef.current;
     if (viewport && !pointerPanAxisRef.current) {
@@ -1624,8 +1769,16 @@ export default function FixedDocumentScreen({
     if (activePointersRef.current.size < 2) pinchRef.current = undefined;
     const start = pointerStartRef.current;
     pointerStartRef.current = undefined;
+    const turnConsumed = comicTurn.up(event.pointerId, event.clientX, cancelled);
     if (event.currentTarget.hasPointerCapture(event.pointerId))
       event.currentTarget.releasePointerCapture(event.pointerId);
+    if (turnConsumed) {
+      suppressViewportClickRef.current = true;
+      window.setTimeout(() => {
+        suppressViewportClickRef.current = false;
+      }, 0);
+      return;
+    }
     const deltaX = start ? event.clientX - start.x : 0;
     const deltaY = start ? event.clientY - start.y : 0;
     const viewportRect = viewportRef.current?.getBoundingClientRect();
@@ -1695,13 +1848,161 @@ export default function FixedDocumentScreen({
     });
   };
   const rtlComic = novel.format === 'image_archive' && comicProfile.direction === 'rtl';
-  const currentSpreadIndex = comicSpreadForPage(comicSpreads, pageIndex);
   const canTurn = (step: -1 | 1) =>
-    effectiveViewMode === 'spread' && novel.format === 'image_archive'
-      ? currentSpreadIndex + step >= 0 && currentSpreadIndex + step < comicSpreads.length
-      : pageIndex + step >= 0 && pageIndex + step < totalPages;
+    !remoteNavigation?.busy &&
+    (pageTurnTarget(step) !== undefined || (step === 1 ? hasNextSection : hasPreviousSection));
   const leftTurnStep: -1 | 1 = rtlComic ? 1 : -1;
   const rightTurnStep: -1 | 1 = rtlComic ? -1 : 1;
+
+  const renderPages = (indexes: readonly number[], preview = false) =>
+    indexes.map((index) => (
+      <article
+        key={sortedChapters[index]?.id ?? index}
+        ref={
+          continuousView &&
+          !stableComicFlow &&
+          (novel.format !== 'image_archive' ||
+            (archiveImages.pages.has(index) && imageDimensions.has(sortedChapters[index]?.id ?? '')))
+            ? continuousVirtualizer.measureElement
+            : undefined
+        }
+        data-index={continuousVirtualIndexByPage.get(index) ?? index}
+        data-page-index={index}
+        className={`${preview ? 'is-preview' : index === pageIndex ? 'is-current' : ''}${effectiveViewMode === 'spread' ? ' is-spread-page' : ''}${effectiveViewMode === 'spread' && comicSpreads[comicSpreadForPage(comicSpreads, preview ? (comicTurn.preview?.index ?? pageIndex) : pageIndex)]?.widePage === index ? ' is-double-page' : ''}`}
+        style={
+          stableComicFlow
+            ? ({
+                height: estimateContinuousPageSize(index),
+                '--fixed-doc-seamless-page-width': `${seamlessContinuousPageWidth(index)}px`,
+              } as CSSProperties)
+            : continuousView
+              ? ({
+                  transform: `translateY(${
+                    continuousItems.find((item) => item.index === continuousVirtualIndexByPage.get(index))?.start ?? 0
+                  }px)`,
+                  ...(!seamlessContinuousView &&
+                  novel.format === 'image_archive' &&
+                  (!archiveImages.pages.has(index) || !imageDimensions.has(sortedChapters[index]?.id ?? ''))
+                    ? {
+                        height:
+                          continuousItems.find((item) => item.key === sortedChapters[index]?.id)?.size ??
+                          estimateContinuousPageSize(index),
+                      }
+                    : {}),
+                  ...(seamlessContinuousView
+                    ? {
+                        height: estimateContinuousPageSize(index),
+                        '--fixed-doc-seamless-page-width': `${seamlessContinuousPageWidth(index)}px`,
+                      }
+                    : {}),
+                } as CSSProperties)
+              : undefined
+        }
+        aria-label={`${index + 1}페이지`}
+        onClick={!preview && index !== pageIndex ? () => goToPage(index) : undefined}
+      >
+        {novel.format === 'pdf' && pdfPages.get(index) ? (
+          <PdfPageView
+            page={pdfPages.get(index)}
+            fit={fit}
+            zoom={zoom}
+            rotation={rotation}
+            availableWidth={Math.max(240, viewportSize.width - 72)}
+            availableHeight={Math.max(320, viewportSize.height - 72)}
+            pageIndex={index}
+            textBlocks={textBlocksByPage.get(index)}
+            selectionEnabled={selectionMode}
+            searchQuery={searchOpen ? searchQuery : ''}
+            annotations={documentAnnotations.filter((annotation) => annotation.pageIndex === index)}
+            onTextSelection={setPendingTextSelection}
+            regionSelectionEnabled={regionMode}
+            onRegionSelection={setPendingRegionSelection}
+            activeRange={
+              listeningPosition?.anchor.kind === 'fixed_text'
+                ? {
+                    blockId: listeningPosition.anchor.blockId,
+                    startOffset: listeningPosition.anchor.startOffset,
+                    endOffset: listeningPosition.anchor.endOffset,
+                  }
+                : undefined
+            }
+          />
+        ) : novel.format === 'pdf' ? (
+          <div className="fixed-doc-page-loading">{index + 1}페이지 불러오는 중</div>
+        ) : archiveImages.pages.get(index)?.url ? (
+          <img
+            src={archiveImages.pages.get(index)?.url}
+            alt={`${novel.title} ${index + 1}페이지`}
+            draggable={false}
+            onError={(event) => {
+              archiveImages.reportError(index, event.currentTarget.src);
+              if (preview) comicTurn.fail(new Error('page_image_decode_failed'));
+            }}
+            width={imageDimensions.get(sortedChapters[index]?.id ?? '')?.width}
+            height={imageDimensions.get(sortedChapters[index]?.id ?? '')?.height}
+            onLoad={(event) => {
+              const image = event.currentTarget;
+              recordArchiveImageDimensions(index, { width: image.naturalWidth, height: image.naturalHeight });
+              if (preview)
+                void image
+                  .decode()
+                  .then(async () => {
+                    if (!image.isConnected) return;
+                    const images = viewportRef.current?.querySelectorAll<HTMLImageElement>('.is-turn-preview img');
+                    if (!images?.length || ![...images].every((img) => img.complete && img.naturalWidth > 0)) return;
+                    await Promise.all([...images].map((img) => img.decode()));
+                    if (image.isConnected) comicTurn.ready();
+                  })
+                  .catch(() => {
+                    if (image.isConnected) comicTurn.fail(new Error('page_image_decode_failed'));
+                  });
+            }}
+            style={
+              comicProfile.crop === 'auto' && comicProfile.pageCrops?.[String(index)]
+                ? ({
+                    '--fixed-doc-image-clip': Object.values(comicProfile.pageCrops[String(index)]).some(
+                      (value) => value > 0,
+                    )
+                      ? undefined
+                      : 'none',
+                    '--fixed-doc-crop-top': `${comicProfile.pageCrops[String(index)].top * 100}%`,
+                    '--fixed-doc-crop-right': `${comicProfile.pageCrops[String(index)].right * 100}%`,
+                    '--fixed-doc-crop-bottom': `${comicProfile.pageCrops[String(index)].bottom * 100}%`,
+                    '--fixed-doc-crop-left': `${comicProfile.pageCrops[String(index)].left * 100}%`,
+                    '--fixed-doc-crop-scale': comicCropRefitScale(comicProfile.pageCrops[String(index)], fit),
+                  } as CSSProperties)
+                : comicProfile.crop === 'auto'
+                  ? ({ '--fixed-doc-image-clip': 'none' } as CSSProperties)
+                  : undefined
+            }
+          />
+        ) : (
+          <div
+            className="fixed-doc-page-loading"
+            style={seamlessContinuousView ? { height: estimateContinuousPageSize(index) } : undefined}
+          >
+            <div className="fixed-doc-page-retry">
+              <span role="status">{archiveImages.errors.get(index) ?? `${index + 1}페이지 불러오는 중`}</span>
+              {archiveImages.errors.has(index) ? (
+                <button
+                  type="button"
+                  className="secondary-btn"
+                  aria-label={`${index + 1}페이지 다시 불러오기`}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    archiveImages.retry(index);
+                  }}
+                >
+                  <RefreshCw size={16} /> 다시 불러오기
+                </button>
+              ) : (
+                <span className="fixed-doc-loading-spinner" aria-hidden="true" />
+              )}
+            </div>
+          </div>
+        )}
+      </article>
+    ));
 
   return (
     <main
@@ -2097,13 +2398,13 @@ export default function FixedDocumentScreen({
           </aside>
         )}
         <section
-          className={`fixed-doc-viewport is-${fit} is-${effectiveViewMode} is-bg-${comicProfile.background ?? 'charcoal'}${pageTurnDirection ? ` is-page-turn-${pageTurnDirection > 0 ? 'next' : 'previous'} motion-${comicProfile.pageTurnMotion ?? 'slide'}` : ''}`}
+          className={`fixed-doc-viewport is-${fit} is-${effectiveViewMode} is-bg-${comicProfile.background ?? 'charcoal'} motion-${comicProfile.pageTurnMotion ?? 'slide'}${pageTurnDirection ? ` is-page-turn-${pageTurnDirection > 0 ? 'next' : 'previous'} motion-${comicProfile.pageTurnMotion ?? 'slide'}` : ''}`}
           ref={viewportRef}
           onPointerDown={pointerDown}
           onPointerMove={pointerMove}
           onPointerUp={pointerUp}
           onPointerCancel={(event) => pointerUp(event, true)}
-          onLostPointerCapture={pointerUp}
+          onLostPointerCapture={(event) => pointerUp(event, true)}
           onClickCapture={(event) => {
             if (!suppressViewportClickRef.current) return;
             event.preventDefault();
@@ -2146,206 +2447,69 @@ export default function FixedDocumentScreen({
               )}
             </div>
           ) : (
-            <ComicPageFlow
-              enabled={stableComicFlow}
-              geometry={imageDimensions}
-              sectionKey={continuousSectionKey}
-              viewportRef={viewportRef}
-              contentRef={continuousContentRef}
-              className={`fixed-doc-pages${stableComicFlow ? ' is-page-flow' : continuousView ? ' is-virtual' : ''}`}
-              style={
-                continuousView && !stableComicFlow
-                  ? {
-                      ...pageStyle,
-                      height: continuousVirtualizer.getTotalSize() + continuousSectionFooterHeight,
-                    }
-                  : pageStyle
-              }
-            >
-              {displayedPages.map((index) => (
-                <article
-                  key={sortedChapters[index]?.id ?? index}
-                  ref={
-                    continuousView &&
-                    !stableComicFlow &&
-                    (novel.format !== 'image_archive' ||
-                      (archiveImages.pages.has(index) && imageDimensions.has(sortedChapters[index]?.id ?? '')))
-                      ? continuousVirtualizer.measureElement
-                      : undefined
-                  }
-                  data-index={continuousVirtualIndexByPage.get(index) ?? index}
-                  data-page-index={index}
-                  className={`${index === pageIndex ? 'is-current' : ''}${effectiveViewMode === 'spread' ? ' is-spread-page' : ''}${effectiveViewMode === 'spread' && comicSpreads[comicSpreadForPage(comicSpreads, pageIndex)]?.widePage === index ? ' is-double-page' : ''}`}
-                  style={
-                    stableComicFlow
-                      ? ({
-                          height: estimateContinuousPageSize(index),
-                          '--fixed-doc-seamless-page-width': `${seamlessContinuousPageWidth(index)}px`,
-                        } as CSSProperties)
-                      : continuousView
-                        ? ({
-                            transform: `translateY(${
-                              continuousItems.find((item) => item.index === continuousVirtualIndexByPage.get(index))
-                                ?.start ?? 0
-                            }px)`,
-                            ...(!seamlessContinuousView &&
-                            novel.format === 'image_archive' &&
-                            (!archiveImages.pages.has(index) || !imageDimensions.has(sortedChapters[index]?.id ?? ''))
-                              ? {
-                                  height:
-                                    continuousItems.find((item) => item.key === sortedChapters[index]?.id)?.size ??
-                                    estimateContinuousPageSize(index),
-                                }
-                              : {}),
-                            ...(seamlessContinuousView
-                              ? {
-                                  height: estimateContinuousPageSize(index),
-                                  '--fixed-doc-seamless-page-width': `${seamlessContinuousPageWidth(index)}px`,
-                                }
-                              : {}),
-                          } as CSSProperties)
-                        : undefined
-                  }
-                  aria-label={`${index + 1}페이지`}
-                  onClick={index !== pageIndex ? () => goToPage(index) : undefined}
-                >
-                  {novel.format === 'pdf' && pdfPages.get(index) ? (
-                    <PdfPageView
-                      page={pdfPages.get(index)}
-                      fit={fit}
-                      zoom={zoom}
-                      rotation={rotation}
-                      availableWidth={Math.max(240, viewportSize.width - 72)}
-                      availableHeight={Math.max(320, viewportSize.height - 72)}
-                      pageIndex={index}
-                      textBlocks={textBlocksByPage.get(index)}
-                      selectionEnabled={selectionMode}
-                      searchQuery={searchOpen ? searchQuery : ''}
-                      annotations={documentAnnotations.filter((annotation) => annotation.pageIndex === index)}
-                      onTextSelection={setPendingTextSelection}
-                      regionSelectionEnabled={regionMode}
-                      onRegionSelection={setPendingRegionSelection}
-                      activeRange={
-                        listeningPosition?.anchor.kind === 'fixed_text'
-                          ? {
-                              blockId: listeningPosition.anchor.blockId,
-                              startOffset: listeningPosition.anchor.startOffset,
-                              endOffset: listeningPosition.anchor.endOffset,
-                            }
+            <>
+              <ComicPageFlow
+                enabled={stableComicFlow}
+                geometry={imageDimensions}
+                sectionKey={continuousSectionKey}
+                viewportRef={viewportRef}
+                contentRef={continuousContentRef}
+                className={`fixed-doc-pages is-turn-current${stableComicFlow ? ' is-page-flow' : continuousView ? ' is-virtual' : ''}`}
+                style={
+                  continuousView && !stableComicFlow
+                    ? {
+                        ...pageStyle,
+                        height: continuousVirtualizer.getTotalSize() + continuousSectionFooterHeight,
+                      }
+                    : pageStyle
+                }
+              >
+                {renderPages(displayedPages)}
+                {continuousView && currentDocumentSection && (
+                  <div
+                    className="fixed-doc-section-footer"
+                    style={{
+                      height: continuousSectionFooterHeight,
+                      ...(stableComicFlow
+                        ? { position: 'relative' }
+                        : { transform: `translateY(${continuousVirtualizer.getTotalSize()}px)` }),
+                    }}
+                  >
+                    <ReaderChapterEnd
+                      unit="회차"
+                      tone="comic"
+                      nextTitle={
+                        hasNextSection
+                          ? (nextDocumentSection?.title ?? remoteNavigation?.nextTitle ?? '다음 회차')
                           : undefined
                       }
+                      hasPrevious={hasPreviousSection}
+                      armed={scrollSectionBoundary.armed}
+                      busy={remoteNavigation?.busy}
+                      rootProps={{ 'aria-label': '만화 회차 이동' }}
+                      onPrevious={() => navigateSection(-1)}
+                      onNext={() => navigateSection(1)}
                     />
-                  ) : novel.format === 'pdf' ? (
-                    <div className="fixed-doc-page-loading">{index + 1}페이지 불러오는 중</div>
-                  ) : archiveImages.pages.get(index)?.url ? (
-                    <img
-                      src={archiveImages.pages.get(index)?.url}
-                      alt={`${novel.title} ${index + 1}페이지`}
-                      draggable={false}
-                      onError={(event) => archiveImages.reportError(index, event.currentTarget.src)}
-                      width={imageDimensions.get(sortedChapters[index]?.id ?? '')?.width}
-                      height={imageDimensions.get(sortedChapters[index]?.id ?? '')?.height}
-                      onLoad={(event) =>
-                        recordArchiveImageDimensions(index, {
-                          width: event.currentTarget.naturalWidth,
-                          height: event.currentTarget.naturalHeight,
-                        })
-                      }
-                      style={
-                        comicProfile.crop === 'auto' && comicProfile.pageCrops?.[String(index)]
-                          ? ({
-                              '--fixed-doc-image-clip': Object.values(comicProfile.pageCrops[String(index)]).some(
-                                (value) => value > 0,
-                              )
-                                ? undefined
-                                : 'none',
-                              '--fixed-doc-crop-top': `${comicProfile.pageCrops[String(index)].top * 100}%`,
-                              '--fixed-doc-crop-right': `${comicProfile.pageCrops[String(index)].right * 100}%`,
-                              '--fixed-doc-crop-bottom': `${comicProfile.pageCrops[String(index)].bottom * 100}%`,
-                              '--fixed-doc-crop-left': `${comicProfile.pageCrops[String(index)].left * 100}%`,
-                              '--fixed-doc-crop-scale': comicCropRefitScale(comicProfile.pageCrops[String(index)], fit),
-                            } as CSSProperties)
-                          : comicProfile.crop === 'auto'
-                            ? ({ '--fixed-doc-image-clip': 'none' } as CSSProperties)
-                            : undefined
-                      }
-                    />
-                  ) : (
-                    <div
-                      className="fixed-doc-page-loading"
-                      style={seamlessContinuousView ? { height: estimateContinuousPageSize(index) } : undefined}
-                    >
-                      <div className="fixed-doc-page-retry">
-                        <span role="status">{archiveImages.errors.get(index) ?? `${index + 1}페이지 불러오는 중`}</span>
-                        {archiveImages.errors.has(index) ? (
-                          <button
-                            type="button"
-                            className="secondary-btn"
-                            aria-label={`${index + 1}페이지 다시 불러오기`}
-                            onClick={(event) => {
-                              event.stopPropagation();
-                              archiveImages.retry(index);
-                            }}
-                          >
-                            <RefreshCw size={16} /> 다시 불러오기
-                          </button>
-                        ) : (
-                          <span className="fixed-doc-loading-spinner" aria-hidden="true" />
-                        )}
-                      </div>
-                    </div>
-                  )}
-                </article>
-              ))}
-              {continuousView && currentDocumentSection && (
+                  </div>
+                )}
+              </ComicPageFlow>
+              {comicTurn.preview && (
                 <div
-                  className="fixed-doc-section-footer"
-                  style={{
-                    height: continuousSectionFooterHeight,
-                    ...(stableComicFlow
-                      ? { position: 'relative' }
-                      : { transform: `translateY(${continuousVirtualizer.getTotalSize()}px)` }),
-                  }}
+                  className="fixed-doc-pages is-turn-preview"
+                  style={pageStyle}
+                  aria-hidden="true"
+                  {...{ inert: '' }}
                 >
-                  <nav className="fixed-doc-section-nav" aria-label="만화 회차 이동">
-                    <button
-                      type="button"
-                      disabled={!hasPreviousSection || remoteNavigation?.busy}
-                      onClick={() => {
-                        navigateSection(-1);
-                      }}
-                    >
-                      <ChevronLeft size={16} /> 이전 회차
-                    </button>
-                    <button
-                      type="button"
-                      disabled={!hasNextSection || remoteNavigation?.busy}
-                      onClick={() => {
-                        navigateSection(1);
-                      }}
-                    >
-                      다음 회차 <ChevronRight size={16} />
-                    </button>
-                  </nav>
-                  {hasNextSection && (
-                    <div
-                      className={`fixed-doc-next-section-boundary${scrollSectionBoundary.armed ? ' is-armed' : ''}`}
-                      aria-live="polite"
-                    >
-                      <span>다음 회차</span>
-                      <strong>{nextDocumentSection?.title ?? remoteNavigation?.nextTitle ?? '다음 회차'}</strong>
-                      <small>{scrollSectionBoundary.armed ? '한 번 더 아래로 스크롤' : '마지막까지 읽었습니다'}</small>
-                    </div>
-                  )}
+                  {renderPages(comicTurn.preview.pages, true)}
                 </div>
               )}
-            </ComicPageFlow>
+            </>
           )}
           <button
             type="button"
             className="fixed-doc-turn is-previous"
             onClick={() => turnPage(leftTurnStep)}
-            disabled={!canTurn(leftTurnStep)}
+            disabled={comicTurn.active || !canTurn(leftTurnStep)}
             aria-label={leftTurnStep === 1 ? '다음 페이지' : '이전 페이지'}
           >
             <ChevronLeft size={28} />
@@ -2354,7 +2518,7 @@ export default function FixedDocumentScreen({
             type="button"
             className="fixed-doc-turn is-next"
             onClick={() => turnPage(rightTurnStep)}
-            disabled={!canTurn(rightTurnStep)}
+            disabled={comicTurn.active || !canTurn(rightTurnStep)}
             aria-label={rightTurnStep === 1 ? '다음 페이지' : '이전 페이지'}
           >
             <ChevronRight size={28} />

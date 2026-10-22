@@ -18,6 +18,7 @@ function sharedPublicAssets(): Plugin {
   for (const name of [
     'LICENSE',
     'THIRD_PARTY_NOTICES.md',
+    'third_party/licenses/st-page-flip/LICENSE',
     'third_party/licenses/7z-wasm/License.txt',
     'third_party/licenses/common/LGPL-2.1.txt',
     'third_party/licenses/common/unRarLicense.txt',

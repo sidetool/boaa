@@ -584,6 +584,7 @@ export class MangayomiExtensionHost {
       outboundProxy,
       browserMode: options.browserMode,
       browserUsage: options.browserUsage,
+      routeRevision: record.digest,
       browserAllowed: true,
     };
     if (hash(source) !== record.digest) throw new Error('package_repository_integrity');

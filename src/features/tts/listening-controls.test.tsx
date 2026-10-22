@@ -298,7 +298,7 @@ describe('listening controls', () => {
     const advanced = renderer.root.findByProps({ id: 'tts-advanced-panel' });
     expect(advanced.props.hidden).toBe(false);
     expect(advanced.findAllByType('h4').map((node) => node.children.join(''))).toEqual(
-      expect.arrayContaining(['캐릭터별 음성', '음성 초안과 승인', 'Hosted 캐릭터 음성']),
+      expect.arrayContaining(['캐릭터별 음성', '음성 초안과 승인', '서버 캐릭터 음성']),
     );
   });
 });

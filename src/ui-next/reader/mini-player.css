@@ -66,6 +66,17 @@
   animation: un-mini-pulse 1.4s ease-in-out infinite;
 }
 
+/* Waiting for audio: the art turns into a spinner, so the bar says so without growing or covering the page. */
+.un-mini-wait {
+  animation: un-mini-spin 0.9s linear infinite;
+}
+
+@keyframes un-mini-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 @keyframes un-mini-pulse {
   50% {
     transform: scaleY(0.7);
@@ -140,6 +151,14 @@
   background: #fff;
 }
 
+.un-mini.is-busy .un-mini-art {
+  background: linear-gradient(
+    140deg,
+    color-mix(in srgb, var(--un-accent) 55%, transparent),
+    color-mix(in srgb, #8b5cf6 55%, transparent)
+  );
+}
+
 .un-mini.is-busy .un-mini-controls button.is-main {
   opacity: 0.7;
 }
@@ -154,6 +173,12 @@
 
 .un-mini-controls button.is-close {
   color: var(--un-text-3);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .un-mini-wait {
+    animation-duration: 2.4s;
+  }
 }
 
 @media (max-width: 899px) {

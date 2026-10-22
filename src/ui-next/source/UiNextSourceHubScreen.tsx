@@ -301,6 +301,8 @@ function ReleaseList({ model }: { model: Model }) {
     setSelectRequested(false);
   };
   const filtered = Boolean(list.query) || list.readFilter !== 'all';
+  // The first page of a freshly opened work: rows take the list's shape instead of a status line.
+  const firstLoad = controller.loading && !contentItems.length && !controller.listError;
   return (
     <section className={cx('un-detail-chapters', selecting && 'is-selecting')} aria-label="회차">
       <div className="un-detail-toolbar">
@@ -362,7 +364,7 @@ function ReleaseList({ model }: { model: Model }) {
         )}
       </div>
 
-      {(controller.catalogLoading || controller.deletingDownloads || controller.loading) && (
+      {(controller.catalogLoading || controller.deletingDownloads || controller.loading) && !firstLoad && (
         <p className="un-source-status" role="status">
           <LoaderCircle size={15} className="un-spin" />
           {controller.deletingDownloads
@@ -421,6 +423,20 @@ function ReleaseList({ model }: { model: Model }) {
               openMenu={() => setMenu(item)}
               selecting={selecting}
             />
+          ))}
+        </ul>
+      ) : firstLoad ? (
+        <ul className="un-chapter-list un-release-skeleton" role="status" aria-label="회차를 불러오고 있어요">
+          {Array.from({ length: 6 }, (_, i) => (
+            <li key={i} className="un-chapter" aria-hidden="true">
+              <span className="un-release-skeleton-row">
+                <i />
+                <span>
+                  <i />
+                  <i />
+                </span>
+              </span>
+            </li>
           ))}
         </ul>
       ) : !controller.loading ? (
@@ -601,6 +617,7 @@ function WorkHero({ model, props }: { model: Model; props: SourceHubScreenProps 
     <RemoteCover title={model.workTitle} author={controller.detail?.author} url={controller.detail?.thumbnailUrl} />
   );
   const primaryRead = model.primaryRead;
+  const arriving = !seriesNovel && controller.loading && !model.contentItems.length && !controller.listError;
   const canRead = Boolean(primaryRead || seriesNovel || controller.canResumeCurrentWork);
   // Novels are read, comics and webtoons are watched; the verb follows the work, not the source.
   const verb =
@@ -700,14 +717,24 @@ function WorkHero({ model, props }: { model: Model; props: SourceHubScreenProps 
             {model.workByline && <p className="un-detail-byline">{model.workByline}</p>}
             <p className="un-detail-kicker">
               <span className="un-tag is-accent">{model.seriesReadingStatus ?? model.workSourceLabel}</span>
-              <span>{seriesNovel ? model.localArchiveFormat : (controller.detail?.status ?? '연재 정보 없음')}</span>
-              <span>{formatCount(model.contentItems.length)}화</span>
+              {arriving ? (
+                <span className="un-detail-kicker-wait" aria-hidden="true" />
+              ) : (
+                <>
+                  <span>
+                    {seriesNovel ? model.localArchiveFormat : (controller.detail?.status ?? '연재 정보 없음')}
+                  </span>
+                  <span>{formatCount(model.contentItems.length)}화</span>
+                </>
+              )}
               {/* The accent tag already names the source when there is no reading status to show. */}
               {model.seriesReadingStatus && <span>{model.workSourceLabel}</span>}
             </p>
             {model.workTags && model.workTags.length > 0 && <DetailTags tags={model.workTags} />}
           </div>
           <div className="un-detail-actions">
+            {/* Holds the read button's place so the actions do not jump when the episodes arrive. */}
+            {arriving && !canRead && <span className="un-detail-action-wait" aria-hidden="true" />}
             {canRead && (
               <button
                 type="button"
@@ -739,7 +766,7 @@ function WorkHero({ model, props }: { model: Model; props: SourceHubScreenProps 
             {controller.canSubscribeCurrentWork && !controller.activeSubscription && (
               <button
                 type="button"
-                className={cx('un-btn is-lg', canRead ? 'is-ghost' : 'is-primary')}
+                className={cx('un-btn is-lg', canRead || arriving ? 'is-ghost' : 'is-primary')}
                 disabled={controller.busy || controller.loading}
                 onClick={commands.addCurrentWorkToLibrary}
               >
@@ -1019,7 +1046,8 @@ export default function UiNextSourceHubScreen(props: SourceHubScreenProps) {
         <div className="un-detail-tabs">
           <div className="un-underline-tabs" role="tablist" aria-label="작품 상세">
             <button type="button" role="tab" aria-selected className="is-active">
-              회차<small>{formatCount(contentItems.length)}</small>
+              회차
+              {(contentItems.length > 0 || !controller.loading) && <small>{formatCount(contentItems.length)}</small>}
             </button>
           </div>
         </div>

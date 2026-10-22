@@ -14,7 +14,7 @@ binary gate is unchanged and remains closed.
 
    ```sh
    node scripts/release/review-release.mjs \
-     --tag v0.1.1-beta.5 --commit <reviewed-image-commit> \
+     --tag v0.1.1-beta.6 --commit <reviewed-image-commit> \
      --directory /tmp/boaa-release-review
    ```
 
@@ -87,11 +87,11 @@ squash/rebase changes the release commit, rerun candidate CI for that new commit
 A normal merge may retain the tested branch commit as the version tag target.
 
 1. Merge the reviewed changes into main as appropriate, create annotated Git tag
-   `v0.1.1-beta.5` **at the reviewed evidence commit**, and push that tag. Confirm
-   `git rev-parse v0.1.1-beta.5^{commit}` equals `server-evidence.json.commit`.
+   `v0.1.1-beta.6` **at the reviewed evidence commit**, and push that tag. Confirm
+   `git rev-parse v0.1.1-beta.6^{commit}` equals `server-evidence.json.commit`.
 2. Copy each reviewed index digest to its
    final version tag using `docker buildx imagetools create --tag
-ghcr.io/sidetool/boaa-<component>:0.1.1-beta.5
+ghcr.io/sidetool/boaa-<component>:0.1.1-beta.6
 ghcr.io/sidetool/boaa-<component>@<reviewed-index-digest>`. Verify the registry
    index digest remains the reviewed digest. The signed installer uses immutable
    digests and does not depend on these mutable registry tags. If local credentials

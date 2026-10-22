@@ -92,8 +92,12 @@
   width: 100%;
 }
 
+/* Equal widths while they fit; on narrow phones a longer label keeps its width instead of wrapping out of the pill. */
 .un-pref.is-stacked .un-segmented button {
   flex: 1;
+  min-width: max-content;
+  padding-inline: 8px;
+  white-space: nowrap;
 }
 
 .un-pref-chips {

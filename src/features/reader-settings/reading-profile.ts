@@ -45,7 +45,10 @@ export function normalizeReadingProfile(
       : 'auto';
   const flow = modeLock === 'paginated' ? 'paginated' : 'scroll';
   const pageTurnMotion =
-    value?.pageTurnMotion === 'instant' || value?.pageTurnMotion === 'smooth' || value?.pageTurnMotion === 'page'
+    value?.pageTurnMotion === 'instant' ||
+    value?.pageTurnMotion === 'smooth' ||
+    value?.pageTurnMotion === 'slide' ||
+    value?.pageTurnMotion === 'page'
       ? value.pageTurnMotion
       : sourceFlow === 'paginated'
         ? 'instant'

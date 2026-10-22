@@ -100,7 +100,7 @@ describe('maker-defined source preferences', () => {
         .fields.find((f) => f.key === '__boaa_webview_mode'),
     ).toBeUndefined();
   });
-  it('defaults browser use off and stores an explicit choice per source, only with browser capability', () => {
+  it('defaults browser use to automatic and stores an explicit choice per source, only with browser capability', () => {
     const { store, pkg } = setup();
     const browserPkg = {
       ...pkg,
@@ -110,7 +110,7 @@ describe('maker-defined source preferences', () => {
     const key = '__boaa_browser_usage';
     expect(
       store.manage(browserPkg, sourceId, 'epoch', { action: 'read' }, signal).fields.find((f) => f.key === key),
-    ).toMatchObject({ title: '브라우저 사용', value: 'off' });
+    ).toMatchObject({ title: '브라우저 사용', value: 'http-first' });
     store.manage(
       browserPkg,
       sourceId,
@@ -124,7 +124,7 @@ describe('maker-defined source preferences', () => {
       signal,
     );
     expect(store.values(browserPkg, sourceId, 'epoch').browserUsage).toBe('always');
-    expect(store.values(browserPkg, sourceId, 'other').browserUsage).toBe('off');
+    expect(store.values(browserPkg, sourceId, 'other').browserUsage).toBe('http-first');
     expect(store.values(browserPkg, sourceId, 'epoch').values).not.toHaveProperty(key);
     const noBrowser = {
       ...pkg,

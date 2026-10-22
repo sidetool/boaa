@@ -247,6 +247,12 @@
   background-color: var(--fixed-doc-stage);
   background-image: radial-gradient(circle at 50% 20%, rgba(255, 255, 255, 0.035), transparent 52%);
 }
+/* Sliding sheets temporarily extend the horizontal scroll area. A scrollbar
+ * would shrink the viewport and move vertically centered pages up, then down.
+ * Hidden overflow still permits the existing programmatic zoom/pan scrolling. */
+.fixed-doc-viewport:is(.is-single, .is-spread).motion-slide {
+  overflow-x: hidden;
+}
 .fixed-doc-viewport:is(.is-continuous, .is-continuous-seamless) {
   /* Let the browser own touch panning so mobile keeps its native momentum. */
   touch-action: pan-y;
@@ -505,20 +511,28 @@
 .fixed-doc-turn.is-next {
   right: 18px;
 }
-.fixed-doc-viewport:is(.is-single, .is-spread).motion-slide.is-page-turn-next .fixed-doc-pages article {
+.fixed-doc-viewport:is(.is-single, .is-spread).motion-slide.is-page-turn-next:not([data-turn-phase])
+  .fixed-doc-pages
+  article {
   animation: fixed-doc-slide-next 180ms ease-out both;
 }
-.fixed-doc-viewport:is(.is-single, .is-spread).motion-slide.is-page-turn-previous .fixed-doc-pages article {
+.fixed-doc-viewport:is(.is-single, .is-spread).motion-slide.is-page-turn-previous:not([data-turn-phase])
+  .fixed-doc-pages
+  article {
   animation: fixed-doc-slide-previous 180ms ease-out both;
 }
-.fixed-doc-viewport:is(.is-single, .is-spread).motion-page {
+.fixed-doc-viewport:is(.is-single, .is-spread).motion-page:not([data-turn-phase]) {
   perspective: 1400px;
 }
-.fixed-doc-viewport:is(.is-single, .is-spread).motion-page.is-page-turn-next .fixed-doc-pages article {
+.fixed-doc-viewport:is(.is-single, .is-spread).motion-page.is-page-turn-next:not([data-turn-phase])
+  .fixed-doc-pages
+  article {
   transform-origin: left center;
   animation: fixed-doc-sheet-next 220ms cubic-bezier(0.22, 0.75, 0.24, 1) both;
 }
-.fixed-doc-viewport:is(.is-single, .is-spread).motion-page.is-page-turn-previous .fixed-doc-pages article {
+.fixed-doc-viewport:is(.is-single, .is-spread).motion-page.is-page-turn-previous:not([data-turn-phase])
+  .fixed-doc-pages
+  article {
   transform-origin: right center;
   animation: fixed-doc-sheet-previous 220ms cubic-bezier(0.22, 0.75, 0.24, 1) both;
 }
@@ -540,6 +554,90 @@
 @keyframes fixed-doc-sheet-previous {
   from {
     transform: rotateY(-9deg) translateX(-3%);
+  }
+}
+/*
+ * Held page turns for image pages. use-page-turn.ts drives the viewport with
+ * data-turn-phase, --turn-progress, --turn-dir, --turn-width, --turn-settle-ms (optional --turn-forward).
+ * The preview group overlays the current group with identical geometry and lands exactly on it.
+ */
+.fixed-doc-pages.is-turn-preview {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 0;
+  width: 100%;
+  pointer-events: none;
+}
+.fixed-doc-pages.is-turn-preview article {
+  opacity: 1;
+}
+/* The curl overlay paints both sheets itself; the real preview group must never sit above the current page. */
+.fixed-doc-viewport:not([data-turn-phase]) .fixed-doc-pages.is-turn-preview,
+.fixed-doc-viewport[data-turn-renderer='curl'] .fixed-doc-pages.is-turn-preview {
+  visibility: hidden;
+}
+.fixed-doc-viewport[data-turn-phase] {
+  --turn-forward-resolved: var(--turn-forward, calc((1 + var(--turn-dir, 1)) / 2));
+  --turn-travel: calc(var(--turn-dir, 1) * var(--turn-width, 100%));
+}
+.fixed-doc-viewport[data-turn-phase]:not([data-turn-renderer='curl'])
+  .fixed-doc-pages:is(.is-turn-current, .is-turn-preview) {
+  position: relative;
+  will-change: transform;
+}
+.fixed-doc-viewport[data-turn-phase]:not([data-turn-renderer='curl']) .fixed-doc-pages.is-turn-preview {
+  position: absolute;
+}
+.fixed-doc-viewport[data-turn-phase]:not([data-turn-renderer='curl'])
+  .fixed-doc-pages:is(.is-turn-current, .is-turn-preview)
+  article {
+  animation: none;
+}
+.fixed-doc-viewport[data-turn-phase='settling']:not([data-turn-renderer='curl'])
+  .fixed-doc-pages:is(.is-turn-current, .is-turn-preview) {
+  transition: transform var(--turn-settle-ms, 240ms) cubic-bezier(0.2, 0.7, 0.25, 1);
+}
+.fixed-doc-viewport.motion-slide[data-turn-phase]:not([data-turn-renderer='curl']) .fixed-doc-pages.is-turn-current {
+  transform: translate3d(calc(-1 * var(--turn-progress, 0) * var(--turn-travel)), 0, 0);
+}
+.fixed-doc-viewport.motion-slide[data-turn-phase]:not([data-turn-renderer='curl']) .fixed-doc-pages.is-turn-preview {
+  transform: translate3d(calc((1 - var(--turn-progress, 0)) * var(--turn-travel)), 0, 0);
+}
+/* Book (flat fallback until the curl renderer takes over): the page images themselves cover the page underneath; only the moving sheet casts a soft edge shadow. */
+.fixed-doc-viewport.motion-page[data-turn-phase]:not([data-turn-renderer='curl']) .fixed-doc-pages.is-turn-current {
+  --turn-lift: calc(var(--turn-forward-resolved) * var(--turn-progress, 0));
+  --turn-mover: var(--turn-forward-resolved);
+  z-index: calc(1 + var(--turn-forward-resolved));
+  transform: translate3d(calc(-1 * var(--turn-lift) * var(--turn-travel)), 0, 0);
+}
+.fixed-doc-viewport.motion-page[data-turn-phase]:not([data-turn-renderer='curl']) .fixed-doc-pages.is-turn-preview {
+  --turn-lift: calc((1 - var(--turn-forward-resolved)) * (1 - var(--turn-progress, 0)));
+  --turn-mover: calc(1 - var(--turn-forward-resolved));
+  z-index: calc(2 - var(--turn-forward-resolved));
+  transform: translate3d(calc(var(--turn-lift) * var(--turn-travel)), 0, 0);
+}
+/* Static for the whole turn, so it is painted once and moves with the layer. */
+.fixed-doc-viewport.motion-page[data-turn-phase]:not([data-turn-renderer='curl'])
+  .fixed-doc-pages:is(.is-turn-current, .is-turn-preview)
+  article {
+  box-shadow: calc(var(--turn-mover) * var(--turn-dir, 1) * (2 * var(--turn-forward-resolved) - 1) * 10px) 0
+    calc(var(--turn-mover) * 18px) calc(var(--turn-mover) * -6px) rgb(0 0 0 / 0.38);
+}
+/* Preview not decoded yet (or section edge): only the current group gives a little. */
+.fixed-doc-viewport[data-turn-phase]:not([data-turn-renderer='curl']):not(:has(.is-turn-preview))
+  .fixed-doc-pages.is-turn-current {
+  z-index: 1;
+  transform: translate3d(calc(-1 * var(--turn-progress, 0) * var(--turn-travel)), 0, 0);
+}
+.fixed-doc-viewport[data-turn-phase]:not([data-turn-renderer='curl']):not(:has(.is-turn-preview))
+  .fixed-doc-pages.is-turn-current
+  article {
+  box-shadow: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  .fixed-doc-viewport .fixed-doc-pages:is(.is-turn-current, .is-turn-preview) {
+    transition: none !important;
   }
 }
 .fixed-doc-viewport:is(.is-continuous, .is-continuous-seamless) .fixed-doc-turn {
@@ -580,70 +678,6 @@
   align-content: start;
   box-sizing: border-box;
   color: #b7bdc4;
-}
-.fixed-doc-section-nav {
-  width: min(760px, calc(100% - 48px));
-  min-height: 72px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  margin: 0 auto;
-  padding: 18px 0 12px;
-  border-top: 1px solid rgba(255, 255, 255, 0.1);
-}
-.fixed-doc-section-nav button {
-  display: inline-flex;
-  min-height: 36px;
-  align-items: center;
-  gap: 5px;
-  padding: 7px 11px;
-  border: 1px solid rgba(255, 255, 255, 0.13);
-  border-radius: 4px;
-  color: #c8cdd2;
-  background: rgba(13, 15, 18, 0.72);
-  font-size: 11px;
-}
-.fixed-doc-section-nav button:hover:not(:disabled) {
-  border-color: rgba(255, 255, 255, 0.24);
-  color: #fff;
-  background: rgba(30, 33, 38, 0.9);
-}
-.fixed-doc-section-nav button:disabled {
-  opacity: 0.28;
-  pointer-events: none;
-}
-.fixed-doc-next-section-boundary {
-  display: grid;
-  min-height: 116px;
-  align-content: center;
-  justify-items: center;
-  gap: 5px;
-  padding: 8px 16px 22px;
-  box-sizing: border-box;
-  text-align: center;
-}
-.fixed-doc-next-section-boundary > span,
-.fixed-doc-next-section-boundary > small {
-  color: #858c94;
-  font-size: 10px;
-}
-.fixed-doc-next-section-boundary > strong {
-  max-width: min(620px, calc(100vw - 56px));
-  overflow: hidden;
-  color: #dce0e4;
-  font-size: 13px;
-  font-weight: 600;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.fixed-doc-next-section-boundary > small {
-  min-height: 1.4em;
-  transition: color 120ms ease;
-}
-.fixed-doc-next-section-boundary.is-armed > small {
-  color: #9bb9ff;
-  font-weight: 650;
 }
 .fixed-doc-pages.reader-boundary-motion {
   --reader-boundary-pull: 0px;
@@ -1469,15 +1503,8 @@
   .fixed-doc-pages.is-virtual article {
     padding: 9px 8px;
   }
-  .fixed-doc-section-nav {
+  .fixed-doc-section-footer .reader-chapter-end {
     width: calc(100% - 20px);
-  }
-  .fixed-doc-section-nav button {
-    min-height: 34px;
-    padding-inline: 9px;
-  }
-  .fixed-doc-next-section-boundary {
-    padding-inline: 10px;
   }
   .fixed-doc-viewport.is-page .fixed-doc-pages img {
     max-width: calc((100vw - 20px) * var(--fixed-doc-zoom));

@@ -1,7 +1,63 @@
+/* 작품 번역 settings, plus the field/action pieces the reader's translation sheet shares. */
+
 .un-translation-settings {
   display: grid;
-  gap: 24px;
+  gap: 22px;
 }
+
+.un-translation-settings .un-pref-section + .un-pref-section {
+  margin-top: 0;
+}
+
+/* A small status header: the page's picture stays the size of an app icon, never a banner. */
+.un-translation-hero {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 2px 4px;
+}
+
+.un-translation-hero > div {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.un-translation-hero strong {
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.un-translation-hero small {
+  color: var(--un-text-3);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.un-translation-art {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 56px;
+  height: 56px;
+  color: #fff;
+  border-radius: 16px;
+  background:
+    radial-gradient(circle at 78% 82%, rgb(139 92 246 / 55%), transparent 58%),
+    linear-gradient(140deg, rgb(255 255 255 / 10%), rgb(255 255 255 / 3%));
+  box-shadow: inset 0 0 0 1px rgb(255 255 255 / 8%);
+  filter: saturate(0.4);
+  transition: filter 0.25s var(--un-ease);
+}
+
+.un-translation-hero.is-on .un-translation-art {
+  background:
+    radial-gradient(circle at 78% 82%, rgb(139 92 246 / 70%), transparent 58%),
+    linear-gradient(140deg, var(--un-accent), rgb(91 140 255 / 35%));
+  filter: none;
+}
+
+/* Fields shared with the reader sheet. */
 .un-translation-field {
   display: flex;
   flex-direction: column;
@@ -9,53 +65,221 @@
   min-width: 0;
   margin: 12px 0;
 }
+
 .un-translation-field > span {
   font-weight: 600;
 }
+
 .un-translation-field small,
-.un-translation-key > small,
 .un-translation-help {
   color: var(--un-text-2);
   font-size: 12px;
   line-height: 1.6;
   overflow-wrap: anywhere;
 }
+
+.un-translation-help {
+  display: block;
+}
+
 .un-translation-field .un-input {
   width: 100%;
   min-width: 0;
   box-sizing: border-box;
 }
-.un-translation-field textarea {
-  resize: vertical;
-}
-.un-translation-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 0 16px;
-}
+
 .un-translation-actions {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
   gap: 8px;
 }
-.un-translation-key {
+
+.un-translation-grid {
   display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.un-translation-grid > .un-pref + .un-pref {
+  border-top: 0;
+  border-left: 1px solid var(--un-line);
+}
+
+.un-translation-grid {
+  border-top: 1px solid var(--un-line);
+}
+
+.un-translation-automatic-options {
+  margin: 0 16px 14px;
+  padding-inline-start: 4px;
+  border-inline-start: 2px solid var(--un-line-2);
+}
+
+.un-translation-automatic-options .un-pref {
+  min-height: 52px;
+  padding-block: 10px;
+}
+
+/* The kit's select fill matches the group surface; give fields on the card their own edge. */
+.un-translation-settings label.un-pref-field select,
+.un-translation-settings input.un-translation-number {
+  border: 1px solid var(--un-line);
+  background-color: rgb(255 255 255 / 5%);
+}
+
+.un-translation-settings input.un-translation-number {
+  width: 96px;
+  min-height: 40px;
+  border-color: var(--un-line-2);
+  background: rgb(255 255 255 / 7%);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Credential row. */
+.un-translation-key {
   gap: 12px;
-  padding: 16px;
-  border: 1px solid var(--un-line-2);
-  border-radius: 16px;
 }
-.un-translation-help {
-  display: block;
+
+.un-translation-key-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px 12px;
 }
+
+.un-translation-key-head .un-pref-text {
+  flex: none;
+}
+
+.un-translation-state {
+  padding: 3px 9px;
+  border-radius: 999px;
+  background: rgb(255 255 255 / 6%);
+  color: var(--un-text-3);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.un-translation-state.is-saved {
+  background: var(--un-accent-soft, rgb(91 140 255 / 16%));
+  color: var(--un-accent-2, #8fb0ff);
+}
+
+.un-translation-secret,
+.un-translation-file {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 46px;
+  padding: 0 14px;
+  border: 1px solid var(--un-line);
+  border-radius: 12px;
+  background: rgb(255 255 255 / 5%);
+  color: var(--un-text-3);
+}
+
+.un-translation-secret:focus-within,
+.un-translation-file:focus-within {
+  border-color: var(--un-accent);
+}
+
+.un-translation-secret input {
+  flex: 1;
+  min-width: 0;
+  height: 44px;
+  padding: 0;
+  border: 0;
+  outline: 0;
+  background: none;
+  color: var(--un-text);
+  font: inherit;
+  font-size: 16px;
+}
+
+.un-translation-file {
+  position: relative;
+  color: var(--un-text-2);
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.un-translation-file > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.un-translation-file.is-disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* The native picker stays the real control; only its look is replaced. */
+.un-translation-file input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  opacity: 0;
+  cursor: inherit;
+}
+
+.un-translation-settings .un-btn.is-danger {
+  color: #ff98a2;
+}
+
+.un-translation-usage {
+  font-size: 15px;
+  font-variant-numeric: tabular-nums;
+}
+
+.un-translation-fold-note {
+  min-height: 0;
+  margin: 0;
+  color: var(--un-text-3);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+/* Save stays in reach at the bottom of a long page without covering a field when scrolled to the end. */
+.un-translation-footer {
+  position: sticky;
+  bottom: 0;
+  z-index: 1;
+  display: grid;
+  gap: 10px;
+  margin: 0 calc(var(--un-pad, 16px) * -1);
+  padding: 14px var(--un-pad, 16px) calc(14px + var(--un-safe-b, 0px));
+  border-top: 1px solid var(--un-line);
+  background: rgb(10 10 12 / 78%);
+  -webkit-backdrop-filter: blur(16px);
+  backdrop-filter: blur(16px);
+}
+
+.un-translation-footer .un-translation-actions {
+  justify-content: flex-end;
+}
+
+.un-translation-message {
+  margin: 0;
+  color: var(--un-text-2);
+  font-size: 13px;
+  text-align: right;
+}
+
 @media (max-width: 480px) {
   .un-translation-grid {
     grid-template-columns: minmax(0, 1fr);
   }
-}
 
-.un-translation-automatic-options {
-  margin: 0 16px 16px;
-  padding-inline-start: 16px;
-  border-inline-start: 2px solid var(--un-line-2);
+  .un-translation-grid > .un-pref + .un-pref {
+    border-top: 1px solid var(--un-line);
+    border-left: 0;
+  }
+
+  .un-translation-footer .un-translation-actions > .un-btn {
+    flex: 1;
+  }
 }

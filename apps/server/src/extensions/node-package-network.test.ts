@@ -5,6 +5,8 @@ import type { VerifiedBoaaPackage } from '../../../../src/extensions/packages/pa
 import { createNodePackageExecution } from './node-package-execution';
 import { createSourceNetworkSettings } from './source-network-settings';
 import type { SourceCredentialVault } from './source-credential-vault';
+import { SessionSourceCredentialVault } from './source-credential-vault';
+import { sourceWebViewHost } from './source-webview';
 
 const observed = vi.hoisted(() => [] as string[]);
 vi.mock('./source-proxy-transport', () => ({
@@ -21,6 +23,48 @@ vi.mock('./source-proxy-transport', () => ({
 afterEach(() => {
   observed.length = 0;
   vi.unstubAllEnvs();
+  vi.restoreAllMocks();
+});
+
+it('allows declared native WebView calls by default while retaining explicit off and manifest boundaries', async () => {
+  const manifest = examplePackageManifest();
+  const pkg = {
+    manifest: { ...manifest, requestedAccess: { ...manifest.requestedAccess, webview: true } },
+    digest: 'fixture',
+    archive: new Blob(),
+    source: `globalThis.boaaExtension=async(method,input,host)=>{await host.request('webview.evaluate',{url:'https://catalog.example/list',script:'1'});return {items:[]};};`,
+  } as VerifiedBoaaPackage;
+  const execution = createNodePackageExecution('self-host-gateway', { vault: new SessionSourceCredentialVault() });
+  const browser = vi.spyOn(sourceWebViewHost, 'evaluate').mockResolvedValue(1);
+  const signal = AbortSignal.timeout(10000),
+    sourceId = 'org.example.catalog.source';
+  // Also exercises the path where preferences/credential epoch are not yet materialized.
+  await execution.invoke(pkg, 'source.listWorks', { sourceId }, signal, {});
+  await execution.invoke(pkg, 'source.listWorks', { sourceId }, signal, {}, 'epoch');
+  expect(browser).toHaveBeenCalledTimes(2);
+  await execution.preferences!(
+    pkg,
+    sourceId,
+    'epoch',
+    {
+      action: 'save',
+      revision: 0,
+      changes: { __boaa_browser_usage: 'off' },
+      privateOrigins: [],
+    },
+    signal,
+  );
+  await expect(execution.invoke(pkg, 'source.listWorks', { sourceId }, signal, {}, 'epoch')).rejects.toThrow(
+    'source_browser_disabled',
+  );
+  const ungranted = {
+    ...pkg,
+    manifest: { ...pkg.manifest, requestedAccess: { ...pkg.manifest.requestedAccess, webview: false } },
+  };
+  await expect(execution.invoke(ungranted, 'source.listWorks', { sourceId }, signal, {})).rejects.toThrow(
+    'permission_denied',
+  );
+  expect(browser).toHaveBeenCalledTimes(2);
 });
 
 it('routes real SDK broker requests through the saved default while respecting per-source direct/custom choices', async () => {

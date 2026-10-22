@@ -84,6 +84,14 @@ describe('reading profile', () => {
     ).toMatchObject({ pageSpread: 'double', pageTurnMotion: 'page' });
   });
 
+  it('keeps the horizontal slide choice through global and per-book normalization', () => {
+    const global = updateGlobalReadingProfile(defaultSettings, { pageTurnMotion: 'slide' });
+    expect(resolveReadingProfile(global).pageTurnMotion).toBe('slide');
+    const book = updateBookReadingProfile(defaultSettings, 'book_1', { pageTurnMotion: 'slide' });
+    expect(settingsWithResolvedReadingProfile(book, 'book_1').readingProfile.pageTurnMotion).toBe('slide');
+    expect(resolveReadingProfile(book).pageTurnMotion).toBe(defaultSettings.readingProfile.pageTurnMotion);
+  });
+
   it('normalizes advanced text layout options used by display and pagination', () => {
     expect(
       resolveReadingProfile(

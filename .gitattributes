@@ -11,3 +11,6 @@ third_party/licenses/** -text
 # Preserve byte hashes and upstream whitespace in captured notice evidence.
 third_party/licenses/server-extra/*.txt -text -whitespace
 third_party/licenses/server-sources/*.txt -text -whitespace
+
+# Preserve pinned upstream source bytes, including original whitespace.
+third_party/st-page-flip/src/** -text -whitespace

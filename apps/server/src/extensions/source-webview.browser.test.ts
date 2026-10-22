@@ -4,7 +4,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { Browser } from 'playwright-core';
 import { browserEngine, browserLauncher } from '@boaa/browser-runtime';
 import { launchSourceBrowser, sourceBrowserUsesRemote } from './source-browser-launch.js';
-import { SourceWebViewHost } from './source-webview.js';
+import { SourceWebViewHost, sourceWebViewHost } from './source-webview.js';
 import { sourceBrowserHttp } from './source-browser-cookies.js';
 
 describe.skipIf(!process.env.BOAA_TEST_SOURCE_BROWSER)('production source WebView', { timeout: 30000 }, () => {
@@ -266,7 +266,41 @@ describe.skipIf(!process.env.BOAA_TEST_SOURCE_BROWSER)('production source WebVie
       await new Promise<void>((resolve) => fixture.close(() => resolve()));
     }
   });
-  it('reuses a browser across consecutive source operations, then closes after idle', async () => {
+  it('learns a browser-only path with real networking and skips later HTTP failures', async () => {
+    let httpDenied = 0;
+    const fixture = createServer((request, response) => {
+      if (!request.headers['sec-fetch-mode']) {
+        httpDenied++;
+        response.writeHead(403, { 'cf-mitigated': 'challenge' }).end('challenge');
+      } else response.writeHead(200, { 'content-type': 'text/plain' }).end('browser document');
+    });
+    await new Promise<void>((resolve) => fixture.listen(0, '127.0.0.1', resolve));
+    const target = `http://127.0.0.1:${(fixture.address() as { port: number }).port}`;
+    const current = {
+      ...scope('learned-browser-route'),
+      origins: [target],
+      privateOrigins: [target],
+      browserAllowed: true,
+    };
+    try {
+      for (let page = 1; page <= 3; page++) {
+        const response = await sourceBrowserHttp(
+          { url: `${target}/catalog?page=${page}`, options: { timeout: 25 } },
+          AbortSignal.timeout(30000),
+          current,
+          1024,
+        );
+        expect(response.statusCode).toBe(200);
+        expect(response.bytes.toString()).toBe('browser document');
+        expect(httpDenied).toBe(2);
+      }
+    } finally {
+      await sourceWebViewHost.close();
+      fixture.closeAllConnections();
+      await new Promise<void>((resolve) => fixture.close(() => resolve()));
+    }
+  });
+  it('reuses Patchright beyond eight calls, bounds Camoufox and closes the final browser after idle', async () => {
     const warm = new SourceWebViewHost({ idleMs: 250, hasQueuedClients: async () => false });
     const launcher = warm as unknown as { launch(engine: string, signal?: AbortSignal): Promise<Browser> };
     const original = launcher.launch.bind(warm);
@@ -277,14 +311,16 @@ describe.skipIf(!process.env.BOAA_TEST_SOURCE_BROWSER)('production source WebVie
       return browser;
     });
     try {
-      for (let i = 0; i < 3; i++)
+      for (let i = 0; i < 10; i++)
         expect(await warm.evaluate({ url: origin, script: '42' }, scope('warm-' + i), AbortSignal.timeout(15000))).toBe(
           42,
         );
-      expect(new Set(browsers).size).toBe(1);
-      expect(browsers[0].contexts()).toHaveLength(0);
-      expect(browsers[0].isConnected()).toBe(true);
-      await vi.waitFor(() => expect(browsers[0].isConnected()).toBe(false), { timeout: 5000 });
+      expect(new Set(browsers).size).toBe(browserEngine() === 'camoufox' ? 2 : 1);
+      if (browserEngine() === 'camoufox') expect(browsers[0].isConnected()).toBe(false);
+      const last = browsers.at(-1)!;
+      expect(last.contexts()).toHaveLength(0);
+      expect(last.isConnected()).toBe(true);
+      await vi.waitFor(() => expect(last.isConnected()).toBe(false), { timeout: 5000 });
     } finally {
       launch.mockRestore();
       await warm.close();

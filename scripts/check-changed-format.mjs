@@ -14,6 +14,9 @@ const ignoredPrefixes = [
   'src-tauri/',
   'test_novel/',
   'ui-reference/',
+  // Preserve pinned upstream sources and their reproducibly generated output.
+  'third_party/st-page-flip/src/',
+  'src/features/reader/vendor/st-page-flip.mjs',
 ];
 
 function git(args, options = {}) {

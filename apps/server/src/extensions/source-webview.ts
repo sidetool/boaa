@@ -61,6 +61,8 @@ export interface SourceWebViewScope {
   outboundProxy?: string;
   browserMode?: 'camoufox';
   browserUsage?: SourceBrowserUsage;
+  /** Invalidates learned transport choices when an extension is updated. */
+  routeRevision?: string;
   /** Host capability, never supplied by a source's HTTP arguments. */
   browserAllowed?: boolean;
   /** Host-only refreshes close before returning to ordinary HTTP. */
@@ -455,9 +457,9 @@ export class SourceWebViewHost {
           contextClosed &&
           browser?.isConnected() &&
           !scope.authenticationOnly &&
-          // Firefox can retain memory after context.close(). Bound continuous
-          // browsing as well as idle time, without reopening for every request.
-          uses < (this.options.maxUses ?? 8) &&
+          // Only Camoufox needs a fixed recycling budget. Patchright reuses the
+          // process until idle, contention or failure; request contexts still close.
+          uses < (this.options.maxUses ?? (engine.startsWith('camoufox:') ? 8 : Infinity)) &&
           (this.options.idleMs ?? 60_000) > 0
         ) {
           releaseSlot();

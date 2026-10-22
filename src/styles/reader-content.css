@@ -197,42 +197,21 @@
   );
 }
 
-.reader-pagination-stage.motion-smooth.turn-next .reader-paginated-page.is-current {
+/* Tap/wheel turns in the vertical "smooth" motion keep their keyframes; held turns never stack on them. */
+.reader-pagination-stage.motion-smooth.turn-next:not([data-turn-phase]) .reader-paginated-page.is-current {
   animation: reader-page-in-next 180ms ease-out both;
 }
 
-.reader-pagination-stage.motion-smooth.turn-next .reader-paginated-page.is-outgoing {
+.reader-pagination-stage.motion-smooth.turn-next:not([data-turn-phase]) .reader-paginated-page.is-outgoing {
   animation: reader-page-out-next 180ms ease-out both;
 }
 
-.reader-pagination-stage.motion-smooth.turn-previous .reader-paginated-page.is-current {
+.reader-pagination-stage.motion-smooth.turn-previous:not([data-turn-phase]) .reader-paginated-page.is-current {
   animation: reader-page-in-previous 180ms ease-out both;
 }
 
-.reader-pagination-stage.motion-smooth.turn-previous .reader-paginated-page.is-outgoing {
+.reader-pagination-stage.motion-smooth.turn-previous:not([data-turn-phase]) .reader-paginated-page.is-outgoing {
   animation: reader-page-out-previous 180ms ease-out both;
-}
-
-.reader-pagination-stage.motion-page {
-  perspective: 1400px;
-}
-
-.reader-pagination-stage.motion-page.turn-next .reader-paginated-page.is-current {
-  animation: reader-sheet-in-next 220ms cubic-bezier(0.22, 0.75, 0.24, 1) both;
-}
-
-.reader-pagination-stage.motion-page.turn-next .reader-paginated-page.is-outgoing {
-  animation: reader-sheet-out-next 220ms cubic-bezier(0.55, 0.05, 0.75, 0.45) both;
-}
-
-.reader-pagination-stage.motion-page.turn-previous .reader-paginated-page.is-current {
-  transform-origin: center right;
-  animation: reader-sheet-in-previous 220ms cubic-bezier(0.22, 0.75, 0.24, 1) both;
-}
-
-.reader-pagination-stage.motion-page.turn-previous .reader-paginated-page.is-outgoing {
-  transform-origin: center right;
-  animation: reader-sheet-out-previous 220ms cubic-bezier(0.55, 0.05, 0.75, 0.45) both;
 }
 
 @keyframes reader-page-in-next {
@@ -259,33 +238,120 @@
   }
 }
 
-@keyframes reader-sheet-in-next {
-  from {
-    transform: rotateY(7deg) translateX(3%);
-  }
+/*
+ * Held page turns (slide/page). use-page-turn.ts drives the stage:
+ * data-turn-phase, --turn-progress 0..1, --turn-dir 1 (content leaves left) | -1,
+ * --turn-width (stage px), --turn-settle-ms, optional --turn-forward 1 | 0 for RTL.
+ * At progress 1 the preview sits exactly where the current page rests, so the swap is invisible.
+ */
+.reader-paginated-page.is-preview {
+  z-index: 0;
+  pointer-events: none;
 }
 
-@keyframes reader-sheet-out-next {
-  to {
-    transform: rotateY(-88deg) translateX(-5%);
-  }
+.reader-pagination-stage:not([data-turn-phase]) .reader-paginated-page.is-preview {
+  visibility: hidden;
 }
 
-@keyframes reader-sheet-in-previous {
-  from {
-    transform: rotateY(-7deg) translateX(-3%);
-  }
+.reader-pagination-stage[data-turn-phase] {
+  --turn-forward-resolved: var(--turn-forward, calc((1 + var(--turn-dir, 1)) / 2));
+  --turn-travel: calc(var(--turn-dir, 1) * var(--turn-width, 100%));
 }
 
-@keyframes reader-sheet-out-previous {
-  to {
-    transform: rotateY(88deg) translateX(5%);
-  }
+.reader-pagination-stage[data-turn-phase]:not([data-turn-renderer='curl'])
+  .reader-paginated-page:is(.is-current, .is-preview) {
+  animation: none;
+  will-change: transform;
+}
+
+.reader-pagination-stage[data-turn-phase='settling']:not([data-turn-renderer='curl'])
+  .reader-paginated-page:is(.is-current, .is-preview),
+.reader-pagination-stage[data-turn-phase='settling']:not([data-turn-renderer='curl'])
+  .reader-paginated-page:is(.is-current, .is-preview)::before,
+.reader-pagination-stage[data-turn-phase='settling']:not([data-turn-renderer='curl'])
+  .reader-paginated-page:is(.is-current, .is-preview)::after {
+  transition:
+    transform var(--turn-settle-ms, 240ms) cubic-bezier(0.2, 0.7, 0.25, 1),
+    opacity var(--turn-settle-ms, 240ms) cubic-bezier(0.2, 0.7, 0.25, 1);
+}
+
+.reader-pagination-stage.motion-slide[data-turn-phase] .reader-paginated-page.is-current {
+  transform: translate3d(calc(-1 * var(--turn-progress, 0) * var(--turn-travel)), 0, 0);
+}
+
+.reader-pagination-stage.motion-slide[data-turn-phase] .reader-paginated-page.is-preview {
+  transform: translate3d(calc((1 - var(--turn-progress, 0)) * var(--turn-travel)), 0, 0);
+}
+
+/* Book (flat fallback until the curl renderer takes over): forward lifts the current sheet off the next one; backward lays the previous sheet back on top. */
+.reader-pagination-stage.motion-page[data-turn-phase]:not([data-turn-renderer='curl']) {
+  perspective: 1600px;
+}
+
+.reader-pagination-stage.motion-page[data-turn-phase]:not([data-turn-renderer='curl'])
+  .reader-paginated-page.is-current {
+  --turn-lift: calc(var(--turn-forward-resolved) * var(--turn-progress, 0));
+  --turn-under: calc((1 - var(--turn-forward-resolved)) * var(--turn-progress, 0));
+  z-index: calc(1 + var(--turn-forward-resolved));
+  transform: translate3d(calc(-1 * var(--turn-lift) * var(--turn-travel)), 0, 0);
+}
+
+.reader-pagination-stage.motion-page[data-turn-phase]:not([data-turn-renderer='curl'])
+  .reader-paginated-page.is-preview {
+  --turn-lift: calc((1 - var(--turn-forward-resolved)) * (1 - var(--turn-progress, 0)));
+  --turn-under: calc(var(--turn-forward-resolved) * (1 - var(--turn-progress, 0)));
+  z-index: calc(2 - var(--turn-forward-resolved));
+  transform: translate3d(calc(var(--turn-lift) * var(--turn-travel)), 0, 0);
+}
+
+/* The held edge darkens slightly as it lifts; the sheet underneath sits in a faint shadow. Opacity only. */
+.reader-pagination-stage.motion-page[data-turn-phase]:not([data-turn-renderer='curl'])
+  .reader-paginated-page:is(.is-current, .is-preview)::before,
+.reader-pagination-stage.motion-page[data-turn-phase]:not([data-turn-renderer='curl'])
+  .reader-paginated-page:is(.is-current, .is-preview)::after {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  content: '';
+  pointer-events: none;
+}
+
+.reader-pagination-stage.motion-page[data-turn-phase]:not([data-turn-renderer='curl'])
+  .reader-paginated-page:is(.is-current, .is-preview)::before {
+  background: linear-gradient(
+    calc(90deg * var(--turn-dir, 1) * (2 * var(--turn-forward-resolved) - 1)),
+    transparent 70%,
+    rgb(0 0 0 / 0.12)
+  );
+  opacity: calc(var(--turn-lift) * 3);
+}
+
+.reader-pagination-stage.motion-page[data-turn-phase]:not([data-turn-renderer='curl'])
+  .reader-paginated-page:is(.is-current, .is-preview)::after {
+  background: rgb(0 0 0 / 0.1);
+  opacity: var(--turn-under);
+}
+
+/* Preview not ready yet (or chapter edge): only the current page gives a little. */
+.reader-pagination-stage[data-turn-phase]:not([data-turn-renderer='curl']):not(:has(.is-preview))
+  .reader-paginated-page.is-current {
+  z-index: 1;
+  transform: translate3d(calc(-1 * var(--turn-progress, 0) * var(--turn-travel)), 0, 0);
+}
+
+.reader-pagination-stage[data-turn-phase]:not([data-turn-renderer='curl']):not(:has(.is-preview))
+  .reader-paginated-page.is-current::before,
+.reader-pagination-stage[data-turn-phase]:not([data-turn-renderer='curl']):not(:has(.is-preview))
+  .reader-paginated-page.is-current::after {
+  content: none;
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .reader-pagination-stage .reader-paginated-page {
+  .reader-pagination-stage .reader-paginated-page,
+  .reader-pagination-stage .reader-paginated-page::before,
+  .reader-pagination-stage .reader-paginated-page::after {
     animation: none !important;
+    transition: none !important;
   }
 }
 
@@ -662,50 +728,6 @@ mark.reader-inline-highlight {
   font-weight: 500;
   line-height: 1.45;
   overflow-wrap: anywhere;
-}
-
-.chapter-nav {
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
-  margin-top: 48px;
-  margin-bottom: 36px;
-  padding-top: 24px;
-  border-top: 1px solid var(--border);
-  font-family: var(--font-ui);
-}
-
-.reader-next-chapter-boundary {
-  display: grid;
-  justify-items: center;
-  gap: 5px;
-  min-height: 88px;
-  margin: 0 auto 20px;
-  padding: 18px 12px 10px;
-  color: var(--text-2);
-  font-family: var(--font-ui);
-  text-align: center;
-}
-
-.reader-next-chapter-boundary > span,
-.reader-next-chapter-boundary > small {
-  font-size: 0.72rem;
-}
-
-.reader-next-chapter-boundary > strong {
-  color: var(--text);
-  font-size: 0.9rem;
-  font-weight: 650;
-}
-
-.reader-next-chapter-boundary > small {
-  min-height: 1.2em;
-  transition: color 120ms ease;
-}
-
-.reader-next-chapter-boundary.is-armed > small {
-  color: var(--primary);
-  font-weight: 650;
 }
 
 .reader-document.reader-boundary-motion {

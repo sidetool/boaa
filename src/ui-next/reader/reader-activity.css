@@ -1,0 +1,98 @@
+/* ui-next 읽기 중 대기 표시: a quiet corner pill over the page; it never takes taps or covers a line of text for long. */
+
+.un-reader-activity {
+  position: fixed;
+  top: calc(10px + var(--un-safe-t, 0px));
+  right: 12px;
+  z-index: var(--layer-floating, 40);
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  max-width: min(240px, calc(100vw - 24px));
+  margin: 0;
+  padding: 6px 11px 6px 9px;
+  border-radius: 999px;
+  background: rgb(18 18 22 / 58%);
+  box-shadow: inset 0 0 0 1px rgb(255 255 255 / 8%);
+  color: rgb(242 242 244 / 88%);
+  font-family: var(--un-font, inherit);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.2;
+  white-space: nowrap;
+  pointer-events: none;
+  transition: top 0.24s var(--un-ease, ease);
+  /* Cache hits and quick replies finish before this shows, so they never flash a label. */
+  animation: un-reader-activity-in 0.22s ease-out 0.45s both;
+  -webkit-backdrop-filter: blur(14px);
+  backdrop-filter: blur(14px);
+}
+
+/* Sit under the top bar while it shows instead of on top of its buttons. */
+.reader-screen.chrome-visible .un-reader-activity,
+.reader-screen:has(.reader-topbar:focus-within, .reader-topbar.always-visible) .un-reader-activity {
+  top: calc(66px + var(--un-safe-t, 0px));
+}
+
+/* Keep clear of the docked side panel on wide screens. */
+@media (min-width: 900px) {
+  .reader-screen.addon-open .un-reader-activity {
+    right: calc(var(--reader-panel-width, 0px) + 12px);
+  }
+}
+
+.un-reader-activity > span:not(.un-reader-activity-spinner) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.un-reader-activity small {
+  flex: none;
+  color: rgb(242 242 244 / 55%);
+  font-size: 11.5px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+
+.un-reader-activity-spinner {
+  flex: none;
+  width: 11px;
+  height: 11px;
+  border: 1.5px solid rgb(255 255 255 / 22%);
+  border-top-color: rgb(242 242 244 / 90%);
+  border-radius: 50%;
+  animation: un-reader-activity-spin 0.8s linear infinite;
+}
+
+.un-reader-activity.is-warning {
+  animation-delay: 0s;
+}
+
+.un-reader-activity.is-warning > svg {
+  flex: none;
+  color: #ffb3a1;
+}
+
+@keyframes un-reader-activity-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+}
+
+@keyframes un-reader-activity-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .un-reader-activity {
+    transition: none;
+    animation: none;
+  }
+
+  .un-reader-activity-spinner {
+    animation-duration: 2.4s;
+  }
+}

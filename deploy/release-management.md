@@ -16,7 +16,7 @@ cd /srv/boaa
 node scripts/release/install.mjs --version vX.Y.Z --key /trusted/boaa-release-public.pub
 ```
 
-설치기는 서명을 검증한 manifest의 digest로 모든 BOAA 이미지를 고정한다. `.env`가 없으면 무작위 비밀 값을 생성하고, 기존 `.env`는 보존한다. 기본 다운로드에는 API/작업자/웹/업데이터와 저장소 서비스만 포함된다. APK Java, Chromium, Python 메타데이터 실행기는 필요할 때 설정에서 별도로 설치한다.
+설치기는 서명을 검증한 manifest의 digest로 모든 BOAA 이미지를 고정한다. `.env`가 없으면 무작위 비밀 값을 생성하고, 기존 `.env`는 보존한다. 기본 다운로드에는 API/작업자/웹/업데이터, 저장소 서비스와 Patchright 브라우저 인증 실행기가 포함된다. 실제 브라우저 프로세스는 요청이 있을 때만 시작하며 60초 유휴 후 종료한다. Camoufox(실험), APK Java, Python 메타데이터 실행기는 필요할 때 설정에서 별도로 설치한다. 브라우저를 제외하려면 설치 명령에 `--browser off`를 추가한다. 기본 브라우저 설치에는 Patchright 엔진이 명시된 서명 릴리즈가 필요하다. 기존 설치의 중지 상태와 선택 엔진은 앱 업데이트 시 유지한다.
 
 기존 소스 설치를 이 명령으로 덮어쓰지 않는다. 같은 Compose project 이름, DB·객체 저장소·서버 데이터 볼륨, 암호화 키를 유지한 별도 전환 계획이 필요하다. 기존 설치의 설정·볼륨과 업데이터 기록이 맞지 않으면 관리 기능을 활성화하지 않는다. 자동 백업은 제공된 postgres 서비스와 `/data/server` 데이터 경로를 사용하는 구성만 지원한다. 외부 DB 또는 다른 데이터 경로는 자동 적용을 차단한다.
 
@@ -55,7 +55,7 @@ node scripts/release/install.mjs --version vX.Y.Z --key /trusted/boaa-release-pu
 | 구성요소   | 설치 내용                                                 | 비활성화 시                                                |
 | ---------- | --------------------------------------------------------- | ---------------------------------------------------------- |
 | APK        | JRE + 사이트 중립 APK 호스트 JAR, 원자적 `current` 포인터 | API 재시작, APK 실행 중단, APK 파일·설정·payload 볼륨 보존 |
-| 브라우저   | 인증된 원격 Playwright + Camoufox                         | worker 중지, HTTP 확장은 계속 동작                         |
+| 브라우저   | Patchright 기본 설치, Camoufox 선택 설치                  | 실행기 중지, HTTP 확장은 계속 동작                         |
 | 메타데이터 | 사이트 중립 Python ASGI 실행기                            | worker 중지, 제공자·캐시 데이터 보존                       |
 
 APK provider 컨테이너는 성공 후 `Exited (0)`인 것이 정상이다. 실행 중 앱 버전과 같은 릴리즈의 구성요소만 설치한다. 이미 설치했어도 꺼 둔 구성요소는 앱 업데이트 때 다시 받지 않으며, 다음 활성화 시 현재 앱 버전으로 맞춘다. 표시되는 다운로드 크기는 이미지 압축 layer 총량의 아키텍처별 최대치로, 이미 받은 layer 재사용에 따른 실제 전송량은 더 작을 수 있다.
@@ -146,3 +146,9 @@ node scripts/release/upgrade-updater.mjs --container <current-updater-container>
 The tool verifies the signed release manifest, pulls its immutable updater image, takes the existing updater lock, preserves the managed deployment and recreates only the updater. Application images, database, credentials and volumes remain in place. Then use the normal beta-channel update action to install beta.5. Do not rerun the new-install command over an existing installation or reapply bootstrap Compose. If an update/recovery operation is already active, the tool refuses to modify it.
 
 Beta.5 metadata images explicitly advertise support for Patchright and Camoufox. The updater refuses an older incompatible metadata image before stopping services. All local translation/TTS/discovery/home changes and additive database migrations 61/62 are included in this release.
+
+## beta.5 → beta.6
+
+Use the normal beta-channel update action. The schema epoch remains 2 and the existing updater can install this release. Existing browser enablement and operator settings are preserved. New installations include the default Patchright browser runtime; use `--browser off` to omit it.
+
+Beta.6 includes source-to-work navigation, translation and listening settings refinements, interactive page turns, and comic chapter-boundary navigation fixes. Page curl uses the pinned MIT-licensed StPageFlip calculation core; corresponding source and notices are included.

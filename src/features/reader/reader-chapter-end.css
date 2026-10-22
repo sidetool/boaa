@@ -1,0 +1,125 @@
+/* 회차 끝: the reader's quiet centred end line. Colours follow the reading theme. */
+
+.reader-chapter-end {
+  --chapter-end-text: var(--text);
+  --chapter-end-muted: var(--text-2);
+  --chapter-end-line: var(--border);
+  --chapter-end-accent: var(--primary);
+
+  display: grid;
+  /* A shrinkable track, so a long title ellipsizes inside the column instead of widening it. */
+  grid-template-columns: minmax(0, 1fr);
+  justify-items: center;
+  margin: 48px 0 0;
+  /* Room for the reader's bottom bar, so the end line is never under it when the bars show. */
+  padding: 26px 12px calc(var(--reader-chapter-end-clearance, 128px) + env(safe-area-inset-bottom, 0px));
+  border-top: 1px solid var(--chapter-end-line);
+  color: var(--chapter-end-muted);
+  font-family: var(--font-ui);
+  text-align: center;
+}
+
+.reader-chapter-end-next {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  justify-items: center;
+  gap: 5px;
+  min-width: 0;
+  max-width: 100%;
+  padding: 4px 8px;
+  border: 0;
+  border-radius: 8px;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.reader-chapter-end-next > span,
+.reader-chapter-end-cue,
+.reader-chapter-end-last,
+.reader-chapter-end-previous {
+  font-size: 0.72rem;
+}
+
+.reader-chapter-end-next > strong {
+  max-width: min(620px, 100%);
+  overflow: hidden;
+  color: var(--chapter-end-text);
+  font-size: 0.9rem;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.reader-chapter-end-next:hover:not(:disabled) > strong {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.reader-chapter-end-next:focus-visible,
+.reader-chapter-end-previous:focus-visible {
+  outline: 2px solid var(--chapter-end-accent);
+  outline-offset: 2px;
+}
+
+.reader-chapter-end-next:disabled {
+  cursor: default;
+}
+
+.reader-chapter-end-cue {
+  min-height: 1.4em;
+  margin-top: 3px;
+  transition: color 120ms ease;
+}
+
+.reader-chapter-end.is-armed .reader-chapter-end-cue {
+  color: var(--chapter-end-accent);
+  font-weight: 650;
+}
+
+.reader-chapter-end-last {
+  margin: 4px 0 0;
+}
+
+.reader-chapter-end-previous {
+  margin-top: 14px;
+  padding: 6px 10px;
+  border: 0;
+  border-radius: 8px;
+  background: none;
+  color: var(--chapter-end-muted);
+  font: inherit;
+  font-size: 0.72rem;
+  opacity: 0.8;
+  cursor: pointer;
+}
+
+.reader-chapter-end-previous:hover:not(:disabled) {
+  color: var(--chapter-end-text);
+  opacity: 1;
+}
+
+.reader-chapter-end-previous:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+/* Comic sections end on the viewer's dark canvas whatever the reading theme. */
+.reader-chapter-end.is-comic {
+  --chapter-end-text: #dce0e4;
+  --chapter-end-muted: #858c94;
+  --chapter-end-line: rgb(255 255 255 / 10%);
+  --chapter-end-accent: #9bb9ff;
+
+  width: min(760px, calc(100% - 48px));
+  margin: 0 auto;
+  padding: 18px 0 0;
+  font-family: var(--font-ui, inherit);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .reader-chapter-end-cue {
+    transition: none;
+  }
+}

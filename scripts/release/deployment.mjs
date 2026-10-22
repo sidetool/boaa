@@ -169,6 +169,15 @@ export class DockerDeployment {
       config: path.join(this.directory, 'initial.config.json'),
       compose: path.join(this.directory, 'initial.compose.json'),
     };
+    // Components enabled by the initial installer are already installed. Retain
+    // that fact when the owner later stops them without downloading anything.
+    this.current.installed = [...this.current.enabled];
+    this.current.componentVersions = Object.fromEntries(this.current.enabled.map((id) => [id, this.current.version]));
+    if (this.current.enabled.includes('browser')) {
+      this.current.browserEngine = configuredBrowserEngine(this.config);
+      this.current.installedBrowserEngines = [this.current.browserEngine];
+      this.current.browserVersions = { [this.current.browserEngine]: this.current.version };
+    }
     await atomicJson(this.current.config, this.config);
     await atomicJson(this.current.compose, escapeCompose(this.config));
     await atomicJson(path.join(this.directory, 'current.json'), this.current);

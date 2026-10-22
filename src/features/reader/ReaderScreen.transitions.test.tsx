@@ -26,6 +26,7 @@ const mocks = vi.hoisted(() => ({
 }));
 // Keep ReaderScreen's branch and the real transition; isolate viewport/plugin/browser ownership.
 vi.mock('../../app/runtime/RuntimeProvider', () => ({
+  useOptionalAppRuntime: () => undefined,
   useAppRuntime: () => ({ readerRuntime: { readerRepository: mocks.repository } }),
 }));
 vi.mock('../../extensions/ui/ReaderPluginProvider', () => ({

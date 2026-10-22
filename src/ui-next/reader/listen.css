@@ -577,13 +577,236 @@
   font-size: 12px;
 }
 
-/* The classic speaker/advanced section rendered inside the sub page. */
+/* The classic speaker/advanced sections and the engine form, drawn as ui-next cards inside the sub pages. */
 .un-listen .tts-addon-body {
   gap: 18px;
+  padding: 0;
 }
 
-.un-listen :is(.voice-profile-section, .tts-panel-section) {
+.un-listen .tts-panel-section {
+  display: grid;
+  gap: 12px;
+  border: 0;
+}
+
+.un-listen :is(.voice-profile-section, .provider-settings-card) {
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+  border: 0;
+  border-radius: 16px;
+  background: var(--un-pref-surface, rgb(255 255 255 / 4.5%));
+}
+
+.un-listen :is(.voice-profile-section .setting-line, .provider-settings-card .panel-section-title) {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 0;
+}
+
+.un-listen :is(.voice-profile-section, .provider-settings-card) h4 {
+  margin: 0;
+  color: var(--un-text);
+  font-size: 15px;
+  font-weight: 650;
+}
+
+.un-listen :is(.voice-profile-section, .provider-settings-card) :is(.setting-line, .panel-section-title) > span {
+  color: var(--un-text-3);
+  font-size: 12.5px;
+  white-space: nowrap;
+}
+
+.un-listen :is(.voice-profile-section, .provider-settings-card) :is(small, .muted, .field-help) {
+  color: var(--un-text-3);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.un-listen :is(.voice-profile-section, .provider-settings-card) p.muted {
+  margin: 0;
+}
+
+.un-listen :is(.voice-profile-section, .provider-settings-card) .muted.warning {
+  color: #ffc875;
+}
+
+.un-listen :is(.voice-profile-section, .provider-settings-card) input[type='checkbox'] {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  margin: 0;
+  accent-color: var(--un-accent);
+}
+
+/* The classic panel pads by id; the card padding has to match that weight. */
+.un-listen #tts-advanced-panel {
+  gap: 12px;
+}
+
+.un-listen #tts-advanced-panel .voice-profile-section {
+  padding: 16px;
+  border-top: 0;
+}
+
+/* Fields sit on the card, so they need their own fill and edge to read as fields. */
+.un-listen :is(.voice-profile-section, .provider-settings-card) :is(input.text-input, select, textarea) {
   border-color: var(--un-line);
+  background-color: rgb(255 255 255 / 6%);
+}
+
+.un-listen .voice-cost-summary input {
+  width: 72px;
+  min-height: 38px;
+  border: 1px solid var(--un-line);
+  border-radius: 10px;
+  background: rgb(255 255 255 / 6%);
+  text-align: right;
+}
+
+.un-listen :is(.voice-profile-section, .provider-settings-card) .ghost-btn {
+  background: rgb(255 255 255 / 6%);
+}
+
+.un-listen :is(.voice-profile-section, .provider-settings-card) .ghost-btn:hover:not(:disabled) {
+  background: rgb(255 255 255 / 10%);
+}
+
+.un-listen .spoken-preview-grid {
+  overflow: hidden;
+  margin-top: 0;
+  border: 1px solid var(--un-line);
+  border-radius: 12px;
+}
+
+.un-listen .spoken-preview-grid > div + div {
+  border-color: var(--un-line);
+  background: rgb(255 255 255 / 3%);
+}
+
+.un-listen .voice-profile-row {
+  grid-template-columns: minmax(84px, 0.5fr) minmax(0, 1fr);
+  gap: 12px;
+}
+
+.un-listen .voice-profile-row > span {
+  color: var(--un-text-2);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.un-listen :is(.hosted-voice-section, .voice-pool-section) {
+  padding-top: 16px;
+  border-top: 0;
+}
+
+.un-listen .hosted-voice-profile-item {
+  padding: 10px;
+  border: 0;
+  border-radius: 12px;
+  background: rgb(255 255 255 / 3.5%);
+}
+
+.un-listen .voice-profile-option-control strong {
+  color: var(--un-text-2);
+  font-size: 12px;
+}
+
+.un-listen .voice-profile-option-control small {
+  color: var(--un-text-3);
+  font-size: 11.5px;
+}
+
+.un-listen .setting-check {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--un-text-2);
+  font-size: 14px;
+}
+
+.un-listen .addon-status {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 0;
+  border-radius: 12px;
+  background: rgb(255 255 255 / 4%);
+  color: var(--un-text-3);
+  font-size: 13px;
+}
+
+.un-listen .addon-status strong {
+  color: var(--un-text);
+  font-size: 14px;
+}
+
+.un-listen div.provider-job-card {
+  border: 0;
+  border-radius: 12px;
+  background: rgb(255 255 255 / 4%);
+}
+
+/* On the engine page the form is the page itself, so it drops the card and lines up with the note above. */
+.un-listen > div.provider-settings-card {
+  padding: 0;
+  background: none;
+}
+
+.un-listen .provider-settings-card .field-label {
+  margin: 4px 0 -4px;
+  color: var(--un-text-2);
+  font-size: 13.5px;
+  font-weight: 600;
+}
+
+.un-listen .provider-grid {
+  gap: 0;
+  overflow: hidden;
+  border-radius: 12px;
+  background: rgb(255 255 255 / 3.5%);
+}
+
+.un-listen .provider-row {
+  gap: 12px;
+  padding: 12px;
+  border: 0;
+  border-radius: 0;
+  background: none;
+}
+
+.un-listen .provider-row + .provider-row {
+  border-top: 1px solid var(--un-line);
+}
+
+.un-listen .provider-row strong {
+  color: var(--un-text);
+  font-size: 14.5px;
+}
+
+.un-listen .provider-row small {
+  color: var(--un-text-3);
+  font-size: 12px;
+}
+
+.un-listen .provider-options-textarea {
+  min-height: 84px;
+  font-family: var(--un-mono, ui-monospace, monospace);
+  font-size: 13px;
+}
+
+.un-listen :is(.provider-settings-actions, .voice-product-actions) {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.un-listen .provider-settings-actions > button {
+  flex: 1;
 }
 
 @media (max-width: 420px) {

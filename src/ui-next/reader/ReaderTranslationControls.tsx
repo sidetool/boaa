@@ -1,9 +1,45 @@
+import { useEffect, useRef, useState } from 'react';
 import type { ReaderTranslationController } from '../../features/translation/use-reader-translation';
 import { translationMessage } from '../../translation/contracts';
 import { Sheet } from '../components/primitives';
 import { Notice } from '../components/prefs';
+import { UiNextReaderActivity, type ReaderActivity } from './UiNextReaderActivity';
 import '../settings/pages/translation.css';
 import './translation.css';
+/** Reads the translation request state for the corner pill; the sheet shows the full status while it is open. */
+function useTranslationActivity(t: ReaderTranslationController): ReaderActivity | undefined {
+  const status = t.result?.status;
+  const active = t.busy || status === 'queued' || status === 'running';
+  const failed = Boolean(t.error) || status === 'failed';
+  const [ended, setEnded] = useState(false);
+  const wasActive = useRef(false);
+  useEffect(() => {
+    if (active) {
+      wasActive.current = true;
+      setEnded(false);
+      return;
+    }
+    // Only a request the reader was waiting on reports how it ended; opening a chapter stays quiet
+    // and clears a warning that belonged to the previous one.
+    if (wasActive.current) setEnded(failed);
+    else if (!failed) setEnded(false);
+    wasActive.current = false;
+  }, [active, failed]);
+  useEffect(() => {
+    if (!ended) return;
+    const timer = setTimeout(() => setEnded(false), 4000);
+    return () => clearTimeout(timer);
+  }, [ended]);
+  if (t.open) return undefined;
+  if (active)
+    return {
+      tone: 'busy',
+      label: t.busy ? '번역 준비 중' : status === 'queued' ? '번역 대기 중' : '번역 중',
+      detail: status === 'running' && t.result?.total ? `${t.result.completed}/${t.result.total}` : undefined,
+    };
+  return ended ? { tone: 'warning', label: '번역을 마치지 못했어요' } : undefined;
+}
+
 export function ReaderTranslationControls({
   controller: t,
   listening,
@@ -11,6 +47,7 @@ export function ReaderTranslationControls({
   controller: ReaderTranslationController;
   listening: boolean;
 }) {
+  const activity = useTranslationActivity(t);
   if (!t.available) return null;
   const progress = t.result ? `${t.result.completed} / ${t.result.total}문단` : '';
   const active = ['running', 'queued'].includes(t.result?.status ?? '');
@@ -19,6 +56,7 @@ export function ReaderTranslationControls({
   );
   return (
     <>
+      <UiNextReaderActivity activity={activity} />
       <Sheet open={t.open} title="작품 번역" onClose={() => t.setOpen(false)}>
         <div className="un-translation-controls">
           <p>원문을 유지하며 번역문으로 바꿔 볼 수 있어요. 긴 회차는 나눠 처리하고, 완료된 문단부터 표시해요.</p>

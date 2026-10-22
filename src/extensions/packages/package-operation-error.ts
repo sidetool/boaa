@@ -5,9 +5,8 @@ const messages: Readonly<Record<string, string>> = {
   apk_review_expired: '설치 검토가 만료됐습니다. 업데이트를 다시 선택해 주세요.',
   source_preferences_conflict: '확장 설정이 변경됐습니다. 설정을 다시 열어 주세요.',
   invalid_source_preferences: '확장 설정 값을 확인해 주세요.',
-  source_browser_disabled: '확장 설정에서 브라우저 사용을 켜 주세요. 브라우저 실행 환경 설치가 필요합니다.',
-  source_browser_unavailable:
-    '사이트 화면을 실행할 브라우저를 사용할 수 없습니다. 호스트의 브라우저 설치 상태를 확인해 주세요.',
+  source_browser_disabled: '확장 설정에서 브라우저 사용을 자동으로 바꿔 주세요.',
+  source_browser_unavailable: '브라우저 인증을 설치하거나 실행 상태를 확인해 주세요.',
   source_browser_failed: '소스의 사이트 화면 처리를 완료하지 못했습니다. 잠시 후 다시 시도해 주세요.',
   source_connection_failed: '소스 사이트와의 연결이 끊겼습니다. 잠시 후 다시 시도해 주세요.',
   source_request_timeout: '소스 사이트의 응답 시간이 초과됐습니다. 잠시 후 다시 시도해 주세요.',

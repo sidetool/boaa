@@ -8,6 +8,7 @@ import type { Plugin } from 'vite';
 const licenseNoticeAssets = [
   ['LICENSE', 'LICENSE'],
   ['THIRD_PARTY_NOTICES.md', 'THIRD_PARTY_NOTICES.md'],
+  ['third_party/licenses/st-page-flip/LICENSE', 'third_party/licenses/st-page-flip/LICENSE'],
   ['third_party/licenses/7z-wasm/License.txt', 'third_party/licenses/7z-wasm/License.txt'],
   ['third_party/licenses/common/LGPL-2.1.txt', 'third_party/licenses/common/LGPL-2.1.txt'],
   ['third_party/licenses/common/unRarLicense.txt', 'third_party/licenses/common/unRarLicense.txt'],
@@ -34,6 +35,8 @@ function webComponentEvidence(): Plugin {
     generateBundle() {
       const components = new Map<string, { name: string; version: string; license?: string }>();
       for (const id of this.getModuleIds()) {
+        if (id.endsWith('/reader/vendor/st-page-flip.mjs'))
+          components.set('page-flip@2.0.7', { name: 'page-flip', version: '2.0.7', license: 'MIT' });
         if (!id.includes('/node_modules/')) continue;
         let folder = dirname(id.split('?')[0]);
         while (folder !== dirname(folder)) {

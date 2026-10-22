@@ -20,6 +20,7 @@ import { sourceBrowserSdkSession } from './source-browser-sdk-transport.js';
 import type { SourceWebViewRequest } from '../../../../packages/extension-contracts/source-webview.js';
 import { createSourcePreferences } from './source-preferences.js';
 import { compatibilityHttp, type CompatibilityHttpInput } from './mangayomi/http.js';
+import { sourceBrowserUsage } from './source-browser-mode.js';
 import { sourceBrowserHttp } from './source-browser-cookies.js';
 import { setTimeout as sleep } from 'node:timers/promises';
 
@@ -139,6 +140,7 @@ export function createNodePackageExecution(
         browserMode: 'browserMode' in sourceOptions ? sourceOptions.browserMode : undefined,
         browserUsage: 'browserUsage' in sourceOptions ? sourceOptions.browserUsage : undefined,
         browserAllowed: !!pkg.manifest.requestedAccess.webview,
+        routeRevision: pkg.digest,
       };
       const broker = createSourceBroker(
         {
@@ -197,6 +199,7 @@ export function createNodePackageExecution(
                   browserMode: 'browserMode' in sourceOptions ? sourceOptions.browserMode : undefined,
                   browserUsage: 'browserUsage' in sourceOptions ? sourceOptions.browserUsage : undefined,
                   browserAllowed: !!pkg.manifest.requestedAccess.webview,
+                  routeRevision: pkg.digest,
                 },
                 2 * 1024 * 1024,
                 compatibilityHttp,
@@ -211,8 +214,7 @@ export function createNodePackageExecution(
             },
             'webview.evaluate': async (request, requestSignal) => {
               if (!pkg.manifest.requestedAccess.webview) throw new Error('permission_denied');
-              if (!('browserUsage' in sourceOptions) || sourceOptions.browserUsage === 'off')
-                throw new Error('source_browser_disabled');
+              if (sourceBrowserUsage(browserScope.browserUsage) === 'off') throw new Error('source_browser_disabled');
               return sourceWebViewHost.evaluate(
                 request as SourceWebViewRequest,
                 {
@@ -228,6 +230,7 @@ export function createNodePackageExecution(
                   browserMode: 'browserMode' in sourceOptions ? sourceOptions.browserMode : undefined,
                   browserUsage: 'browserUsage' in sourceOptions ? sourceOptions.browserUsage : undefined,
                   browserAllowed: !!pkg.manifest.requestedAccess.webview,
+                  routeRevision: pkg.digest,
                 },
                 requestSignal,
               );

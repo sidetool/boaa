@@ -99,6 +99,44 @@ it('keeps SDK assets on streaming HTTP with saved sessions even under always mod
   }
 });
 
+it('learns browser-only SDK text without repeating HTTP and releases discarded challenge streams', async () => {
+  const current = scope();
+  const authenticate = vi.spyOn(sourceWebViewHost, 'evaluate').mockResolvedValue(null);
+  const browser = vi.spyOn(sourceWebViewHost, 'request').mockResolvedValue({
+    statusCode: 200,
+    url,
+    headers: {},
+    bytes: Buffer.from('browser text'),
+    contentType: 'text/plain',
+  });
+  const bodies: Readable[] = [];
+  const transport = vi.fn(async () => {
+    const body = Readable.from(['challenge']);
+    bodies.push(body);
+    return { status: 403, headers: { 'cf-mitigated': 'challenge' }, body };
+  });
+  const broker = createSourceBroker(
+    { origins: ['https://sdk.example'] },
+    {
+      lookup: async () => [{ address: '1.1.1.1', family: 4 }],
+      session: sourceBrowserSdkSession(current),
+      transport,
+    },
+  );
+  try {
+    for (let i = 0; i < 3; i++)
+      expect(await broker.methods['http.request']({ url, response: 'text' }, AbortSignal.timeout(2000))).toEqual({
+        text: 'browser text',
+      });
+    expect(transport).toHaveBeenCalledTimes(2);
+    expect(authenticate).toHaveBeenCalledOnce();
+    expect(browser).toHaveBeenCalledTimes(3);
+    expect(bodies.every((body) => body.destroyed)).toBe(true);
+  } finally {
+    broker.dispose();
+  }
+});
+
 it('retains SDK origin checks and routes only granted text requests through always mode', async () => {
   const current = scope('always');
   const browser = vi.spyOn(sourceWebViewHost, 'request').mockResolvedValue({

@@ -22,10 +22,10 @@ const scope = (usage?: SourceWebViewScope['browserUsage']): SourceWebViewScope =
   browserUsage: usage,
 });
 
-it('defaults to HTTP without installation or launch, including challenge and permission responses', async () => {
+it('keeps explicit off and ungranted sources on HTTP, including challenge responses', async () => {
   const evaluate = vi.spyOn(sourceWebViewHost, 'evaluate').mockRejectedValue(new Error('must not launch'));
   const browserRequest = vi.spyOn(sourceWebViewHost, 'request').mockRejectedValue(new Error('must not launch'));
-  for (const current of [scope(), scope('off'), { ...scope('always'), browserAllowed: false }]) {
+  for (const current of [scope('off'), { ...scope('always'), browserAllowed: false }]) {
     for (const status of [200, 401, 403]) {
       const result = response(status, status === 403);
       await expect(
@@ -91,6 +91,7 @@ it('refreshes a recognized read challenge once and then reuses saved cookies thr
 });
 
 it('bounds repeated authentication when browser clearance cannot be reused by HTTP', async () => {
+  vi.spyOn(sourceWebViewHost, 'request').mockResolvedValue(response(403, true));
   vi.useFakeTimers();
   const evaluate = vi.spyOn(sourceWebViewHost, 'evaluate').mockResolvedValue(null);
   const current = scope('http-first');
@@ -132,6 +133,7 @@ it('does not turn ordinary denials or non-idempotent requests into browser authe
 });
 
 it('coalesces authentication and keeps it alive when only one of two readers cancels', async () => {
+  vi.spyOn(sourceWebViewHost, 'request').mockResolvedValue(response(403, true));
   let finish!: () => void;
   let sharedSignal: AbortSignal | undefined;
   const gate = new Promise<void>((resolve) => {

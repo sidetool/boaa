@@ -582,6 +582,8 @@ export function useTTSExecutionController(input: TTSExecutionControllerInput) {
     hostedJob: visibleHostedLane === 'playback' ? playbackJob : warmupJob,
     hostedStatus: visibleHostedLane === 'playback' ? playbackStatus : warmupStatus,
     hostedBusy: playbackBusy || warmupBusy,
+    playbackWaiting: playbackBusy && !itemActive,
+    playbackStatus,
     warmupBusy,
     beginSession,
     isSessionCurrent,

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type RefObject, type WheelEvent as ReactWheelEvent } from 'react';
+import { gestureTargetIsInteractive } from './reader-action-dispatcher';
 
 const END_EPSILON_PX = 2;
 const END_IDLE_MS = 280;
@@ -238,7 +239,14 @@ export function useScrollChapterBoundary(input: {
   );
 
   const onPointerDown = useCallback(
-    (clientY: number, pointerType: string): boolean => {
+    (clientY: number, pointerType: string, target?: EventTarget | null): boolean => {
+      // Reader controls own their click. Capturing it on the viewport retargets
+      // pointerup/click away from the button when the chapter boundary is armed.
+      if (target && gestureTargetIsInteractive(target)) {
+        pointerStartedArmedRef.current = false;
+        pointerStartYRef.current = undefined;
+        return false;
+      }
       if (pointerType === 'touch') return false;
       const root = input.rootRef.current;
       const ready = Boolean(
@@ -345,7 +353,7 @@ export function useScrollChapterBoundary(input: {
       touchLastYRef.current = undefined;
     };
     const onTouchStart = (event: TouchEvent) => {
-      if (event.touches.length !== 1) {
+      if (event.touches.length !== 1 || gestureTargetIsInteractive(event.target)) {
         resetTouch();
         return;
       }

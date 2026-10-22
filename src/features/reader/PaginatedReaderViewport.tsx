@@ -1,3 +1,5 @@
+import { usePageTurn } from './use-page-turn';
+import { gestureTargetIsInteractive } from './reader-action-dispatcher';
 import { useOptionalAppRuntime } from '../../app/runtime/RuntimeProvider';
 import { useReaderSearchInset } from './reader-search-occlusion';
 import { readReaderSelection, useReaderSelectionChanges } from './reader-selection';
@@ -674,8 +676,47 @@ export function PaginatedReaderViewport(
     },
     [chapter.index, chapters, novel.id, screenHandle, props.navigationBusy],
   );
+  const horizontalMotion =
+    settings.readingProfile.pageTurnMotion === 'slide' || settings.readingProfile.pageTurnMotion === 'page';
+  const turnPointers = useRef(new Set<number>());
+  const pageTurn = usePageTurn<NonNullable<typeof view>>({
+    stage: stageRef,
+    curl: settings.readingProfile.pageTurnMotion === 'page',
+    enabled: isActive && !preparing && !props.navigationBusy && horizontalMotion,
+    scope: `${pageMapKey}:${bodyKey}:${settings.readingProfile.pageTurnMotion}:${spreadActive}`,
+    position: `${view?.boundary.start.blockIndex}:${view?.boundary.start.offset}`,
+    prepare: async (direction, signal) => {
+      const current = viewRef.current;
+      if (!current || current.key !== pageMapKey) return undefined;
+      const edge = direction > 0 ? (current.secondaryBoundary ?? current.boundary).end : current.boundary.start;
+      let boundary = await session.window.adjacent(edge, direction);
+      if (direction < 0 && spreadActive && boundary)
+        boundary = (await session.window.adjacent(boundary.start, -1)) ?? boundary;
+      if (!boundary || signal.aborted || session.controller.signal.aborted) return undefined;
+      const fragments = await session.window.materialize(boundary);
+      const secondaryBoundary = spreadActive ? await session.window.adjacent(boundary.end, 1) : undefined;
+      const secondaryFragments = secondaryBoundary ? await session.window.materialize(secondaryBoundary) : [];
+      return { key: pageMapKey, boundary, fragments, secondaryBoundary, secondaryFragments };
+    },
+    commit: (next) => {
+      window.clearTimeout(transitionTimerRef.current);
+      setOutgoingFragments([]);
+      setOutgoingSecondaryFragments([]);
+      setTransitionDirection(undefined);
+      viewRef.current = next;
+      visibleAnchorRef.current = next.boundary.start;
+      setView(next);
+      setPreparing(false);
+    },
+    edge: (direction) => goChapter(direction),
+    error: () => onPaginationFailure(),
+  });
   const pageJump = useCallback(
     (direction: -1 | 1) => {
+      if (horizontalMotion) {
+        pageTurn.turn(direction);
+        return;
+      }
       const navigation = navigationRef.current;
       pageTurnQueueRef.current = pageTurnQueueRef.current
         .then(async () => {
@@ -701,7 +742,17 @@ export function PaginatedReaderViewport(
         });
       onRevealChrome();
     },
-    [commitPage, goChapter, onPaginationFailure, onRevealChrome, pageMapKey, session, spreadActive],
+    [
+      commitPage,
+      goChapter,
+      onPaginationFailure,
+      onRevealChrome,
+      pageMapKey,
+      session,
+      spreadActive,
+      horizontalMotion,
+      pageTurn,
+    ],
   );
   const requestScrollAfterPageTurn = useCallback(
     (deltaY: number) => {
@@ -962,8 +1013,52 @@ export function PaginatedReaderViewport(
       aria-busy={preparing}
       data-pagination-ready={view?.key === pageMapKey && !preparing ? 'true' : 'false'}
       data-reader-layer="paginated"
-      onPointerDown={gestureHandlers.onPointerDown}
-      onPointerUp={gestureHandlers.onPointerUp}
+      onPointerDown={(event) => {
+        if (event.isPrimary) turnPointers.current.clear();
+        turnPointers.current.add(event.pointerId);
+        if (turnPointers.current.size > 1) {
+          pageTurn.cancel();
+          gestureHandlers.onPointerCancel();
+          return;
+        }
+        gestureHandlers.onPointerDown(event);
+        if (event.button !== 0 || gestureTargetIsInteractive(event.target) || window.getSelection()?.toString()) return;
+        if (
+          settings.gestureBindings.swipeLeft === 'next_page' &&
+          settings.gestureBindings.swipeRight === 'previous_page'
+        )
+          pageTurn.down(event.pointerId, event.clientX, event.clientY);
+      }}
+      onPointerMove={(event) => {
+        if (window.getSelection()?.toString()) {
+          pageTurn.cancel();
+          return;
+        }
+        if (pageTurn.move(event.pointerId, event.clientX, event.clientY)) {
+          event.preventDefault();
+          event.currentTarget.setPointerCapture(event.pointerId);
+        }
+      }}
+      onPointerUp={(event) => {
+        turnPointers.current.delete(event.pointerId);
+        if (pageTurn.up(event.pointerId, event.clientX)) gestureHandlers.onPointerCancel();
+        else gestureHandlers.onPointerUp(event);
+        if (event.currentTarget.hasPointerCapture(event.pointerId))
+          event.currentTarget.releasePointerCapture(event.pointerId);
+      }}
+      onPointerCancel={(event) => {
+        turnPointers.current.clear();
+        pageTurn.up(event.pointerId, event.clientX, true);
+        gestureHandlers.onPointerCancel();
+      }}
+      onLostPointerCapture={(event) => {
+        // Touch starts with implicit capture on a paragraph child. Transferring it
+        // to this root bubbles a loss from that child without ending the drag.
+        if (event.target !== event.currentTarget && event.currentTarget.hasPointerCapture(event.pointerId)) return;
+        turnPointers.current.delete(event.pointerId);
+        pageTurn.up(event.pointerId, event.clientX, true);
+        gestureHandlers.onPointerCancel();
+      }}
       onWheel={(event) => {
         if (event.ctrlKey || Math.abs(event.deltaY) < Math.abs(event.deltaX)) return;
         if (settings.readingProfile.modeLock !== 'paginated') {
@@ -989,6 +1084,43 @@ export function PaginatedReaderViewport(
         style={searchInset > 0 ? { marginTop: searchInset, height: `calc(100% - ${searchInset}px)` } : undefined}
         className={`reader-pagination-stage motion-${settings.readingProfile.pageTurnMotion}${transitionDirection ? ` turn-${transitionDirection > 0 ? 'next' : 'previous'}` : ''}`}
       >
+        {pageTurn.preview &&
+          [
+            { fragments: pageTurn.preview.fragments, secondary: false },
+            { fragments: pageTurn.preview.secondaryFragments ?? [], secondary: true },
+          ]
+            .filter((leaf) => leaf.fragments.length)
+            .map((leaf) => (
+              <article
+                key={`preview-${leaf.secondary}`}
+                aria-hidden="true"
+                {...{ inert: '' }}
+                className={`reader-document reader-paginated-page is-preview${leaf.secondary ? ' is-secondary' : ''}${leaf.fragments[0]?.paragraphIndex === 0 && leaf.fragments[0]?.startOffset === 0 ? ' has-chapter-heading' : ''}`}
+              >
+                {leaf.fragments[0]?.paragraphIndex === 0 && leaf.fragments[0]?.startOffset === 0 && (
+                  <ReaderChapterHeading chapter={chapterHeading} />
+                )}
+                {leaf.fragments.map((fragment, index) => (
+                  <ReaderParagraphRow
+                    key={`${fragment.paragraph.id}:${fragment.startOffset}:${index}`}
+                    paragraph={sliceParagraphForPage(fragment.paragraph, fragment.startOffset, fragment.endOffset)}
+                    sourceOffset={fragment.startOffset}
+                    sourceText={fragment.paragraph.text}
+                    virtualIndex={fragment.paragraphIndex}
+                    start={0}
+                    staticLayout
+                    isSpeaking={false}
+                    mode={mode}
+                    searchQuery={search.highlightQuery}
+                    decorationStore={screenHandle.decorations}
+                    measureElement={() => undefined}
+                    onSelectCorrectionSegment={() => undefined}
+                    assetRepository={assetRepository}
+                    onDocumentLink={onDocumentLink}
+                  />
+                ))}
+              </article>
+            ))}
         {outgoingFragments.length > 0 && (
           <article
             key={`outgoing-${transitionSequence}`}

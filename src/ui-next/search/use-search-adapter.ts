@@ -156,6 +156,7 @@ export function useSearchAdapter(
               ? { parentRef: item.navigationRef }
               : { parentRef: answer.parentRef, browseMode: 'search', query: state.submitted },
             item.navigationRef ? item.title : undefined,
+            item,
           );
         },
       })),

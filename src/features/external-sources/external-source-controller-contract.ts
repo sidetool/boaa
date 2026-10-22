@@ -153,7 +153,12 @@ export interface ExternalSourceController {
   addWorkToLibrary(item: ExternalSourceItemView): Promise<void>;
   addCurrentWorkToLibrary(): Promise<void>;
   removeLibraryWork(subscription: ExternalSourceSubscriptionRecord): Promise<void>;
-  openDiscovery?(sourceId: ExtensionContributionId, input: ExternalSourceListInput, title?: string): Promise<void>;
+  openDiscovery?(
+    sourceId: ExtensionContributionId,
+    input: ExternalSourceListInput,
+    title?: string,
+    item?: ExternalItemSummary,
+  ): Promise<void>;
   show(sourceId?: ExtensionContributionId): void;
   showLocalSeries(novel: Novel): Promise<void>;
   resolveSourceSeriesBook?(novel: Novel): Promise<boolean | undefined>;

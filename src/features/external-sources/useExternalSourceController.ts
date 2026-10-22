@@ -57,6 +57,7 @@ import type {
   ExternalItemSummary,
   ExternalSourceBrowseMode,
   ExternalSourceConnectionInput,
+  ExternalSourceConnectionStatus,
   ExternalSourceLink,
   ExternalSourceListInput,
   ExternalSourceFilterDefinition,
@@ -223,6 +224,7 @@ export function useExternalSourceController(options: UseExternalSourceController
     listAbortRef,
     localSeriesPageSeedRef,
     isCurrentOwner: catalogOwnerIsCurrent,
+    isCurrentConnection: catalogConnectionIsCurrent,
   } = catalogQuery;
   const {
     loading,
@@ -250,6 +252,32 @@ export function useExternalSourceController(options: UseExternalSourceController
     setCatalogBrowseParentRef,
     setFilterValues,
   } = catalogQuery.setters;
+  const navigationIsCurrent = useCallback(
+    (sourceId: ExtensionContributionId, connection: ExternalSourceConnectionStatus, navigation: AbortController) => {
+      if (!catalogOwnerIsCurrent() || navigation.signal.aborted || listAbortRef.current !== navigation) return false;
+      if (catalogConnectionIsCurrent(sourceId, connection)) return true;
+      // The request has not reached transport yet; discard its visual seed if its connection changed while waiting.
+      setDetail(undefined);
+      setRawItems([]);
+      setBrowse(undefined);
+      setNextCursor(undefined);
+      setLoading(false);
+      setCatalogLoading(false);
+      return false;
+    },
+    [
+      catalogOwnerIsCurrent,
+      catalogConnectionIsCurrent,
+      listAbortRef,
+      setDetail,
+      setRawItems,
+      setBrowse,
+      setNextCursor,
+      setLoading,
+      setCatalogLoading,
+    ],
+  );
+
   const [libraryBootstrap, setLibraryBootstrap] = useState<NonNullable<ExternalSourceController['libraryBootstrap']>>({
     status: 'loading',
   });
@@ -632,23 +660,23 @@ export function useExternalSourceController(options: UseExternalSourceController
         return;
       }
       setLoading(true);
+      setDetail(undefined);
+      setRawItems([]);
+      setBrowse(undefined);
+      setNextCursor(undefined);
       const savedFolder = await optionsRef.current.state
         .getDefaultFolder(sourceId, connection.accountConnectionId)
         .catch(() => undefined);
-      if (!mountedRef.current || navigation.signal.aborted) return;
+      if (!navigationIsCurrent(sourceId, connection, navigation)) return;
       setDefaultFolder(savedFolder);
       setQuery('');
-      setRawItems([]);
-      setDetail(undefined);
-      setBrowse(undefined);
       setCatalogBrowse(undefined);
       setCatalogBrowseParentRef(undefined);
       setFilterValues({});
       setSelectedKeys(new Set());
-      setNextCursor(undefined);
       setBreadcrumbs(savedFolder ? [{ label: '최상위 폴더' }, ...savedFolder.breadcrumbs] : [{ label: '최상위 폴더' }]);
       await refreshLocalProjection();
-      if (navigation.signal.aborted) return;
+      if (!navigationIsCurrent(sourceId, connection, navigation)) return;
       const loaded = await loadPage(
         { parentRef: savedFolder?.parentRef },
         false,
@@ -672,6 +700,7 @@ export function useExternalSourceController(options: UseExternalSourceController
       catalogOwnerIsCurrent,
       listAbortRef,
       loadPage,
+      navigationIsCurrent,
       refreshLocalProjection,
       setBrowse,
       setCatalogBrowse,
@@ -948,6 +977,10 @@ export function useExternalSourceController(options: UseExternalSourceController
       const crumbIndex = parentRef ? breadcrumbs.findIndex((crumb) => crumb.parentRef === parentRef) : 0;
       setBreadcrumbs(crumbIndex >= 0 ? breadcrumbs.slice(0, crumbIndex + 1) : [{ label: '최상위 폴더' }]);
       setQuery('');
+      setDetail(undefined);
+      setRawItems([]);
+      setBrowse(undefined);
+      setNextCursor(undefined);
       setSelectedKeys(new Set());
       const loaded = await loadPage(
         {
@@ -971,6 +1004,10 @@ export function useExternalSourceController(options: UseExternalSourceController
       catalogBrowseParentRef,
       filterValues,
       loadPage,
+      setDetail,
+      setRawItems,
+      setBrowse,
+      setNextCursor,
       persistCatalogPreference,
     ],
   );
@@ -3108,6 +3145,16 @@ export function useExternalSourceController(options: UseExternalSourceController
         itemNavigationPendingRef.current
       )
         return;
+      const connection = activeSourceId
+        ? optionsRef.current.registry.getExternalSourceStatus(activeSourceId, optionsRef.current.hostContext)
+        : undefined;
+      if (
+        !activeSourceId ||
+        connection?.state !== 'connected' ||
+        item.key.connectorId !== activeSourceId ||
+        (item.key.accountConnectionId ?? '') !== (connection.accountConnectionId ?? '')
+      )
+        return;
       itemNavigationPendingRef.current = true;
       cancelResume();
       listAbortRef.current?.abort();
@@ -3116,26 +3163,29 @@ export function useExternalSourceController(options: UseExternalSourceController
       setLoading(true);
       setListFailure(undefined);
       try {
-        if (item.kind === 'work') {
-          setQuery('');
-          setDetail({
-            title: item.title,
-            author: item.author,
-            coverRef: item.coverRef,
-            thumbnailUrl: item.thumbnailUrl,
-          });
-          setRawItems([]);
-        }
+        const workPreview =
+          item.kind === 'work'
+            ? {
+                title: item.title,
+                author: item.author,
+                coverRef: item.coverRef,
+                thumbnailUrl: item.thumbnailUrl,
+              }
+            : undefined;
+        setDetail(workPreview);
+        setRawItems([]);
+        setNextCursor(undefined);
+        setBrowse(undefined);
+        if (workPreview) setQuery('');
         const next = [...breadcrumbs, { label: item.title, parentRef: item.navigationRef }];
         setBreadcrumbs(next);
         setSelectedKeys(new Set());
-        const connection = sources.find((source) => source.id === activeSourceId)?.connection;
         const preference = activeSourceId
           ? await optionsRef.current.state
               .getCatalogPreference(activeSourceId, connection?.accountConnectionId, item.navigationRef)
               .catch(() => undefined)
           : undefined;
-        if (navigation.signal.aborted) return;
+        if (!navigationIsCurrent(activeSourceId, connection, navigation)) return;
         if (preference) setFilterValues(preference.filterValues);
         await loadPage(
           {
@@ -3144,6 +3194,11 @@ export function useExternalSourceController(options: UseExternalSourceController
             filters: preference?.filters,
           },
           false,
+          undefined,
+          true,
+          false,
+          'navigation',
+          workPreview ?? null,
         );
       } finally {
         itemNavigationPendingRef.current = false;
@@ -3156,12 +3211,14 @@ export function useExternalSourceController(options: UseExternalSourceController
       cancelResume,
       listAbortRef,
       loadPage,
+      navigationIsCurrent,
+      setBrowse,
+      setNextCursor,
       setDetail,
       setFilterValues,
       setListFailure,
       setLoading,
       setRawItems,
-      sources,
     ],
   );
 
@@ -3178,25 +3235,32 @@ export function useExternalSourceController(options: UseExternalSourceController
       close();
       return;
     }
-    if (breadcrumbs.length <= 1) return;
+    if (breadcrumbs.length <= 1 || !activeSourceId) return;
     cancelResume();
     listAbortRef.current?.abort();
     const navigation = new AbortController();
     listAbortRef.current = navigation;
     setLoading(true);
+    setDetail(undefined);
+    setRawItems([]);
+    setBrowse(undefined);
+    setNextCursor(undefined);
     setListFailure(undefined);
     const next = breadcrumbs.slice(0, -1);
     setBreadcrumbs(next);
     setSelectedKeys(new Set());
     const parentRef = next.at(-1)?.parentRef;
-    const connection = sources.find((source) => source.id === activeSourceId)?.connection;
+    const connection = optionsRef.current.registry.getExternalSourceStatus(
+      activeSourceId,
+      optionsRef.current.hostContext,
+    );
     const preference =
       activeSourceId && parentRef
         ? await optionsRef.current.state
             .getCatalogPreference(activeSourceId, connection?.accountConnectionId, parentRef)
             .catch(() => undefined)
         : undefined;
-    if (navigation.signal.aborted) return;
+    if (!navigationIsCurrent(activeSourceId, connection, navigation)) return;
     if (preference) setFilterValues(preference.filterValues);
     await loadPage(
       {
@@ -3213,11 +3277,15 @@ export function useExternalSourceController(options: UseExternalSourceController
     close,
     listAbortRef,
     loadPage,
+    navigationIsCurrent,
     localSeriesBookId,
+    setDetail,
+    setRawItems,
+    setBrowse,
+    setNextCursor,
     setFilterValues,
     setListFailure,
     setLoading,
-    sources,
   ]);
 
   const setCurrentFolderAsDefault = useCallback(async () => {
@@ -3660,13 +3728,14 @@ export function useExternalSourceController(options: UseExternalSourceController
       const navigation = new AbortController();
       listAbortRef.current = navigation;
       setLoading(true);
-      setDetail({
+      const workPreview = {
         title: subscription.title,
         author: subscription.author,
         description: subscription.description,
         thumbnailUrl: subscription.thumbnailUrl,
         sourceLabel: subscription.sourceLabel,
-      });
+      };
+      setDetail(workPreview);
       setRawItems([]);
       setNextCursor(undefined);
       setListFailure(undefined);
@@ -3691,8 +3760,16 @@ export function useExternalSourceController(options: UseExternalSourceController
         { label: subscription.title, parentRef: subscription.navigationRef },
       ]);
       await refreshLocalProjection();
-      if (navigation.signal.aborted) return;
-      await loadPage({ parentRef: subscription.navigationRef }, false, sourceId);
+      if (!navigationIsCurrent(sourceId, connection, navigation)) return;
+      await loadPage(
+        { parentRef: subscription.navigationRef },
+        false,
+        sourceId,
+        true,
+        false,
+        'navigation',
+        workPreview,
+      );
     },
     [
       activeSourceId,
@@ -3702,6 +3779,7 @@ export function useExternalSourceController(options: UseExternalSourceController
       importBusy,
       listAbortRef,
       loadPage,
+      navigationIsCurrent,
       localSeriesPageSeedRef,
       refreshLocalProjection,
       setBrowse,
@@ -3934,8 +4012,23 @@ export function useExternalSourceController(options: UseExternalSourceController
     ? (novels.find((novel) => novel.id === localSeriesBookId) ?? localSeriesSeedNovel)
     : undefined;
 
-  const openDiscovery = async (sourceId: ExtensionContributionId, input: ExternalSourceListInput, title?: string) => {
+  const openDiscovery = async (
+    sourceId: ExtensionContributionId,
+    input: ExternalSourceListInput,
+    title?: string,
+    item?: ExternalItemSummary,
+  ) => {
     if (blockingBusy || (importBusy && sourceId !== activeSourceId)) return;
+    cancelResume();
+    const connection = optionsRef.current.registry.getExternalSourceStatus(sourceId, optionsRef.current.hostContext);
+    const workPreview =
+      item?.kind === 'work' &&
+      item.navigationRef &&
+      item.navigationRef === input.parentRef &&
+      item.key.connectorId === sourceId &&
+      (item.key.accountConnectionId ?? '') === (connection.accountConnectionId ?? '')
+        ? { title: item.title, author: item.author, coverRef: item.coverRef, thumbnailUrl: item.thumbnailUrl }
+        : undefined;
     setLocalSeriesBookId(undefined);
     setLocalSeriesSeedNovel(undefined);
     setLocalSeriesSourceId(undefined);
@@ -3947,13 +4040,18 @@ export function useExternalSourceController(options: UseExternalSourceController
     setQuery(input.query ?? '');
     setSelectedKeys(new Set());
     setFilterValues({});
-    setDetail(undefined);
+    setDetail(workPreview);
+    setRawItems([]);
+    setNextCursor(undefined);
+    setBrowse(undefined);
+    setCatalogBrowse(undefined);
+    setCatalogBrowseParentRef(undefined);
     setDefaultFolder(undefined);
     setBreadcrumbs([
       { label: '최상위 폴더' },
       ...(input.parentRef ? [{ label: title ?? '작품 목록', parentRef: input.parentRef }] : []),
     ]);
-    await loadPage(input, false, sourceId);
+    await loadPage(input, false, sourceId, true, false, 'navigation', workPreview ?? null);
   };
 
   const captureNavigation = (): ExternalSourceNavigationSnapshot => {

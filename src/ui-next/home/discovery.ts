@@ -2,6 +2,7 @@ import { sourceRowInput } from './source-row';
 import {
   externalItemKeyId,
   type ExternalItemPage,
+  type ExternalItemSummary,
   type ExternalSourceListInput,
 } from '../../external-sources/contracts';
 import type { DiscoverySession } from '../../features/discovery/discovery-session';
@@ -89,7 +90,7 @@ export class HomeDiscoveryLoader {
     config: HomeRowConfig,
     list: HomeDiscoverySection,
     sources: ExternalSourceController,
-    open: (source: string, input: ExternalSourceListInput, title?: string) => void,
+    open: (source: string, input: ExternalSourceListInput, title?: string, item?: ExternalItemSummary) => void,
     openAll: (tabId: string) => void,
     openSource?: (section: DiscoverySection) => void,
   ): HomeRowView {
@@ -198,6 +199,7 @@ export class HomeDiscoveryLoader {
               section.sourceId,
               item.navigationRef ? { parentRef: item.navigationRef } : input,
               item.navigationRef ? item.title : undefined,
+              item,
             ),
         },
       })),

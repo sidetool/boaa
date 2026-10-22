@@ -59,8 +59,8 @@ export function useHomeDiscovery({
           config,
           list,
           externalSources,
-          (source, input, title) => {
-            void externalSources.openDiscovery?.(source as ExtensionContributionId, input, title);
+          (source, input, title, item) => {
+            void externalSources.openDiscovery?.(source as ExtensionContributionId, input, title, item);
           },
           (tabId) => {
             saveDiscoverySelection(discovery.scope, { selected: tabId, quickSource: undefined });

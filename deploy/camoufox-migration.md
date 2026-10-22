@@ -1,16 +1,16 @@
 # Camoufox migration
 
-Source WebViews, local collector authentication and the optional text-source
-browser transport use Camoufox. Normal HTTP source requests remain HTTP.
-The source browser has no Chromium, Edge or Patchright fallback and no
-per-source engine selector. Existing engine preferences normalize to Camoufox.
-Browser _usage_ is a separate source preference: off (default), when needed,
-or always for document requests. Installing the optional browser component does
-not enable browser use for every source. The basic server image and default
-installation remain browser-free. Host cover/image downloads remain HTTP.
-Source operations save cookies/UA and close their request contexts. Explicit
-WebView/document work shares one lazy browser for up to eight requests or 60 idle seconds;
-authentication-only refreshes close immediately before retrying HTTP. An idle API
+Source WebViews use the selected managed engine: Patchright by default, or
+Camoufox as a separate experimental download. Normal HTTP source requests remain
+HTTP. Engine selection is server-wide; legacy per-source engine preferences do
+not override it. Browser usage defaults to automatic and preserves an explicit
+off choice. The managed installer includes the Patchright component by default;
+`--browser off` opts out. Base API/metadata images still contain no browser binary.
+Host cover/image downloads remain HTTP. Source operations save cookies/UA and
+close their request contexts. Explicit WebView/document work shares one lazy
+browser until 60 idle seconds. Camoufox additionally recycles after eight requests;
+Patchright has no request-count recycling limit. Managed remote lease limits remain.
+Authentication-only refreshes close immediately before retrying HTTP. An idle API
 lease yields when another runtime client is queued, so metadata is not blocked
 by browser retention. The managed browser service admits only one process at a time,
 with a bounded cancellable queue shared by API and metadata callers. Text-source

@@ -48,6 +48,7 @@ export interface SourceCatalogRequest {
   connectionIsCurrent: () => boolean;
   ownsRequest: () => boolean;
   seedRef: MutableRefObject<SourceCatalogSeed | undefined>;
+  workPreview?: ExternalSourceWorkDetail;
   state: SourceCatalogState;
   update: Dispatch<SetStateAction<SourceCatalogState>>;
 }
@@ -66,6 +67,7 @@ export async function runSourceCatalogQuery(request: SourceCatalogRequest): Prom
     connectionIsCurrent,
     ownsRequest,
     seedRef,
+    workPreview,
     state,
     update,
   } = request;
@@ -93,9 +95,12 @@ export async function runSourceCatalogQuery(request: SourceCatalogRequest): Prom
       ? seed
       : undefined;
   if (!localSeed) seedRef.current = undefined;
+  const previewDetail = localSeed?.detail ?? workPreview;
+  const pageDetail = (page: { detail?: ExternalSourceWorkDetail; browse?: ExternalSourceBrowseState }) =>
+    page.detail ?? (page.browse ? undefined : previewDetail);
   if (connection.state !== 'connected') {
     setRawItems(localSeed?.items ?? []);
-    setDetail(localSeed?.detail);
+    setDetail(previewDetail);
     setNextCursor(undefined);
     setStale(false);
     return false;
@@ -149,7 +154,7 @@ export async function runSourceCatalogQuery(request: SourceCatalogRequest): Prom
         localSeed.remoteItems = page.items;
         setRawItems(mergeSeriesCatalogItems(localSeed.items, page.items));
       } else setRawItems([...page.items]);
-      setDetail(page.detail ?? localSeed?.detail);
+      setDetail(pageDetail(page));
       setNextCursor(page.nextCursor);
       setBrowse(page.browse);
       if (page.browse) {
@@ -201,7 +206,7 @@ export async function runSourceCatalogQuery(request: SourceCatalogRequest): Prom
         page.items.some((item) => item.release && item.collection?.remoteId === normalizedInput.parentRef),
       );
     if (series) {
-      if (!snapshot) setDetail(page.detail ?? localSeed?.detail);
+      if (!snapshot) setDetail(pageDetail(page));
       page = await completeSeriesCatalog(
         page,
         (cursor) => {
@@ -238,7 +243,7 @@ export async function runSourceCatalogQuery(request: SourceCatalogRequest): Prom
     } else {
       setRawItems((current) => mergeSeriesCatalogItems([], [...(append ? current : []), ...page.items]));
     }
-    if (!append) setDetail(page.detail ?? localSeed?.detail);
+    if (!append) setDetail(pageDetail(page));
     if (!append) {
       setBrowse(page.browse);
       if (page.browse) {
@@ -339,7 +344,7 @@ export async function runSourceCatalogQuery(request: SourceCatalogRequest): Prom
         const cachedItems = cached.items;
         setRawItems((current) => mergeSeriesCatalogItems([], [...(append ? current : []), ...cachedItems]));
       }
-      if (!append) setDetail(cached.detail ?? localSeed?.detail);
+      if (!append) setDetail(pageDetail(cached));
       if (!append) {
         setBrowse(cached.browse);
         if (cached.browse) {
@@ -360,7 +365,7 @@ export async function runSourceCatalogQuery(request: SourceCatalogRequest): Prom
     } else {
       if (!append) {
         setRawItems(localSeed?.items ?? []);
-        setDetail(localSeed?.detail);
+        setDetail(previewDetail);
         setBrowse(undefined);
         setNextCursor(undefined);
         setStale(false);

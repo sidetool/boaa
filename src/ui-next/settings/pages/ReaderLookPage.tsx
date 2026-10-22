@@ -389,6 +389,7 @@ export function ReaderLookPage({
                     options={[
                       { value: 'instant', label: '바로' },
                       { value: 'smooth', label: '부드럽게' },
+                      { value: 'slide', label: '밀기' },
                       { value: 'page', label: '책장 넘김' },
                     ]}
                     onChange={(pageTurnMotion) => updateProfile({ pageTurnMotion })}

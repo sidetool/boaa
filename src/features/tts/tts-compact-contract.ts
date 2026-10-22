@@ -7,6 +7,8 @@ export interface TTSCompactBarProps {
   readonly playing: boolean;
   readonly paused: boolean;
   readonly busy: boolean;
+  /** Current audio is being prepared; excludes background warmup and audio already playing. */
+  readonly waiting?: boolean;
   readonly rate: number;
   readonly timerPreset?: TTSSleepTimerPreset;
   readonly timerRemainingSeconds?: number;

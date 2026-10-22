@@ -1574,7 +1574,8 @@ describe('useExternalSourceController remote updates', () => {
       releaseDownload = resolve;
     });
     const harness = await createHarness({ downloadedContent: '백그라운드 원문', downloadGate });
-    act(() => harness.controller.show(SOURCE_ID));
+    await act(async () => harness.controller.show(SOURCE_ID));
+    await vi.waitFor(() => expect(harness.controller.loading).toBe(false));
     expect(harness.controller.open).toBe(true);
 
     let importPromise!: Promise<void>;
@@ -1612,7 +1613,8 @@ describe('useExternalSourceController remote updates', () => {
       localBookMissing: true,
       serial: true,
     });
-    act(() => harness.controller.show(SOURCE_ID));
+    await act(async () => harness.controller.show(SOURCE_ID));
+    await vi.waitFor(() => expect(harness.controller.loading).toBe(false));
 
     let importPromise!: Promise<void>;
     await act(async () => {
@@ -4179,3 +4181,164 @@ it.each([
     await act(async () => h.renderer.unmount());
   }
 });
+
+describe('selected work navigation preview', () => {
+  const selectedWork = {
+    key: { ...ITEM_KEY, remoteId: 'selected-work' },
+    kind: 'work' as const,
+    title: 'Selected work',
+    navigationRef: 'selected-work',
+    importability: 'supported' as const,
+  };
+  it('opens a selected discovery work immediately and keeps its detail on failure', async () => {
+    const h = await createHarness({ downloadedContent: 'Synthetic text' });
+    let reject!: (error: Error) => void;
+    vi.mocked(h.registry.listExternalSource).mockReturnValueOnce(
+      new Promise((_, fail) => {
+        reject = fail;
+      }),
+    );
+    let task!: Promise<void>;
+    try {
+      await act(async () => {
+        task = h.controller.openDiscovery!(SOURCE_ID, { parentRef: 'selected-work' }, selectedWork.title, selectedWork);
+      });
+      expect(h.controller.detail?.title).toBe(selectedWork.title);
+      expect(h.controller.loading).toBe(true);
+      expect(h.controller.items).toEqual([]);
+      await act(async () => {
+        reject(new Error('offline'));
+        await task;
+      });
+      expect(h.controller.detail?.title).toBe(selectedWork.title);
+      expect(h.controller.listError).toBeDefined();
+      expect(h.controller.loading).toBe(false);
+    } finally {
+      await act(async () => h.renderer.unmount());
+    }
+  });
+  it.each(['folder', 'catalogue'])('clears the previous work while opening a %s', async (destination) => {
+    const h = await createHarness({ downloadedContent: 'Synthetic text', detail: { title: 'Previous work' } });
+    let resolve!: (page: { items: [] }) => void;
+    vi.mocked(h.registry.listExternalSource).mockReturnValueOnce(
+      new Promise((done) => {
+        resolve = done;
+      }),
+    );
+    let task!: Promise<void>;
+    try {
+      await act(async () => {
+        task =
+          destination === 'folder'
+            ? h.controller.openFolder({ ...h.controller.items[0]!, kind: 'folder', navigationRef: 'folder' })
+            : h.controller.openDiscovery!(SOURCE_ID, {}, 'All works');
+      });
+      expect(h.controller.loading).toBe(true);
+      expect(h.controller.detail).toBeUndefined();
+      await act(async () => {
+        resolve({ items: [] });
+        await task;
+      });
+      expect(h.controller.detail).toBeUndefined();
+    } finally {
+      await act(async () => h.renderer.unmount());
+    }
+  });
+  it.each(['connector', 'account'])(
+    'rejects stale selected items from another %s before querying',
+    async (identity) => {
+      const h = await createHarness({ downloadedContent: 'Synthetic text' });
+      const calls = vi.mocked(h.registry.listExternalSource).mock.calls.length;
+      try {
+        await act(async () => {
+          await h.controller.openItem({
+            ...h.controller.items[0]!,
+            ...selectedWork,
+            key: {
+              ...selectedWork.key,
+              ...(identity === 'connector'
+                ? { connectorId: 'other.source' }
+                : { accountConnectionId: 'other-account' }),
+            },
+          });
+        });
+        expect(h.registry.listExternalSource).toHaveBeenCalledTimes(calls);
+        expect(h.controller.detail?.title).not.toBe(selectedWork.title);
+      } finally {
+        await act(async () => h.renderer.unmount());
+      }
+    },
+  );
+});
+
+it.each(['item-account', 'item-generation', 'subscription-account', 'subscription-generation'])(
+  'does not send a prepared work to a replacement connection: %s',
+  async (scenario) => {
+    const h = await createHarness({ downloadedContent: 'Synthetic text' });
+    let connection = {
+      state: 'connected' as const,
+      accountConnectionId: 'fixture-account',
+      connectionGeneration: 'g1',
+    };
+    h.registry.getExternalSourceStatus = () => connection;
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const subscription = scenario.startsWith('subscription');
+    if (subscription)
+      vi.mocked(h.state.listLinks).mockImplementationOnce(async () => {
+        await gate;
+        return [];
+      });
+    else
+      vi.mocked(h.state.getCatalogPreference).mockImplementationOnce(async () => {
+        await gate;
+        return undefined;
+      });
+    const calls = vi.mocked(h.registry.listExternalSource).mock.calls.length;
+    let task!: Promise<void>;
+    try {
+      await act(async () => {
+        task = subscription
+          ? h.controller.openSubscription({
+              id: 'work-subscription',
+              connectorId: SOURCE_ID,
+              accountConnectionId: 'fixture-account',
+              collectionRemoteId: 'work',
+              knownReleaseIds: [],
+              newReleaseIds: [],
+              availableReleaseCount: 0,
+              lastCheckedAt: '2026-10-21T00:00:00Z',
+              schemaVersion: 1,
+              navigationRef: 'work',
+              title: 'Prepared work',
+              createdAt: '2026-10-21T00:00:00Z',
+              updatedAt: '2026-10-21T00:00:00Z',
+            })
+          : h.controller.openItem({
+              ...h.controller.items[0]!,
+              kind: 'work',
+              navigationRef: 'work',
+              title: 'Prepared work',
+            });
+      });
+      expect(h.controller.detail?.title).toBe('Prepared work');
+      expect(h.registry.listExternalSource).toHaveBeenCalledTimes(calls);
+      connection = {
+        ...connection,
+        ...(scenario.endsWith('account') ? { accountConnectionId: 'new-account' } : { connectionGeneration: 'g2' }),
+      };
+      await act(async () => {
+        release();
+        await task;
+      });
+      expect(h.registry.listExternalSource).toHaveBeenCalledTimes(calls);
+      expect(h.controller.detail).toBeUndefined();
+      expect(h.controller.loading).toBe(false);
+    } finally {
+      release();
+      await act(async () => h.renderer.unmount());
+    }
+  },
+);

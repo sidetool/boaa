@@ -356,7 +356,7 @@ describe('section rows', () => {
     expect(button(sectionRoot, '1위 테스트 작품 상세 보기')).toBeDefined();
     click(button(sectionRoot, '2위 선택한 작품 상세 보기'));
     expect(rail.itemOpenArgs).toHaveBeenCalledExactlyOnceWith(chosen);
-    expect(props.open).toHaveBeenCalledExactlyOnceWith(...openArgs(chosen));
+    expect(props.open).toHaveBeenCalledExactlyOnceWith(...openArgs(chosen), chosen);
   });
 
   it.each([false, true])('renders the owned badge only when owned returns %s', (owned) => {
@@ -469,7 +469,7 @@ describe('section rows', () => {
       });
       click(cards[count - 1]);
       expect(rail.itemOpenArgs).toHaveBeenCalledExactlyOnceWith(items[count - 1]);
-      expect(props.open).toHaveBeenCalledExactlyOnceWith(...openArgs(items[count - 1]));
+      expect(props.open).toHaveBeenCalledExactlyOnceWith(...openArgs(items[count - 1]), items[count - 1]);
     },
   );
 });
@@ -595,7 +595,7 @@ describe('dedicated source view', () => {
     view.data.items = [chosen];
     click(button(dedicated(), '소스 작품 상세 보기'));
     expect(view.itemOpenArgs).toHaveBeenCalledExactlyOnceWith(chosen);
-    expect(props.open).toHaveBeenCalledExactlyOnceWith(...openArgs(chosen));
+    expect(props.open).toHaveBeenCalledExactlyOnceWith(...openArgs(chosen), chosen);
     expect(rail.itemOpenArgs).not.toHaveBeenCalled();
   });
 });

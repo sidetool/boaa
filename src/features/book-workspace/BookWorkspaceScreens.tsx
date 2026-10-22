@@ -11,7 +11,7 @@ import type { SourceTextReaderOptions } from '../external-sources/SourceTextStre
 import { SaveListSheet as SaveDiscoveryList } from '../../ui-next/discovery/SaveListSheet';
 import type { DiscoveryController } from '../discovery/useDiscoveryController';
 import type { ExtensionContributionId } from '@boaa/extension-contracts';
-import type { ExternalSourceListInput } from '../../external-sources/contracts';
+import type { ExternalSourceListInput, ExternalItemSummary } from '../../external-sources/contracts';
 import { lazy, Suspense, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import type { LibraryScreenActions, LibraryScreenModel } from '../library/library-screen-contract';
 
@@ -523,8 +523,8 @@ export function BookWorkspaceScreens({
             library={{ model: libraryModel, actions: libraryActions }}
             discovery={discovery}
             sources={externalSources}
-            open={(id: string, input: ExternalSourceListInput, title?: string) => {
-              void externalSources.openDiscovery?.(id as ExtensionContributionId, input, title);
+            open={(id: string, input: ExternalSourceListInput, title?: string, item?: ExternalItemSummary) => {
+              void externalSources.openDiscovery?.(id as ExtensionContributionId, input, title, item);
             }}
           />
         </Suspense>

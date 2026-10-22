@@ -13,6 +13,8 @@ export default tseslint.config(
       'src-tauri/gen/**',
       'test_novel/**',
       'ui-reference/**',
+      // Generated from the unmodified, separately licensed StPageFlip core.
+      'src/features/reader/vendor/st-page-flip.mjs',
     ],
   },
   js.configs.recommended,

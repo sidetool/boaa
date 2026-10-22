@@ -1,12 +1,11 @@
 import { readBrowserSession, writeBrowserSession } from './source-browser-session.js';
 import { CookieJar } from 'tough-cookie';
 import { sourceWebViewHost, type SourceWebViewScope } from './source-webview.js';
-import { refreshSourceBrowserSession } from './source-browser-refresh.js';
-import { sourceBrowserUsage } from './source-browser-mode.js';
+import { automaticSourceRequest } from './source-browser-auto.js';
 import { compatibilityHttp, type CompatibilityHttpInput } from './mangayomi/http.js';
 import { compatibilityHttpPolicy } from './mangayomi/http-options.js';
 
-/** HTTP by default; browser use requires an owner-selected source policy and host capability. */
+/** HTTP by default, with optional browser authentication and learned read-only routing. */
 export async function sourceBrowserHttp(
   input: CompatibilityHttpInput,
   signal: AbortSignal,
@@ -18,57 +17,17 @@ export async function sourceBrowserHttp(
   const policy = compatibilityHttpPolicy(input?.options);
   const deadline = AbortSignal.any([signal, AbortSignal.timeout(policy.timeoutMs)]);
   try {
-    const usage = scope.browserAllowed ? sourceBrowserUsage(scope.browserUsage) : 'off';
-    const send = () =>
-      usage === 'always'
-        ? sourceWebViewHost.request(input, scope, deadline, maximum, followRedirects)
-        : requestWithCookies(input, deadline, scope, maximum, transport, followRedirects && policy.followRedirects);
-    return await authenticateSourceRequest(input, scope, deadline, send);
+    return await automaticSourceRequest(
+      input,
+      scope,
+      deadline,
+      () => requestWithCookies(input, deadline, scope, maximum, transport, followRedirects && policy.followRedirects),
+      () => sourceWebViewHost.request(input, scope, deadline, maximum, followRedirects && policy.followRedirects),
+    );
   } catch (error) {
     if (!signal.aborted && deadline.aborted) throw new Error('source_request_timeout', { cause: error });
     throw error;
   }
-}
-
-/** Shared read-only challenge policy for buffered compatibility and streaming SDK transports. */
-export async function authenticateSourceRequest<
-  T extends {
-    statusCode: number;
-    url: string;
-    headers: Record<string, string | string[] | undefined>;
-  },
->(
-  input: CompatibilityHttpInput,
-  scope: SourceWebViewScope,
-  signal: AbortSignal,
-  send: () => Promise<T>,
-  discard: (response: T) => void = () => {},
-): Promise<T> {
-  const usage = scope.browserAllowed ? sourceBrowserUsage(scope.browserUsage) : 'off';
-  const response = await send();
-  // Never replay a mutation or interpret an ordinary permission denial as a challenge.
-  if (
-    usage === 'off' ||
-    !['GET', 'HEAD'].includes(input.method ?? 'GET') ||
-    ![403, 503].includes(response.statusCode) ||
-    response.headers['cf-mitigated'] !== 'challenge'
-  )
-    return response;
-  try {
-    await refreshSourceBrowserSession(
-      response.url,
-      new URL(response.url).origin === new URL(input.url).origin ? input.headers : undefined,
-      scope,
-      signal,
-    );
-  } catch (error) {
-    // An optional component being absent must not change ordinary HTTP behavior.
-    if ((error as Error).message === 'source_browser_unavailable') return response;
-    discard(response);
-    throw error;
-  }
-  discard(response);
-  return await send();
 }
 
 async function requestWithCookies(

@@ -245,9 +245,9 @@ function ProviderOptionControl({
           value={value === undefined ? '' : String(value)}
           onChange={(event) => onChange(event.target.value === '' ? undefined : event.target.value === 'true')}
         >
-          <option value="">Default</option>
-          <option value="true">True</option>
-          <option value="false">False</option>
+          <option value="">기본값</option>
+          <option value="true">켜기</option>
+          <option value="false">끄기</option>
         </select>
       </label>
     );
@@ -261,7 +261,7 @@ function ProviderOptionControl({
           value={value === undefined ? '' : String(value)}
           onChange={(event) => onChange(event.target.value || undefined)}
         >
-          <option value="">Default</option>
+          <option value="">기본값</option>
           {(option.choices ?? []).map((choice) => (
             <option key={choice.value} value={choice.value}>
               {choice.label}
@@ -323,7 +323,7 @@ export default function ProviderSettingsPanel({
           <h4>{title}</h4>
           <span>로컬 모드</span>
         </div>
-        <p className="muted">서버 연결 또는 데스크톱 앱에서 provider 설정을 사용할 수 있습니다.</p>
+        <p className="muted">서버에 연결하거나 데스크톱 앱에서 엔진을 설정할 수 있어요.</p>
       </div>
     );
   }
@@ -337,7 +337,7 @@ export default function ProviderSettingsPanel({
         </div>
         {controller.error && <p className="field-error">{controller.error}</p>}
         <button className="ghost-btn wide" onClick={() => void controller.refresh()} disabled={controller.loading}>
-          <RefreshCw size={16} /> Provider 설정 불러오기
+          <RefreshCw size={16} /> 엔진 설정 불러오기
         </button>
       </div>
     );
@@ -420,7 +420,7 @@ export default function ProviderSettingsPanel({
       </div>
 
       <label className="field-label" htmlFor={defaultProviderId}>
-        기본 provider
+        기본 엔진
       </label>
       <select
         id={defaultProviderId}
@@ -437,7 +437,7 @@ export default function ProviderSettingsPanel({
       </select>
 
       <label className="field-label" htmlFor={selectedProviderId}>
-        Provider 세부 설정
+        설정할 엔진
       </label>
       <select
         id={selectedProviderId}
@@ -456,7 +456,7 @@ export default function ProviderSettingsPanel({
       {requestProfiles.length > 0 && (
         <>
           <label className="field-label" htmlFor={requestProfileId}>
-            Request profile
+            요청 프로필
           </label>
           <select
             id={requestProfileId}
@@ -501,7 +501,7 @@ export default function ProviderSettingsPanel({
         id={modelId}
         className="text-input"
         value={draft.modelByProvider[selectedProvider.providerId] ?? ''}
-        placeholder={selectedProvider.models[0]?.modelId ?? 'server default'}
+        placeholder={selectedProvider.models[0]?.modelId ?? '서버 기본값'}
         onChange={(event) =>
           controller.updateDraft(scope, (current) => ({
             ...current,
@@ -570,7 +570,7 @@ export default function ProviderSettingsPanel({
               <Trash2 size={16} /> 삭제
             </button>
           </div>
-          <p className="muted">키는 다시 표시하거나 동기화하지 않습니다.</p>
+          <p className="muted">저장한 키는 다시 보여주거나 동기화하지 않아요.</p>
         </div>
       )}
 
@@ -587,7 +587,7 @@ export default function ProviderSettingsPanel({
       {providerOptions.length > 0 && (
         <div className="provider-option-controls">
           <div className="setting-line">
-            <h4>Provider options</h4>
+            <h4>엔진 옵션</h4>
             <span>{providerOptions.length}</span>
           </div>
           {providerOptions.map((option) => (
@@ -602,7 +602,7 @@ export default function ProviderSettingsPanel({
       )}
 
       <label className="field-label" htmlFor={providerOptionsId}>
-        Provider 옵션 JSON
+        추가 옵션 JSON
       </label>
       <textarea
         id={providerOptionsId}

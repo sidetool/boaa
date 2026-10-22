@@ -7,7 +7,7 @@ import { preparedSourceOpening } from './prepared-source-opening';
 import { readReaderSelection, useReaderSelectionChanges } from './reader-selection';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { sentenceRanges } from '@boaa/text-core/sentence-boundaries';
-import { SkipBack, SkipForward } from 'lucide-react';
+import { ReaderChapterEnd } from './ReaderChapterEnd';
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type MutableRefObject } from 'react';
 import type { Chapter, Novel, Paragraph, ReaderAnchor, ReaderSettings } from '../../domain/types';
 import type { ReaderBodyRepository } from '../../repositories/reader-repository';
@@ -1047,7 +1047,11 @@ function VirtualizedReaderViewportComponent({
         onMouseUp={updateSelection}
         onTouchEnd={updateSelection}
         onPointerDown={(event) => {
-          const shouldCaptureBoundaryGesture = scrollChapterBoundary.onPointerDown(event.clientY, event.pointerType);
+          const shouldCaptureBoundaryGesture = scrollChapterBoundary.onPointerDown(
+            event.clientY,
+            event.pointerType,
+            event.target,
+          );
           gestureHandlers.onPointerDown(event);
           if (shouldCaptureBoundaryGesture) {
             try {
@@ -1131,28 +1135,19 @@ function VirtualizedReaderViewportComponent({
               );
             })}
           </div>
-          <nav className="chapter-nav">
-            <button className="ghost-btn" disabled={chapter.index <= 1} onClick={() => void goChapter(-1)}>
-              <SkipBack size={18} /> 이전 화
-            </button>
-            <button className="ghost-btn" disabled={chapter.index >= chapters.length} onClick={() => void goChapter(1)}>
-              다음 화 <SkipForward size={18} />
-            </button>
-          </nav>
-          {nextChapter && (
-            <div
-              className={`reader-next-chapter-boundary${scrollChapterBoundary.armed ? ' is-armed' : ''}`}
-              data-scroll-chapter-boundary="true"
-              data-scroll-chapter-boundary-armed={scrollChapterBoundary.armed ? 'true' : 'false'}
-              aria-live="polite"
-            >
-              <span>다음 화</span>
-              <strong>
-                {nextChapter.index}화 · {nextChapter.title}
-              </strong>
-              <small>{scrollChapterBoundary.armed ? '한 번 더 아래로 스크롤' : '마지막까지 읽었습니다'}</small>
-            </div>
-          )}
+          <ReaderChapterEnd
+            unit="화"
+            nextTitle={nextChapter ? `${nextChapter.index}화 · ${nextChapter.title}` : undefined}
+            hasPrevious={chapter.index > 1}
+            armed={scrollChapterBoundary.armed}
+            busy={navigationBusy}
+            rootProps={{
+              'data-scroll-chapter-boundary': nextChapter ? 'true' : 'false',
+              'data-scroll-chapter-boundary-armed': scrollChapterBoundary.armed ? 'true' : 'false',
+            }}
+            onPrevious={() => void goChapter(-1)}
+            onNext={() => void goChapter(1)}
+          />
         </article>
       </section>
     </>

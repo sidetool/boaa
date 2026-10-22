@@ -591,3 +591,77 @@
 .un-release.is-opening .un-release-state {
   color: var(--un-accent-2);
 }
+
+/* A work opened from a list shows its cover and title at once; what is still on its way keeps its shape. */
+.un-release-skeleton-row {
+  display: grid;
+  flex: 1;
+  grid-template-columns: 52px minmax(0, 1fr);
+  align-items: center;
+  gap: 12px;
+  min-height: 68px;
+  padding: 10px 8px 10px 4px;
+}
+
+.un-release-skeleton-row > span {
+  display: grid;
+  gap: 8px;
+}
+
+.un-release-skeleton-row i,
+.un-detail-kicker-wait,
+.un-detail-action-wait {
+  display: block;
+  border-radius: 6px;
+  background: linear-gradient(100deg, var(--un-bg-1) 30%, var(--un-bg-2) 50%, var(--un-bg-1) 70%);
+  background-size: 300% 100%;
+  animation: un-shimmer 1.4s linear infinite;
+}
+
+.un-release-skeleton-row > i {
+  justify-self: center;
+  width: 22px;
+  height: 16px;
+}
+
+.un-release-skeleton-row > span i {
+  width: min(56%, 320px);
+  height: 14px;
+}
+
+.un-release-skeleton-row > span i + i {
+  width: min(30%, 160px);
+  height: 11px;
+}
+
+.un-release-skeleton li:nth-child(n + 4) {
+  opacity: 0.6;
+}
+
+.un-detail-kicker-wait {
+  width: 96px;
+  height: 12px;
+}
+
+.un-detail-action-wait {
+  flex: none;
+  width: 180px;
+  height: 46px;
+  margin-right: 8px;
+  border-radius: 10px;
+}
+
+@media (max-width: 899px) {
+  .un-detail-action-wait {
+    flex: 1 0 100%;
+    margin: 0 0 4px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .un-release-skeleton-row i,
+  .un-detail-kicker-wait,
+  .un-detail-action-wait {
+    animation: none;
+  }
+}

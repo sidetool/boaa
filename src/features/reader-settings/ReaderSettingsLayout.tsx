@@ -310,6 +310,14 @@ export function ReaderSettingsLayout({
               </button>
               <button
                 type="button"
+                className={profile.pageTurnMotion === 'slide' ? 'active' : ''}
+                onClick={() => updateProfile({ pageTurnMotion: 'slide' })}
+                aria-pressed={profile.pageTurnMotion === 'slide'}
+              >
+                밀기
+              </button>
+              <button
+                type="button"
                 className={profile.pageTurnMotion === 'page' ? 'active' : ''}
                 onClick={() => updateProfile({ pageTurnMotion: 'page' })}
                 aria-pressed={profile.pageTurnMotion === 'page'}

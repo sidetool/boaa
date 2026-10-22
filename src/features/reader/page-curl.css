@@ -1,0 +1,63 @@
+/* StPageFlip soft-page geometry. Three whole surfaces; no animated text strips. */
+.reader-page-curl {
+  --curl-paper: var(--reading-background, var(--reader-canvas, #f4f1ea));
+  --curl-paper-back: color-mix(in srgb, var(--curl-paper) 88%, rgb(128 128 128));
+  z-index: 4;
+  isolation: isolate;
+  clip-path: inset(-100vmax 0);
+}
+.reader-page-curl.is-comic {
+  --curl-paper: #0b0b0d;
+  --curl-paper-back: #e3e0d9;
+}
+.reader-curl-piece {
+  position: absolute;
+  inset: 0;
+  transform-origin: 0 0;
+  background: var(--curl-paper);
+}
+.reader-curl-piece.is-front {
+  z-index: 0;
+}
+.reader-curl-piece.is-revealed {
+  z-index: 1;
+}
+.reader-curl-piece.is-back {
+  z-index: 3;
+  will-change: transform;
+  backface-visibility: visible;
+}
+.reader-curl-shade {
+  position: absolute;
+  z-index: 1;
+  inset: 0;
+  pointer-events: none;
+  background: var(--curl-paper-back);
+  opacity: 0.96;
+}
+.reader-page-curl .reader-curl-copy::before,
+.reader-page-curl .reader-curl-copy::after {
+  content: none;
+}
+.reader-page-curl .reader-curl-copy {
+  z-index: 0;
+  box-shadow: none;
+  will-change: auto;
+}
+.reader-curl-cast-clip {
+  position: absolute;
+  z-index: 2;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+.reader-curl-cast {
+  position: absolute;
+  top: -450%;
+  left: 0;
+  width: 40px;
+  height: 1000%;
+  transform-origin: 0 50%;
+  background: linear-gradient(to right, rgb(0 0 0 / 0.24), rgb(0 0 0 / 0.08) 35%, transparent);
+  will-change: transform;
+}

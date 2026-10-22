@@ -6,3 +6,7 @@ pnpm-lock.yaml
 
 # Keep upstream license texts verbatim.
 third_party/licenses
+
+# Pinned upstream source and generated calculation core.
+third_party/st-page-flip/src
+src/features/reader/vendor/st-page-flip.mjs

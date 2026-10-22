@@ -1,4 +1,4 @@
-import { AudioLines, Pause, Play, SkipBack, SkipForward, Timer, X } from 'lucide-react';
+import { AudioLines, LoaderCircle, Pause, Play, SkipBack, SkipForward, Timer, X } from 'lucide-react';
 import type { TTSCompactBarProps } from '../../features/tts/tts-compact-contract';
 import { cx } from '../components/primitives';
 import '../styles/tokens.css';
@@ -14,6 +14,9 @@ const STATUS: Record<string, string> = {
   fallback: '시스템 음성으로 재생',
 };
 
+// Results of a finished request: once playback waits again they are stale, not progress.
+const SETTLED = new Set(['prefetch_hit', 'native_cache_hit', 'native_cache_rendered']);
+
 const TIMER_CYCLE: readonly TTSCompactBarProps['timerPreset'][] = [undefined, 10, 20, 30, 60, 'end_of_chapter'];
 const timerName = (preset: TTSCompactBarProps['timerPreset']) =>
   preset === undefined ? '끔' : preset === 'end_of_chapter' ? '화 끝' : `${preset}분`;
@@ -25,22 +28,26 @@ function remaining(seconds?: number, preset?: TTSCompactBarProps['timerPreset'])
 
 /** ui-next listening mini player: stays on screen while reading so playback is always one tap away. */
 export default function UiNextMiniPlayer(props: TTSCompactBarProps) {
-  const status =
-    props.speakerLabel ??
-    (props.status && (STATUS[props.status] ?? props.status)) ??
-    (props.busy ? '준비 중' : undefined);
+  // Waiting for this paragraph's audio outranks the speaker name; background preparation does not.
+  const waiting = (props.waiting ?? props.busy) && props.playing && !props.paused;
+  const statusText = props.status && (STATUS[props.status] ?? props.status);
+  const status = waiting
+    ? props.status && !SETTLED.has(props.status)
+      ? statusText
+      : '준비 중'
+    : (props.speakerLabel ?? statusText);
   const timer = remaining(props.timerRemainingSeconds, props.timerPreset);
   const playingNow = props.playing && !props.paused;
 
   return (
     <section
-      className={cx('tts-compact-bar ui-next un-mini', playingNow && 'is-playing', props.busy && 'is-busy')}
+      className={cx('tts-compact-bar ui-next un-mini', playingNow && !waiting && 'is-playing', waiting && 'is-busy')}
       aria-label="TTS 재생 제어"
       data-playing={props.playing}
     >
       <button type="button" className="un-mini-info" onClick={props.openSettings} aria-label="듣기 설정 열기">
         <span className="un-mini-art" aria-hidden="true">
-          <AudioLines size={18} />
+          {waiting ? <LoaderCircle size={18} className="un-mini-wait" /> : <AudioLines size={18} />}
         </span>
         <span className="un-mini-text">
           <b>{props.chapterTitle}</b>

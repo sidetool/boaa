@@ -12,12 +12,15 @@ export async function install({
   keyFile,
   repository = 'sidetool/boaa',
   fetcher,
+  browser = true,
   run = (args) => execFileSync('docker', args, { cwd: directory, stdio: 'inherit' }),
 }) {
   const publicKey = await readFile(keyFile, 'utf8');
   const { manifest } = await new ReleaseFeed({ repository, publicKey, fetcher }).manifest(version);
   const platform = `linux/${process.arch === 'arm64' ? 'arm64' : 'amd64'}`;
-  for (const name of ['server', 'web', 'updater'])
+  if (typeof browser !== 'boolean') throw new Error('install_browser_invalid');
+  if (browser && manifest.images.browser?.engine !== 'patchright') throw new Error('release_browser_unsupported');
+  for (const name of ['server', 'web', 'updater', ...(browser ? ['browser'] : [])])
     if (!manifest.images[name]?.platforms.includes(platform)) throw new Error('release_platform_unsupported');
   const state = path.join(directory, '.boaa-release');
   if (
@@ -57,12 +60,29 @@ export async function install({
   const engine = manifest.images.browser.engine ?? 'patchright';
   for (const service of ['api', 'runtime-browser', 'runtime-metadata'])
     (services[service].environment ??= {}).BOAA_BROWSER_ENGINE = engine;
+  if (browser) {
+    services.api.environment.BOAA_SOURCE_BROWSER_ENDPOINT = 'http://runtime-browser:8791';
+    services['runtime-metadata'].environment.BOAA_SOURCE_BROWSER_ENDPOINT = 'http://runtime-browser:8791';
+  }
   services.updater.environment.BOAA_RELEASE_REPOSITORY = repository;
   services.updater.environment.BOAA_RELEASE_SCHEMA_EPOCH = String(manifest.schemaEpoch);
   const override = path.join(state, 'bootstrap.json');
   await atomicJson(override, { services });
   const compose = ['compose', '-f', path.join(directory, 'compose.release.yaml'), '-f', override];
-  run([...compose, 'pull', 'runtime-bootstrap', 'web', 'api', 'worker', 'postgres', 'redis', 'minio', 'updater']);
+  const browserServices = browser ? ['runtime-browser'] : [];
+  run([
+    ...compose,
+    'pull',
+    'runtime-bootstrap',
+    ...browserServices,
+    'web',
+    'api',
+    'worker',
+    'postgres',
+    'redis',
+    'minio',
+    'updater',
+  ]);
   run([
     ...compose,
     'up',
@@ -74,6 +94,7 @@ export async function install({
     'redis',
     'minio',
     'runtime-bootstrap',
+    ...browserServices,
     'api',
     'worker',
     'web',
@@ -92,12 +113,15 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
       .reduce((pairs, value, index, args) => (index % 2 === 0 ? [...pairs, [value, args[index + 1]]] : pairs), []),
   );
   if (
-    Object.keys(options).some((key) => !['--version', '--key', '--directory', '--repository'].includes(key)) ||
+    Object.keys(options).some(
+      (key) => !['--version', '--key', '--directory', '--repository', '--browser'].includes(key),
+    ) ||
     !options['--version'] ||
-    !options['--key']
+    !options['--key'] ||
+    (Object.hasOwn(options, '--browser') && !['on', 'off'].includes(options['--browser']))
   ) {
     console.error(
-      'Usage: node scripts/release/install.mjs --version vX.Y.Z --key /trusted/public.pem [--directory /srv/boaa]',
+      'Usage: node scripts/release/install.mjs --version vX.Y.Z --key /trusted/public.pem [--directory /srv/boaa] [--browser on|off]',
     );
     process.exitCode = 1;
   } else {
@@ -106,6 +130,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
       version: options['--version'],
       keyFile: path.resolve(options['--key']),
       repository: options['--repository'],
+      browser: options['--browser'] !== 'off',
     }).catch(() => {
       console.error(
         'Release installation failed. Existing data was not removed; check the version, trusted key and Docker setup.',

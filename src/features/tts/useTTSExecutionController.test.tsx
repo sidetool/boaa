@@ -320,3 +320,48 @@ it('does not let an old play continuation replace the audio of a newly selected 
   expect(controller.itemActive).toBe(false);
   act(() => root.unmount());
 });
+
+it('reports current audio preparation separately from warmup and audio already playing', async () => {
+  const audioSession = new TestAudioSession();
+  let controller!: ReturnType<typeof useTTSExecutionController>;
+  const input: TTSExecutionControllerInput = {
+    systemTTS: { pause: vi.fn(), resume: vi.fn(), stop: vi.fn() },
+    audioSession,
+    bookId: 'book',
+    chapterId: 'chapter',
+  };
+  function Harness() {
+    controller = useTTSExecutionController(input);
+    return null;
+  }
+  let renderer!: ReactTestRenderer;
+  let session!: number;
+  await act(async () => {
+    renderer = create(<Harness />);
+  });
+  try {
+    await act(async () => {
+      session = controller.beginSession('book', 'chapter', 0)!;
+      const warmup = controller.beginWarmup('book', 'chapter');
+      controller.setHostedStatus(warmup!, 'background preparation');
+    });
+    expect(controller.hostedBusy).toBe(true);
+    expect(controller.playbackWaiting).toBe(false);
+    expect(controller.playbackStatus).toBeUndefined();
+    await act(async () => {
+      controller.beginHostedPlayback(session, 'current audio');
+    });
+    expect(controller.playbackWaiting).toBe(true);
+    expect(controller.playbackStatus).toBe('current audio');
+    await act(async () => {
+      void controller.playAudio(new Blob(['audio']), session);
+    });
+    expect(controller.hostedBusy).toBe(true);
+    expect(controller.playbackWaiting).toBe(false);
+    await act(async () => controller.stopAll());
+    expect(controller.playbackWaiting).toBe(false);
+    expect(controller.playbackStatus).toBeUndefined();
+  } finally {
+    await act(async () => renderer.unmount());
+  }
+});

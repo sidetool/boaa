@@ -21,7 +21,7 @@ import { createSourceNetworkSettings } from '../source-network-settings.js';
 import { sourceWebViewHost } from '../source-webview.js';
 const roots: string[] = [];
 const hosts: MangayomiExtensionHost[] = [];
-it('requires an explicit per-source browser choice and persists it across reopen', async () => {
+it('automatically supports explicit WebView calls and preserves an explicit off choice across reopen', async () => {
   const root = await mkdtemp(join(tmpdir(), 'boaa-source-browser-choice-'));
   roots.push(root);
   const script = `class DefaultExtension extends MProvider {
@@ -47,21 +47,21 @@ it('requires an explicit per-source browser choice and persists it across reopen
   const review = await host.inspect(repo, entry.pkg, entry.code, signal);
   await host.install(review.id, review.revision, signal);
   const key = '__boaa_browser_usage';
-  expect(host.preferences(entry.pkg).fields.find((field) => field.key === key)?.value).toBe('off');
+  expect(host.preferences(entry.pkg).fields.find((field) => field.key === key)?.value).toBe('http-first');
   const browser = vi.spyOn(sourceWebViewHost, 'evaluate').mockResolvedValue('Synthetic');
   try {
     const source = host.catalog.getSources()[0].descriptor.id;
-    await expect(host.catalog.invoke(source, 'source.listWorks', {}, signal)).rejects.toThrow(
-      'source_browser_disabled',
-    );
-    expect(browser).not.toHaveBeenCalled();
-    await host.savePreferences(entry.pkg, host.snapshot().revision, { [key]: 'http-first' }, []);
+    const listed = await host.catalog.invoke(source, 'source.listWorks', {}, signal);
+    expect(listed.result.items[0].title).toBe('Synthetic');
+    expect(browser).toHaveBeenCalledOnce();
+    await host.savePreferences(entry.pkg, host.snapshot().revision, { [key]: 'off' }, []);
     host.close();
     host = await MangayomiExtensionHost.open(join(root, 'host'), vault, transport);
     hosts.push(host);
-    expect(host.preferences(entry.pkg).fields.find((field) => field.key === key)?.value).toBe('http-first');
-    const listed = await host.catalog.invoke(source, 'source.listWorks', {}, signal);
-    expect(listed.result.items[0].title).toBe('Synthetic');
+    expect(host.preferences(entry.pkg).fields.find((field) => field.key === key)?.value).toBe('off');
+    await expect(host.catalog.invoke(source, 'source.listWorks', { cacheMode: 'reload' }, signal)).rejects.toThrow(
+      'source_browser_disabled',
+    );
     expect(browser).toHaveBeenCalledOnce();
   } finally {
     browser.mockRestore();

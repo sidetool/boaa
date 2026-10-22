@@ -204,3 +204,55 @@ it('accepts equivalent freshly allocated host contexts and preserves local seed 
   expect(h.hook.state.catalogItems.map((value) => value.title)).toEqual(['remote', 'local']);
   expect(h.port.notify).not.toHaveBeenCalled();
 });
+
+it('keeps matching work metadata through a failed request and retry without inventing a catalogue', async () => {
+  const h = fixture();
+  vi.mocked(h.port.registry.listExternalSource).mockRejectedValueOnce(new Error('offline'));
+  await act(async () => {
+    await h.hook.loadPage({ parentRef: 'work' }, false, undefined, false, false, 'navigation', { title: 'Work' });
+  });
+  expect(h.hook.state.catalogDetail?.title).toBe('Work');
+  expect(h.hook.state.listFailure).toBeDefined();
+  expect(h.hook.state.loading).toBe(false);
+  expect(h.hook.state.catalogItems).toEqual([]);
+  await act(async () => {
+    await h.hook.loadPage({ parentRef: 'work' }, false, undefined, false, true);
+  });
+  expect(h.hook.state.catalogDetail?.title).toBe('Work');
+  expect(h.hook.state.listFailure).toBeUndefined();
+});
+
+it.each(['folder', 'parent', 'account', 'generation', 'browse'])(
+  'does not reuse work metadata for a different %s destination',
+  async (destination) => {
+    const h = fixture();
+    await act(async () => {
+      await h.hook.loadPage({ parentRef: 'work' }, false, undefined, false, false, 'navigation', { title: 'Work' });
+    });
+    if (destination === 'account' || destination === 'generation') {
+      h.setConnection({
+        state: 'connected',
+        accountConnectionId: destination === 'account' ? 'other-account' : 'account',
+        connectionGeneration: destination === 'generation' ? 'g2' : 'g1',
+      });
+    }
+    if (destination === 'browse') {
+      vi.mocked(h.port.registry.listExternalSource).mockResolvedValueOnce({
+        items: [],
+        browse: { availableModes: ['popular'], activeMode: 'popular' },
+      });
+    }
+    await act(async () => {
+      await h.hook.loadPage(
+        { parentRef: destination === 'parent' ? 'other' : 'work' },
+        false,
+        undefined,
+        false,
+        false,
+        'navigation',
+        destination === 'folder' ? null : undefined,
+      );
+    });
+    expect(h.hook.state.catalogDetail).toBeUndefined();
+  },
+);

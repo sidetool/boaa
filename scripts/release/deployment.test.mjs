@@ -111,3 +111,52 @@ test('an interrupted journal reaches recovery instead of failing early on expect
   await atomicJson(path.join(directory, 'journal.json'), { phase: 'complete' });
   await assert.rejects(f.deployment.initialize(), /deployment_drift/);
 });
+
+test('initial enabled Patchright is recorded as installed and existing managed state is not re-defaulted', async (t) => {
+  const directory = await mkdtemp(path.join(tmpdir(), 'boaa-default-browser-test-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const names = ['BOAA_MANAGED_RELEASE', 'BOAA_RELEASE_VERSION', 'BOAA_RELEASE_SCHEMA_EPOCH'];
+  const previous = names.map((name) => process.env[name]);
+  t.after(() =>
+    names.forEach((name, i) => {
+      if (previous[i] === undefined) delete process.env[name];
+      else process.env[name] = previous[i];
+    }),
+  );
+  process.env.BOAA_MANAGED_RELEASE = '1';
+  process.env.BOAA_RELEASE_VERSION = '1.0.0';
+  process.env.BOAA_RELEASE_SCHEMA_EPOCH = '2';
+  const config = fixture().config;
+  for (const service of ['api', 'worker', 'web']) config.services[service].image = `fixture@sha256:${'a'.repeat(64)}`;
+  config.services.api.environment.BOAA_SOURCE_BROWSER_ENDPOINT = 'http://runtime-browser:8791';
+  config.services.api.environment.BOAA_BROWSER_ENGINE = 'patchright';
+  config.services['runtime-browser'] = { image: `browser@sha256:${'b'.repeat(64)}` };
+  const deployment = new DockerDeployment({
+    directory,
+    installation: directory,
+    run: async (args) => {
+      if (args[0] === 'inspect')
+        return JSON.stringify([
+          {
+            Config: {
+              Labels: {
+                'com.docker.compose.project': 'fixture',
+                'com.docker.compose.project.working_dir': directory,
+                'com.docker.compose.project.config_files': path.join(directory, 'compose.release.yaml'),
+              },
+            },
+          },
+        ]);
+      return JSON.stringify(config);
+    },
+  });
+  await deployment.initialize();
+  assert.deepEqual(deployment.current.enabled, ['browser']);
+  assert.deepEqual(deployment.current.installed, ['browser']);
+  assert.deepEqual(deployment.current.installedBrowserEngines, ['patchright']);
+  assert.equal(deployment.current.componentVersions.browser, '1.0.0');
+  const stopped = { ...deployment.current, enabled: [] };
+  await atomicJson(path.join(directory, 'current.json'), stopped);
+  await deployment.initialize({ allowDrift: true });
+  assert.deepEqual(deployment.current, stopped);
+});

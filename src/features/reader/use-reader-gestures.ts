@@ -56,5 +56,11 @@ export function useReaderGestureHandlers(input: {
     [input],
   );
 
-  return { onPointerDown, onPointerUp };
+  return {
+    onPointerDown,
+    onPointerUp,
+    onPointerCancel: () => {
+      startRef.current = undefined;
+    },
+  };
 }

@@ -31,6 +31,7 @@ const expectedStyleImports = [
 ];
 
 const appRuntimeStyles = path.join(repoRoot, 'src', 'App.tsx');
+const pageTurnRuntimeStyles = path.join(repoRoot, 'src', 'features', 'reader', 'use-page-turn.ts');
 const runtimeCustomPropertyOwners = new Map(
   [
     '--reading-background',
@@ -42,7 +43,14 @@ const runtimeCustomPropertyOwners = new Map(
     '--reading-letter-spacing',
     '--reading-margin-y',
     '--reading-text-align',
-  ].map((customProperty) => [customProperty, appRuntimeStyles]),
+  ]
+    .map((customProperty) => [customProperty, appRuntimeStyles])
+    .concat(
+      ['--turn-dir', '--turn-forward', '--turn-progress', '--turn-settle-ms', '--turn-width'].map((customProperty) => [
+        customProperty,
+        pageTurnRuntimeStyles,
+      ]),
+    ),
 );
 
 function assert(condition, message) {

@@ -1,5 +1,5 @@
+import { TranslateIcon } from '../../shared/ui/translate-icon';
 import {
-  Languages,
   BookmarkIcon,
   ChevronLeft,
   ChevronsLeft,
@@ -101,7 +101,7 @@ export function UiNextReaderChrome({
 
   const more: ActionEntry[] = [
     ...(onOpenTranslation
-      ? [{ id: 'translation', label: '작품 번역', icon: <Languages size={20} />, run: onOpenTranslation }]
+      ? [{ id: 'translation', label: '작품 번역', icon: <TranslateIcon size={20} />, run: onOpenTranslation }]
       : []),
     {
       id: 'start',

@@ -14,7 +14,7 @@ export const SOURCE_BROWSER_USAGE_KEY = '__boaa_browser_usage';
 export type SourceBrowserUsage = 'off' | 'http-first' | 'always';
 
 export function sourceBrowserUsage(value: unknown): SourceBrowserUsage {
-  if (value === null || value === undefined || value === '') return 'off';
+  if (value === null || value === undefined || value === '') return 'http-first';
   if (value !== 'off' && value !== 'http-first' && value !== 'always')
     throw new Error('compatibility_preferences_invalid');
   return value;
@@ -25,13 +25,13 @@ export function sourceBrowserFields(usage: unknown): CompatibilityPreference[] {
     {
       key: SOURCE_BROWSER_USAGE_KEY,
       title: '브라우저 사용',
-      summary: '별도 설치가 필요해요. 미사용 시 자동 종료돼요.',
+      summary: '자동은 필요한 경우에만 설치된 브라우저를 사용해요.',
       kind: 'select',
       secret: false,
       value: sourceBrowserUsage(usage),
       choices: [
-        { label: '사용 안 함 (기본)', value: 'off' },
-        { label: '필요할 때', value: 'http-first' },
+        { label: '자동 (기본)', value: 'http-first' },
+        { label: '사용 안 함', value: 'off' },
         { label: '항상 사용', value: 'always' },
       ],
     },

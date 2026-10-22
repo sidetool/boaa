@@ -135,6 +135,12 @@ it('reuses cover lookup, projects ownership, opens detail, and hands the exact q
     'fixture.search',
     { parentRef: 'detail:work' },
     'work',
+    expect.objectContaining({
+      key: { connectorId: 'fixture.search', remoteId: 'work' },
+      kind: 'work',
+      title: 'work',
+      navigationRef: 'detail:work',
+    }),
   );
   openSearch();
   group.openAll!();

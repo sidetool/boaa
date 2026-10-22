@@ -593,7 +593,7 @@ describe('source series pagination integration', () => {
     await act(async () => h.controller.selectSource(sourceId));
     await act(async () =>
       h.controller.openItem({
-        key: { connectorId: sourceId, remoteId: 'work' },
+        key: { connectorId: sourceId, accountConnectionId: 'account', remoteId: 'work' },
         kind: 'work',
         title: 'Work',
         navigationRef: 'work',
