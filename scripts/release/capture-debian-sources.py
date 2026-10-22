@@ -49,20 +49,10 @@ def digest(path):
         return hashlib.file_digest(stream, 'sha256').hexdigest()
 
 
-def main():
-    p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument('--image', required=True)
-    p.add_argument('--component', required=True)
-    p.add_argument('--output', type=Path, required=True)
-    p.add_argument('--cache', type=Path, default=Path('.tmp/debian-sources'))
-    a = p.parse_args()
-    a.output.mkdir(parents=True, exist_ok=True)
-    a.cache.mkdir(parents=True, exist_ok=True)
-    info = json.loads(subprocess.check_output(['docker', 'image', 'inspect', a.image], text=True))[0]
-    prefix = a.component + '-' + info['Architecture']
+def lookup_sources(info):
     container = subprocess.check_output(['docker', 'create', '--user', '0', '--entrypoint', 'sh', info['Id'], '-c', SCRIPT], text=True).strip()
     try:
-        text = subprocess.check_output(['docker', 'start', '--attach', container], text=True)
+        text = subprocess.check_output(['docker', 'start', '--attach', container], text=True, timeout=240)
         exit_code = subprocess.check_output(['docker', 'inspect', '--format', '{{.State.ExitCode}}', container], text=True).strip()
         if exit_code != '0':
             raise RuntimeError('source_package_lookup_failed')
@@ -77,6 +67,25 @@ def main():
         rows.append({'url': url.replace('http://', 'https://', 1), 'file': name, 'bytes': int(size), 'sha256': sha})
     if not rows:
         raise ValueError('missing_source_packages')
+    expected = {p['source'] + '_' + p['sourceVersion'].split(':')[-1] + '.dsc' for p in packages}
+    missing = expected - {r['file'] for r in rows}
+    if missing:
+        raise ValueError('missing_source_descriptors: ' + repr(sorted(missing)))
+    return packages, rows
+
+
+def main():
+    p = argparse.ArgumentParser(description=__doc__)
+    p.add_argument('--image', required=True)
+    p.add_argument('--component', required=True)
+    p.add_argument('--output', type=Path, required=True)
+    p.add_argument('--cache', type=Path, default=Path('.tmp/debian-sources'))
+    a = p.parse_args()
+    a.output.mkdir(parents=True, exist_ok=True)
+    a.cache.mkdir(parents=True, exist_ok=True)
+    info = json.loads(subprocess.check_output(['docker', 'image', 'inspect', a.image], text=True))[0]
+    prefix = a.component + '-' + info['Architecture']
+    packages, rows = lookup_sources(info)
     def download(row):
         target = a.cache / row['file']
         if not target.exists() or digest(target) != row['sha256']:

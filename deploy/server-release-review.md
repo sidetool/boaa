@@ -7,6 +7,32 @@ application stacks, then uploads signed assets to an **existing draft**. Registr
 packages may be private or public; public packages remain usable for subsequent releases. The global desktop/mobile
 binary gate is unchanged and remains closed.
 
+## Before starting the native matrix
+
+Candidate validation resolves the exact source versions in each distinct pinned runtime base
+before the application suite. The same signed APT lookup is used for final-image evidence;
+lookup errors, missing source descriptors and timeouts stop the candidate. A historical signed
+snapshot handles versions removed from rolling indexes. This probe checks the current runner
+architecture and base packages, not packages installed later by a Dockerfile; the final native
+image checks remain required on both architectures.
+
+After the existing web build, validation captures dependency notices and checks every emitted
+web/worker component inventory against the notice paths or retained hash-pinned exceptions.
+A vendored library with an unlinked license now fails before fourteen native builds. The
+regression tests reproduce that missing link rather than merely checking that a LICENSE exists.
+
+For local preparation (after dependencies are installed and the web build is current):
+
+```sh
+python3 scripts/release/check-base-sources.py
+node scripts/release/capture-npm-notices.mjs .tmp/release-npm-notices
+node scripts/release/check-web-notices.mjs dist .tmp/release-npm-notices
+```
+
+These checks do not restart production, publish releases or weaken final artifact verification.
+External outages and new final-image dependencies can still fail later; use failed-job retries
+at the same commit for transient errors as described below.
+
 ## Review the candidate
 
 1. Record the successful candidate workflow run and its exact image commit.

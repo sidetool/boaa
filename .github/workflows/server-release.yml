@@ -105,7 +105,14 @@ jobs:
       - run: python3 -m unittest discover -s services/runtime-components -p 'test_*.py'
       - run: python3 -m unittest discover -s scripts/release -p 'test_*.py'
       - run: node scripts/build-page-flip-core.mjs --check
+      - name: Resolve pinned runtime base sources before expensive validation
+        timeout-minutes: 10
+        run: python3 scripts/release/check-base-sources.py
       - run: pnpm check:web-server
+      - name: Check bundled web notice mappings before native image builds
+        run: |
+          node scripts/release/capture-npm-notices.mjs .tmp/release-npm-notices
+          node scripts/release/check-web-notices.mjs dist .tmp/release-npm-notices
       - name: Account isolation and TTS regression tests
         run: >-
           pnpm exec vitest run src/features/auth src/storage/account-isolation.test.ts
