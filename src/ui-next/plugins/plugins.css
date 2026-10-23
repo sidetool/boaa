@@ -19,6 +19,14 @@
   min-height: 320px;
 }
 
+/* Owned here, not by the settings stylesheet: home can open this sheet before settings ever loads. */
+.un-plugin-sheet .product-plugin-view iframe {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border: 0;
+}
+
 @media (max-width: 899px) {
   .un-plugin-sheet .un-sheet-body {
     padding-bottom: var(--un-safe-b);
