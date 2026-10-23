@@ -109,8 +109,9 @@ export function useAppBrowserNavigation(options: {
         from.source?.localBookId === to.source?.localBookId &&
         JSON.stringify(from.source?.breadcrumbs) === JSON.stringify(to.source?.breadcrumbs) &&
         ((Boolean(from.search) && !to.search) ||
-          (from.stream && !to.stream) ||
-          (from.layers.length > to.layers.length && to.layers.every((id) => from.layers.includes(id)))),
+          (from.search?.id === to.search?.id &&
+            ((from.stream && !to.stream) ||
+              (from.layers.length > to.layers.length && to.layers.every((id) => from.layers.includes(id)))))),
       intermediate: (from, to) => {
         if (
           (to.view !== 'reader' && to.view !== 'document') ||

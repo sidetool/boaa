@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react';
+import { navigateAppForward } from '../../features/navigation/browser-navigation';
 
 /** Dispatched on the host window by the plugin view runtime after it authorizes `ctx.app.search`. */
 export const PLUGIN_SEARCH_EVENT = 'boaa:plugin-search';
@@ -24,7 +25,7 @@ export function usePluginSearchRequests(handle: (query: string) => void) {
       if (!query) return;
       // Next task: the guest's reply settles before handling closes the frame that awaited it.
       clearTimeout(timer);
-      timer = setTimeout(() => latest.current(query), 0);
+      timer = setTimeout(() => navigateAppForward(() => latest.current(query)), 0);
     };
     window.addEventListener(PLUGIN_SEARCH_EVENT, listener);
     return () => {

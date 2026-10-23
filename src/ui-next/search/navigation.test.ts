@@ -8,7 +8,9 @@ import { actions, model } from '../test-fixtures';
 import { getHomeActive, setHomeActive } from '../home/route';
 import type { UiNextShellProps } from '../shell/contract';
 import type { UiNextSearchScreenProps } from './contract';
-import { getSearchRoute, setSearchRoute } from './route';
+import { getSearchRoute, openSearch, setSearchRoute } from './route';
+import { closePluginView, openPluginView, usePluginViewRoute } from '../plugins/view-route';
+import { usePluginSearchRequests, PLUGIN_SEARCH_EVENT } from '../plugins/plugin-search-requests';
 
 let shell!: UiNextShellProps;
 let screen: UiNextSearchScreenProps | undefined;
@@ -33,6 +35,7 @@ vi.mock('./UiNextSearchScreen', () => ({
 afterEach(() => {
   setSearchRoute(undefined);
   setHomeActive(false);
+  closePluginView();
   vi.unstubAllGlobals();
 });
 
@@ -71,7 +74,7 @@ function browser() {
     index = Math.max(0, Math.min(entries.length - 1, index + delta));
     const event = new Event('popstate');
     Object.assign(event, { state: entries[index] });
-    events.dispatchEvent(event);
+    queueMicrotask(() => events.dispatchEvent(event));
   };
   return {
     history: {
@@ -93,6 +96,7 @@ function browser() {
     addEventListener: events.addEventListener.bind(events),
     removeEventListener: events.removeEventListener.bind(events),
     entries,
+    dispatchEvent: events.dispatchEvent.bind(events),
   };
 }
 
@@ -167,3 +171,66 @@ it.each([false, true])(
     }
   },
 );
+
+it.each([false, true])('keeps plugin search open across asynchronous history (batched=%s)', async (batched) => {
+  const window = browser();
+  vi.stubGlobal('window', window);
+  vi.stubGlobal('requestAnimationFrame', (callback: () => void) => {
+    callback();
+    return 0;
+  });
+  setHomeActive(true);
+  const state = testWorkspaceState({ view: 'library' });
+  const options = {
+    enabled: true,
+    state,
+    workspace: {
+      getSnapshot: () => state,
+      cancelNavigation: vi.fn(),
+      setView: vi.fn(),
+      setLibraryQuery: vi.fn(),
+      setLibraryFilter: vi.fn(),
+      setLibrarySort: vi.fn(),
+      setLibraryViewMode: vi.fn(),
+    },
+    sources: { open: false, close: vi.fn() },
+    discovery: { active: false, setActive: vi.fn() },
+    getNovel: vi.fn(),
+    notify: vi.fn(),
+  } as unknown as Parameters<typeof useAppBrowserNavigation>[0];
+  function Harness() {
+    const route = usePluginViewRoute();
+    usePluginSearchRequests((query) => {
+      const handoff = () => {
+        closePluginView();
+        openSearch(query);
+      };
+      if (batched) act(handoff);
+      else handoff();
+    });
+    useAppBrowserNavigation({
+      ...options,
+      layers: [{ id: 'plugin-view', open: Boolean(route), dismiss: closePluginView }],
+    });
+    return createElement(UiNextWorkspace, { model: model([]), actions: actions(), view: 'library', children: null });
+  }
+  let renderer!: ReactTestRenderer;
+  act(() => {
+    renderer = create(createElement(Harness));
+  });
+  try {
+    act(() => openPluginView('fixture', 'browse'));
+    await act(async () => {
+      window.dispatchEvent(new CustomEvent(PLUGIN_SEARCH_EVENT, { detail: { query: 'A title' } }));
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+    expect(getSearchRoute()?.initialQuery).toBe('A title');
+    expect(screen?.initialQuery).toBe('A title');
+    expect(options.notify).not.toHaveBeenCalled();
+    await act(async () => screen!.close());
+    expect(getSearchRoute()).toBeUndefined();
+    expect(getHomeActive()).toBe(true);
+  } finally {
+    act(() => renderer.unmount());
+  }
+});

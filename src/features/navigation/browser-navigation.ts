@@ -1,5 +1,16 @@
 import { randomUuid } from '../../utils/random-uuid';
 const KEY = 'boaaNavigation';
+let forwardTransitionDepth = 0;
+
+/** Closing an overlay on the way to a new destination must not trigger history.back(). */
+export function navigateAppForward(action: () => void): void {
+  forwardTransitionDepth++;
+  try {
+    action();
+  } finally {
+    forwardTransitionDepth--;
+  }
+}
 type Marker = { session: string; id: number; position: number };
 type Entry<T> = { marker: Marker; key: string; snapshot: T };
 
@@ -63,7 +74,8 @@ export class BrowserNavigation<T> {
       Object.assign(this.current, value);
       return;
     }
-    if (this.options.closesLayer?.(this.current.snapshot, value.snapshot) && this.back()) return;
+    if (!forwardTransitionDepth && this.options.closesLayer?.(this.current.snapshot, value.snapshot) && this.back())
+      return;
     const intermediate = this.options.intermediate?.(this.current.snapshot, value.snapshot);
     if (intermediate) this.append(intermediate);
     this.append(value);
