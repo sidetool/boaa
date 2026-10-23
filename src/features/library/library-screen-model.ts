@@ -1,4 +1,4 @@
-import type { WorkView } from '../../components/work-view';
+import type { WorkView } from '../../components/work-view-model';
 import type { Novel } from '../../domain/types';
 import { bookUnitLabel, isFixedDocumentFormat } from '../../domain/book-format';
 import { formatDateTime } from '../../utils/format';

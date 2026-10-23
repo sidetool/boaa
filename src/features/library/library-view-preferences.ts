@@ -1,5 +1,5 @@
 import { readBrandStorage, writeBrandStorage } from '@boaa/extension-contracts/brand-compat';
-import { isWorkView } from '../../components/work-view';
+import { isWorkView } from '../../components/work-view-model';
 import type { LibrarySort, LibraryViewMode } from './library-screen-model';
 
 const KEY = 'boaa.library-view.v1';
