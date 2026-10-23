@@ -29,3 +29,7 @@ export async function buildProductPluginRuntime(outdir) {
   });
   await copyFile(runtimeRequire.resolve('@jitl/quickjs-wasmfile-release-sync/wasm'), path.join(outdir, 'quickjs.wasm'));
 }
+
+// Development servers need the same sandbox assets as the production bundle.
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url))
+  await buildProductPluginRuntime(path.join(root, 'apps/server/dist/plugin-runtime-assets'));

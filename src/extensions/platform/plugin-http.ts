@@ -74,6 +74,10 @@ export class PluginHttp {
   async revoke(row: Installation, slot?: string) {
     await this.host('revoke', this.owner(row), slot ? { slot } : {});
   }
+  /** Retire only the reviewed generation; a concurrent update may already have new connections. */
+  async retire(row: Installation) {
+    await this.host('retire', this.owner(row));
+  }
   async request(session: PluginSession, input: UiJson, signal: AbortSignal): Promise<UiJson> {
     await this.store.assertCall(session, session.fence, 'http.request');
     requireStore(pluginHttpRequest(input), 'HTTP_INVALID_REQUEST');

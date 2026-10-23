@@ -16,6 +16,8 @@ import {
 } from '../services/id-v2-migration/postgres-integration-harness';
 import { SELF_HOST_SESSION_COOKIE, requestCookie } from '../auth-cookie';
 import { testPluginBackend } from './test-fixtures/plugin-backend';
+import { pluginScope } from '../plugins/plugin-scope';
+import { scopeKey } from '../../../../src/extensions/ui/store-model';
 const harness = await startPostgresIntegrationHarness();
 afterAll(() => harness?.stop(), POSTGRES_HARNESS_CLEANUP_TIMEOUT_MS);
 it.skipIf(!harness)(
@@ -54,7 +56,56 @@ it.skipIf(!harness)(
           'x-boaa-plugin-host': '1',
           cookie: `${SELF_HOST_SESSION_COOKIE}=${account.token}`,
         };
-        const owner = { profileId: randomUUID(), installationId: randomUUID(), digest: 'a'.repeat(64), generation: 1 };
+        const identity = (await pluginScope(pool, account.token, 'owner'))!;
+        const owner = {
+          profileId: identity.accountId,
+          installationId: randomUUID(),
+          digest: 'a'.repeat(64),
+          generation: 1,
+        };
+        const scope = scopeKey({ kind: 'remote', profileId: identity.accountId, ...identity });
+        const stateKey = JSON.stringify([scope, 'fixture.http']);
+        await pool.query('insert into plugin_state_versions(account_id,library_id,revision) values($1,$2,1)', [
+          identity.accountId,
+          identity.libraryId,
+        ]);
+        // The account state route separately verifies package bytes and this metadata graph.
+        // Seed the committed authority here so the broker exercises its own live authorization checks.
+        for (const [store, value] of Object.entries({
+          installations: {
+            scope,
+            pluginId: 'fixture.http',
+            installationId: owner.installationId,
+            revision: 1,
+            enabled: true,
+            tombstone: false,
+            active: owner.digest,
+            manifest: {
+              contributes: { connections: ['backend'] },
+              entries: {
+                controller: { permissions: ['http.request'] },
+                ui: { permissions: ['http.request'] },
+              },
+            },
+          },
+          grants: {
+            scope,
+            pluginId: 'fixture.http',
+            installationId: owner.installationId,
+            digest: owner.digest,
+            revision: 1,
+            roles: { controller: ['http.request'], ui: ['http.request'] },
+          },
+        }))
+          await pool.query(
+            'insert into plugin_state_rows(account_id,library_id,store,row_key,value,revision) values($1,$2,$3,$4,$5,1)',
+            [identity.accountId, identity.libraryId, store, stateKey, JSON.stringify(value)],
+          );
+        const patchInstallation = (patch: Record<string, unknown>) =>
+          pool.query(
+            "update plugin_state_rows set value=value || $3::jsonb where account_id=$1 and library_id=$2 and store='installations'",
+            [identity.accountId, identity.libraryId, JSON.stringify(patch)],
+          );
         const call = (action: string, data: Record<string, unknown> = {}, customHeaders = headers) =>
           app.inject({
             method: 'POST',
@@ -77,6 +128,23 @@ it.skipIf(!harness)(
           expect(JSON.stringify(connection)).not.toContain('synthetic-plugin-key');
           const rows = await pool.query('select encrypted_secret from plugin_connections');
           expect(rows.rows[0].encrypted_secret).not.toContain('synthetic-plugin-key');
+          const updateConnection = (extra: Record<string, unknown> = {}) =>
+            call('approve', {
+              headers: ['content-type', 'accept'],
+              slot: 'backend',
+              endpoint: a.origin + '/v1/',
+              roles: ['controller'],
+              methods: ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE'],
+              expectedRevision: connection.revision,
+              auth: { kind: 'preserve', revision: connection.revision },
+              ...extra,
+            });
+          expect((await updateConnection({ endpoint: b.origin + '/v1/' })).statusCode).toBe(403);
+          expect((await updateConnection({ expectedRevision: randomUUID() })).statusCode).toBe(403);
+          expect((await call('list')).json()[0].revision).toBe(connection.revision);
+          expect((await updateConnection()).statusCode).toBe(200);
+          connection = (await call('list')).json()[0];
+          expect(connection.authenticated).toBe(true);
           const request = (patch: Record<string, unknown> = {}, extra: Record<string, unknown> = {}) =>
             call('request', {
               requestId: randomUUID(),
@@ -85,6 +153,64 @@ it.skipIf(!harness)(
               request: { slot: 'backend', path: 'notes', method: 'POST', response: 'json', body: 'hello', ...patch },
               ...extra,
             });
+          // A stale browser must not revive consent or use a surviving connection after another device disables it.
+          await patchInstallation({ enabled: false });
+          expect((await approve()).statusCode).toBe(403);
+          expect((await request()).statusCode).toBe(403);
+          expect(a.requests).toHaveLength(0);
+          expect((await call('list')).json()[0].revision).toBe(connection.revision);
+          await patchInstallation({ enabled: true });
+          // Waiting approvals take the same version lock as account-state commits and recheck after acquiring it.
+          const locked = await pool.connect();
+          let waitingApproval: ReturnType<typeof approve> | undefined;
+          try {
+            await locked.query('begin');
+            await locked.query(
+              'select revision from plugin_state_versions where account_id=$1 and library_id=$2 for update',
+              [identity.accountId, identity.libraryId],
+            );
+            let finished = false;
+            waitingApproval = approve();
+            void waitingApproval.then(() => {
+              finished = true;
+            });
+            await new Promise((resolve) => setTimeout(resolve, 100));
+            expect(finished).toBe(false);
+            await locked.query(
+              "update plugin_state_rows set value=value || '{\"enabled\":false}'::jsonb where account_id=$1 and library_id=$2 and store='installations'",
+              [identity.accountId, identity.libraryId],
+            );
+            await locked.query('commit');
+            expect((await waitingApproval).statusCode).toBe(403);
+            expect((await call('list')).json()[0].revision).toBe(connection.revision);
+          } finally {
+            await locked.query('rollback');
+            locked.release();
+          }
+          await patchInstallation({ enabled: true });
+          // Declaring a slot and granting each exact role are both required independently of connection consent.
+          expect(
+            (
+              await call('approve', {
+                headers: [],
+                slot: 'undeclared',
+                endpoint: a.origin + '/v1/',
+                roles: ['controller'],
+                methods: ['GET'],
+                auth: { kind: 'none' },
+              })
+            ).statusCode,
+          ).toBe(403);
+          await pool.query(
+            "update plugin_state_rows set value=jsonb_set(value,'{roles,controller}','[]') where account_id=$1 and library_id=$2 and store='grants'",
+            [identity.accountId, identity.libraryId],
+          );
+          expect((await approve()).statusCode).toBe(403);
+          expect((await request()).statusCode).toBe(403);
+          await pool.query(
+            "update plugin_state_rows set value=jsonb_set(value,'{roles,controller}','[\"http.request\"]') where account_id=$1 and library_id=$2 and store='grants'",
+            [identity.accountId, identity.libraryId],
+          );
           for (const method of ['GET', 'POST', 'PUT', 'PATCH', 'DELETE']) {
             const response = await request({ method, body: method === 'GET' ? undefined : 'hello' });
             expect(response.json()).toMatchObject({ ok: true, status: 200, body: { service: 'notes', method } });
@@ -158,6 +284,25 @@ it.skipIf(!harness)(
             body: { provider: 'dictionary', value: 'HELLO' },
           });
           expect(b.requests[0].authenticated).toBe(true);
+          // Retiring an older generation must not remove this generation's approved connection.
+          expect((await call('retire', { owner: { ...owner, generation: 2 } })).statusCode).toBe(200);
+          expect((await call('revoke', { owner: { ...owner, generation: 2 }, slot: 'backend' })).statusCode).toBe(200);
+          expect((await call('list')).json()[0].revision).toBe(connection.revision);
+          expect((await call('retire')).statusCode).toBe(200);
+          expect((await call('list')).json()).toEqual([]);
+          expect(
+            (
+              await call('approve', {
+                headers: ['content-type', 'accept'],
+                slot: 'backend',
+                endpoint: b.origin + '/v1/',
+                roles: ['ui'],
+                methods: ['POST'],
+                auth: { kind: 'header', header: 'x-api-key', value: 'synthetic-plugin-key' },
+              })
+            ).statusCode,
+          ).toBe(200);
+          connection = (await call('list')).json()[0];
           // Deployment/library identity changes invalidate retained approvals.
           const priorScope = await pool.query('select library_id from plugin_deployment_identity');
           await pool.query('update plugin_deployment_identity set library_id=$1', [randomUUID()]);

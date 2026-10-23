@@ -27,6 +27,7 @@
 - [Cloud Vault](architecture/cloud-vault-sync.md)
 - [신뢰 익스텐션 v1 개발 가이드](architecture/trusted-extensions.md)
 - [JS/TS 소스 확장 개발과 배포](extensions/source-development.md)
+- [JS 플러그인 개발: 홈 목록·리더·설정·HTTP](extensions/platform-plugins.md)
 - [확장 패키지 형식](extensions/boaapatch-format.md)
 - [Source SDK v1 빠른 참조](extensions/sdk-v1-reference.md)
 - [Mangayomi JavaScript 지원 범위와 검사](extensions/mangayomi-compatibility.md)

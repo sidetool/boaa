@@ -2,6 +2,7 @@ import { SettingsSubscriptions } from './settings-subscriptions';
 import { BOAA_PACKAGE_LIMITS } from '@boaa/extension-contracts/package';
 import { isUiJson, uiRecord, uiKeys, uiInteger, uiUtf8Size, type UiJson } from '@boaa/extension-contracts/ui-json';
 import { canonicalJson } from '../../ui/store-model';
+import { platformStorageError } from '../../../../packages/extension-contracts/plugin-platform-sdk';
 declare const __BOAA_UI_PARENT_ORIGIN__: string;
 const hostOrigin = __BOAA_UI_PARENT_ORIGIN__;
 if (parent !== window) {
@@ -131,7 +132,14 @@ if (parent !== window) {
         clearTimeout(p.timer);
         p.detach();
         if (data.result.ok && uiKeys(data.result, ['ok', 'value'])) p.resolve(data.result.value);
-        else p.reject(Error('REQUEST_DENIED'));
+        else
+          p.reject(
+            Error(
+              !data.result.ok && uiKeys(data.result, ['ok', 'code']) && platformStorageError(data.result.code)
+                ? data.result.code
+                : 'REQUEST_DENIED',
+            ),
+          );
         return;
       }
       if (
@@ -162,6 +170,14 @@ if (parent !== window) {
             request('controller.call', { handler, value }, options?.signal),
         }),
         view: Object.freeze({ id: data.view, root }),
+        storage: Object.freeze({
+          get: (key: string) => request('storage.get', { key }),
+          set: (key: string, value: UiJson, expectedRevision: number | null = null) =>
+            request('storage.set', { key, value, expectedRevision }),
+          remove: (key: string, expectedRevision: number) => request('storage.remove', { key, expectedRevision }),
+          list: (options: { prefix?: string; cursor?: string; limit?: number } = {}) =>
+            request('storage.list', { limit: 32, ...options }),
+        }),
         settings: Object.freeze({
           subscribe: subscriptions.subscribe.bind(subscriptions),
           get: () => request('settings.get', {}),

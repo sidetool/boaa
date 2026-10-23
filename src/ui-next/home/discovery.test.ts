@@ -88,10 +88,38 @@ it('does not request on adapter construction, loads once on demand, caps items a
   await item.work.loadCover!(new AbortController().signal);
   expect(f.cover).toHaveBeenCalledOnce();
   item.work.open();
-  expect(f.open).toHaveBeenCalledWith('fixture.source', { parentRef: 'detail' }, '작품 0');
+  expect(f.open).toHaveBeenCalledWith(
+    'fixture.source',
+    { parentRef: 'detail' },
+    '작품 0',
+    expect.objectContaining({ title: '작품 0' }),
+  );
   f.row().openAll!();
   expect(f.openAll).toHaveBeenCalledWith('tab');
   f.session.dispose();
+});
+
+it('rechecks an expired home row after returning to home and retains cached items if refresh fails', async () => {
+  const f = fixture();
+  f.row().requestLoad!();
+  await vi.waitFor(() => expect(f.row().status).toBe('ready'));
+  const clock = vi.spyOn(Date, 'now').mockReturnValue(f.row().refreshAt! + 1);
+  try {
+    f.list.mockRejectedValueOnce(Error('offline'));
+    f.row().requestLoad!();
+    await vi.waitFor(() => expect(f.row().error).toBe('offline'));
+    expect(f.list).toHaveBeenCalledTimes(2);
+    expect(f.row()).toMatchObject({ status: 'ready', stale: true, items: [{ work: { title: '작품' } }] });
+    f.row().requestLoad!();
+    expect(f.list).toHaveBeenCalledTimes(2);
+    f.row().retry!();
+    await vi.waitFor(() => expect(f.row().error).toBeUndefined());
+    await vi.waitFor(() => expect(f.row().refreshing).toBe(false));
+    expect(f.list).toHaveBeenCalledTimes(3);
+  } finally {
+    clock.mockRestore();
+    f.session.dispose();
+  }
 });
 
 function cachedRowFixture(kind: 'discovery' | 'source') {

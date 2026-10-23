@@ -112,6 +112,7 @@
     "plugin:platform": "node apps/server/node_modules/tsx/dist/cli.mjs scripts/plugins/platform-cli.ts",
     "test:plugin-platform-packages": "vitest run src/extensions/packages/platform-package.test.ts scripts/plugins/platform-package.test.ts",
     "test:plugin-platform-store": "vitest run src/extensions/platform src/extensions/ui",
+    "check:plugin-platform:browser": "node --import ./apps/server/node_modules/tsx/dist/loader.mjs scripts/plugins/product-browser-smoke.ts",
     "check:bundle-inventory": "node --test scripts/performance/web-bundle-inventory.check.mjs",
     "test:plugin-reader": "vitest run src/reader/plugin-decoration-layers.test.ts src/features/reader/reader-plugin-paint.test.tsx src/test/text-decorations.test.ts src/features/reader/reader-hot-path.test.tsx src/features/reader/reader-pagination-model.test.ts --maxWorkers=2",
     "test:server-management": "node --test scripts/release/*.test.mjs && vitest run apps/server/src/management",

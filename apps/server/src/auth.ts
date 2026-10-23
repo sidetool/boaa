@@ -54,7 +54,6 @@ export async function registerAuthHook(
 
   app.addHook('onRequest', async (request, reply) => {
     if (
-      config.pluginOrigin &&
       ['GET', 'HEAD'].includes(request.method) &&
       /^\/plugin-runtime\/(shell|controller-worker\.js|quickjs\.wasm)$/.test(request.url)
     )

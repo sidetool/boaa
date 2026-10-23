@@ -43,7 +43,7 @@ function ExtensionCard({
   const failed = state(extension);
   return (
     <article className="un-ext-card">
-      <header className="un-ext-head">
+      <header className="un-ext-card-head">
         <span className="un-ext-icon" aria-hidden="true">
           <Puzzle size={18} />
         </span>
@@ -65,9 +65,14 @@ function ExtensionCard({
           onChange={(on) => setEnabled(extension.id, on)}
         />
       </header>
-      {extension.description && <p className="un-ext-desc">{extension.description}</p>}
+      {extension.description && <p className="un-ext-card-desc">{extension.description}</p>}
       {extension.errorMessage && <Notice tone="danger">{extension.errorMessage}</Notice>}
-      <button type="button" className="un-ext-more" aria-expanded={open} onClick={() => setOpen((value) => !value)}>
+      <button
+        type="button"
+        className="un-ext-card-more"
+        aria-expanded={open}
+        onClick={() => setOpen((value) => !value)}
+      >
         {open ? '접기' : '하는 일과 권한'}
       </button>
       {open && (
@@ -110,7 +115,7 @@ export function ExtensionsPage({
   return (
     <>
       <PrefSection title="기본 기능" hint="BOAA에 들어 있는 기능이에요. 필요 없으면 꺼 두세요.">
-        <div className="un-ext-list">
+        <div className="un-ext-cards">
           {bundled.map((extension) => (
             <ExtensionCard
               key={extension.id}
@@ -124,7 +129,7 @@ export function ExtensionsPage({
 
       <PrefSection title="커뮤니티 기능">
         {community.length ? (
-          <div className="un-ext-list">
+          <div className="un-ext-cards">
             {community.map((extension) => (
               <ExtensionCard
                 key={extension.id}

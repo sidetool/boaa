@@ -18,10 +18,10 @@ export function inspectSingleJs(bytes: Uint8Array): { manifest: PlatformManifest
     !uiKeys(
       header,
       ['id', 'version', 'apiVersion', 'license', 'activation', 'permissions', 'features', 'contributes'],
-      ['name', 'storageKiB'],
+      ['name', 'storageKiB', 'connections'],
     ) ||
     !uiRecord(header.contributes) ||
-    !uiKeys(header.contributes, [], ['commands', 'decorations', 'connections'])
+    !uiKeys(header.contributes, [], ['commands', 'decorations', 'connections', 'homeSections'])
   )
     throw Error('INVALID_HEADER');
   const manifest = {
@@ -38,7 +38,9 @@ export function inspectSingleJs(bytes: Uint8Array): { manifest: PlatformManifest
       views: [],
       decorations: header.contributes.decorations ?? [],
       ...(header.contributes.connections === undefined ? {} : { connections: header.contributes.connections }),
+      ...(header.contributes.homeSections === undefined ? {} : { homeSections: header.contributes.homeSections }),
     },
+    ...(header.connections === undefined ? {} : { connections: header.connections }),
     requestedAccess: {
       storageKiB: header.storageKiB ?? 0,
       contentScopes: Array.isArray(header.permissions)

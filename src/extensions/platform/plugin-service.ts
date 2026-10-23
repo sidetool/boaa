@@ -12,6 +12,9 @@ import { PlatformPluginStore } from './plugin-store';
 import { ControllerVm, controllerResources, type ControllerOptions } from './controller-vm';
 import type { Installation, PluginSession, ConfigRow } from './store-model';
 import { validateSettingsSchema } from './settings-schema';
+import { storageCall } from './storage-call';
+import { PluginHomeRuntime } from './home-runtime';
+import { sleepControllerJob } from './controller-jobs';
 const retired = (error: unknown) =>
   error instanceof UiStoreError && ['PACKAGE_GENERATION_CHANGED', 'CONTEXT_STALE'].includes(error.code);
 interface Running {
@@ -22,7 +25,6 @@ interface Running {
   activation?: Promise<void>;
   active: boolean;
   stopped: boolean;
-  marked: boolean;
   configRevision: number;
   views: number;
   paintVersion: number;
@@ -33,25 +35,19 @@ interface Running {
 }
 const publicConfig = (row?: ConfigRow): UiJson =>
   row ? { schemaVersion: row.schema.version, revision: row.revision, value: row.value } : null;
-function delay(ms: number, signal?: AbortSignal): Promise<void> {
-  return new Promise((resolve, reject) => {
-    if (signal?.aborted) {
-      reject(Error('CANCELLED'));
-      return;
-    }
-    const abort = () => {
-      clearTimeout(timer);
-      reject(Error('CANCELLED'));
-    };
-    const timer = setTimeout(() => {
-      signal?.removeEventListener('abort', abort);
-      resolve();
-    }, ms);
-    signal?.addEventListener('abort', abort, { once: true });
-  });
-}
-/** Host-owned service, deliberately not mounted by the product provider until G3. */
+/** Account-scoped controller lifetime, authority and reader coordination. */
 export class PluginService {
+  private version = 0;
+  private installationKey = '';
+  private listeners = new Set<() => void>();
+  private readonly home: PluginHomeRuntime;
+  subscribe = (listener: () => void) => {
+    this.listeners.add(listener);
+    return () => {
+      this.listeners.delete(listener);
+    };
+  };
+  getSnapshot = () => this.version;
   readonly bindings: ReaderBindings;
   private actions?: PluginReaderSession;
   private unbind: () => void;
@@ -78,6 +74,11 @@ export class PluginService {
       http?: PluginHttp;
     },
   ) {
+    this.home = new PluginHomeRuntime(
+      { list: () => store.list(), invoke: (row, section, signal) => this.invokeHomeFeed(row, section, signal) },
+      options.http,
+      options.off,
+    );
     this.bindings = options.bindings ?? new ReaderBindings();
     this.unbind = this.bindings.subscribe(() => this.actions?.interrupt());
     if (options.off) return;
@@ -143,20 +144,32 @@ export class PluginService {
     return row;
   }
   private ensure(row: Installation): Running {
+    const existing = this.records.get(row.pluginId);
+    // Release unused, completed controllers before admitting another plugin.
+    if (!existing && controllerResources('controller').workers >= 4)
+      for (const record of [...this.records.values()]) {
+        if (
+          record.vm?.idle &&
+          record.views === 0 &&
+          !record.row.manifest?.activation.includes('onAppSession') &&
+          (!this.reader || !record.row.manifest?.activation.includes('onReader'))
+        )
+          this.stop(record);
+        if (controllerResources('controller').workers < 4) break;
+      }
     requireStore(!this.options.off, 'PLUGINS_DISABLED');
     requireStore(!this.closed && row.enabled && row.manifest?.entries.controller, 'CONTROLLER_UNAVAILABLE');
     const previous = this.records.get(row.pluginId);
     if (previous?.row.revision === row.revision) return previous;
     if (previous) this.stop(previous);
     requireStore(this.faults.get(row.pluginId)?.revision !== row.revision, 'RECOVERY_REQUIRED');
-    requireStore(controllerResources().workers < 4, 'WORKER_LIMIT');
+    requireStore(controllerResources('controller').workers < 4, 'WORKER_LIMIT');
     this.faults.delete(row.pluginId);
     const record: Running = {
       row,
       ready: Promise.resolve(),
       active: false,
       stopped: false,
-      marked: false,
       configRevision: 0,
       views: 0,
       paintVersion: 0,
@@ -194,7 +207,6 @@ export class PluginService {
     const source = await this.store.loadEntry(session);
     this.guard(record);
     await this.store.startMarker(session);
-    record.marked = true;
     this.owners?.add(session.fence.instanceId);
     this.guard(record);
     const permissions = await this.store.sessionPermissions(session);
@@ -207,6 +219,7 @@ export class PluginService {
     const descriptor = await record.vm.invoke('describe', {
       commands: record.row.manifest!.contributes.commands,
       decorations: record.row.manifest!.contributes.decorations,
+      homeSections: record.row.manifest!.contributes.homeSections?.map((section) => section.id) ?? [],
       permissions,
     });
     this.guard(record);
@@ -226,7 +239,9 @@ export class PluginService {
     signal.throwIfAborted();
     requireStore(uiRecord(input), 'INVALID_ARGUMENT');
     let value: UiJson;
-    if (method === 'http.request' || method === 'http.cancel') {
+    if (method.startsWith('storage.')) {
+      value = await storageCall(this.store, session, method, input);
+    } else if (method === 'http.request' || method === 'http.cancel') {
       requireStore(this.options.http, 'HTTP_UNAVAILABLE');
       value = await this.options.http.controller(session, method, input, signal);
     } else if (
@@ -290,7 +305,7 @@ export class PluginService {
       value = await this.tasks.run(session, input.input as UiJson, signal);
     } else if (method === 'jobs.sleep') {
       requireStore(uiKeys(input, ['ms']) && uiInteger(input.ms, 0, 10000), 'INVALID_ARGUMENT');
-      await delay(input.ms, signal);
+      await sleepControllerJob(input.ms, signal);
       value = null;
     } else if (method === 'settings.get') {
       requireStore(uiKeys(input, []), 'INVALID_ARGUMENT');
@@ -372,6 +387,15 @@ export class PluginService {
         this.reconciliationRequested = false;
         const rows = await this.store.list();
         if (this.closed) return;
+        const key = JSON.stringify(
+          rows.map((row) => [row.pluginId, row.installationId, row.revision, row.enabled, row.active, row.tombstone]),
+        );
+        if (key !== this.installationKey) {
+          this.installationKey = key;
+          this.home.reconcile(rows);
+          this.version++;
+          this.listeners.forEach((listener) => listener());
+        }
         const binding = this.bindings.get();
         if (binding && !rows.some((row) => matchesReaderBinding(row, binding))) this.bindings.clear();
         for (const record of [...this.records.values()]) {
@@ -620,7 +644,13 @@ export class PluginService {
     this.appStarted = true;
     await this.reconcile();
     if (!first) return;
-    for (const r of this.records.values()) await this.event(r, 'app.ready');
+    for (const r of [...this.records.values()]) {
+      try {
+        await this.event(r, 'app.ready');
+      } catch {
+        this.stop(r, 'APP_READY_FAILED');
+      }
+    }
   }
   async setReader(present: boolean): Promise<void> {
     const previous = this.reader;
@@ -630,7 +660,11 @@ export class PluginService {
     await this.reconcile();
     for (const r of this.records.values()) {
       if (generation !== this.readerGeneration || this.closed) break;
-      await this.event(r, present ? (previous ? 'reader.contextChanged' : 'reader.entered') : 'reader.exited');
+      try {
+        await this.event(r, present ? (previous ? 'reader.contextChanged' : 'reader.entered') : 'reader.exited');
+      } catch {
+        this.stop(r, 'READER_EVENT_FAILED');
+      }
     }
   }
   async settings(id: string): Promise<{ schema: UiJson; config: UiJson }> {
@@ -638,6 +672,29 @@ export class PluginService {
     if (!this.options.off && row.enabled && row.manifest?.entries.controller) await this.ensure(row).ready;
     const config = await this.store.inspectConfig(id, row.revision);
     return { schema: (config?.schema ?? null) as unknown as UiJson, config: publicConfig(config) };
+  }
+  homeSections() {
+    return this.home.sections();
+  }
+  homeFeed(id: string, section: string, signal?: AbortSignal) {
+    return this.home.feed(id, section, signal);
+  }
+  homeCover(id: string, section: string, url: string, signal?: AbortSignal) {
+    return this.home.cover(id, section, url, signal);
+  }
+  private async invokeHomeFeed(row: Installation, section: string, signal?: AbortSignal): Promise<UiJson> {
+    const record = this.ensure(row);
+    if (!record.active) {
+      requireStore(row.manifest?.activation.includes('onHome'), 'NOT_ACTIVE');
+      await this.activate(record);
+    }
+    await this.store.assertSession(record.session!, record.session!.fence, 'home.feed');
+    this.guard(record);
+    const result = await record.vm!.invoke('homeFeed', { id: section }, signal);
+    await this.store.assertSession(record.session!, record.session!.fence, 'home.feed');
+    this.guard(record);
+    signal?.throwIfAborted();
+    return result;
   }
   async command(id: string, command: string, value: UiJson = null, signal?: AbortSignal): Promise<UiJson> {
     const row = await this.currentRow(id);
@@ -717,6 +774,8 @@ export class PluginService {
   async close(): Promise<void> {
     if (this.closed) return;
     this.closed = true;
+    this.home.close();
+    this.listeners.clear();
     this.actions?.close();
     this.actions = undefined;
     this.unbind();

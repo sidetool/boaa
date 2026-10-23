@@ -11,6 +11,7 @@ export function request<T>(req: IDBRequest<T>): Promise<T> {
 /** Shared transaction engine; callers may provide an isolated schema in another database. */
 export interface PluginDatabaseLayout {
   readonly stores: readonly string[];
+  readonly version?: number;
   initialize(db: IDBDatabase): void;
 }
 export class UiPluginDatabase {
@@ -29,7 +30,7 @@ export class UiPluginDatabase {
             let failed = false;
             const factory = this.factory ?? globalThis.indexedDB;
             if (!factory) throw new UiStoreError('STORAGE_UNAVAILABLE');
-            const req = factory.open(this.name, 1);
+            const req = factory.open(this.name, this.layout?.version ?? 1);
             const fail = () => {
               failed = true;
               this.database = undefined;

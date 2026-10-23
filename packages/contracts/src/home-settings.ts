@@ -16,9 +16,20 @@ export interface ReaderHomeSourceSection {
 /** Shared wire shape; kept independent of the web presentation layer. */
 export interface ReaderHomeRowConfig {
   id: string;
-  kind: 'recently-added' | 'unread' | 'finished' | 'favorites' | 'shelf' | 'external-updates' | 'discovery' | 'source';
+  kind:
+    | 'recently-added'
+    | 'unread'
+    | 'finished'
+    | 'favorites'
+    | 'shelf'
+    | 'external-updates'
+    | 'discovery'
+    | 'source'
+    | 'plugin';
   visible: boolean;
   shelfId?: string;
   discoveryTabId?: string;
   section?: ReaderHomeSourceSection;
+  pluginId?: string;
+  pluginSectionId?: string;
 }

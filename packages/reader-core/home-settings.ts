@@ -11,6 +11,7 @@ const kinds = new Set([
   'external-updates',
   'discovery',
   'source',
+  'plugin',
 ]);
 export const MAX_HOME_ROWS = 100;
 export const MAX_HOME_ROWS_BYTES = 512 * 1024;
@@ -49,7 +50,7 @@ export function normalizeHomeRows(value: unknown): HomeRows | undefined {
   const rows: HomeRows = [];
   for (const candidate of value.slice(0, MAX_HOME_ROWS)) {
     if (!candidate || typeof candidate !== 'object') continue;
-    const { id, kind, visible, shelfId, discoveryTabId } = candidate;
+    const { id, kind, visible, shelfId, discoveryTabId, pluginId, pluginSectionId } = candidate;
     if (
       typeof id !== 'string' ||
       id.length > 1024 ||
@@ -61,6 +62,15 @@ export function normalizeHomeRows(value: unknown): HomeRows | undefined {
       continue;
     if (kind === 'shelf' && (typeof shelfId !== 'string' || !shelfId.trim())) continue;
     if (kind === 'discovery' && (typeof discoveryTabId !== 'string' || !discoveryTabId.trim())) continue;
+    if (
+      kind === 'plugin' &&
+      (typeof pluginId !== 'string' ||
+        pluginId.length > 128 ||
+        !/^[a-z][a-z0-9]*(?:[.-][a-z0-9]+)+$/.test(pluginId) ||
+        typeof pluginSectionId !== 'string' ||
+        !/^[a-z][a-z0-9.-]{0,63}$/.test(pluginSectionId))
+    )
+      continue;
     const section = kind === 'source' ? normalizeHomeSourceSection(candidate.section) : undefined;
     if (kind === 'source' && !section) continue;
     ids.add(id);
@@ -71,6 +81,7 @@ export function normalizeHomeRows(value: unknown): HomeRows | undefined {
       ...(kind === 'shelf' ? { shelfId } : {}),
       ...(kind === 'discovery' ? { discoveryTabId } : {}),
       ...(section ? { section } : {}),
+      ...(kind === 'plugin' ? { pluginId, pluginSectionId } : {}),
     });
   }
   return new TextEncoder().encode(JSON.stringify(rows)).length <= MAX_HOME_ROWS_BYTES ? rows : undefined;

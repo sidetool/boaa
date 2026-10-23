@@ -1,6 +1,7 @@
 import type { ProductPluginSession } from '../../../extensions/platform/product-session';
 import type { Installation } from '../../../extensions/platform/store-model';
 import { usePluginConnectionModel } from '../../../extensions/platform/use-plugin-connection-model';
+import { pluginContributionLabel } from '../../../extensions/platform/plugin-presentation';
 import { Notice, PrefField, PrefFold, PrefSwitch } from '../../components/prefs';
 
 function Connection({ session, row, slot }: { session: ProductPluginSession; row: Installation; slot: string }) {
@@ -8,7 +9,9 @@ function Connection({ session, row, slot }: { session: ProductPluginSession; row
   const saved = model.saved;
   return (
     <PrefFold
-      title={`${slot} 외부 연결`}
+      title={
+        model.title ?? pluginContributionLabel('connection', slot, row.manifest?.contributes.connections ?? [slot])
+      }
       summary={saved ? `허락함 · ${saved.authenticated ? '키 보관 중' : '인증 없음'}` : '아직 허락 안 함'}
     >
       <form
@@ -20,7 +23,7 @@ function Connection({ session, row, slot }: { session: ProductPluginSession; row
       >
         <fieldset disabled={model.disabled}>
           <Notice>요청은 BOAA 서버에서 나가요. 본문 읽기 권한도 허락했다면 본문이 이 주소로 갈 수 있어요.</Notice>
-          <PrefField label="API 주소" help="/로 끝나는 API 경로를 적어 주세요.">
+          <PrefField label="연결 주소" help="플러그인 작성자가 안내한 주소를 사용하세요.">
             <input
               type="url"
               required
@@ -31,6 +34,11 @@ function Connection({ session, row, slot }: { session: ProductPluginSession; row
           </PrefField>
           <PrefField label="인증 방식">
             <select aria-label="인증 방식" value={model.auth} onChange={(event) => model.setAuth(event.target.value)}>
+              {saved?.authenticated && (
+                <option value="preserve" disabled={!model.canPreserve}>
+                  저장된 인증정보 유지
+                </option>
+              )}
               <option value="none">없음 (저장하면 보관한 키를 지워요)</option>
               <option value="bearer">Bearer 토큰</option>
               <option value="header">API 키 헤더</option>
@@ -41,7 +49,7 @@ function Connection({ session, row, slot }: { session: ProductPluginSession; row
               <input value={model.header} onChange={(event) => model.setHeader(event.target.value)} />
             </PrefField>
           )}
-          {model.auth !== 'none' && (
+          {['bearer', 'header'].includes(model.auth) && (
             <PrefField label="키" help="플러그인에는 키를 넘기지 않아요. 바꾸려면 다시 적어 주세요.">
               <input
                 aria-label="인증정보"
@@ -53,35 +61,44 @@ function Connection({ session, row, slot }: { session: ProductPluginSession; row
               />
             </PrefField>
           )}
-          <PrefField label="보낼 수 있는 일반 헤더" help="쉼표로 나눠요. 인증·쿠키·전송 제어 헤더는 적을 수 없어요.">
-            <input value={model.allowedHeaders} onChange={(event) => model.setAllowedHeaders(event.target.value)} />
-          </PrefField>
-          <div className="un-plugin-connection-choice">
-            <span>허락할 요청</span>
-            <div className="un-pref-chips" role="group" aria-label="허락할 요청">
-              {model.methodOptions.map((method) => (
-                <button
-                  key={method}
-                  type="button"
-                  aria-pressed={model.methods.includes(method)}
-                  className={`un-chip${model.methods.includes(method) ? ' is-active' : ''}`}
-                  onClick={() => model.setMethod(method, !model.methods.includes(method))}
-                >
-                  {method}
-                </button>
-              ))}
+          {model.auth === 'preserve' && !model.canPreserve && (
+            <Notice tone="warning">연결 주소를 바꾸려면 인증 방식을 선택하고 키를 다시 입력해 주세요.</Notice>
+          )}
+          <PrefFold title="고급 연결 설정">
+            <PrefField label="보낼 수 있는 일반 헤더" help="쉼표로 나눠요. 인증·쿠키·전송 제어 헤더는 적을 수 없어요.">
+              <input value={model.allowedHeaders} onChange={(event) => model.setAllowedHeaders(event.target.value)} />
+            </PrefField>
+            <div className="un-plugin-connection-choice">
+              <span>허락할 요청</span>
+              <div className="un-pref-chips" role="group" aria-label="허락할 요청">
+                {model.methodOptions.map((method) => (
+                  <button
+                    key={method}
+                    type="button"
+                    aria-pressed={model.methods.includes(method)}
+                    className={`un-chip${model.methods.includes(method) ? ' is-active' : ''}`}
+                    onClick={() => model.setMethod(method, !model.methods.includes(method))}
+                  >
+                    {method}
+                  </button>
+                ))}
+              </div>
             </div>
-          </div>
-          {model.roleOptions.map((role) => (
-            <PrefSwitch
-              key={role}
-              title={role === 'controller' ? '자동 작업·명령에서 쓰기' : '플러그인 화면에서 쓰기'}
-              checked={model.roles.includes(role)}
-              onChange={(on) => model.setRole(role, on)}
-            />
-          ))}
+            {model.roleOptions.map((role) => (
+              <PrefSwitch
+                key={role}
+                title={role === 'controller' ? '자동 작업·명령에서 쓰기' : '플러그인 화면에서 쓰기'}
+                checked={model.roles.includes(role)}
+                onChange={(on) => model.setRole(role, on)}
+              />
+            ))}
+          </PrefFold>
           <div className="un-plugin-actions">
-            <button type="submit" className="un-btn is-primary is-sm">
+            <button
+              type="submit"
+              className="un-btn is-primary is-sm"
+              disabled={model.auth === 'preserve' && !model.canPreserve}
+            >
               허락하고 저장
             </button>
             {saved && (

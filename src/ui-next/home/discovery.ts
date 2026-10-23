@@ -1,4 +1,5 @@
 import { sourceRowInput } from './source-row';
+import { sourceCachePolicy, sourcePageTime } from '../../external-sources/cache-policy';
 import {
   externalItemKeyId,
   type ExternalItemPage,
@@ -64,8 +65,8 @@ export function homeSourceSection(
 }
 
 interface Entry {
-  started: boolean;
   pending: boolean;
+  refreshAt?: number;
   page?: ExternalItemPage;
   error?: string;
 }
@@ -117,7 +118,6 @@ export class HomeDiscoveryLoader {
     let entry = this.entries.get(key);
     if (!entry) {
       entry = {
-        started: false,
         pending: false,
         page: validCachedPage(this.session.peek(section.sourceId, input)?.page),
       };
@@ -125,8 +125,7 @@ export class HomeDiscoveryLoader {
     }
     const current = entry;
     const load = (force: boolean) => {
-      if (current.pending || (!force && current.started)) return;
-      current.started = true;
+      if (current.pending || (!force && current.refreshAt && current.refreshAt > Date.now())) return;
       current.pending = true;
       current.error = undefined;
       this.changed();
@@ -160,6 +159,14 @@ export class HomeDiscoveryLoader {
           current.error = error instanceof Error ? error.message : '목록을 불러오지 못했습니다.';
         } finally {
           current.pending = false;
+          const ttl = sourceCachePolicy(
+            input,
+            false,
+            this.session.scope?.startsWith('hosted-account:') ? this.session.scope : undefined,
+          ).fresh;
+          current.refreshAt = current.error
+            ? Date.now() + 60_000
+            : Math.max(Date.now() + 60_000, sourcePageTime(current.page ?? { items: [] }) + ttl);
           this.changed();
         }
       })();
@@ -171,6 +178,11 @@ export class HomeDiscoveryLoader {
       ranked: section.mode === 'popular' && !section.filters?.length,
       status: current.page ? 'ready' : current.error ? 'failed' : 'loading',
       error: current.error,
+      loadKey: key,
+      refreshAt: current.refreshAt,
+      refreshing: current.pending,
+      updatedAt: current.page ? sourcePageTime(current.page) : undefined,
+      stale: Boolean(current.page && current.error),
       requestLoad: () => load(false),
       retry: () => load(true),
       openAll:

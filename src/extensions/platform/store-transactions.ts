@@ -57,6 +57,7 @@ interface Usage {
   configBytes: number;
   archiveBytes: number;
   installs: number;
+  storageBytes?: number;
 }
 export async function usage(tx: IDBTransaction): Promise<Usage> {
   return (

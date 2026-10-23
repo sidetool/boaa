@@ -5,7 +5,6 @@ import {
   usePluginViewModel,
   usePluginReaderInputModel,
 } from './use-platform-plugin-editor-models';
-import type { EntryRole, PlatformPermission } from '@boaa/extension-contracts/platform-package';
 import type { UiJson } from '@boaa/extension-contracts/ui-json';
 import { Dialog } from '../../shared/ui/Dialog';
 import { useProductPlugins } from './PlatformPluginProvider';
@@ -14,22 +13,17 @@ import type { ConfigRow, Installation } from './store-model';
 import type { SettingsField } from './settings-schema';
 import { usePlatformPluginSettingsModel } from './use-platform-plugin-settings-model';
 import type { PluginSettingsFailure } from './plugin-settings-failure';
+import {
+  PLUGIN_ACCOUNT_DESCRIPTION,
+  pluginCapabilities,
+  pluginCapabilityWarnings,
+  pluginConnectionAccess,
+  pluginContributionLabel,
+  pluginFaultText,
+  pluginHomeSectionTitles,
+} from './plugin-presentation';
 import './product-plugins.css';
-const labels: Record<PlatformPermission, string> = {
-  'http.request': '승인한 외부 서버로 요청·자료 전송 (본문 권한이 있으면 본문도 전송 가능)',
-  'settings.own': '자기 설정 읽기·변경',
-  'storage.own': '자기 저장 공간 사용',
-  'commands.register': '플러그인 명령 등록',
-  'ui.render': '자기 화면 표시',
-  'reader.content.visible': '현재 보이는 본문 읽기',
-  'reader.annotations.read': '현재 책의 북마크·하이라이트·메모 읽기',
-  'reader.annotations.write': '현재 책의 사용자 주석 생성·수정·삭제 (저장 후 플러그인을 꺼도 유지)',
-  'reader.state': '열린 독서 화면 상태 읽기',
-  'reader.control': '승인된 입력 중 자동 스크롤 제어',
-  'reader.input': '사용자가 연결한 독서 입력 받기',
-  'reader.content.book': '현재 열린 책 전체 본문 읽기',
-  'reader.decorations': '본문 색상·서식 표시',
-};
+
 const failure = (issue: PluginSettingsFailure) => {
   if (issue.code === 'migration_requires_disabled')
     return '설정을 이전하려면 먼저 플러그인을 끄고 파일을 다시 검토해 주세요.';
@@ -37,6 +31,11 @@ const failure = (issue: PluginSettingsFailure) => {
     return '플러그인은 중지했습니다. 서버 연결이 없어 보관된 연결 정보의 삭제는 확인하지 못했습니다.';
   if (issue.code === 'remove_revoke_failed')
     return '플러그인은 제거했습니다. 서버 연결이 없어 보관된 연결 정보의 삭제는 확인하지 못했습니다.';
+  if (issue.code === 'review_stale') return '플러그인이 변경됐거나 검토가 끝났습니다. 파일을 다시 선택해 주세요.';
+  if (issue.code === 'update_revoke_failed')
+    return '업데이트는 완료했습니다. 이전 외부 연결 정리는 확인하지 못했습니다.';
+  if (issue.code === 'connection_setup_failed')
+    return '플러그인은 설치했습니다. 아래 외부 서비스에서 연결을 다시 저장해 주세요.';
   if (issue.code === 'missing_config') return '작성자가 제공한 공통 설정이 없습니다. 플러그인 화면을 확인해 주세요.';
   return issue.cause instanceof Error ? issue.cause.message : '처리하지 못했습니다.';
 };
@@ -161,7 +160,7 @@ function PluginViewPanel({
   const { container, error: issue } = usePluginViewModel(session, id, view);
   const error = issue ? failure(issue) : '';
   return (
-    <Dialog open title={`${id} · ${view}`} closeLabel="플러그인 화면 닫기" onClose={close}>
+    <Dialog open title={pluginContributionLabel('view', view, [view])} closeLabel="플러그인 화면 닫기" onClose={close}>
       {error && <p role="alert">{error}</p>}
       <div className="product-plugin-view" ref={container} />
     </Dialog>
@@ -194,7 +193,9 @@ function ReaderInputSetting({ session, row }: { session: ProductPluginSession; r
         >
           <option value="">연결 안 함</option>
           {commands.map((c) => (
-            <option key={c}>{c}</option>
+            <option key={c} value={c}>
+              {pluginContributionLabel('command', c, commands)}
+            </option>
           ))}
         </select>
       </label>
@@ -219,12 +220,10 @@ function ReaderInputSetting({ session, row }: { session: ProductPluginSession; r
 export function PlatformPluginSettings() {
   const { session, message, retry } = useProductPlugins();
   return (
-    <section className="product-plugins" aria-label="JS 플러그인">
-      <h3>JS 플러그인</h3>
-      <p>
-        이 브라우저의 현재 계정에 설치합니다. 자동 플러그인은 설정창을 닫아도 동작합니다. 본문 서식은 현재 TXT·EPUB
-        읽기에서 지원합니다.
-      </p>
+    <section className="product-plugins" aria-label="플러그인">
+      <h3>플러그인</h3>
+      <p>{PLUGIN_ACCOUNT_DESCRIPTION}</p>
+      <p>홈과 읽기 화면의 기능을 추가합니다. 작품을 검색하고 가져오는 서비스는 소스 설정에서 관리하세요.</p>
       {message && <p role="status">{message}</p>}
       {session ? (
         <Installed key={session.instanceId} session={session} />
@@ -243,8 +242,6 @@ function Installed({ session }: { session: ProductPluginSession }) {
     busy,
     review,
     setReview,
-    grants,
-    setPermission,
     preserve,
     setPreserve,
     config,
@@ -260,15 +257,16 @@ function Installed({ session }: { session: ProductPluginSession }) {
     openConfig,
     reviewPrevious,
     acknowledge,
+    recoveryIds,
     command,
   } = usePlatformPluginSettingsModel(session);
   const error = issue ? failure(issue) : '';
   return (
     <>
       <label>
-        JS 또는 패키지 파일
+        플러그인 파일
         <input
-          aria-label="JS 플러그인 파일"
+          aria-label="플러그인 파일"
           type="file"
           accept=".js,.zip,.boaaext,.moyaext"
           disabled={busy || session.off}
@@ -286,34 +284,50 @@ function Installed({ session }: { session: ProductPluginSession }) {
           <strong>
             {review.manifest.extension.name} · {review.manifest.extension.version}
           </strong>
-          <p>{review.pluginId}</p>
-          <p>
-            {review.publisher ? `서명자: ${review.publisher}` : '서명되지 않은 파일'} · SHA-256{' '}
-            <code>{review.digest}</code>
-          </p>
-          <p>
-            실행 시점: {review.manifest.activation.join(', ')} · 저장 공간 {review.manifest.requestedAccess.storageKiB}{' '}
-            KiB
-          </p>
+          <details>
+            <summary>기술 정보</summary>
+            <p>
+              {review.pluginId} · {review.publisher ? `서명자: ${review.publisher}` : '서명되지 않은 파일'}
+            </p>
+            <p>
+              SHA-256 <code>{review.digest}</code>
+            </p>
+            <p>
+              실행 시점: {review.manifest.activation.join(', ')} · 저장 공간{' '}
+              {review.manifest.requestedAccess.storageKiB} KiB
+            </p>
+          </details>
           {review.publisherChanged && <p>서명자가 변경됩니다.</p>}
           {review.sourceChanged && <p>파일 출처가 변경됩니다.</p>}
           {review.downgrade && <p>이전 버전으로 되돌립니다.</p>}
           {review.sameVersionReplacement && <p>같은 버전 이름의 코드가 교체됩니다.</p>}
-          {Object.entries(review.manifest.entries).map(([role, entry]) => (
-            <fieldset key={role}>
-              <legend>{role}</legend>
-              {entry.permissions.length === 0 && <p>요청 권한 없음</p>}
-              {entry.permissions.map((permission) => (
-                <label className="product-plugin-toggle" key={permission}>
-                  <input
-                    type="checkbox"
-                    checked={grants[role as EntryRole]?.includes(permission) ?? false}
-                    onChange={(e) => setPermission(role as EntryRole, permission, e.target.checked)}
-                  />
-                  {labels[permission]}
-                </label>
-              ))}
-            </fieldset>
+          {pluginHomeSectionTitles(review.manifest).length > 0 && (
+            <p>
+              홈에 추가되는 목록: {pluginHomeSectionTitles(review.manifest).join(', ')}. 작품을 누르면 제목으로
+              검색합니다.
+            </p>
+          )}
+          <p>설치하면 다음 기능에 필요한 권한을 허용합니다.</p>
+          {pluginCapabilities(review.manifest).map((group) => (
+            <section key={group.title}>
+              <h4>{group.title}</h4>
+              <ul>
+                {group.details.map((detail) => (
+                  <li key={detail}>{detail}</li>
+                ))}
+              </ul>
+            </section>
+          ))}
+          {pluginCapabilityWarnings(review.manifest).map((warning) => (
+            <p key={warning} role="note">
+              {warning}
+            </p>
+          ))}
+          {review.manifest.connections?.map((connection) => (
+            <p key={connection.id}>
+              {connection.title} · {connection.endpoint} · {pluginConnectionAccess(connection.methods)} (
+              {connection.methods.join(', ')})
+            </p>
           ))}
           {review.expectedRevision > 0 && (
             <label className="product-plugin-toggle">
@@ -323,12 +337,12 @@ function Installed({ session }: { session: ProductPluginSession }) {
                 disabled={review.publisherChanged || review.sourceChanged}
                 onChange={(e) => setPreserve(e.target.checked)}
               />
-              기존 설정·저장 자료 유지 (변경 시 작성자의 이전 코드 실행)
+              기존 설정·저장 자료 유지
             </label>
           )}
           {!preserve && review.expectedRevision > 0 && <p>승인하면 기존 플러그인의 설정·저장 자료를 초기화합니다.</p>}
           <button type="button" className="primary-btn" disabled={busy || session.off} onClick={() => run(approve)}>
-            권한 승인하고 사용
+            {review.expectedRevision > 0 ? '확인하고 적용' : '확인하고 설치'}
           </button>
           <button type="button" className="ghost-btn" disabled={busy} onClick={() => setReview(undefined)}>
             검토 취소
@@ -345,9 +359,16 @@ function Installed({ session }: { session: ProductPluginSession }) {
             .filter((f) => f.id === row.pluginId)
             .map((f) => (
               <p role="status" key={f.code}>
-                {f.code} · 플러그인을 끈 뒤 복구할 수 있습니다.
+                {pluginFaultText(f.code)} 끈 뒤 다시 켜면 새로 시작해요. ({f.code})
               </p>
             ))}
+          {row.manifest && (
+            <p>
+              {pluginCapabilities(row.manifest)
+                .map((group) => group.title)
+                .join(' · ')}
+            </p>
+          )}
           <ReaderInputSetting session={session} row={row} />
           <PluginConnections session={session} row={row} />
           <div className="product-plugin-actions">
@@ -359,9 +380,11 @@ function Installed({ session }: { session: ProductPluginSession }) {
             >
               {row.enabled ? '끄기' : '권한 검토 후 켜기'}
             </button>
-            <button type="button" className="ghost-btn" disabled={busy} onClick={() => openConfig(row)}>
-              설정
-            </button>
+            {Object.values(row.manifest?.entries ?? {}).some((entry) => entry.permissions.includes('settings.own')) && (
+              <button type="button" className="ghost-btn" disabled={busy} onClick={() => openConfig(row)}>
+                설정
+              </button>
+            )}
             {row.previous && (
               <button
                 type="button"
@@ -372,7 +395,7 @@ function Installed({ session }: { session: ProductPluginSession }) {
                 이전 파일 검토
               </button>
             )}
-            {!row.enabled && (
+            {!row.enabled && recoveryIds.has(row.pluginId) && (
               <button type="button" className="ghost-btn" disabled={busy} onClick={() => acknowledge(row)}>
                 중단 기록 정리
               </button>
@@ -396,14 +419,14 @@ function Installed({ session }: { session: ProductPluginSession }) {
                   key={v}
                   onClick={() => setView({ id: row.pluginId, view: v })}
                 >
-                  {v} 열기
+                  {pluginContributionLabel('view', v, row.manifest!.contributes.views)}
                 </button>
               ))}
             {row.enabled &&
               !session.off &&
               row.manifest?.contributes.commands.map((c) => (
                 <button type="button" className="ghost-btn" key={c} disabled={busy} onClick={() => command(row, c)}>
-                  {c} 실행
+                  {pluginContributionLabel('command', c, row.manifest!.contributes.commands)}
                 </button>
               ))}
           </div>

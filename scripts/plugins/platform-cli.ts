@@ -6,17 +6,26 @@ import { readBoundedUiFile } from './ui-package';
 import { packPlatformProject } from './platform-package';
 import { verifyPlatformSingleJs } from '../../src/extensions/packages/platform-package';
 import { SOURCE_LIMIT } from '../../src/extensions/packages/platform-single-js';
+import { initializePlatformProject } from './platform-init';
 
 const usage =
-  'Usage: pnpm plugin:platform pack <prebuilt-folder> --out <new.boaaext> [--key <publisher.pem>] | check <package.boaaext> | check-js <plugin.js>';
+  'Usage: pnpm plugin:platform init <new-folder> --id org.example.plugin --name <name> | pack <prebuilt-folder> --out <new.boaaext> [--key <publisher.pem>] | check <package.boaaext> | check-js <plugin.js>';
 async function main() {
   const [command, input, ...rest] = process.argv.slice(2);
   if (!input || input.startsWith('--')) throw new Error(usage);
   const options = new Map<string, string>();
+  const allowed = command === 'init' ? ['--id', '--name'] : command === 'pack' ? ['--out', '--key'] : [];
   for (let i = 0; i < rest.length; i += 2) {
-    if (!['--out', '--key'].includes(rest[i]) || !rest[i + 1] || rest[i + 1].startsWith('--') || options.has(rest[i]))
+    if (!allowed.includes(rest[i]) || !rest[i + 1] || rest[i + 1].startsWith('--') || options.has(rest[i]))
       throw new Error(usage);
     options.set(rest[i], rest[i + 1]);
+  }
+  if (command === 'init' && options.size === 2) {
+    const manifest = await initializePlatformProject(input, options.get('--id')!, options.get('--name')!);
+    console.log(
+      JSON.stringify({ created: true, id: manifest.extension.id, version: manifest.extension.version }, null, 2),
+    );
+    return;
   }
   let verified;
   if (command === 'pack' && options.has('--out')) {

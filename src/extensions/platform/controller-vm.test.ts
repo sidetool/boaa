@@ -8,10 +8,10 @@ afterEach(() => {
   vi.useRealTimers();
   expect(controllerResources()).toEqual({ workers: 0, calls: 0 });
 });
-function fixture(broker = async () => null) {
+function fixture(broker = async () => null, role: PluginSession['role'] = 'controller') {
   const session: PluginSession = {
     handle: 'opaque',
-    role: 'controller',
+    role,
     fence: {
       installationId: 'i',
       digest: 'd',
@@ -60,6 +60,15 @@ it('limits simultaneous workers without allocating a fifth one', () => {
   for (let i = 0; i < 4; i++) fixture();
   expect(() => fixture()).toThrow('WORKER_LIMIT');
   expect(controllerResources().workers).toBe(4);
+});
+it('reserves independent temporary workers when four controllers are resident', () => {
+  for (let i = 0; i < 4; i++) fixture();
+  fixture(async () => null, 'task');
+  fixture(async () => null, 'task');
+  expect(controllerResources().workers).toBe(6);
+  expect(controllerResources('controller').workers).toBe(4);
+  expect(controllerResources('temporary').workers).toBe(2);
+  expect(() => fixture(async () => null, 'task')).toThrow('WORKER_LIMIT');
 });
 it('rejects a forged full fence and terminates before delivering a result', async () => {
   const { vm, emit, port } = fixture();
@@ -171,6 +180,25 @@ it.each([
     invocationId: 1,
     text: JSON.stringify({ method: 'reader.annotations.update', input: {} }),
   });
+  await vi.waitFor(() => expect(port.postMessage.mock.calls.some(([m]) => m.kind === 'reply')).toBe(true));
+  const reply = port.postMessage.mock.calls.find(([m]) => m.kind === 'reply')![0];
+  expect(JSON.parse(reply.text)).toEqual({ ok: false, code: expected });
+  emit({ kind: 'result', id: 1, text: '{"ok":true,"value":null}' });
+  await call;
+});
+
+it.each([
+  ['STORAGE_CONFLICT', 'STORAGE_CONFLICT'],
+  ['STATE_CONFLICT', 'STATE_CONFLICT'],
+  ['QUOTA_EXCEEDED', 'QUOTA_EXCEEDED'],
+  ['SECRET_DATABASE_DETAIL', 'HOST_REQUEST_DENIED'],
+])('lets storage callers recover from %s without exposing host internals', async (code, expected) => {
+  const { vm, emit, port } = fixture(async () => {
+    throw new UiStoreError(code);
+  });
+  emit({ kind: 'ready' });
+  const call = vm.invoke('command');
+  emit({ kind: 'rpc', id: 7, invocationId: 1, text: JSON.stringify({ method: 'storage.set', input: {} }) });
   await vi.waitFor(() => expect(port.postMessage.mock.calls.some(([m]) => m.kind === 'reply')).toBe(true));
   const reply = port.postMessage.mock.calls.find(([m]) => m.kind === 'reply')![0];
   expect(JSON.parse(reply.text)).toEqual({ ok: false, code: expected });

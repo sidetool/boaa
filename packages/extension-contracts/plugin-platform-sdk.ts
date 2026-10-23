@@ -1,5 +1,19 @@
 import type { UiJson } from './ui-json';
-/** G0 draft: JSON wire data only; not exported by the product SDK. */
+/** Stable, non-sensitive storage failures a guest can handle without inspecting host internals. */
+export function platformStorageError(code: unknown): code is string {
+  return (
+    typeof code === 'string' &&
+    [
+      'STORAGE_CONFLICT',
+      'STATE_CONFLICT',
+      'QUOTA_EXCEEDED',
+      'STORAGE_UNAVAILABLE',
+      'PERMISSION_DENIED',
+      'INVALID_ARGUMENT',
+    ].includes(code)
+  );
+}
+/** Host/runtime wire DTOs. Guest-facing API declarations live in platform-sdk.ts. */
 export interface PlatformFence {
   installationId: string;
   digest: string;

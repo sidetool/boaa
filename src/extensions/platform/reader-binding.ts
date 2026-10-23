@@ -45,6 +45,12 @@ export class ReaderBindings {
     this.listeners.forEach((fn) => fn());
   };
   get = () => this.value;
+  /** Trusted account preference hydration; no guest RPC can call this. */
+  restore(value: ReaderBinding | undefined) {
+    if (JSON.stringify(this.value) === JSON.stringify(value)) return;
+    this.value = value;
+    this.listeners.forEach((listener) => listener());
+  }
   subscribe = (listener: () => void) => {
     this.listeners.add(listener);
     return () => {

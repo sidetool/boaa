@@ -1,5 +1,6 @@
 import type { ProductPluginSession } from './product-session';
 import type { Installation } from './store-model';
+import { pluginContributionLabel } from './plugin-presentation';
 import { usePluginConnectionModel } from './use-plugin-connection-model';
 export function PluginConnections({ session, row }: { session: ProductPluginSession; row: Installation }) {
   const slots = row.manifest?.contributes.connections;
@@ -34,6 +35,8 @@ function Connection({ session, row, slot }: { session: ProductPluginSession; row
     setMethod,
     setRole,
     disabled,
+    title,
+    canPreserve,
   } = usePluginConnectionModel({ session, row, slot });
   const error =
     errorCode === 'load_failed'
@@ -50,7 +53,9 @@ function Connection({ session, row, slot }: { session: ProductPluginSession; row
       }}
     >
       <fieldset disabled={disabled}>
-        <legend>{slot} · 외부 연결</legend>
+        <legend>
+          {title ?? pluginContributionLabel('connection', slot, row.manifest?.contributes.connections ?? [slot])}
+        </legend>
         <p>
           요청은 BOAA 서버에서 나갑니다. 주소는 /로 끝나는 API 경로를 입력하세요. 본문 읽기 권한을 함께 승인하면 본문을
           이 서버로 보낼 수 있습니다.
@@ -61,7 +66,7 @@ function Connection({ session, row, slot }: { session: ProductPluginSession; row
           </p>
         )}
         <label>
-          API 주소
+          연결 주소
           <input
             type="url"
             required
@@ -73,6 +78,11 @@ function Connection({ session, row, slot }: { session: ProductPluginSession; row
         <label>
           인증 방식
           <select aria-label="인증 방식" value={auth} onChange={(e) => setAuth(e.target.value)}>
+            {saved?.authenticated && (
+              <option value="preserve" disabled={!canPreserve}>
+                저장된 인증정보 유지
+              </option>
+            )}
             <option value="none">없음 (저장 시 기존 키 제거)</option>
             <option value="bearer">Bearer 토큰</option>
             <option value="header">API 키 헤더</option>
@@ -84,7 +94,7 @@ function Connection({ session, row, slot }: { session: ProductPluginSession; row
             <input value={header} onChange={(e) => setHeader(e.target.value)} />
           </label>
         )}
-        {auth !== 'none' && (
+        {['bearer', 'header'].includes(auth) && (
           <label>
             인증정보
             <input
@@ -98,30 +108,36 @@ function Connection({ session, row, slot }: { session: ProductPluginSession; row
             <small>플러그인에는 키를 전달하지 않습니다. 변경하려면 다시 입력하세요.</small>
           </label>
         )}
-        <label>
-          허용할 일반 헤더
-          <input value={allowedHeaders} onChange={(e) => setAllowedHeaders(e.target.value)} />
-          <small>쉼표로 구분합니다. 인증·쿠키·전송 제어 헤더는 직접 지정할 수 없습니다.</small>
-        </label>
-        <fieldset>
-          <legend>허용할 요청</legend>
-          {methodOptions.map((m) => (
-            <label className="product-plugin-toggle" key={m}>
-              <input type="checkbox" checked={methods.includes(m)} onChange={(e) => setMethod(m, e.target.checked)} />
-              {m}
-            </label>
-          ))}
-        </fieldset>
-        <fieldset>
-          <legend>연결을 사용할 코드</legend>
-          {roleOptions.map((r) => (
-            <label className="product-plugin-toggle" key={r}>
-              <input type="checkbox" checked={roles.includes(r)} onChange={(e) => setRole(r, e.target.checked)} />
-              {r === 'controller' ? '자동 작업·명령' : '플러그인 화면'}
-            </label>
-          ))}
-        </fieldset>
-        <button type="submit" className="primary-btn">
+        {auth === 'preserve' && !canPreserve && (
+          <p>연결 주소를 바꾸려면 인증 방식을 선택하고 키를 다시 입력해 주세요.</p>
+        )}
+        <details>
+          <summary>고급 연결 설정</summary>
+          <label>
+            허용할 일반 헤더
+            <input value={allowedHeaders} onChange={(e) => setAllowedHeaders(e.target.value)} />
+            <small>쉼표로 구분합니다. 인증·쿠키·전송 제어 헤더는 직접 지정할 수 없습니다.</small>
+          </label>
+          <fieldset>
+            <legend>허용할 요청</legend>
+            {methodOptions.map((m) => (
+              <label className="product-plugin-toggle" key={m}>
+                <input type="checkbox" checked={methods.includes(m)} onChange={(e) => setMethod(m, e.target.checked)} />
+                {m}
+              </label>
+            ))}
+          </fieldset>
+          <fieldset>
+            <legend>연결을 사용할 코드</legend>
+            {roleOptions.map((r) => (
+              <label className="product-plugin-toggle" key={r}>
+                <input type="checkbox" checked={roles.includes(r)} onChange={(e) => setRole(r, e.target.checked)} />
+                {r === 'controller' ? '자동 작업·명령' : '플러그인 화면'}
+              </label>
+            ))}
+          </fieldset>
+        </details>
+        <button type="submit" className="primary-btn" disabled={auth === 'preserve' && !canPreserve}>
           연결 승인·저장
         </button>
         {saved && (

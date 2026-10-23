@@ -217,6 +217,7 @@ export function HomeEditor({ adapter }: { adapter: UiNextHomeAdapter }) {
               <span className="un-home-editor-text">
                 <b>{label}</b>
                 {row.kind === 'source' && row.section?.summary && <small>{row.section.summary}</small>}
+                {row.kind === 'plugin' && <small>플러그인 추천 · 누르면 제목으로 검색</small>}
               </span>
               {editable && (
                 <button

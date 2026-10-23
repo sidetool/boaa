@@ -370,6 +370,56 @@ describe('home rows and work menus', () => {
     }
   });
 
+  it('preserves supplied plugin ranks and names search actions correctly', () => {
+    const open = vi.fn();
+    const { root } = mount(
+      adapter({
+        rows: [
+          row({
+            config: {
+              id: 'plugin:fixture.ranking:today',
+              kind: 'plugin',
+              visible: true,
+              pluginId: 'fixture.ranking',
+              pluginSectionId: 'today',
+            },
+            title: '오늘의 인기',
+            ranked: true,
+            items: [3, undefined, 7].map((rank, index) => ({
+              kind: 'discovery',
+              key: String(index),
+              work: { id: String(index), title: `작품 ${index}`, rank, actionLabel: '검색', open },
+            })),
+          }),
+        ],
+      }),
+    );
+    const section = byRole(root, 'region', '오늘의 인기');
+    const ranks = section
+      .findAll((node) => node.type === 'span' && String(node.props.className).startsWith('un-poster-rank'))
+      .map((node) => node.children.join(''));
+    expect(ranks).toEqual(['3', '7']);
+    click(byRole(section, 'button', '작품 0 검색'));
+    expect(open).toHaveBeenCalledOnce();
+  });
+
+  it('keeps home editing accessible when the only plugin row is hidden', () => {
+    const { root } = mount(
+      adapter({
+        config: [
+          {
+            id: 'plugin:fixture.ranking:today',
+            kind: 'plugin',
+            visible: false,
+            pluginId: 'fixture.ranking',
+            pluginSectionId: 'today',
+          },
+        ],
+      }),
+    );
+    expect(byRole(root, 'button', '홈 화면 편집')).toBeDefined();
+  });
+
   it('opens a tile menu and runs its action through the real sheet', () => {
     const item = book();
     const run = vi.fn();

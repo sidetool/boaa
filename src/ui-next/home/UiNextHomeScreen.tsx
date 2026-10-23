@@ -238,7 +238,9 @@ export function UiNextHomeScreen({ adapter }: UiNextHomeScreenProps) {
   const close = () => setSheet(null);
   useNavigationScroll(scrollRef, 'ui-next-home', adapter.status === 'ready');
 
-  const rows = adapter.rows.filter((row) => row.status !== 'ready' || row.items.length > 0);
+  const rows = adapter.rows.filter(
+    (row) => row.status !== 'ready' || row.items.length > 0 || row.config.kind === 'plugin' || row.error,
+  );
   const empty = adapter.status === 'ready' && adapter.hero.length === 0 && rows.length === 0;
   const { library } = adapter;
 
@@ -251,7 +253,14 @@ export function UiNextHomeScreen({ adapter }: UiNextHomeScreenProps) {
 
   const renderItem = (row: HomeRowView, entry: HomeRowItem, index: number) => {
     if (entry.kind === 'discovery')
-      return <DiscoveryCard key={entry.key} work={entry.work} ranked={row.ranked} rank={index + 1} />;
+      return (
+        <DiscoveryCard
+          key={entry.key}
+          work={entry.work}
+          ranked={row.ranked && (row.config.kind !== 'plugin' || entry.work.rank !== undefined)}
+          rank={entry.work.rank ?? index + 1}
+        />
+      );
     const { item } = entry;
     return (
       <WorkTile
@@ -297,8 +306,10 @@ export function UiNextHomeScreen({ adapter }: UiNextHomeScreenProps) {
                       </button>
                     )}
                   </p>
-                ) : (
+                ) : row.items.length ? (
                   row.items.map((entry, index) => renderItem(row, entry, index))
+                ) : (
+                  <p className="un-row-note">표시할 작품이 없어요.</p>
                 )}
               </HomeRow>
             ))}
@@ -306,7 +317,7 @@ export function UiNextHomeScreen({ adapter }: UiNextHomeScreenProps) {
         </>
       )}
 
-      {adapter.status === 'ready' && !empty && (
+      {adapter.status === 'ready' && (!empty || adapter.config.some((row) => row.kind === 'plugin')) && (
         <div className="un-home-edit">
           <button type="button" className="un-btn is-ghost" onClick={() => setSheet({ kind: 'edit' })}>
             <Pencil size={16} />홈 화면 편집

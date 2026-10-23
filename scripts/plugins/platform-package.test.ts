@@ -26,6 +26,27 @@ async function fixture() {
 const exec = promisify(execFile);
 const loader = resolve('apps/server/node_modules/tsx/dist/cli.mjs');
 const cli = resolve('scripts/plugins/platform-cli.ts');
+it('scaffolds an offline home plugin that validates as both a single JS and a package without overwriting', async () => {
+  const parent = await mkdtemp(resolve(tmpdir(), 'boaa-platform-init-'));
+  dirs.push(parent);
+  const options = { cwd: parent, timeout: 30000 };
+  const args = [loader, cli, 'init', 'example', '--id', 'org.example.feed', '--name', '추천 목록'];
+  const result = await exec(process.execPath, args, options);
+  expect(JSON.parse(result.stdout)).toMatchObject({ created: true, id: 'org.example.feed' });
+  const source = await readFile(resolve(parent, 'example/dist/controller.js'));
+  expect(inspectSingleJs(source).manifest.contributes.homeSections).toEqual([
+    { id: 'popular', title: '오늘의 인기 작품' },
+  ]);
+  const pack = await packPlatformProject(resolve(parent, 'example'));
+  expect(pack.manifest.activation).toEqual(['onHome']);
+  expect(pack.sources['dist/controller.js']).toContain("ctx.home.register('popular'");
+  await expect(exec(process.execPath, args, options)).rejects.toMatchObject({ code: 1 });
+  expect(await readFile(resolve(parent, 'example/dist/controller.js'))).toEqual(source);
+  await expect(
+    exec(process.execPath, [loader, cli, 'init', 'invalid', '--id', '../bad', '--name', 'Example'], options),
+  ).rejects.toMatchObject({ code: 1 });
+  await expect(readFile(resolve(parent, 'invalid/manifest.json'))).rejects.toMatchObject({ code: 'ENOENT' });
+}, 30000);
 it('packs prebuilt bytes and supports offline publisher verification', async () => {
   const dir = await fixture();
   const { folder } = await generatePublisherKey(resolve(dir, 'key'));

@@ -1,6 +1,7 @@
 import type { HomeDiscoverySection } from './discovery';
-import { normalizeHomeRows } from '@boaa/reader-core/settings';
+import { MAX_HOME_ROWS, normalizeHomeRows } from '@boaa/reader-core/settings';
 import type { HomeRowConfig, HomeRowOption } from './contract';
+import { pluginHomeRowId, type HomePluginSection } from './plugin-home';
 
 const choices: HomeRowOption[] = [
   { kind: 'recently-added', label: '최근 추가한 작품', hint: '최근에 서재에 추가한 작품' },
@@ -16,18 +17,49 @@ export function defaultHomeRows(): HomeRowConfig[] {
     visible: true,
   }));
 }
+/** A saved hidden row is also the tombstone for a removed automatic plugin row. */
+export function appendPluginHomeRows(
+  config: readonly HomeRowConfig[] | undefined,
+  plugins: readonly HomePluginSection[],
+): HomeRowConfig[] {
+  const rows = normalizeHomeRows(config) ?? defaultHomeRows();
+  for (const plugin of plugins) {
+    if (rows.length >= MAX_HOME_ROWS) break;
+    if (
+      rows.some(
+        (row) => row.kind === 'plugin' && row.pluginId === plugin.pluginId && row.pluginSectionId === plugin.section.id,
+      )
+    )
+      continue;
+    rows.push({
+      id: pluginHomeRowId(plugin.pluginId, plugin.section.id),
+      kind: 'plugin',
+      visible: true,
+      pluginId: plugin.pluginId,
+      pluginSectionId: plugin.section.id,
+    });
+    if (!normalizeHomeRows(rows)) {
+      rows.pop();
+      break;
+    }
+  }
+  return rows;
+}
 /** Missing shelves are filtered from the view, never destructively saved during bootstrap. */
 export function resolveHomeRows(
   config: readonly HomeRowConfig[] | undefined,
   shelves: readonly { id: string }[],
   discovery: readonly HomeDiscoverySection[] = [],
   sources: readonly { id: string }[] = [],
+  plugins: readonly HomePluginSection[] = [],
 ): HomeRowConfig[] {
-  return (normalizeHomeRows(config) ?? defaultHomeRows()).filter(
+  return appendPluginHomeRows(config, plugins).filter(
     (row) =>
       (row.kind !== 'shelf' || shelves.some((shelf) => shelf.id === row.shelfId)) &&
       (row.kind !== 'discovery' || discovery.some((list) => list.id === row.discoveryTabId)) &&
-      (row.kind !== 'source' || sources.some((source) => source.id === row.section?.sourceId)),
+      (row.kind !== 'source' || sources.some((source) => source.id === row.section?.sourceId)) &&
+      (row.kind !== 'plugin' ||
+        plugins.some((plugin) => plugin.pluginId === row.pluginId && plugin.section.id === row.pluginSectionId)),
   );
 }
 export function homeRowOptions(
@@ -62,7 +94,13 @@ export function homeRowLabel(
   row: HomeRowConfig,
   shelves: readonly { id: string; name: string }[],
   discovery: readonly HomeDiscoverySection[] = [],
+  plugins: readonly HomePluginSection[] = [],
 ): string {
+  if (row.kind === 'plugin')
+    return (
+      plugins.find((plugin) => plugin.pluginId === row.pluginId && plugin.section.id === row.pluginSectionId)?.section
+        .title ?? '플러그인 목록'
+    );
   if (row.kind === 'source') return row.section?.title ?? '';
   // Same title the home screen shows above the row ("네이버 웹툰 · 인기"), not just the source name.
   if (row.kind === 'discovery') return discovery.find((list) => list.id === row.discoveryTabId)?.title ?? '탐색';
@@ -79,6 +117,10 @@ export function mergeHomeRowEdits(
 ): HomeRowConfig[] {
   const next = normalizeHomeRows(edited) ?? [];
   const editableIds = new Set(editable.map((row) => row.id));
+  for (const row of editable) {
+    if (row.kind === 'plugin' && !next.some((candidate) => candidate.id === row.id))
+      next.push({ ...row, visible: false });
+  }
   for (const [index, row] of (normalizeHomeRows(saved) ?? defaultHomeRows()).entries()) {
     if (!editableIds.has(row.id) && !next.some((candidate) => candidate.id === row.id))
       next.splice(Math.min(index, next.length), 0, row);

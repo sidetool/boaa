@@ -13,6 +13,9 @@ import {
 import { requestCookie, SELF_HOST_SESSION_COOKIE } from '../auth-cookie';
 import type { ServerConfig } from '../config';
 import { pluginScope } from '../plugins/plugin-scope.js';
+import { pluginCoverTransport } from '../plugins/cover-transport.js';
+import { resolvePluginRequestOrigin } from '../plugins/plugin-origin.js';
+import { requirePluginConnectionAuthority } from '../plugins/plugin-connection-authority.js';
 import { loadProviderSecretMasterKey } from '../providers/server-provider-secrets';
 import {
   approvePluginEndpoint,
@@ -40,18 +43,18 @@ const values = (a: string, o: PluginHttpOwner) => [a, o.profileId, o.installatio
 const where =
   "account_id=$1 and profile_id=$2 and installation_id=$3 and digest=$4 and generation=$5 and scope_key=(select server_id::text||':'||library_id::text from plugin_deployment_identity where singleton_key=1)";
 export function registerPluginConnectionRoutes(app: FastifyInstance, config: ServerConfig, pool: pg.Pool) {
-  if (!config.pluginOrigin) return;
   const allowed = privateOrigins(config.pluginPrivateOrigins ?? '[]');
-  const pending = new Map<string, AbortController>();
+  const pending = new Map<string, { controller: AbortController; owner: PluginHttpOwner }>();
   const seen = new Map<string, number>();
   const identity = async (req: FastifyRequest) => {
     // All endpoints require a same-origin host POST and a real account cookie.
-    assert(req.headers.origin === config.pluginOrigin && req.headers['x-boaa-plugin-host'] === '1');
+    const origin = resolvePluginRequestOrigin(req, config);
+    assert(req.headers.origin === origin && req.headers['x-boaa-plugin-host'] === '1');
     const token = requestCookie(req, SELF_HOST_SESSION_COOKIE);
     assert(token && token.length <= 512);
     const scope = await pluginScope(pool, token!, requireUserId(req));
     assert(scope);
-    return scope!;
+    return { ...scope!, origin };
   };
   const seal = (text: string, aad: string) => {
     const iv = randomBytes(12),
@@ -70,8 +73,13 @@ export function registerPluginConnectionRoutes(app: FastifyInstance, config: Ser
   };
   const prefix = (account: string, owner: PluginHttpOwner) =>
     JSON.stringify([account, owner.profileId, owner.installationId]) + ':';
-  const abortConnections = (account: string, owner: PluginHttpOwner) => {
-    for (const [key, abort] of pending) if (key.startsWith(prefix(account, owner))) abort.abort();
+  const abortConnections = (account: string, owner: PluginHttpOwner, exact = false) => {
+    for (const [key, request] of pending)
+      if (
+        key.startsWith(prefix(account, owner)) &&
+        (!exact || (request.owner.digest === owner.digest && request.owner.generation === owner.generation))
+      )
+        request.controller.abort();
   };
   app.post('/api/plugins/connections/:action', { bodyLimit: 48 * 1024 }, async (req, reply) => {
     reply.header('Cache-Control', 'no-store');
@@ -99,14 +107,27 @@ export function registerPluginConnectionRoutes(app: FastifyInstance, config: Ser
       if (action === 'revoke') {
         assert(uiKeys(body, ['owner'], ['slot']) && (body.slot === undefined || pluginSlot(body.slot)));
         await pool.query(
-          `delete from plugin_connections where account_id=$1 and profile_id=$2 and installation_id=$3 ${body.slot === undefined ? '' : 'and slot=$4'}`,
-          [...args.slice(0, 3), ...(body.slot === undefined ? [] : [body.slot])],
+          `delete from plugin_connections where ${where} ${body.slot === undefined ? '' : 'and slot=$6'}`,
+          [...args, ...(body.slot === undefined ? [] : [body.slot])],
         );
-        abortConnections(scope.accountId, owner);
+        abortConnections(scope.accountId, owner, true);
+        return { ok: true };
+      }
+      if (action === 'retire') {
+        assert(uiKeys(body, ['owner']));
+        await pool.query(`delete from plugin_connections where ${where}`, args);
+        abortConnections(scope.accountId, owner, true);
         return { ok: true };
       }
       if (action === 'approve') {
-        assert(uiKeys(body, ['owner', 'slot', 'endpoint', 'roles', 'methods', 'headers', 'auth']));
+        assert(
+          uiKeys(body, ['owner', 'slot', 'endpoint', 'roles', 'methods', 'headers', 'auth'], ['expectedRevision']),
+        );
+        assert(
+          body.expectedRevision === undefined ||
+            body.expectedRevision === null ||
+            typeof body.expectedRevision === 'string',
+        );
         assert(pluginSlot(body.slot) && typeof body.endpoint === 'string');
         assert(
           Array.isArray(body.roles) &&
@@ -125,12 +146,13 @@ export function registerPluginConnectionRoutes(app: FastifyInstance, config: Ser
             body.headers.length <= 16 &&
             body.headers.every((h) => typeof h === 'string' && /^[a-z][a-z0-9-]{0,63}$/.test(h)),
         );
-        assert(uiRecord(body.auth) && uiKeys(body.auth, ['kind'], ['header', 'value']));
+        assert(uiRecord(body.auth) && uiKeys(body.auth, ['kind'], ['header', 'value', 'revision']));
         const auth = body.auth as Record<string, unknown>;
-        assert(['none', 'bearer', 'header'].includes(String(auth.kind)));
+        assert(['none', 'bearer', 'header', 'preserve'].includes(String(auth.kind)));
         let header: string | null = null,
           secret: string | null = null;
-        if (auth.kind !== 'none') {
+        if (auth.kind === 'preserve') assert(typeof auth.revision === 'string' && uiKeys(auth, ['kind', 'revision']));
+        else if (auth.kind !== 'none') {
           assert(
             typeof auth.value === 'string' &&
               auth.value.length > 0 &&
@@ -141,13 +163,20 @@ export function registerPluginConnectionRoutes(app: FastifyInstance, config: Ser
           assert(credentialHeaderAllowed(header));
           secret = auth.kind === 'bearer' ? `Bearer ${auth.value}` : String(auth.value);
         }
-        await approvePluginEndpoint(String(body.endpoint), config.pluginOrigin!, allowed, undefined, config.port);
+        await requirePluginConnectionAuthority(pool, scope, owner, String(body.slot), body.roles as string[]);
+        await approvePluginEndpoint(String(body.endpoint), scope.origin, allowed, undefined, config.port);
         await identity(req);
         const id = randomUUID(),
           revision = randomUUID();
         const client = await pool.connect();
         try {
           await client.query('begin');
+          // Serialize consent with the account state CAS, which retires old connections atomically.
+          await client.query(
+            'select revision from plugin_state_versions where account_id=$1 and library_id=$2 for update',
+            [scope.accountId, scope.libraryId],
+          );
+          await requirePluginConnectionAuthority(client, scope, owner, String(body.slot), body.roles as string[]);
           await client.query('select account_id from plugin_account_identity where account_id=$1 for update', [
             scope.accountId,
           ]);
@@ -155,10 +184,25 @@ export function registerPluginConnectionRoutes(app: FastifyInstance, config: Ser
             'select count(*) from plugin_connections where account_id=$1',
             [scope.accountId],
           );
-          const existing = await client.query(
-            'select slot from plugin_connections where account_id=$1 and profile_id=$2 and installation_id=$3',
+          const existing = await client.query<Connection>(
+            'select * from plugin_connections where account_id=$1 and profile_id=$2 and installation_id=$3 for update',
             args.slice(0, 3),
           );
+          const previous = existing.rows.find((r) => r.slot === body.slot);
+          if (body.expectedRevision !== undefined) assert((previous?.revision ?? null) === body.expectedRevision);
+          if (auth.kind === 'preserve') {
+            assert(
+              previous &&
+                previous.revision === auth.revision &&
+                previous.digest === owner.digest &&
+                Number(previous.generation) === owner.generation &&
+                previous.encrypted_secret &&
+                previous.auth_header &&
+                new URL(previous.endpoint).href === new URL(String(body.endpoint)).href,
+            );
+            header = previous!.auth_header;
+            secret = open(previous!.encrypted_secret!, `${scope.accountId}:${previous!.id}:${previous!.revision}`);
+          }
           assert(
             existing.rows.some((r) => r.slot === body.slot) ||
               (Number(count.rows[0].count) < 128 && existing.rows.length < 8),
@@ -188,6 +232,69 @@ export function registerPluginConnectionRoutes(app: FastifyInstance, config: Ser
         abortConnections(scope.accountId, owner);
         return { ok: true };
       }
+      if (action === 'cover') {
+        assert(uiKeys(body, ['owner', 'url']) && typeof body.url === 'string' && body.url.length <= 2048);
+        const target = new URL(String(body.url));
+        const load = async () => {
+          const current = await identity(req);
+          assert(current.accountId === scope.accountId && current.libraryId === scope.libraryId);
+          const rows = await pool.query<Connection>(`select * from plugin_connections where ${where}`, args);
+          const row = rows.rows.find((connection) => {
+            const base = new URL(connection.endpoint);
+            return (
+              connection.roles.includes('controller') &&
+              connection.methods.includes('GET') &&
+              target.origin === base.origin &&
+              target.pathname.startsWith(base.pathname)
+            );
+          });
+          assert(row);
+          await requirePluginConnectionAuthority(pool, scope, owner, row!.slot, ['controller']);
+          return row!;
+        };
+        assert(
+          pending.size < 16 &&
+            [...pending.keys()].filter((key) => key.startsWith(prefix(scope.accountId, owner))).length < 4,
+        );
+        const key = prefix(scope.accountId, owner) + randomUUID(),
+          controller = new AbortController();
+        pending.set(key, { controller, owner });
+        const timeout = setTimeout(() => controller.abort(), 10000);
+        let checking = false;
+        const poll = setInterval(() => {
+          if (checking) return;
+          checking = true;
+          void load()
+            .catch(() => controller.abort())
+            .finally(() => {
+              checking = false;
+            });
+        }, 250);
+        const disconnect = () => {
+          if (!reply.raw.writableEnded) controller.abort();
+        };
+        reply.raw.on('close', disconnect);
+        try {
+          const row = await load();
+          const result = await pluginCoverTransport(
+            String(body.url),
+            row.endpoint,
+            scope.origin,
+            controller.signal,
+            async () => {
+              assert((await load()).revision === row.revision);
+            },
+          );
+          const current = await load();
+          assert(current.revision === row.revision);
+          return result;
+        } finally {
+          clearTimeout(timeout);
+          clearInterval(poll);
+          reply.raw.off('close', disconnect);
+          pending.delete(key);
+        }
+      }
       assert(action === 'request' || action === 'cancel');
       assert(typeof body.requestId === 'string' && /^[a-f0-9-]{36}$/.test(body.requestId));
       const key = prefix(scope.accountId, owner) + body.requestId;
@@ -197,7 +304,7 @@ export function registerPluginConnectionRoutes(app: FastifyInstance, config: Ser
       if (action === 'cancel') {
         assert(uiKeys(body, ['owner', 'requestId']));
         seen.set(key, now + 60000); // Prevent a reordered request arriving after cancellation.
-        pending.get(key)?.abort();
+        pending.get(key)?.controller.abort();
         return { ok: true };
       }
       assert(uiKeys(body, ['owner', 'requestId', 'role', 'revision', 'request']) && pluginHttpRequest(body.request));
@@ -217,10 +324,11 @@ export function registerPluginConnectionRoutes(app: FastifyInstance, config: Ser
         );
         const row = result.rows[0];
         assert(row && row.roles.includes(String(body.role)) && row.methods.includes(input.method));
+        await requirePluginConnectionAuthority(pool, scope, owner, input.slot, [String(body.role)]);
         return row;
       };
       const controller = new AbortController();
-      pending.set(key, controller);
+      pending.set(key, { controller, owner });
       const timeout = setTimeout(() => controller.abort(), 20000);
       let checking = false;
       const poll = setInterval(() => {
@@ -249,7 +357,7 @@ export function registerPluginConnectionRoutes(app: FastifyInstance, config: Ser
           input,
           row.endpoint,
           credential,
-          config.pluginOrigin!,
+          scope.origin,
           allowed,
           row.headers,
           config.port,
@@ -269,6 +377,6 @@ export function registerPluginConnectionRoutes(app: FastifyInstance, config: Ser
     }
   });
   app.addHook('onClose', async () => {
-    for (const controller of pending.values()) controller.abort();
+    for (const { controller } of pending.values()) controller.abort();
   });
 }

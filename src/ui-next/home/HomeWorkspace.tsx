@@ -1,8 +1,10 @@
 import { withSourceMetadata } from '../../features/library/library-source-metadata';
 import { homeSourceContinuity } from './source-continuity';
 import { useHomeDiscovery } from './useHomeDiscovery';
+import { usePluginHome } from './usePluginHome';
+import { appendPluginHomeRows } from './config';
 
-import { useMemo } from 'react';
+import { useEffect, useMemo } from 'react';
 import {
   BookWorkspaceScreens,
   type BookWorkspaceScreensProps,
@@ -23,6 +25,16 @@ function NextHomeWorkspace({
   const { projection, externalSources, libraryManagement } = props;
   const { settings, updateSettings } = homeSettings;
   const discoveryRows = useHomeDiscovery(props);
+  const pluginRows = usePluginHome();
+  useEffect(() => {
+    if (!pluginRows?.sections.length) return;
+    const next = appendPluginHomeRows(settings.homeRows, pluginRows.sections);
+    if (JSON.stringify(next) === JSON.stringify(settings.homeRows)) return;
+    updateSettings((previous) => {
+      const homeRows = appendPluginHomeRows(previous.homeRows, pluginRows.sections);
+      return JSON.stringify(homeRows) === JSON.stringify(previous.homeRows) ? previous : { ...previous, homeRows };
+    });
+  }, [pluginRows?.sections, settings.homeRows, updateSettings]);
   const sourceContinuity = useMemo(
     () =>
       homeSourceContinuity({
@@ -36,6 +48,7 @@ function NextHomeWorkspace({
     () => ({
       search: { discovery: props.discovery, externalSources, controller: props.controller, preferences: homeSettings },
       discoveryRows,
+      pluginRows,
       sourcePositions: sourceContinuity.positions,
       books: [...projection.libraryCollection.booksByNovelId.values()].map((book) =>
         withSourceProgress(
@@ -92,6 +105,7 @@ function NextHomeWorkspace({
     }),
     [
       discoveryRows,
+      pluginRows,
       props.discovery,
       props.controller,
       externalSources,

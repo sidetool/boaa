@@ -14,7 +14,7 @@ interface ProductPlugins {
   retry(): void;
 }
 const Context = createContext<ProductPlugins>({
-  message: '이 환경에서는 JS 플러그인을 사용할 수 없습니다.',
+  message: '플러그인을 사용하려면 서버에 로그인해 주세요.',
   retry() {},
 });
 export const useProductPlugins = () => useContext(Context);
@@ -78,15 +78,37 @@ export function PlatformPluginProvider({ runtime, children }: { runtime: ReaderR
           fail('계정 또는 서버 정보가 바뀌었습니다. 플러그인을 중지했습니다. 다시 확인해 주세요.');
           return;
         }
+        await session!.database?.refresh();
+        if (disposed) return;
+        setState({
+          session,
+          owner,
+          message: session!.off
+            ? '안전 모드: 플러그인 실행이 중지되어 있습니다.'
+            : session!.persistenceError || session!.migrationNotice || '',
+        });
         timer = setTimeout(() => void check(), 5000);
-      } catch {
-        if (!disposed) fail('인증 상태를 확인할 수 없어 플러그인을 중지했습니다.');
+      } catch (error) {
+        if (disposed) return;
+        if (
+          error instanceof Error &&
+          ['PLUGIN_ACCOUNT_UNAVAILABLE', 'PLUGIN_DEPLOYMENT_MISMATCH'].includes(error.message)
+        ) {
+          fail('로그인 상태가 바뀌어 플러그인을 중지했습니다.');
+        } else {
+          setState({
+            session,
+            owner,
+            message: '서버에 다시 연결하는 중입니다. 저장과 새 목록 조회는 연결 후 사용할 수 있어요.',
+          });
+          timer = setTimeout(() => void check(), 5000);
+        }
       }
     };
     const start = async () => {
       setState({ message: '플러그인 환경 확인 중' });
       if (!account || runtime.mode !== 'remote' || runtime.managedByDesktop) {
-        fail('JS 플러그인은 로그인한 self-host 브라우저에서 지원합니다.');
+        fail('플러그인은 서버에 로그인한 브라우저에서 사용할 수 있습니다.');
         return;
       }
       try {
@@ -104,11 +126,18 @@ export function PlatformPluginProvider({ runtime, children }: { runtime: ReaderR
         )
           throw new Error('PLUGIN_DEPLOYMENT_MISMATCH');
         session = new ProductPluginSession(deployment, window, runtime.session?.fetch.bind(runtime.session));
+        await session.prepare?.();
+        if (disposed) return;
         await session.store.finishRetirements();
         if (disposed) return;
         await session.service.startSession();
+        await session.refreshBinding?.();
         if (disposed) return;
-        setState({ session, owner, message: session.off ? '안전 모드: 플러그인 실행이 중지되어 있습니다.' : '' });
+        setState({
+          session,
+          owner,
+          message: session.off ? '안전 모드: 플러그인 실행이 중지되어 있습니다.' : session.migrationNotice || '',
+        });
         timer = setTimeout(() => void check(), 5000);
       } catch (error) {
         if (!disposed) fail(error instanceof Error ? error.message : '플러그인을 준비하지 못했습니다.');

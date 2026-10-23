@@ -58,7 +58,7 @@ it('restores saved values, derives choices and submits approval and revocation w
   expect(state.model.endpoint).toBe(saved.endpoint);
   expect(state.model.allowedHeaders).toBe('accept');
   expect(state.model.secret).toBe('');
-  expect(state.model.auth).toBe('none');
+  expect(state.model.auth).toBe('preserve');
   expect(state.model.methodOptions).toEqual(PLUGIN_HTTP_METHODS);
   expect(state.model.roleOptions).toEqual(['controller']);
   act(() => {
@@ -92,6 +92,7 @@ it('restores saved values, derives choices and submits approval and revocation w
     headers: ['accept', 'content-type'],
     roles: ['controller'],
     auth: { kind: 'header', header: 'x-token', value: 'private-key' },
+    expectedRevision: saved.revision,
   });
   await act(async () => {
     finish();

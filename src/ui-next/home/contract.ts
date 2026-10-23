@@ -7,7 +7,15 @@ import type { UiNextLibraryAdapter, LibraryProgress } from '../library/contract'
 
 /** Rows the reader can place on the home screen. The hero always shows recently read works. */
 export type HomeRowKind =
-  'recently-added' | 'unread' | 'finished' | 'favorites' | 'shelf' | 'external-updates' | 'discovery' | 'source';
+  | 'recently-added'
+  | 'unread'
+  | 'finished'
+  | 'favorites'
+  | 'shelf'
+  | 'external-updates'
+  | 'discovery'
+  | 'source'
+  | 'plugin';
 
 export interface HomeSourceRowSection {
   sourceId: string;
@@ -29,6 +37,8 @@ export interface HomeRowConfig {
   discoveryTabId?: string;
   /** Required for source rows; independent of discovery tabs. */
   section?: HomeSourceRowSection;
+  pluginId?: string;
+  pluginSectionId?: string;
 }
 
 export interface HomeHeroItem {
@@ -55,11 +65,14 @@ export interface HomeHeroItem {
 
 /** Source works shown on home that are not in the library yet. */
 export interface HomeDiscoveryItem {
+  rank?: number;
+  actionLabel?: string;
   translateTitle?: boolean;
   id: string;
   title: string;
   author?: string;
   thumbnailUrl?: string;
+  coverKey?: string;
   /** Authenticated artwork; the UI calls it only while the card is near the viewport. */
   loadCover?(signal: AbortSignal): Promise<string | undefined>;
   /** Already saved in the library. */
@@ -93,6 +106,12 @@ export interface HomeRowView {
   retry?(): void;
   /** Failure detail; cached rows remain `ready` when only their background refresh fails. */
   error?: string;
+  /** Host scheduling and presentation; never executable plugin data. */
+  loadKey?: string;
+  refreshAt?: number;
+  refreshing?: boolean;
+  updatedAt?: number;
+  stale?: boolean;
 }
 
 /** Choices offered by the home editor's "줄 추가" sheet; rows already present are excluded. */

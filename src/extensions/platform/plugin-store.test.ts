@@ -64,18 +64,13 @@ it('requires per-role grants and checks all fence fields plus the method allowli
   });
   await expect(peer.assertSession(controller, controller.fence)).rejects.toMatchObject({ code: 'CONTEXT_STALE' });
   await store.assertCall(controller, controller.fence, 'settings.get');
-  for (const method of [
-    'fetch',
-    'ctx.request',
-    '__proto__',
-    'constructor',
-    'toString',
-    'reader.content.visible',
-    'storage.get',
-  ])
+  for (const method of ['fetch', 'ctx.request', '__proto__', 'constructor', 'toString', 'reader.content.visible'])
     await expect(store.assertCall(controller, controller.fence, method)).rejects.toMatchObject({
       code: 'METHOD_NOT_ALLOWED',
     });
+  await expect(store.assertCall(controller, controller.fence, 'storage.get')).rejects.toMatchObject({
+    code: 'PERMISSION_DENIED',
+  });
   const task = await store.openSession(id, 'task', row.revision);
   await store.assertCall(controller, controller.fence, 'tasks.run');
   await expect(store.assertCall(ui, ui.fence, 'tasks.run')).rejects.toMatchObject({ code: 'METHOD_NOT_ALLOWED' });

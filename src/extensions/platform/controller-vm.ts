@@ -1,10 +1,15 @@
 import { UiStoreError } from '../ui/store-model';
 import { isUiJson, uiRecord, uiKeys, type UiJson } from '@boaa/extension-contracts/ui-json';
 import { canonicalJson, requireStore } from '../ui/store-model';
-import type { PlatformFence } from '../../../packages/extension-contracts/plugin-platform-sdk';
-export type ControllerOp = 'describe' | 'activate' | 'event' | 'command' | 'task' | 'migrate' | 'handler' | 'decorate';
+import { platformStorageError, type PlatformFence } from '../../../packages/extension-contracts/plugin-platform-sdk';
+export type ControllerOp =
+  'describe' | 'activate' | 'event' | 'command' | 'task' | 'migrate' | 'handler' | 'decorate' | 'homeFeed';
 const counts = { workers: 0, calls: 0 };
-export const controllerResources = () => ({ ...counts });
+const pools = { controller: 0, temporary: 0 };
+export const controllerResources = (pool?: keyof typeof pools) => ({
+  ...counts,
+  ...(pool ? { workers: pools[pool] } : {}),
+});
 interface Call {
   id: number;
   op: ControllerOp;
@@ -25,6 +30,9 @@ export interface ControllerOptions {
 }
 /** Owns one host Worker/QuickJS context. No synthetic permissions or test-only generic guest RPC. */
 export class ControllerVm {
+  get idle(): boolean {
+    return !this.current && this.queue.length === 0;
+  }
   private worker: Worker;
   private queue: Call[] = [];
   private current?: Call;
@@ -43,10 +51,12 @@ export class ControllerVm {
     source: string,
     private readonly options: ControllerOptions,
   ) {
-    requireStore(counts.workers < 4, 'WORKER_LIMIT');
+    const pool = session.role === 'controller' ? 'controller' : 'temporary';
+    requireStore(pools[pool] < (pool === 'controller' ? 4 : 2), 'WORKER_LIMIT');
     this.fenceKey = canonicalJson(session.fence as unknown as UiJson);
     this.worker = options.worker();
     counts.workers++;
+    pools[pool]++;
     this.timer = setTimeout(() => this.stop('START_TIMEOUT'), 5000);
     this.worker.onerror = () => this.stop('WORKER_ERROR');
     this.worker.onmessage = ({ data }) => {
@@ -123,9 +133,9 @@ export class ControllerVm {
           'READER_CONTEXT_STALE',
         ];
         const code =
-          request.method.startsWith('reader.annotations.') &&
           error instanceof UiStoreError &&
-          annotationCodes.includes(error.code)
+          ((request.method.startsWith('reader.annotations.') && annotationCodes.includes(error.code)) ||
+            (request.method.startsWith('storage.') && platformStorageError(error.code)))
             ? error.code
             : 'HOST_REQUEST_DENIED';
         reply = { ok: false, code: call.abort.signal.aborted ? 'CANCELLED' : code };
@@ -211,6 +221,7 @@ export class ControllerVm {
     clearTimeout(this.timer);
     this.worker.terminate();
     counts.workers--;
+    pools[this.session.role === 'controller' ? 'controller' : 'temporary']--;
     for (const call of [...(this.current ? [this.current] : []), ...this.queue]) {
       call.abort.abort();
       call.detach();

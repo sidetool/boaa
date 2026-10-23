@@ -1,5 +1,14 @@
 import { PlatformSettingsStore, checkConfigProposal } from './store-settings';
 import { PlatformMarkerStore } from './store-markers';
+import {
+  PlatformKvStore,
+  purgeKv,
+  assertKvQuota,
+  type StorageGet,
+  type StorageSet,
+  type StorageRemove,
+  type StorageList,
+} from './store-kv';
 import type { PlatformStoreAccess } from './store-access';
 import { platformCallPolicy } from './platform-call-policy';
 import type { RetirementJournal } from './retirement-journal';
@@ -81,17 +90,26 @@ export class PlatformPluginStore {
   private suspended = false;
   private readonly settings: PlatformSettingsStore;
   private readonly markers: PlatformMarkerStore;
+  private readonly kv: PlatformKvStore;
   private readonly now: () => number;
   private readonly windowSessionId = crypto.randomUUID();
   private reviews = new Map<InstallReview, Pending>();
   private sessions = new Map<PluginSession, SessionBinding>();
   constructor(
     scope: UiPluginScope,
-    options: { name?: string; factory?: IDBFactory; now?: () => number; retirements?: RetirementJournal } = {},
+    options: {
+      name?: string;
+      factory?: IDBFactory;
+      now?: () => number;
+      retirements?: RetirementJournal;
+      database?: UiPluginDatabase;
+    } = {},
   ) {
     this.scope = scopeKey(scope);
     this.now = options.now ?? Date.now;
-    this.db = new UiPluginDatabase(options.factory, `boaa.js-plugins.v1:${options.name ?? 'default'}`, platformLayout);
+    this.db =
+      options.database ??
+      new UiPluginDatabase(options.factory, `boaa.js-plugins.v1:${options.name ?? 'default'}`, platformLayout);
     const access: PlatformStoreAccess = {
       host: () => ({ scope: this.scope, guard: this.guard() }),
       session: (session) => this.access(session),
@@ -104,6 +122,7 @@ export class PlatformPluginStore {
       },
     };
     this.settings = new PlatformSettingsStore(this.db, access);
+    this.kv = new PlatformKvStore(this.db, access);
     this.markers = new PlatformMarkerStore(this.db, access, this.now, options.retirements);
   }
   private guard() {
@@ -139,6 +158,18 @@ export class PlatformPluginStore {
     return this.db.run('readonly', this.guard(), (tx) =>
       request(tx.objectStore('installations').index('scope').getAll(scope)),
     );
+  }
+  storageGet(session: PluginSession, input: StorageGet) {
+    return this.kv.get(session, input);
+  }
+  storageSet(session: PluginSession, input: StorageSet) {
+    return this.kv.set(session, input);
+  }
+  storageRemove(session: PluginSession, input: StorageRemove) {
+    return this.kv.remove(session, input);
+  }
+  storageList(session: PluginSession, input: StorageList) {
+    return this.kv.list(session, input);
   }
   async inspect(blob: Blob, format: PayloadFormat, provenance: string): Promise<InstallReview> {
     requireStore(uiString(provenance, 1024), 'INVALID_ARGUMENT');
@@ -291,6 +322,8 @@ export class PlatformPluginStore {
       );
       const oldConfig = old ? await getConfig(tx, old) : undefined;
       requireStore((oldConfig?.revision ?? 0) === p.review.configRevision, 'CONFIG_CONFLICT');
+      if (preserve && old)
+        await assertKvQuota(tx, scope, old.installationId, fresh.manifest.requestedAccess.storageKiB);
 
       requireStore(
         !preserve ||
@@ -372,10 +405,13 @@ export class PlatformPluginStore {
         manifest: fresh.manifest,
       };
       const u = await usage(tx);
-      if (!old) u.installs++;
+      if (!old || old.tombstone) u.installs++;
       requireStore(u.installs <= limits.installs, 'QUOTA_EXCEEDED');
       tx.objectStore('usage').put(u);
-      if (!preserve && old) await purgeConfig(tx, old);
+      if (!preserve && old) {
+        await purgeConfig(tx, old);
+        await purgeKv(tx, old.scope, old.installationId);
+      }
       if (decision.config)
         await putConfig(tx, installed, preserve ? oldConfig : undefined, {
           ...decision.config,
@@ -414,7 +450,11 @@ export class PlatformPluginStore {
       const next: Installation = { ...old, enabled: false, revision: expectedRevision + 1 };
       if (remove) {
         await purgeConfig(tx, old);
+        await purgeKv(tx, old.scope, old.installationId);
         await keepPayloads(tx, scope, id, []);
+        const u = await usage(tx);
+        u.installs = Math.max(0, u.installs - 1);
+        tx.objectStore('usage').put(u);
         next.tombstone = true;
         delete next.active;
         delete next.previous;

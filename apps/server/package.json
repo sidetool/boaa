@@ -7,14 +7,14 @@
   "scripts": {
     "build": "tsc -p tsconfig.json --noEmit",
     "bundle": "node build.mjs",
-    "dev": "tsx watch src/index.ts",
+    "dev": "node ../../scripts/plugins/build-product-runtime.mjs && tsx watch src/index.ts",
     "migrate": "tsx src/db/migrate.ts",
     "migrate:production": "node dist/db/migrate.js",
     "id-v2:migrate": "tsx src/cli/id-v2-migration.ts",
     "id-v2:migrate:production": "node dist/cli/id-v2-migration.js",
     "provider:smoke": "tsx src/providers/provider-smoke.ts",
     "tts:smoke": "tsx src/providers/tts-provider-smoke.ts",
-    "start": "tsx src/index.ts",
+    "start": "node ../../scripts/plugins/build-product-runtime.mjs && tsx src/index.ts",
     "start:production": "node dist/index.js",
     "worker": "tsx src/worker.ts",
     "worker:production": "node dist/worker.js"

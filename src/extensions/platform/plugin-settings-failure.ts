@@ -3,6 +3,9 @@ export type PluginSettingsFailureCode =
   | 'migration_requires_disabled'
   | 'disable_revoke_failed'
   | 'remove_revoke_failed'
+  | 'update_revoke_failed'
+  | 'review_stale'
+  | 'connection_setup_failed'
   | 'missing_config';
 export interface PluginSettingsFailure {
   code: PluginSettingsFailureCode;

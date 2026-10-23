@@ -1,6 +1,6 @@
 import { isUiJson, uiRecord, uiKeys, uiInteger, type UiJson } from '@boaa/extension-contracts/ui-json';
 import { UiPluginDatabase } from '../ui/store-db';
-import { requireStore, canonicalJson } from '../ui/store-model';
+import { requireStore, canonicalJson, UiStoreError } from '../ui/store-model';
 import { authorize, getInstallation, getConfig, putConfig } from './store-transactions';
 import type { ConfigRow, ConfigProposal, PluginSession } from './store-model';
 import type { PlatformStoreAccess } from './store-access';
@@ -61,7 +61,7 @@ export class PlatformSettingsStore {
     validateSettingsSchema(schema);
     const copy = structuredClone(schema);
     const { guard, binding } = this.access.session(session);
-    return this.db.run('readwrite', guard, async (tx) => {
+    const registered = async (tx: IDBTransaction) => {
       const install = await authorize(tx, binding, 'settings.own');
       requireStore(
         binding.role === 'controller' || (binding.role === 'ui' && !install.manifest?.entries.controller),
@@ -73,10 +73,26 @@ export class PlatformSettingsStore {
           canonicalJson(old.schema as unknown as UiJson) === canonicalJson(copy as unknown as UiJson),
           'CONFIG_MIGRATION_REQUIRED',
         );
-        return old;
       }
-      return putConfig(tx, install, undefined, { expectedRevision: 0, schema: copy, value: settingsDefaults(copy) });
-    });
+      return { install, old };
+    };
+    try {
+      return await this.db.run('readwrite', guard, async (tx) => {
+        const { install, old } = await registered(tx);
+        return (
+          old ?? putConfig(tx, install, undefined, { expectedRevision: 0, schema: copy, value: settingsDefaults(copy) })
+        );
+      });
+    } catch (error) {
+      if (!(error instanceof UiStoreError) || error.code !== 'STATE_CONFLICT') throw error;
+      // The server adapter refreshed after the conflict. Another browser may have
+      // registered this schema; reauthorize and reuse its values without replaying a write.
+      return this.db.run('readonly', guard, async (tx) => {
+        const { old } = await registered(tx);
+        if (!old) throw error;
+        return old;
+      });
+    }
   }
   async writeConfig(session: PluginSession, proposal: ConfigProposal, signal?: AbortSignal): Promise<ConfigRow> {
     checkConfigProposal(proposal);

@@ -2,6 +2,8 @@ import { requireUserId } from '../auth.js';
 import { pluginScope } from '../plugins/plugin-scope.js';
 export { pluginScope } from '../plugins/plugin-scope.js';
 import { registerPluginConnectionRoutes } from './plugin-connections.js';
+import { registerPluginStateRoutes } from './plugin-state.js';
+import { resolvePluginRequestOrigin } from '../plugins/plugin-origin.js';
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import type pg from 'pg';
@@ -28,18 +30,15 @@ export async function registerPluginRuntimeRoutes(
   pool: pg.Pool,
   assets: URL,
 ) {
-  const origin = pluginOriginFromEnv(config.pluginOrigin);
-  if (!origin) return;
   registerPluginConnectionRoutes(app, config, pool);
+  registerPluginStateRoutes(app, config, pool);
   // A missing/corrupt deployment fails startup instead of serving a half-functional runtime.
   const [bootstrap, worker, wasm] = await Promise.all([
     readFile(new URL('view-bootstrap.js', assets), 'utf8'),
     readFile(new URL('controller-worker.js', assets)),
     readFile(new URL('quickjs.wasm', assets)),
   ]);
-  const shell = pluginShell(bootstrap, origin);
   const files = {
-    shell: { body: shell.html, type: 'text/html; charset=utf-8', csp: shell.csp },
     'controller-worker.js': {
       body: worker,
       type: 'application/javascript',
@@ -47,6 +46,15 @@ export async function registerPluginRuntimeRoutes(
     },
     'quickjs.wasm': { body: wasm, type: 'application/wasm', csp: "default-src 'none'" },
   };
+  app.get('/plugin-runtime/shell', async (request, reply) => {
+    const shell = pluginShell(bootstrap, resolvePluginRequestOrigin(request, config));
+    return reply
+      .header('Cache-Control', 'no-store')
+      .header('X-Content-Type-Options', 'nosniff')
+      .header('Content-Security-Policy', shell.csp)
+      .type('text/html; charset=utf-8')
+      .send(shell.html);
+  });
   for (const [name, asset] of Object.entries(files)) {
     app.get(`/plugin-runtime/${name}`, async (_request, reply) =>
       reply
@@ -63,6 +71,7 @@ export async function registerPluginRuntimeRoutes(
     if (!token || token.length > 512) return reply.code(401).send({ error: 'plugin_account_required' });
     const scope = await pluginScope(pool, token, requireUserId(request));
     if (!scope) return reply.code(401).send({ error: 'plugin_account_required' });
+    const origin = resolvePluginRequestOrigin(request, config);
     return {
       version: 1,
       origin,

@@ -1,9 +1,12 @@
 import { normalizeBrandRecord } from './brand-compat';
+import { homeFeedSections, type HomeFeedSection } from './home-feed';
+import { PLUGIN_HTTP_METHODS, pluginEndpoint, type PluginHttpRequest } from './plugin-http';
 import { isUiJson, uiKeys, uiRecord, uiString, uiInteger } from './ui-json';
 
-/** V3 static package contract. Product activation remains gated until G3. */
+/** Current package contract for account-scoped plugins and host-owned contributions. */
 export const PLATFORM_PERMISSIONS = [
   'http.request',
+  'home.feed',
   'settings.own',
   'storage.own',
   'commands.register',
@@ -19,6 +22,7 @@ export const PLATFORM_PERMISSIONS = [
 ] as const;
 export const PLATFORM_FEATURES = [
   'http.request',
+  'home.feed',
   'settings.schema',
   'storage.own',
   'commands.register',
@@ -34,7 +38,7 @@ export const PLATFORM_FEATURES = [
 ] as const;
 export type PlatformPermission = (typeof PLATFORM_PERMISSIONS)[number];
 export type PlatformFeature = (typeof PLATFORM_FEATURES)[number];
-export type Activation = 'onReader' | 'onCommand' | 'onAppSession' | 'onView';
+export type Activation = 'onReader' | 'onCommand' | 'onAppSession' | 'onView' | 'onHome';
 export type EntryRole = 'controller' | 'ui' | 'task';
 export interface PlatformManifest {
   packageFormat: 'boaa.extension.package';
@@ -45,13 +49,21 @@ export interface PlatformManifest {
   entries: Partial<Record<EntryRole, { path: string; permissions: PlatformPermission[] }>>;
   activation: Activation[];
   features: { required: PlatformFeature[]; optional: PlatformFeature[] };
-  contributes: { commands: string[]; views: string[]; decorations: string[]; connections?: string[] };
+  contributes: {
+    commands: string[];
+    views: string[];
+    decorations: string[];
+    connections?: string[];
+    homeSections?: HomeFeedSection[];
+  };
+  /** Public connections shown and approved once at installation. Secrets are configured separately. */
+  connections?: { id: string; title: string; endpoint: string; methods: PluginHttpRequest['method'][] }[];
   requestedAccess: { storageKiB: number; contentScopes: ('visible:nearby' | 'current:book')[] };
 }
 export type PlatformValidation =
   { ok: true; manifest: PlatformManifest } | { ok: false; code: 'INVALID_MANIFEST' | 'UNSUPPORTED_API'; path: string };
 const roles = ['controller', 'ui', 'task'] as const;
-const activations = ['onReader', 'onCommand', 'onAppSession', 'onView'];
+const activations = ['onReader', 'onCommand', 'onAppSession', 'onView', 'onHome'];
 const subset = (v: unknown, choices: readonly string[]): v is string[] =>
   Array.isArray(v) &&
   v.length <= choices.length &&
@@ -71,18 +83,22 @@ export function validatePlatformManifest(value: unknown): PlatformValidation {
   if (
     !isUiJson(value, 16384) ||
     !uiRecord(value) ||
-    !uiKeys(value, [
-      'packageFormat',
-      'packageVersion',
-      'apiVersion',
-      'extension',
-      'license',
-      'entries',
-      'activation',
-      'features',
-      'contributes',
-      'requestedAccess',
-    ])
+    !uiKeys(
+      value,
+      [
+        'packageFormat',
+        'packageVersion',
+        'apiVersion',
+        'extension',
+        'license',
+        'entries',
+        'activation',
+        'features',
+        'contributes',
+        'requestedAccess',
+      ],
+      ['connections'],
+    )
   )
     return bad('manifest');
   if (value.packageFormat !== 'boaa.extension.package') return bad('packageFormat');
@@ -138,19 +154,53 @@ export function validatePlatformManifest(value: unknown): PlatformValidation {
   const c = value.contributes;
   if (
     !uiRecord(c) ||
-    !uiKeys(c, ['commands', 'views', 'decorations'], ['connections']) ||
+    !uiKeys(c, ['commands', 'views', 'decorations'], ['connections', 'homeSections']) ||
+    (c.homeSections !== undefined && !homeFeedSections(c.homeSections)) ||
     (c.connections !== undefined && (!ids(c.connections) || c.connections.length > 8)) ||
     !ids(c.commands) ||
     !ids(c.views) ||
     !ids(c.decorations)
   )
     return bad('contributes');
+  if (value.connections !== undefined) {
+    if (
+      !Array.isArray(value.connections) ||
+      value.connections.length > 8 ||
+      !value.connections.every((connection) => {
+        if (
+          !uiRecord(connection) ||
+          !uiKeys(connection, ['id', 'title', 'endpoint', 'methods']) ||
+          typeof connection.id !== 'string' ||
+          !Array.isArray(c.connections) ||
+          !c.connections.includes(connection.id) ||
+          !uiString(connection.title, 128) ||
+          typeof connection.endpoint !== 'string' ||
+          !subset(connection.methods, PLUGIN_HTTP_METHODS) ||
+          !connection.methods.length
+        )
+          return false;
+        try {
+          return pluginEndpoint(connection.endpoint).protocol === 'https:';
+        } catch {
+          return false;
+        }
+      }) ||
+      new Set(value.connections.map((connection) => (connection as { id: string }).id)).size !==
+        value.connections.length
+    )
+      return bad('connections');
+  }
   if (
     permissions.has('http.request') !== (Array.isArray(c.connections) && c.connections.length > 0) ||
     (task && hasHttpTask(task))
   )
     return bad('connections');
-  const all = [...c.commands, ...c.views, ...c.decorations];
+  const all = [
+    ...c.commands,
+    ...c.views,
+    ...c.decorations,
+    ...(Array.isArray(c.homeSections) ? c.homeSections.map((section) => section.id) : []),
+  ];
   if (
     new Set(all).size !== all.length ||
     (c.commands.length && !controller) ||
@@ -162,6 +212,12 @@ export function validatePlatformManifest(value: unknown): PlatformValidation {
     const entry = value.entries as Record<string, { permissions: string[] }>;
     return entry[role]?.permissions.includes(permission);
   };
+  if (
+    (Array.isArray(c.homeSections) && c.homeSections.length > 0) !== permissions.has('home.feed') ||
+    (permissions.has('home.feed') && (!controller || !hasRolePermission('controller', 'home.feed'))) ||
+    (value.activation.includes('onHome') && (!Array.isArray(c.homeSections) || !c.homeSections.length))
+  )
+    return bad('homeSections');
   if (
     (c.commands.length && !hasRolePermission('controller', 'commands.register')) ||
     (c.decorations.length &&

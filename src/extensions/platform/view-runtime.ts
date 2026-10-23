@@ -1,12 +1,14 @@
 import type { PluginHttp } from './plugin-http';
 import { isUiJson, uiRecord, uiKeys, uiInteger, type UiJson } from '@boaa/extension-contracts/ui-json';
-import { canonicalJson, requireStore } from '../ui/store-model';
+import { canonicalJson, requireStore, UiStoreError } from '../ui/store-model';
+import { platformStorageError } from '../../../packages/extension-contracts/plugin-platform-sdk';
 import { requireEnvironment } from '../ui/runtime-policy';
 import { PlatformPluginStore } from './plugin-store';
 import type { PluginSession } from './store-model';
 import type { PluginService } from './plugin-service';
 import { RuntimeOwners } from './runtime-owners';
 import { validateSettingsSchema } from './settings-schema';
+import { storageCall } from './storage-call';
 const configDto = (row: Awaited<ReturnType<PlatformPluginStore['readConfig']>>): UiJson =>
   row ? { schemaVersion: row.schema.version, revision: row.revision, value: row.value } : null;
 export interface PluginView {
@@ -157,7 +159,8 @@ class View implements PluginView {
     this.frame = frame;
     frame.title = 'Plugin: ' + this.id;
     frame.setAttribute('sandbox', 'allow-scripts');
-    frame.referrerPolicy = 'no-referrer';
+    // The same-origin shell verifies its parent origin without receiving reader paths.
+    frame.referrerPolicy = 'origin';
     frame.setAttribute(
       'allow',
       "camera 'none'; microphone 'none'; geolocation 'none'; clipboard-read 'none'; clipboard-write 'none'",
@@ -288,7 +291,9 @@ class View implements PluginView {
       const input = data.input;
       requireStore(uiRecord(input), 'INVALID_ARGUMENT');
       let value: UiJson;
-      if (data.method === 'http.request') {
+      if (data.method.startsWith('storage.')) {
+        value = await storageCall(this.store, session, data.method, input);
+      } else if (data.method === 'http.request') {
         requireStore(this.http, 'HTTP_UNAVAILABLE');
         value = await this.http.request(session, input, operation.signal);
       } else if (data.method === 'controller.call') {
@@ -344,9 +349,15 @@ class View implements PluginView {
       this.guard();
       operation.signal.throwIfAborted();
       result = { ok: true, value };
-    } catch {
+    } catch (error) {
       if (createdSubscription !== undefined) this.subscriptions.delete(createdSubscription);
-      result = { ok: false, code: 'REQUEST_DENIED' };
+      result = {
+        ok: false,
+        code:
+          data.method.startsWith('storage.') && error instanceof UiStoreError && platformStorageError(error.code)
+            ? error.code
+            : 'REQUEST_DENIED',
+      };
     } finally {
       clearTimeout(timeout);
       this.pending.delete(data.id);

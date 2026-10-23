@@ -48,6 +48,13 @@ export interface ConfigProposal {
   schema: SettingsSchema;
   value: Record<string, UiJson>;
 }
+export interface PlatformKvRow {
+  scope: string;
+  installationId: string;
+  key: string;
+  value: UiJson;
+  revision: number;
+}
 export interface InstallReview {
   readonly pluginId: string;
   readonly digest: string;
@@ -106,8 +113,17 @@ export const PLATFORM_STORE_LIMITS = {
   markers: 128,
 } as const;
 export const platformLayout: PluginDatabaseLayout = {
-  stores: ['installations', 'archives', 'grants', 'config', 'runtime-markers', 'usage'],
+  version: 2,
+  stores: ['installations', 'archives', 'grants', 'config', 'kv', 'runtime-markers', 'usage'],
   initialize(db) {
+    if (db.objectStoreNames.contains('installations')) {
+      if (!db.objectStoreNames.contains('kv'))
+        db.createObjectStore('kv', { keyPath: ['scope', 'installationId', 'key'] }).createIndex('namespace', [
+          'scope',
+          'installationId',
+        ]);
+      return;
+    }
     db.createObjectStore('installations', { keyPath: ['scope', 'pluginId'] }).createIndex('scope', 'scope');
     db.createObjectStore('archives', { keyPath: ['scope', 'pluginId', 'digest'] }).createIndex('owner', [
       'scope',
@@ -115,6 +131,10 @@ export const platformLayout: PluginDatabaseLayout = {
     ]);
     db.createObjectStore('grants', { keyPath: ['scope', 'pluginId'] });
     db.createObjectStore('config', { keyPath: ['scope', 'installationId'] });
+    db.createObjectStore('kv', { keyPath: ['scope', 'installationId', 'key'] }).createIndex('namespace', [
+      'scope',
+      'installationId',
+    ]);
     db.createObjectStore('runtime-markers', { keyPath: ['scope', 'installationId', 'instanceId'] }).createIndex(
       'scope',
       'scope',

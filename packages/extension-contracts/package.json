@@ -29,6 +29,9 @@
       "platform-package": [
         "./plugin-platform-manifest.ts"
       ],
+      "platform-sdk": [
+        "./platform-sdk.ts"
+      ],
       "ui-json": [
         "./ui-json.ts"
       ],
@@ -75,6 +78,10 @@
     "./platform-package": {
       "types": "./plugin-platform-manifest.ts",
       "default": "./plugin-platform-manifest.ts"
+    },
+    "./platform-sdk": {
+      "types": "./platform-sdk.ts",
+      "default": "./platform-sdk.ts"
     },
     "./ui-json": {
       "types": "./ui-json.ts",

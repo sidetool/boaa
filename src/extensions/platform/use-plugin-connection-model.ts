@@ -10,14 +10,18 @@ export interface PluginConnectionModelOptions {
   slot: string;
 }
 export function usePluginConnectionModel({ session, row, slot }: PluginConnectionModelOptions) {
+  const declared = row.manifest?.connections?.find((connection) => connection.id === slot);
+  const availableRoles = (['controller', 'ui'] as const).filter((role) =>
+    row.manifest?.entries[role]?.permissions.includes('http.request'),
+  );
   const [saved, setSaved] = useState<PluginConnectionStatus>(),
-    [endpoint, setEndpoint] = useState(''),
+    [endpoint, setEndpoint] = useState(declared?.endpoint ?? ''),
     [auth, setAuth] = useState('none'),
     [header, setHeader] = useState('x-api-key'),
     [allowedHeaders, setAllowedHeaders] = useState('accept, content-type, accept-language'),
     [secret, setSecret] = useState(''),
-    [methods, setMethods] = useState<string[]>(['GET']),
-    [roles, setRoles] = useState<string[]>([]),
+    [methods, setMethods] = useState<string[]>(declared?.methods ?? ['GET']),
+    [roles, setRoles] = useState<string[]>(availableRoles),
     [error, setError] = useState<PluginConnectionError>(),
     [busy, setBusy] = useState(false);
   const { installationId, active, revision } = row;
@@ -34,6 +38,7 @@ export function usePluginConnectionModel({ session, row, slot }: PluginConnectio
           setMethods(old.methods);
           setAllowedHeaders(old.headers.join(', '));
           setRoles(old.roles);
+          setAuth(old.authenticated ? 'preserve' : 'none');
         }
       })
       .catch(() => {
@@ -49,7 +54,9 @@ export function usePluginConnectionModel({ session, row, slot }: PluginConnectio
     try {
       await action();
       setSecret('');
-      setSaved((await session.http.list(row)).find((c) => c.slot === slot));
+      const next = (await session.http.list(row)).find((c) => c.slot === slot);
+      setSaved(next);
+      setAuth(next?.authenticated ? 'preserve' : 'none');
     } catch {
       setError('mutation_failed');
     } finally {
@@ -67,15 +74,19 @@ export function usePluginConnectionModel({ session, row, slot }: PluginConnectio
           .map((h) => h.trim())
           .filter(Boolean),
         roles,
-        auth: auth === 'none' ? { kind: 'none' } : { kind: auth, header, value: secret },
+        auth:
+          auth === 'preserve'
+            ? { kind: 'preserve', revision: saved?.revision }
+            : auth === 'none'
+              ? { kind: 'none' }
+              : { kind: auth, header, value: secret },
+        expectedRevision: saved?.revision ?? null,
       }),
     );
   };
   const revoke = () => run(() => session.http.revoke(row, slot));
   const methodOptions = PLUGIN_HTTP_METHODS;
-  const roleOptions = (['controller', 'ui'] as const).filter((role) =>
-    row.manifest?.entries[role]?.permissions.includes('http.request'),
-  );
+  const roleOptions = availableRoles;
   const setMethod = (method: string, checked: boolean) =>
     setMethods((old) => (checked ? [...old, method] : old.filter((value) => value !== method)));
   const setRole = (role: string, checked: boolean) =>
@@ -106,6 +117,8 @@ export function usePluginConnectionModel({ session, row, slot }: PluginConnectio
     setMethod,
     setRole,
     disabled,
+    title: declared?.title,
+    canPreserve: !!saved?.authenticated && endpoint === saved.endpoint,
   };
 }
 export type PluginConnectionModel = ReturnType<typeof usePluginConnectionModel>;

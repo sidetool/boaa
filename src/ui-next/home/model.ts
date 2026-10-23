@@ -1,5 +1,6 @@
 import type { HomeSourcePosition } from './source-continuity';
 import type { HomeDiscoveryAdapter } from './discovery';
+import type { HomePluginAdapter } from './plugin-home';
 import type { ShelfMembership } from '../../domain/types';
 import { bookFormatLabel } from '../../domain/book-format';
 import { bookHeroLabels, relativeLastReadLabel, type HomeCurrentChapter } from './hero-labels';
@@ -16,6 +17,7 @@ export interface HomeAdapterInput {
   showSourceRanks?: boolean;
   sourcePositions?: ReadonlyMap<string, HomeSourcePosition>;
   discoveryRows?: HomeDiscoveryAdapter;
+  pluginRows?: HomePluginAdapter;
   /** Required full catalog inputs: never pass the current library's visibleBooks/libraryWorks. */
   books: readonly LibraryBookView[];
   externalWorks: readonly (LibraryExternalWorkView & { description?: string })[];
@@ -70,6 +72,7 @@ export function createUiNextHomeAdapter(props: LibraryScreenProps, input: HomeAd
     model.management.shelves,
     discovery,
     input.discoveryRows?.rowBuilder?.sources,
+    input.pluginRows?.sections,
   );
   const read = added.filter((item) => !unread(item) || lastRead(item, props) > 0);
   const reason = read.length === 0 ? 'new' : 'continue';
@@ -126,6 +129,7 @@ export function createUiNextHomeAdapter(props: LibraryScreenProps, input: HomeAd
   const rows: HomeRowView[] = config
     .filter((row) => row.visible)
     .map((row) => {
+      if (row.kind === 'plugin') return input.pluginRows!.row(row);
       if (row.kind === 'discovery' || row.kind === 'source') {
         const view = input.discoveryRows!.row(row);
         return { ...view, ranked: input.showSourceRanks === true && view.ranked === true };
@@ -181,9 +185,10 @@ export function createUiNextHomeAdapter(props: LibraryScreenProps, input: HomeAd
     config,
     rowBuilder: input.discoveryRows?.rowBuilder,
     rowOptions: homeRowOptions(config, model.management.shelves, discovery),
-    rowLabel: (row) => homeRowLabel(row, model.management.shelves, discovery),
+    rowLabel: (row) => homeRowLabel(row, model.management.shelves, discovery, input.pluginRows?.sections),
     setConfig: (next) => input.setConfig(mergeHomeRowEdits(input.config, config, next)),
-    resetConfig: () => input.setConfig(defaultHomeRows()),
+    resetConfig: () =>
+      input.setConfig([...defaultHomeRows(), ...(input.config ?? config).filter((row) => row.kind === 'plugin')]),
     library,
     importFiles: actions.header.openImport,
     addSamples: () => {

@@ -1,7 +1,7 @@
 /** Trusted shim evaluated ONLY inside QuickJS. No browser-global eval or generic host request API. */
 export const bootstrap = `(function(rpc) {
   const parse = JSON.parse, stringify = JSON.stringify, freeze = Object.freeze;
-  const commands = new Map(), events = new Map(), handlers = new Map(), decorations = new Map();
+  const commands = new Map(), events = new Map(), handlers = new Map(), decorations = new Map(), feeds = new Map();
   const ordered = new Set();
   const changed = () => request('reader.decorations.changed',{ordered:[...ordered]});
   let httpSequence = 0;
@@ -20,6 +20,16 @@ export const bootstrap = `(function(rpc) {
     if(value && typeof value==='object') { for(const key of Object.keys(value))immutable(value[key]);freeze(value); } return value;
   };
   const ctx = freeze({
+    home: freeze({register(id, fn) {
+      if(!manifest.homeSections?.includes(id) || !manifest.permissions.includes('home.feed'))throw Error('PERMISSION_DENIED');
+      return add(feeds,id,fn);
+    }}),
+    storage: freeze({
+      get: key => request('storage.get', {key}),
+      set: (key,value,expectedRevision=null) => request('storage.set',{key,value,expectedRevision}),
+      remove: (key,expectedRevision) => request('storage.remove',{key,expectedRevision}),
+      list: (options={}) => request('storage.list',{limit:32,...options}),
+    }),
     http: freeze({async request(input, signal) {
       if(signal?.aborted)return {ok:false,code:'HTTP_CANCELLED',outcome:'not-sent'};
       const id=++httpSequence;let cancelling;
@@ -116,6 +126,12 @@ export const bootstrap = `(function(rpc) {
           }
         }
         value=input.mode==='ordered-chapter'?{layers,checkpoints}:{layers};
+      }
+      else if (op === 'homeFeed') {
+        if(!active || !manifest.permissions.includes('home.feed'))throw Error('PERMISSION_DENIED');
+        const fn=feeds.get(input.id);
+        if(!fn)value={ok:false,code:'UNKNOWN_HOME_FEED'};
+        else { try { value={ok:true,value:await fn(signal)}; } catch { value={ok:false,code:'HOME_FEED_FAILED'}; } }
       }
       else if (op === 'handler') {
         if (!active) throw Error('NOT_ACTIVE');

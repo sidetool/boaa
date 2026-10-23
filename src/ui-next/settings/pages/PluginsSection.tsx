@@ -1,6 +1,5 @@
-import type { EntryRole, PlatformPermission } from '@boaa/extension-contracts/platform-package';
 import type { UiJson } from '@boaa/extension-contracts/ui-json';
-import { Code2, LifeBuoy, Play, Settings2, Trash2 } from 'lucide-react';
+import { AppWindow, Code2, FileUp, House, LifeBuoy, Play, Settings2, Trash2 } from 'lucide-react';
 import { useRef, useState } from 'react';
 import { useProductPlugins } from '../../../extensions/platform/PlatformPluginProvider';
 import type { PluginSettingsFailure } from '../../../extensions/platform/plugin-settings-failure';
@@ -13,10 +12,19 @@ import {
   usePluginReaderInputModel,
   usePluginViewModel,
 } from '../../../extensions/platform/use-platform-plugin-editor-models';
-import { usePlatformPluginSettingsModel } from '../../../extensions/platform/use-platform-plugin-settings-model';
+import {
+  pluginContributionLabel,
+  pluginFaultText,
+  pluginHomeSectionTitles,
+} from '../../../extensions/platform/plugin-presentation';
+import {
+  usePlatformPluginSettingsModel,
+  type PlatformPluginSettingsModel,
+} from '../../../extensions/platform/use-platform-plugin-settings-model';
 import { ConfirmSheet } from '../../components/dialogs';
 import { PluginConnectionFolds } from './PluginConnectionFold';
-import { Sheet, Switch } from '../../components/primitives';
+import { PluginCapabilityChips, PluginReviewSheet } from './PluginReviewSheet';
+import { cx, Sheet, Switch } from '../../components/primitives';
 import {
   EmptyState,
   Notice,
@@ -25,24 +33,12 @@ import {
   PrefFold,
   PrefGroup,
   PrefSection,
+  PrefSkeleton,
   PrefSwitch,
 } from '../../components/prefs';
 
-const PERMISSION: Record<PlatformPermission, string> = {
-  'http.request': '허락한 외부 서버로 요청·자료 보내기 (본문 권한이 있으면 본문도)',
-  'settings.own': '자기 설정 읽고 바꾸기',
-  'storage.own': '자기 저장 공간 쓰기',
-  'commands.register': '플러그인 명령 등록',
-  'ui.render': '자기 화면 보여 주기',
-  'reader.content.visible': '지금 보이는 본문 읽기',
-  'reader.annotations.read': '이 책의 북마크·하이라이트·메모 읽기',
-  'reader.annotations.write': '이 책의 주석 만들고 고치고 지우기 (플러그인을 꺼도 남아요)',
-  'reader.state': '열린 리더 상태 읽기',
-  'reader.control': '허락한 입력 중에 자동 스크롤 조작',
-  'reader.input': '연결한 리더 입력 받기',
-  'reader.content.book': '열린 책 전체 본문 읽기',
-  'reader.decorations': '본문에 색·서식 입히기',
-};
+const SECTION_HINT =
+  '홈에 추천 목록을 더하거나 읽기를 돕는 기능이에요. 내 계정에 저장되어 다른 기기에서도 그대로 쓸 수 있어요.';
 
 function failureText(issue: PluginSettingsFailure) {
   switch (issue.code) {
@@ -52,6 +48,12 @@ function failureText(issue: PluginSettingsFailure) {
       return '플러그인은 멈췄어요. 서버에 닿지 않아 보관된 연결 정보가 지워졌는지는 확인하지 못했어요.';
     case 'remove_revoke_failed':
       return '플러그인은 지웠어요. 서버에 닿지 않아 보관된 연결 정보가 지워졌는지는 확인하지 못했어요.';
+    case 'review_stale':
+      return '다른 기기에서 플러그인이 변경됐거나 검토가 끝났어요. 파일을 다시 선택해 주세요.';
+    case 'update_revoke_failed':
+      return '업데이트는 완료했어요. 이전 연결 정리는 확인하지 못했어요. 외부 서비스 연결을 확인해 주세요.';
+    case 'connection_setup_failed':
+      return '플러그인은 설치했어요. 아래 외부 서비스에서 연결을 다시 저장해 주세요.';
     case 'missing_config':
       return '작성자가 공통 설정을 주지 않았어요. 플러그인 화면을 확인해 주세요.';
     default:
@@ -178,7 +180,7 @@ function ViewSheet({
 }) {
   const model = usePluginViewModel(session, id, view);
   return (
-    <Sheet open onClose={close} title={view}>
+    <Sheet open onClose={close} title={pluginContributionLabel('view', view, [view])}>
       {model.error && <Notice tone="danger">{failureText(model.error)}</Notice>}
       <div className="product-plugin-view un-plugin-view" ref={model.container} />
     </Sheet>
@@ -189,7 +191,12 @@ function ReaderInput({ session, row }: { session: ProductPluginSession; row: Ins
   const model = usePluginReaderInputModel(session, row);
   if (!model.available) return null;
   return (
-    <PrefFold title="읽는 중 길게 누르기" summary={model.selected ? model.selected.command : '연결 안 함'}>
+    <PrefFold
+      title="읽는 중 길게 누르기"
+      summary={
+        model.selected ? pluginContributionLabel('command', model.selected.command, model.commands) : '연결 안 함'
+      }
+    >
       <Pref
         title="명령"
         help="누르고 있는 동안 실행하고, 떼면 멈춰요. Alt+Shift+Space로도 돼요."
@@ -202,7 +209,9 @@ function ReaderInput({ session, row }: { session: ProductPluginSession; row: Ins
           >
             <option value="">연결 안 함</option>
             {model.commands.map((command) => (
-              <option key={command}>{command}</option>
+              <option key={command} value={command}>
+                {pluginContributionLabel('command', command, model.commands)}
+              </option>
             ))}
           </select>
         }
@@ -229,265 +238,199 @@ function ReaderInput({ session, row }: { session: ProductPluginSession; row: Ins
   );
 }
 
-function ReviewSheet({
-  model,
+function PluginCard({
+  row,
   session,
+  model,
+  remove,
 }: {
-  model: ReturnType<typeof usePlatformPluginSettingsModel>;
+  row: Installation;
   session: ProductPluginSession;
+  model: PlatformPluginSettingsModel;
+  remove(row: Installation): void;
 }) {
-  const review = model.review;
-  if (!review) return null;
-  const replacing = review.expectedRevision > 0;
+  const name = row.manifest?.extension.name ?? row.pluginId;
+  const live = row.enabled && !session.off;
+  const homeTitles = pluginHomeSectionTitles(row.manifest);
+  const status = !row.enabled ? '꺼짐' : session.off ? '복구 모드로 멈춤' : '사용 중';
+  const configurable = Object.values(row.manifest?.entries ?? {}).some((entry) =>
+    entry.permissions.includes('settings.own'),
+  );
   return (
-    <Sheet
-      open
-      onClose={() => model.setReview(undefined)}
-      title="설치 전 확인"
-      footer={
-        <>
-          <button
-            type="button"
-            className="un-btn is-ghost"
-            disabled={model.busy}
-            onClick={() => model.setReview(undefined)}
-          >
-            취소
-          </button>
-          <button
-            type="button"
-            className="un-btn is-primary"
-            disabled={model.busy || session.off}
-            onClick={() => model.run(model.approve)}
-          >
-            허락하고 쓰기
-          </button>
-        </>
-      }
-    >
-      <div className="un-plugin-review">
-        <header>
-          <strong>{review.manifest.extension.name}</strong>
+    <article className={cx('un-ext-card un-plugin-card', !live && 'is-off')}>
+      <header className="un-ext-card-head">
+        <span className="un-ext-icon" aria-hidden="true">
+          <Code2 size={18} />
+        </span>
+        <div className="un-ext-title">
+          <strong>{name}</strong>
           <small>
-            v{review.manifest.extension.version} · {review.publisher ? `서명: ${review.publisher}` : '서명 없음'}
+            {row.manifest?.extension.version && `v${row.manifest.extension.version} · `}
+            {status}
           </small>
-        </header>
-        {!review.publisher && (
-          <Notice tone="warning">서명되지 않은 파일이에요. 믿을 수 있는 곳에서 받은 파일만 설치하세요.</Notice>
-        )}
-        {review.publisherChanged && <Notice tone="warning">서명한 사람이 바뀌어요.</Notice>}
-        {review.sourceChanged && <Notice tone="warning">파일을 받은 곳이 바뀌어요.</Notice>}
-        {review.downgrade && <Notice tone="warning">이전 버전으로 되돌려요.</Notice>}
-        {review.sameVersionReplacement && <Notice tone="warning">같은 버전 이름으로 코드가 바뀌어요.</Notice>}
-
-        {Object.entries(review.manifest.entries).map(([role, entry]) => (
-          <section key={role} className="un-plugin-role">
-            <h4>{role} 권한</h4>
-            {entry.permissions.length ? (
-              <PrefGroup>
-                {entry.permissions.map((permission) => (
-                  <PrefSwitch
-                    key={permission}
-                    title={PERMISSION[permission]}
-                    checked={model.grants[role as EntryRole]?.includes(permission) ?? false}
-                    onChange={(on) => model.setPermission(role as EntryRole, permission, on)}
-                  />
-                ))}
-              </PrefGroup>
-            ) : (
-              <p className="un-plugin-muted">요청한 권한이 없어요.</p>
-            )}
-          </section>
+        </div>
+        <Switch
+          label={`${name} ${row.enabled ? '끄기' : '켜기'}`}
+          checked={row.enabled}
+          disabled={model.busy || (!row.enabled && session.off)}
+          onChange={() => model.toggle(row)}
+        />
+      </header>
+      {row.manifest && <PluginCapabilityChips manifest={row.manifest} />}
+      {homeTitles.length > 0 && (
+        <p className="un-plugin-home-line">
+          <House size={14} aria-hidden="true" />
+          <span>
+            홈 목록 <b>{homeTitles.join(', ')}</b>
+          </span>
+        </p>
+      )}
+      {!row.enabled && <p className="un-plugin-muted">켜면 허용할 기능을 다시 확인해요.</p>}
+      {model.faults
+        .filter((fault) => fault.id === row.pluginId)
+        .map((fault) => (
+          <Notice key={fault.code} tone="warning">
+            {pluginFaultText(fault.code)} 끈 뒤 다시 켜면 새로 시작해요.
+            <small className="un-plugin-code">{fault.code}</small>
+          </Notice>
         ))}
-
-        {replacing && (
-          <PrefGroup>
-            <PrefSwitch
-              title="지금 설정과 저장 자료 그대로 두기"
-              help={
-                model.preserve
-                  ? '바꿀 때 작성자의 이전 코드가 한 번 실행돼요.'
-                  : '허락하면 이 플러그인의 설정과 저장 자료를 지워요.'
-              }
-              checked={model.preserve}
-              disabled={review.publisherChanged || review.sourceChanged}
-              onChange={model.setPreserve}
-            />
-          </PrefGroup>
+      <ReaderInput session={session} row={row} />
+      <PluginConnectionFolds session={session} row={row} />
+      <div className="un-plugin-actions">
+        {configurable && (
+          <button
+            type="button"
+            className="un-btn is-ghost is-sm"
+            disabled={model.busy}
+            onClick={() => model.openConfig(row)}
+          >
+            <Settings2 size={15} />
+            설정
+          </button>
         )}
-
-        <dl className="un-plugin-facts">
-          <div>
-            <dt>ID</dt>
-            <dd>{review.pluginId}</dd>
-          </div>
-          <div>
-            <dt>실행 시점</dt>
-            <dd>{review.manifest.activation.join(', ')}</dd>
-          </div>
-          <div>
-            <dt>저장 공간</dt>
-            <dd>{review.manifest.requestedAccess.storageKiB} KiB</dd>
-          </div>
-          <div>
-            <dt>SHA-256</dt>
-            <dd>
-              <code>{review.digest}</code>
-            </dd>
-          </div>
-        </dl>
+        {live &&
+          row.manifest?.contributes.views.map((view) => (
+            <button
+              key={view}
+              type="button"
+              className="un-btn is-ghost is-sm"
+              onClick={() => model.setView({ id: row.pluginId, view })}
+            >
+              <AppWindow size={15} />
+              {pluginContributionLabel('view', view, row.manifest!.contributes.views)}
+            </button>
+          ))}
+        {live &&
+          row.manifest?.contributes.commands.map((command) => (
+            <button
+              key={command}
+              type="button"
+              className="un-btn is-ghost is-sm"
+              disabled={model.busy}
+              onClick={() => model.command(row, command)}
+            >
+              <Play size={14} />
+              {pluginContributionLabel('command', command, row.manifest!.contributes.commands)}
+            </button>
+          ))}
+        <span className="un-plugin-actions-end">
+          {row.previous && (
+            <button
+              type="button"
+              className="un-btn is-text is-sm"
+              disabled={model.busy || session.off}
+              onClick={() => model.reviewPrevious(row)}
+            >
+              이전 파일로
+            </button>
+          )}
+          {!row.enabled && model.recoveryIds.has(row.pluginId) && (
+            <button
+              type="button"
+              className="un-btn is-text is-sm"
+              disabled={model.busy}
+              onClick={() => model.acknowledge(row)}
+            >
+              멈춤 기록 지우기
+            </button>
+          )}
+          <button
+            type="button"
+            className="un-icon-btn is-sm"
+            aria-label={`${name} 지우기`}
+            disabled={model.busy}
+            onClick={() => remove(row)}
+          >
+            <Trash2 size={15} />
+          </button>
+        </span>
       </div>
-    </Sheet>
+    </article>
   );
 }
 
-function Installed({ session }: { session: ProductPluginSession }) {
+function Installed({ session, message }: { session: ProductPluginSession; message?: string }) {
   const model = usePlatformPluginSettingsModel(session);
   const file = useRef<HTMLInputElement>(null);
   const [removing, setRemoving] = useState<Installation>();
+  const empty = !model.loading && !model.rows.length;
+  const install = (primary: boolean) => (
+    <button
+      type="button"
+      className={cx('un-btn', primary ? 'is-primary' : 'is-ghost is-sm')}
+      disabled={model.busy || session.off}
+      onClick={() => file.current?.click()}
+    >
+      <FileUp size={primary ? 17 : 15} />
+      파일로 설치
+    </button>
+  );
   return (
-    <>
-      <div className="un-plugin-toolbar">
-        <input
-          ref={file}
-          type="file"
-          hidden
-          aria-label="JS 플러그인 파일"
-          accept=".js,.zip,.boaaext,.moyaext"
-          onChange={(event) => {
-            const picked = event.target.files?.[0];
-            event.target.value = '';
-            if (picked) model.inspectFile(picked);
-          }}
-        />
-        <button
-          type="button"
-          className="un-btn is-ghost"
-          disabled={model.busy || session.off}
-          onClick={() => file.current?.click()}
-        >
-          <Code2 size={16} />
-          파일로 설치
-        </button>
-        <a className="un-btn is-text is-sm" href="?plugins=off">
-          <LifeBuoy size={15} />
-          모두 멈추고 복구
-        </a>
-      </div>
+    <PrefSection title="플러그인" hint={SECTION_HINT} action={!empty && install(false)}>
+      <input
+        ref={file}
+        type="file"
+        hidden
+        aria-label="플러그인 파일"
+        accept=".js,.zip,.boaaext,.moyaext"
+        onChange={(event) => {
+          const picked = event.target.files?.[0];
+          event.target.value = '';
+          if (picked) model.inspectFile(picked);
+        }}
+      />
+      {message && <Notice tone="warning">{message}</Notice>}
       {model.error && <Notice tone="danger">{failureText(model.error)}</Notice>}
 
-      {model.rows.length ? (
-        <div className="un-ext-list">
-          {model.rows.map((row) => {
-            const name = row.manifest?.extension.name ?? row.pluginId;
-            const live = row.enabled && !session.off;
-            return (
-              <article key={row.pluginId} className="un-ext-card">
-                <header className="un-ext-head">
-                  <span className="un-ext-icon" aria-hidden="true">
-                    <Code2 size={18} />
-                  </span>
-                  <div className="un-ext-title">
-                    <strong>{name}</strong>
-                    <small>
-                      {row.manifest?.extension.version && `v${row.manifest.extension.version} · `}
-                      {row.enabled ? '켜짐' : '꺼짐'}
-                    </small>
-                  </div>
-                  <Switch
-                    label={`${name} ${row.enabled ? '끄기' : '켜기'}`}
-                    checked={row.enabled}
-                    disabled={model.busy || (!row.enabled && session.off)}
-                    onChange={() => model.toggle(row)}
-                  />
-                </header>
-                {!row.enabled && <p className="un-plugin-muted">켜면 권한을 다시 확인해요.</p>}
-                {model.faults
-                  .filter((fault) => fault.id === row.pluginId)
-                  .map((fault) => (
-                    <Notice key={fault.code} tone="warning">
-                      {fault.code} · 플러그인을 끈 뒤 복구할 수 있어요.
-                    </Notice>
-                  ))}
-                <ReaderInput session={session} row={row} />
-                <PluginConnectionFolds session={session} row={row} />
-                <div className="un-plugin-actions">
-                  <button
-                    type="button"
-                    className="un-btn is-ghost is-sm"
-                    disabled={model.busy}
-                    onClick={() => model.openConfig(row)}
-                  >
-                    <Settings2 size={15} />
-                    설정
-                  </button>
-                  {live &&
-                    row.manifest?.contributes.views.map((view) => (
-                      <button
-                        key={view}
-                        type="button"
-                        className="un-btn is-ghost is-sm"
-                        onClick={() => model.setView({ id: row.pluginId, view })}
-                      >
-                        {view}
-                      </button>
-                    ))}
-                  {live &&
-                    row.manifest?.contributes.commands.map((command) => (
-                      <button
-                        key={command}
-                        type="button"
-                        className="un-btn is-ghost is-sm"
-                        disabled={model.busy}
-                        onClick={() => model.command(row, command)}
-                      >
-                        <Play size={14} />
-                        {command}
-                      </button>
-                    ))}
-                  {row.previous && (
-                    <button
-                      type="button"
-                      className="un-btn is-text is-sm"
-                      disabled={model.busy || session.off}
-                      onClick={() => model.reviewPrevious(row)}
-                    >
-                      이전 파일로
-                    </button>
-                  )}
-                  {!row.enabled && (
-                    <button
-                      type="button"
-                      className="un-btn is-text is-sm"
-                      disabled={model.busy}
-                      onClick={() => model.acknowledge(row)}
-                    >
-                      멈춤 기록 지우기
-                    </button>
-                  )}
-                  <button
-                    type="button"
-                    className="un-icon-btn is-sm un-plugin-remove"
-                    aria-label={`${name} 지우기`}
-                    disabled={model.busy}
-                    onClick={() => setRemoving(row)}
-                  >
-                    <Trash2 size={15} />
-                  </button>
-                </div>
-              </article>
-            );
-          })}
+      {model.loading ? (
+        <PrefSkeleton rows={2} />
+      ) : model.rows.length ? (
+        <div className="un-ext-cards">
+          {model.rows.map((row) => (
+            <PluginCard key={row.pluginId} row={row} session={session} model={model} remove={setRemoving} />
+          ))}
         </div>
       ) : (
         <EmptyState
           icon={<Code2 size={22} />}
-          title="설치한 JS 플러그인이 없어요"
-          body=".js나 패키지 파일로 설치할 수 있어요."
+          title="설치한 플러그인이 없어요"
+          body="받은 플러그인 파일을 고르면 하는 일을 먼저 보여 드리고, 확인한 뒤에 설치해요."
+          action={install(true)}
         />
       )}
 
-      <ReviewSheet model={model} session={session} />
+      <footer className="un-plugin-foot">
+        <p>작품을 검색하고 가져오는 서비스는 소스 설정에서 관리해요.</p>
+        <p>
+          플러그인 때문에 화면이 멈추거나 이상하다면
+          <a className="un-btn is-text is-sm" href="?plugins=off">
+            <LifeBuoy size={15} />
+            모두 멈추고 복구
+          </a>
+        </p>
+      </footer>
+
+      <PluginReviewSheet model={model} session={session} />
       {model.config && (
         <ConfigSheet
           key={`${model.config.row.pluginId}:${model.config.value.revision}`}
@@ -506,34 +449,31 @@ function Installed({ session }: { session: ProductPluginSession }) {
         onConfirm={() => removing && model.remove(removing)}
         onClose={() => setRemoving(undefined)}
       >
-        <p>‘{removing?.manifest?.extension.name ?? removing?.pluginId}’와 저장 자료를 지워요.</p>
+        <p>
+          ‘{removing?.manifest?.extension.name ?? removing?.pluginId}’ 플러그인과 설정·저장 자료를 지워요. 같은 계정의
+          다른 기기에서도 사라져요.
+        </p>
       </ConfirmSheet>
-    </>
+    </PrefSection>
   );
 }
 
-/** JS 플러그인: installed per account in this browser. Auto-run plugins keep working after settings close. */
+/** Account plugins expose capabilities without requiring users to choose a runtime format. */
 export function PluginsSection() {
   const { session, message, code, retry } = useProductPlugins();
+  if (session) return <Installed key={session.instanceId} session={session} message={message} />;
   return (
-    <PrefSection title="JS 플러그인" hint="이 브라우저의 지금 계정에 설치해요. 본문 서식은 TXT·EPUB에서만 돼요.">
-      {session ? (
-        <>
-          {message && <Notice tone="warning">{message}</Notice>}
-          <Installed key={session.instanceId} session={session} />
-        </>
-      ) : (
-        <Notice
-          tone={message === '플러그인 환경 확인 중' ? 'info' : 'warning'}
-          action={
-            <button type="button" className="un-btn is-text is-sm" onClick={retry}>
-              다시 확인
-            </button>
-          }
-        >
-          {code ? '이 서버에서는 JS 플러그인을 쓸 수 없어요.' : message}
-        </Notice>
-      )}
+    <PrefSection title="플러그인" hint={SECTION_HINT}>
+      <Notice
+        tone={message === '플러그인 환경 확인 중' ? 'info' : 'warning'}
+        action={
+          <button type="button" className="un-btn is-text is-sm" onClick={retry}>
+            다시 확인
+          </button>
+        }
+      >
+        {code ? '이 서버에서는 플러그인을 쓸 수 없어요.' : message}
+      </Notice>
     </PrefSection>
   );
 }
