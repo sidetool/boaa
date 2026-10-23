@@ -1,3 +1,4 @@
+import { pinnedProxyAgent } from '../extensions/outbound-proxy';
 import { request } from 'node:https';
 import { approvePluginEndpoint } from './http-transport';
 import { publicImageUrl } from '../../../../packages/extension-contracts/home-feed';
@@ -17,6 +18,7 @@ export async function pluginCoverTransport(
   origin: string,
   signal: AbortSignal,
   beforeSend: () => Promise<void> = async () => {},
+  outboundProxy?: string,
 ) {
   if (!publicImageUrl(raw)) throw Error('INVALID_COVER');
   const target = new URL(raw),
@@ -28,45 +30,50 @@ export async function pluginCoverTransport(
   const approved = await approvePluginEndpoint(endpoint, origin, [], undefined, 0);
   await beforeSend();
   signal.throwIfAborted();
-  const bytes = await new Promise<Buffer>((resolve, reject) => {
-    const req = request(
-      target,
-      {
-        signal,
-        agent: false,
-        maxHeaderSize: 8192,
-        headers: { accept: 'image/png,image/jpeg,image/webp', 'accept-encoding': 'identity' },
-        lookup: (_host, options, callback) =>
-          queueMicrotask(() =>
-            options.all
-              ? callback(null, [approved.address])
-              : callback(null, approved.address.address, approved.address.family),
-          ),
-      },
-      (response) => {
-        response.on('error', reject);
-        if (
-          response.statusCode !== 200 ||
-          (response.headers['content-encoding'] && response.headers['content-encoding'] !== 'identity')
-        ) {
-          response.destroy(Error('COVER_DENIED'));
-          return;
-        }
-        let size = 0;
-        const chunks: Buffer[] = [];
-        response.on('data', (chunk: Buffer) => {
-          size += chunk.length;
-          if (size > 512 * 1024) response.destroy(Error('COVER_LIMIT'));
-          else chunks.push(chunk);
-        });
-        response.on('end', () => resolve(Buffer.concat(chunks)));
-      },
-    );
-    req.on('error', reject);
-    req.end();
-  });
-  signal.throwIfAborted();
-  const mime = coverMime(bytes);
-  if (!mime) throw Error('INVALID_COVER');
-  return { mime, data: bytes.toString('base64') };
+  const agent = pinnedProxyAgent(outboundProxy, target, approved.address.address, signal);
+  try {
+    const bytes = await new Promise<Buffer>((resolve, reject) => {
+      const req = request(
+        target,
+        {
+          signal,
+          agent: agent ?? false,
+          maxHeaderSize: 8192,
+          headers: { accept: 'image/png,image/jpeg,image/webp', 'accept-encoding': 'identity' },
+          lookup: (_host, options, callback) =>
+            queueMicrotask(() =>
+              options.all
+                ? callback(null, [approved.address])
+                : callback(null, approved.address.address, approved.address.family),
+            ),
+        },
+        (response) => {
+          response.on('error', reject);
+          if (
+            response.statusCode !== 200 ||
+            (response.headers['content-encoding'] && response.headers['content-encoding'] !== 'identity')
+          ) {
+            response.destroy(Error('COVER_DENIED'));
+            return;
+          }
+          let size = 0;
+          const chunks: Buffer[] = [];
+          response.on('data', (chunk: Buffer) => {
+            size += chunk.length;
+            if (size > 512 * 1024) response.destroy(Error('COVER_LIMIT'));
+            else chunks.push(chunk);
+          });
+          response.on('end', () => resolve(Buffer.concat(chunks)));
+        },
+      );
+      req.on('error', reject);
+      req.end();
+    });
+    signal.throwIfAborted();
+    const mime = coverMime(bytes);
+    if (!mime) throw Error('INVALID_COVER');
+    return { mime, data: bytes.toString('base64') };
+  } finally {
+    agent?.destroy();
+  }
 }

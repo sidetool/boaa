@@ -1,0 +1,32 @@
+/* Plugin views get the whole sheet body; the frame scrolls internally. */
+.un-layer.is-auto .un-sheet.un-plugin-sheet {
+  width: min(720px, 100%);
+}
+
+.un-plugin-sheet .un-sheet-body {
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+}
+
+.un-plugin-sheet-notice {
+  padding: 8px 22px 0;
+}
+
+.un-plugin-sheet .product-plugin-view.un-plugin-view {
+  flex: 1;
+  height: auto;
+  min-height: 320px;
+}
+
+@media (max-width: 899px) {
+  .un-plugin-sheet .un-sheet-body {
+    padding-bottom: var(--un-safe-b);
+  }
+
+  /* Bottom sheets size to content, so the frame needs an explicit height. */
+  .un-plugin-sheet .product-plugin-view.un-plugin-view {
+    flex: none;
+    height: calc(88dvh - 72px);
+  }
+}

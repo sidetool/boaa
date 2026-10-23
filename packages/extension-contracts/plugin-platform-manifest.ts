@@ -7,6 +7,7 @@ import { isUiJson, uiKeys, uiRecord, uiString, uiInteger } from './ui-json';
 export const PLATFORM_PERMISSIONS = [
   'http.request',
   'home.feed',
+  'app.search',
   'settings.own',
   'storage.own',
   'commands.register',
@@ -23,6 +24,7 @@ export const PLATFORM_PERMISSIONS = [
 export const PLATFORM_FEATURES = [
   'http.request',
   'home.feed',
+  'app.search',
   'settings.schema',
   'storage.own',
   'commands.register',
@@ -162,6 +164,12 @@ export function validatePlatformManifest(value: unknown): PlatformValidation {
     !ids(c.decorations)
   )
     return bad('contributes');
+  const declaredViews = c.views;
+  if (
+    Array.isArray(c.homeSections) &&
+    c.homeSections.some((section) => section.view !== undefined && !declaredViews.includes(section.view))
+  )
+    return bad('homeSections.view');
   if (value.connections !== undefined) {
     if (
       !Array.isArray(value.connections) ||
@@ -219,6 +227,10 @@ export function validatePlatformManifest(value: unknown): PlatformValidation {
   )
     return bad('homeSections');
   if (
+    (permissions.has('app.search') &&
+      (!hasRolePermission('ui', 'app.search') ||
+        hasRolePermission('controller', 'app.search') ||
+        hasRolePermission('task', 'app.search'))) ||
     (c.commands.length && !hasRolePermission('controller', 'commands.register')) ||
     (c.decorations.length &&
       (!hasRolePermission('controller', 'reader.decorations') ||

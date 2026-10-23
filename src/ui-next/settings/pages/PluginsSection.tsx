@@ -2,7 +2,6 @@ import type { UiJson } from '@boaa/extension-contracts/ui-json';
 import { AppWindow, Code2, FileUp, House, LifeBuoy, Play, Settings2, Trash2 } from 'lucide-react';
 import { useRef, useState } from 'react';
 import { useProductPlugins } from '../../../extensions/platform/PlatformPluginProvider';
-import type { PluginSettingsFailure } from '../../../extensions/platform/plugin-settings-failure';
 import type { ProductPluginSession } from '../../../extensions/platform/product-session';
 import type { SettingsField } from '../../../extensions/platform/settings-schema';
 import type { ConfigRow, Installation } from '../../../extensions/platform/store-model';
@@ -10,7 +9,6 @@ import {
   usePluginConfigEditorModel,
   usePluginJsonFieldModel,
   usePluginReaderInputModel,
-  usePluginViewModel,
 } from '../../../extensions/platform/use-platform-plugin-editor-models';
 import {
   pluginContributionLabel,
@@ -22,6 +20,8 @@ import {
   type PlatformPluginSettingsModel,
 } from '../../../extensions/platform/use-platform-plugin-settings-model';
 import { ConfirmSheet } from '../../components/dialogs';
+import { failureText } from '../../plugins/failure-text';
+import { PluginViewSheet } from '../../plugins/PluginViewSheet';
 import { PluginConnectionFolds } from './PluginConnectionFold';
 import { PluginCapabilityChips, PluginReviewSheet } from './PluginReviewSheet';
 import { cx, Sheet, Switch } from '../../components/primitives';
@@ -39,27 +39,6 @@ import {
 
 const SECTION_HINT =
   '홈에 추천 목록을 더하거나 읽기를 돕는 기능이에요. 내 계정에 저장되어 다른 기기에서도 그대로 쓸 수 있어요.';
-
-function failureText(issue: PluginSettingsFailure) {
-  switch (issue.code) {
-    case 'migration_requires_disabled':
-      return '설정을 옮기려면 먼저 플러그인을 끄고 파일을 다시 검토해 주세요.';
-    case 'disable_revoke_failed':
-      return '플러그인은 멈췄어요. 서버에 닿지 않아 보관된 연결 정보가 지워졌는지는 확인하지 못했어요.';
-    case 'remove_revoke_failed':
-      return '플러그인은 지웠어요. 서버에 닿지 않아 보관된 연결 정보가 지워졌는지는 확인하지 못했어요.';
-    case 'review_stale':
-      return '다른 기기에서 플러그인이 변경됐거나 검토가 끝났어요. 파일을 다시 선택해 주세요.';
-    case 'update_revoke_failed':
-      return '업데이트는 완료했어요. 이전 연결 정리는 확인하지 못했어요. 외부 서비스 연결을 확인해 주세요.';
-    case 'connection_setup_failed':
-      return '플러그인은 설치했어요. 아래 외부 서비스에서 연결을 다시 저장해 주세요.';
-    case 'missing_config':
-      return '작성자가 공통 설정을 주지 않았어요. 플러그인 화면을 확인해 주세요.';
-    default:
-      return issue.cause instanceof Error ? issue.cause.message : '처리하지 못했어요.';
-  }
-}
 
 function JsonField({ label, value, change }: { label: string; value: UiJson; change(value: UiJson): void }) {
   const { text, valid, changeText } = usePluginJsonFieldModel(value, change);
@@ -163,26 +142,6 @@ function ConfigSheet({
         </PrefGroup>
         {model.error && <Notice tone="danger">{failureText(model.error)}</Notice>}
       </form>
-    </Sheet>
-  );
-}
-
-function ViewSheet({
-  session,
-  id,
-  view,
-  close,
-}: {
-  session: ProductPluginSession;
-  id: string;
-  view: string;
-  close(): void;
-}) {
-  const model = usePluginViewModel(session, id, view);
-  return (
-    <Sheet open onClose={close} title={pluginContributionLabel('view', view, [view])}>
-      {model.error && <Notice tone="danger">{failureText(model.error)}</Notice>}
-      <div className="product-plugin-view un-plugin-view" ref={model.container} />
     </Sheet>
   );
 }
@@ -440,7 +399,7 @@ function Installed({ session, message }: { session: ProductPluginSession; messag
           close={() => model.setConfig(undefined)}
         />
       )}
-      {model.view && <ViewSheet session={session} {...model.view} close={() => model.setView(undefined)} />}
+      {model.view && <PluginViewSheet session={session} {...model.view} close={() => model.setView(undefined)} />}
       <ConfirmSheet
         open={Boolean(removing)}
         title="플러그인을 지울까요?"

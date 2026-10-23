@@ -64,6 +64,7 @@ export function Sheet({
   footer,
   variant = 'auto',
   closeDisabled = false,
+  className,
 }: {
   open: boolean;
   onClose: () => void;
@@ -73,6 +74,8 @@ export function Sheet({
   variant?: 'auto' | 'dialog';
   /** Keeps the sheet up while work that must not be interrupted runs (backdrop, Escape and ✕ do nothing). */
   closeDisabled?: boolean;
+  /** Extra class on the sheet panel for content-specific sizing. */
+  className?: string;
 }) {
   const panel = useRef<HTMLElement>(null);
   const close = useRef(onClose);
@@ -132,7 +135,7 @@ export function Sheet({
     <div className={cx('ui-next un-layer', `is-${variant}`)} role="presentation" onClick={requestClose}>
       <section
         ref={panel}
-        className="un-sheet"
+        className={cx('un-sheet', className)}
         role="dialog"
         aria-modal="true"
         aria-label={typeof title === 'string' ? title : undefined}

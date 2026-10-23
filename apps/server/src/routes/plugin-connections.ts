@@ -42,7 +42,12 @@ const assert = (v: unknown): void => {
 const values = (a: string, o: PluginHttpOwner) => [a, o.profileId, o.installationId, o.digest, o.generation];
 const where =
   "account_id=$1 and profile_id=$2 and installation_id=$3 and digest=$4 and generation=$5 and scope_key=(select server_id::text||':'||library_id::text from plugin_deployment_identity where singleton_key=1)";
-export function registerPluginConnectionRoutes(app: FastifyInstance, config: ServerConfig, pool: pg.Pool) {
+export function registerPluginConnectionRoutes(
+  app: FastifyInstance,
+  config: ServerConfig,
+  pool: pg.Pool,
+  resolveDefaultProxy: () => string | undefined = () => undefined,
+) {
   const allowed = privateOrigins(config.pluginPrivateOrigins ?? '[]');
   const pending = new Map<string, { controller: AbortController; owner: PluginHttpOwner }>();
   const seen = new Map<string, number>();
@@ -284,6 +289,7 @@ export function registerPluginConnectionRoutes(app: FastifyInstance, config: Ser
             async () => {
               assert((await load()).revision === row.revision);
             },
+            resolveDefaultProxy(),
           );
           const current = await load();
           assert(current.revision === row.revision);
@@ -365,6 +371,7 @@ export function registerPluginConnectionRoutes(app: FastifyInstance, config: Ser
           async () => {
             await load();
           },
+          resolveDefaultProxy(),
         );
       } finally {
         clearTimeout(timeout);

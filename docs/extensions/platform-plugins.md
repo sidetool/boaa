@@ -87,6 +87,10 @@ BoaaPlugin.register({
 
 플러그인은 최대 8개 홈 섹션을 선언할 수 있습니다. BOAA가 카드를 그리고 표지를 지연 로드합니다. 표지는 서버의 승인된 연결을 통해 이미지로 검증한 뒤 표시하므로 브라우저에 외부 URL을 직접 삽입하지 않습니다. 갱신 실패 시 기존 목록과 실패 안내·재시도 버튼을 함께 표시합니다. 비활성화·교체 중 늦게 도착한 응답은 반영하지 않습니다. 홈 화면을 닫으면 행의 자동 갱신 타이머도 해제됩니다.
 
+홈 섹션에 `view`를 지정하면 행의 **전체 보기**가 `contributes.views`에 선언한 플러그인 화면을 엽니다. 선언하지 않은 view ID는 설치 검증에서 거부합니다.
+
+자체 UI에서 제목 검색을 열려면 UI 역할에 `app.search` 권한과 필수 feature를 선언하고 클릭 핸들러에서 `await ctx.app.search(title)`을 호출합니다. 최대 256자의 검색어만 허용하며, SDK의 사용자 활성화 확인과 호스트의 프레임 포커스·세션 확인·초당 1회 제한을 적용합니다. 검색을 열면 플러그인 화면이 닫힙니다. 임의 URL이나 앱 라우트는 지정할 수 없습니다.
+
 ## HTTP 연결
 
 HTTP가 필요한 역할은 `http.request` 권한과 필수 feature를 선언하고, `contributes.connections`에 연결 ID를 넣습니다. `connections` 기본값을 함께 제공하면 설치 시 공개 연결 주소와 허용 메서드를 확인할 수 있습니다. 키나 토큰을 manifest에 넣지 않습니다.
@@ -117,7 +121,9 @@ if (result.status < 200 || result.status >= 300) throw new Error('ranking_failed
 // result.body를 검증하고 HomeFeed 형태로 변환합니다.
 ```
 
-`response`는 `text` 또는 `json`입니다. HTTP 상태 코드는 성공 결과에서도 직접 확인합니다. 취소 결과의 `outcome: 'unknown'`은 요청이 서버에 도착했을 가능성이 있으므로 변경 요청을 무조건 반복하지 않습니다. 표지를 내려받으려면 표지 URL의 origin과 경로도 승인된 **GET** 연결 범위에 포함되어야 합니다. 별도 이미지 호스트라면 별도 연결을 선언합니다. 연결 승인이 임의 서버나 내부 주소 접근 권한을 부여하지는 않습니다.
+`response`는 `text` 또는 `json`입니다. HTTP 상태 코드는 전송 성공 결과에서도 직접 확인합니다. `response: "json"`인데 오류 상태의 본문이 HTML이거나 비어 있으면 `body: null`과 원래 상태를 반환합니다. 정상 상태의 잘못된 JSON과 크기 제한 초과는 전송 실패로 처리합니다. 취소 결과의 `outcome: 'unknown'`은 요청이 서버에 도착했을 가능성이 있으므로 변경 요청을 무조건 반복하지 않습니다. 표지를 내려받으려면 표지 URL의 origin과 경로도 승인된 **GET** 연결 범위에 포함되어야 합니다. 별도 이미지 호스트라면 별도 연결을 선언합니다. 연결 승인이 임의 서버나 내부 주소 접근 권한을 부여하지는 않습니다.
+
+HTTP와 표지 요청은 서버에 저장된 소스 기본 연결 방식(직접 연결 또는 운영자 프록시)을 따릅니다. 플러그인은 프록시를 선택하거나 주소를 받지 않습니다. 프록시를 사용해도 목적지 DNS/IP 검증, TLS 호스트 검증 및 승인한 경로 범위를 유지하며 프록시 실패 시 직접 연결로 전환하지 않습니다.
 
 현재 HTTP 응답 본문은 24 KiB, 요청 본문은 32 KiB로 제한됩니다. 큰 HTML 페이지 전체를 받는 방식보다 필요한 필드만 반환하는 작은 API나 페이지 분할을 사용합니다. 표지는 별도 경로로 최대 512 KiB의 PNG·JPEG·WebP를 받습니다. 리다이렉트와 압축 응답은 따르지 않습니다.
 
@@ -136,18 +142,20 @@ await ctx.storage.set('ranking-cache', { items: [], fetchedAt: Date.now() }, pre
 
 ## 기능 범위와 수명
 
-| 기능           | 공개 API와 범위                                                                       |
-| -------------- | ------------------------------------------------------------------------------------- |
-| 홈 목록        | `ctx.home.register`; 호스트 카드 및 제목 검색                                         |
-| 명령           | `ctx.commands.register`; 선언한 명령 ID, 설정 화면 및 승인된 리더 입력에서 실행       |
-| 자체 화면      | `entries.ui`, `contributes.views`; 설정 화면에서 여는 격리된 UI, `ctx.view.root`      |
-| UI ↔ 컨트롤러  | UI의 `ctx.controller.call`, 컨트롤러의 `ctx.handlers.register`                        |
-| 리더 상태·본문 | `ctx.reader.state/content`; 열린 책에 한정, 본문 권한 필요                            |
-| 본문 서식      | `ctx.decorations.register/invalidate`; TXT·EPUB의 범위·색상 장식, 원본 본문 변경 아님 |
-| 메모·북마크    | `ctx.reader.annotations`; 현재 책의 권한과 호스트가 발급한 handle 필요                |
-| 자동 스크롤    | `ctx.reader.auto`; 사용자가 승인한 실제 입력의 interaction/lease 동안만 제어          |
-| 계산 작업      | `entries.task`, `ctx.tasks.run`; 별도 VM의 순수 계산, 네트워크·UI·저장소 없음         |
-| 이벤트         | `app.ready`, 리더 진입·이탈·상태 변경, 설정 변경, view 열기·닫기                      |
+| 기능           | 공개 API와 범위                                                                          |
+| -------------- | ---------------------------------------------------------------------------------------- |
+| 홈 목록        | `ctx.home.register`; 호스트 카드 및 제목 검색                                            |
+| 명령           | `ctx.commands.register`; 선언한 명령 ID, 설정 화면 및 승인된 리더 입력에서 실행          |
+| 자체 화면      | `entries.ui`, `contributes.views`; 설정 화면 또는 홈에서 여는 격리된 UI, `ctx.view.root` |
+| UI ↔ 컨트롤러  | UI의 `ctx.controller.call`, 컨트롤러의 `ctx.handlers.register`                           |
+| 리더 상태·본문 | `ctx.reader.state/content`; 열린 책에 한정, 본문 권한 필요                               |
+| 본문 서식      | `ctx.decorations.register/invalidate`; TXT·EPUB의 범위·색상 장식, 원본 본문 변경 아님    |
+| 메모·북마크    | `ctx.reader.annotations`; 현재 책의 권한과 호스트가 발급한 handle 필요                   |
+| 자동 스크롤    | `ctx.reader.auto`; 사용자가 승인한 실제 입력의 interaction/lease 동안만 제어             |
+| 계산 작업      | `entries.task`, `ctx.tasks.run`; 별도 VM의 순수 계산, 네트워크·UI·저장소 없음            |
+| 이벤트         | `app.ready`, 리더 진입·이탈·상태 변경, 설정 변경, view 열기·닫기                         |
+
+`ctx.controller.call`과 UI의 HTTP 요청은 최대 25초까지 기다린 뒤 취소합니다. 컨트롤러의 기존 30초 실행 감시와 메모리·CPU 제한은 유지됩니다.
 
 `onHome`은 홈 피드를 요청할 때, `onCommand`는 명령을 실행할 때, `onView`는 자체 UI를 열 때 활성화합니다. `onReader`와 `onAppSession`은 해당 앱 수명에 연결됩니다. `activate()`에서 핸들러를 등록하고 실제 작업은 핸들러 안에서 수행합니다. 홈·명령용 유휴 컨트롤러는 해제될 수 있으므로 메모리 전역 값의 영속성을 가정하지 않습니다. 필요한 지속 상태는 `storage.own`에 저장합니다. 제공되는 `signal`로 취소를 확인하고 HTTP에 전달합니다.
 

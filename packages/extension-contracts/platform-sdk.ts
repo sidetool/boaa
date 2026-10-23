@@ -142,6 +142,8 @@ export interface PlatformControllerApi {
 
 /** UI code has DOM access only inside its sandbox. Supply HTMLElement as Root in a DOM-enabled project. */
 export interface PlatformViewContext<Root = unknown> {
+  /** Opens BOAA title search after a user action; requires app.search. */
+  readonly app: { search(query: string): Promise<void> };
   readonly view: { readonly id: string; readonly root: Root | null };
   readonly controller: {
     call(handler: string, value?: UiJson, options?: { signal?: PlatformAbortSignal }): Promise<UiJson>;

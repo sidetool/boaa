@@ -67,6 +67,10 @@ import { useAppRuntime } from './app/runtime/RuntimeProvider';
 import { useOptionalSelfHostAuth } from './features/auth/SelfHostAccountGate';
 import { useAnnotationsController } from './features/annotations/useAnnotationsController';
 import { HomeWorkspace as BookWorkspaceScreens } from './ui-next/home/HomeWorkspace';
+import { PluginViewHost } from './ui-next/plugins/PluginViewHost';
+import { usePluginSearchRequests } from './ui-next/plugins/plugin-search-requests';
+import { closePluginView, usePluginViewRoute } from './ui-next/plugins/view-route';
+import { openSearch } from './ui-next/search/route';
 import { BookWorkspaceStatsPanel } from './features/book-workspace/book-workspace-lazy-panels';
 import type {
   BookWorkspaceAdjacentFeaturePort,
@@ -5070,7 +5074,18 @@ export default function App() {
   }, [currentChapter, mediaSession, selectedNovel, ttsPaused, ttsPlaying]);
   useEffect(() => () => mediaSession.clear(), [mediaSession]);
 
+  const pluginViewRoute = usePluginViewRoute();
+  // A plugin asked for BOAA title search (authorized by the view runtime): leave its sheet and any settings
+  // surface that hosted it, then open unified search exactly like a home card.
+  usePluginSearchRequests((query) => {
+    closePluginView();
+    if (settingsOpen) readerSettingsController.closePanel();
+    if (view !== 'library') bookWorkspace.setView('library');
+    openSearch(query);
+  });
   const appBackLayers: readonly AppBackLayer[] = [
+    // First open layer is the top one; plugin views open above home and settings.
+    { id: 'plugin-view', open: Boolean(pluginViewRoute), dismiss: closePluginView },
     { id: 'import', open: importFeature.isOpen, dismiss: importFeature.close },
     { id: 'external-sources', open: externalSourceFeature.open, dismiss: externalSourceFeature.close },
     {
@@ -5937,6 +5952,7 @@ export default function App() {
         </Suspense>
       )}
 
+      <PluginViewHost />
       <LayerPresence open={settingsOpen}>
         <Suspense fallback={null}>
           <ReaderSettingsPanel

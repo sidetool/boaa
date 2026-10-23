@@ -7,6 +7,7 @@ import { createUiNextHomeAdapter } from './model';
 import { actions, model } from '../test-fixtures';
 import { DiscoveryCard, HomeRow, rowUpdatedLabel } from './rows';
 import { getSearchRoute, setSearchRoute } from '../search/route';
+import { closePluginView, getPluginViewRoute } from '../plugins/view-route';
 import { UiNextSearchScreen } from '../search/UiNextSearchScreen';
 import type { UiNextSearchAdapter } from '../search/contract';
 import type { HomeRowConfig } from './contract';
@@ -42,6 +43,7 @@ afterEach(() => {
   act(() => renderer?.unmount());
   renderer = undefined;
   setSearchRoute(undefined);
+  closePluginView();
   vi.useRealTimers();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
@@ -203,4 +205,22 @@ it('labels row freshness compactly relative to today', () => {
   expect(rowUpdatedLabel(new Date(2026, 9, 22, 21, 30).getTime(), now)).toBe('어제 21:30');
   expect(rowUpdatedLabel(new Date(2026, 9, 3, 14, 0).getTime(), now)).toBe('10월 3일 14:00');
   expect(rowUpdatedLabel(new Date(2025, 11, 31, 8, 0).getTime(), now)).toBe('2025년 12월 31일 08:00');
+});
+
+it('opens the declared plugin view of a section from its row action only while that section is current', async () => {
+  const f = fixture();
+  await f.loader.sync();
+  expect(f.row().openAll).toBeUndefined();
+
+  f.service.homeSections.mockResolvedValue([{ ...section, section: { ...section.section, view: 'browse' } }]);
+  await f.loader.sync();
+  const openAll = f.row().openAll!;
+  openAll();
+  expect(getPluginViewRoute()).toMatchObject({ pluginId: section.pluginId, view: 'browse', title: section.pluginName });
+  expect(getSearchRoute()).toBeUndefined();
+
+  closePluginView();
+  f.loader.dispose();
+  openAll();
+  expect(getPluginViewRoute()).toBeUndefined();
 });

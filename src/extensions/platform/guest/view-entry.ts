@@ -83,7 +83,7 @@ if (parent !== window) {
           detach: () => signal?.removeEventListener('abort', abort),
           timer: setTimeout(
             () => cancel(method === 'http.request' ? 'HTTP_OUTCOME_UNKNOWN' : 'TIMEOUT'),
-            method === 'http.request' ? 25000 : 5000,
+            ['http.request', 'controller.call'].includes(method) ? 25000 : 5000,
           ),
         });
         signal?.addEventListener('abort', abort, { once: true });
@@ -155,6 +155,12 @@ if (parent !== window) {
       loaded = true;
       const root = document.getElementById('boaa-plugin-root');
       const ctx = Object.freeze({
+        app: Object.freeze({
+          search: async (query: string): Promise<void> => {
+            if (!navigator.userActivation?.isActive) throw Error('USER_ACTION_REQUIRED');
+            await request('app.search', { query });
+          },
+        }),
         http: Object.freeze({
           request: async (input: UiJson, signal?: AbortSignal): Promise<UiJson> => {
             if (signal?.aborted) return { ok: false, code: 'HTTP_CANCELLED', outcome: 'not-sent' };

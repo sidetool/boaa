@@ -29,8 +29,9 @@ export async function registerPluginRuntimeRoutes(
   config: ServerConfig,
   pool: pg.Pool,
   assets: URL,
+  resolveDefaultProxy?: () => string | undefined,
 ) {
-  registerPluginConnectionRoutes(app, config, pool);
+  registerPluginConnectionRoutes(app, config, pool, resolveDefaultProxy);
   registerPluginStateRoutes(app, config, pool);
   // A missing/corrupt deployment fails startup instead of serving a half-functional runtime.
   const [bootstrap, worker, wasm] = await Promise.all([

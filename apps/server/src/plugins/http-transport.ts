@@ -1,3 +1,4 @@
+import { pinnedProxyAgent } from '../extensions/outbound-proxy';
 import { networkInterfaces } from 'node:os';
 import { lookup } from 'node:dns/promises';
 import { isIP, BlockList } from 'node:net';
@@ -76,8 +77,10 @@ export async function pluginHttpTransport(
   serverPort: number,
   signal: AbortSignal,
   beforeSend: () => Promise<void>,
+  outboundProxy?: string,
 ): Promise<UiJson> {
   let dispatched = false;
+  let agent: ReturnType<typeof pinnedProxyAgent>;
   const write = !['GET', 'HEAD', 'OPTIONS'].includes(input.method);
   try {
     const target = pluginTarget(endpoint, input.path);
@@ -92,6 +95,7 @@ export async function pluginHttpTransport(
     if (input.body !== undefined) headers['content-length'] = String(Buffer.byteLength(input.body));
     await beforeSend();
     signal.throwIfAborted();
+    agent = pinnedProxyAgent(outboundProxy, target, approved.address.address, signal);
     const response = await new Promise<{ status: number; headers: Record<string, string>; text: string }>(
       (resolve, reject) => {
         const req = (target.protocol === 'https:' ? https : http)(
@@ -100,7 +104,7 @@ export async function pluginHttpTransport(
             method: input.method,
             headers,
             signal,
-            agent: false,
+            agent: agent ?? false,
             maxHeaderSize: 8192,
             lookup: (_host, options, callback) =>
               queueMicrotask(() =>
@@ -110,7 +114,7 @@ export async function pluginHttpTransport(
               ),
           },
           (res) => {
-            // No redirects, cookie jar, proxy inheritance or compressed-response expansion.
+            // No redirects, cookie jar or compressed-response expansion.
             if (res.headers['content-encoding'] && res.headers['content-encoding'] !== 'identity') {
               res.destroy(Error('HTTP_ENCODING_DENIED'));
             }
@@ -139,17 +143,21 @@ export async function pluginHttpTransport(
     );
     await beforeSend();
     signal.throwIfAborted();
-    const result = {
-      ok: true,
-      status: response.status,
-      headers: response.headers,
-      body:
-        input.response === 'json'
-          ? input.method === 'HEAD' || [204, 205, 304].includes(response.status)
-            ? null
-            : (JSON.parse(response.text) as UiJson)
-          : response.text,
-    };
+    let body: UiJson = response.text;
+    if (input.response === 'json') {
+      if (input.method === 'HEAD' || [204, 205, 304].includes(response.status)) body = null;
+      else {
+        try {
+          body = JSON.parse(response.text) as UiJson;
+        } catch (error) {
+          // Error pages often contain HTML or no body. Preserve their HTTP status so
+          // guests can distinguish login, challenges and throttling from outages.
+          if (response.status >= 200 && response.status < 300) throw error;
+          body = null;
+        }
+      }
+    }
+    const result = { ok: true, status: response.status, headers: response.headers, body };
     if (!isUiJson(result, 56 * 1024)) throw Error('HTTP_RESPONSE_LIMIT');
     return result;
   } catch {
@@ -158,5 +166,7 @@ export async function pluginHttpTransport(
       code: signal.aborted ? 'HTTP_CANCELLED' : 'HTTP_FAILED',
       outcome: dispatched && write ? 'unknown' : dispatched ? 'failed' : 'not-sent',
     };
+  } finally {
+    agent?.destroy();
   }
 }

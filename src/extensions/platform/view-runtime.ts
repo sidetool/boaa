@@ -96,6 +96,7 @@ class View implements PluginView {
   private pending = new Map<number, AbortController>();
   private burst = 0;
   private tick = Date.now();
+  private lastSearch = 0;
   private resolve!: () => void;
   private reject!: (error: Error) => void;
   readonly ready = new Promise<void>((resolve, reject) => {
@@ -281,9 +282,13 @@ class View implements PluginView {
     requireStore(this.pending.size < 4, 'CALL_LIMIT');
     const operation = new AbortController();
     this.pending.set(data.id, operation);
-    const timeout = setTimeout(() => operation.abort(), data.method === 'http.request' ? 25000 : 5000);
+    const timeout = setTimeout(
+      () => operation.abort(),
+      ['http.request', 'controller.call'].includes(data.method) ? 25000 : 5000,
+    );
     let result: UiJson;
     let createdSubscription: number | undefined;
+    let searchQuery: string | undefined;
     try {
       await this.store.assertCall(session, session.fence, data.method);
       this.guard();
@@ -296,6 +301,25 @@ class View implements PluginView {
       } else if (data.method === 'http.request') {
         requireStore(this.http, 'HTTP_UNAVAILABLE');
         value = await this.http.request(session, input, operation.signal);
+      } else if (data.method === 'app.search') {
+        requireStore(
+          uiKeys(input, ['query']) &&
+            typeof input.query === 'string' &&
+            input.query.trim().length > 0 &&
+            input.query.length <= 256 &&
+            !Array.from(input.query).some(
+              (character) => character.charCodeAt(0) < 32 || character.charCodeAt(0) === 127,
+            ),
+          'INVALID_ARGUMENT',
+        );
+        requireStore(
+          this.phase === 'ready' &&
+            this.win.document.activeElement === this.frame &&
+            Date.now() - this.lastSearch >= 1000,
+          'USER_ACTION_REQUIRED',
+        );
+        searchQuery = (input.query as string).trim();
+        value = null;
       } else if (data.method === 'controller.call') {
         requireStore(uiKeys(input, ['handler', 'value']) && typeof input.handler === 'string', 'INVALID_ARGUMENT');
         value = await this.service.callFromView(session, input.handler, input.value, operation.signal);
@@ -348,6 +372,13 @@ class View implements PluginView {
       await this.store.assertSession(session, session.fence);
       this.guard();
       operation.signal.throwIfAborted();
+      if (searchQuery !== undefined) {
+        requireStore(
+          this.win.document.activeElement === this.frame && Date.now() - this.lastSearch >= 1000,
+          'USER_ACTION_REQUIRED',
+        );
+        this.lastSearch = Date.now();
+      }
       result = { ok: true, value };
     } catch (error) {
       if (createdSubscription !== undefined) this.subscriptions.delete(createdSubscription);
@@ -364,6 +395,9 @@ class View implements PluginView {
     }
     requireStore(isUiJson(result, 65536), 'OUTPUT_LIMIT');
     this.send({ kind: 'reply', id: data.id, result });
+    if (result.ok && searchQuery !== undefined) {
+      this.win.dispatchEvent(new CustomEvent('boaa:plugin-search', { detail: { query: searchQuery } }));
+    }
   }
   close(normal = true): Promise<void> {
     if (this.cleanup) return this.cleanup;

@@ -1,5 +1,6 @@
 import type { HomeRowConfig, HomeRowView } from './contract';
 import { openSearch } from '../search/route';
+import { openPluginView } from '../plugins/view-route';
 
 export interface HomePluginSection {
   pluginId: string;
@@ -7,7 +8,8 @@ export interface HomePluginSection {
   digest: string;
   revision: number;
   pluginName: string;
-  section: { id: string; title: string; description?: string };
+  /** `view` is a declared plugin view the row's "전체 보기" action opens. */
+  section: { id: string; title: string; description?: string; view?: string };
 }
 export interface HomePluginFeed {
   items: Array<{ id: string; title: string; author?: string; rank?: number; coverUrl?: string; searchQuery?: string }>;
@@ -105,6 +107,7 @@ export class HomePluginLoader {
       return { config, title: '플러그인 목록', status: 'failed', error: '사용할 수 없는 플러그인이에요.', items: [] };
     const { section } = entry;
     const current = () => !this.disposed && this.entries.get(key) === entry;
+    const view = section.section.view;
     const load = (force: boolean) => {
       if (!current() || entry.operation || (!force && entry.refreshAt && entry.refreshAt > Date.now())) return;
       const generation = this.generation;
@@ -145,6 +148,11 @@ export class HomePluginLoader {
       error: entry.error,
       requestLoad: () => load(false),
       retry: () => load(true),
+      openAll: view
+        ? () => {
+            if (current()) openPluginView(section.pluginId, view, section.pluginName);
+          }
+        : undefined,
       items: (entry.page?.items ?? []).map((item) => ({
         kind: 'discovery',
         key: `${key}:${item.id}`,

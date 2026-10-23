@@ -32,6 +32,7 @@ const policies: Readonly<Record<string, CallPolicy>> = {
   'reader.auto.start': { roles: ['controller'], permission: 'reader.control' },
   'reader.auto.update': { roles: ['controller'], permission: 'reader.control' },
   'reader.auto.stop': { roles: ['controller'], permission: 'reader.control' },
+  'app.search': { roles: ['ui'], permission: 'app.search' },
   'controller.call': { roles: ['ui'], permission: 'ui.render' },
 };
 

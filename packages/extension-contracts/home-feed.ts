@@ -4,6 +4,8 @@ export interface HomeFeedSection {
   id: string;
   title: string;
   description?: string;
+  /** Declared plugin view opened by the host row action. */
+  view?: string;
 }
 export interface HomeFeedItem {
   id: string;
@@ -26,10 +28,11 @@ export function homeFeedSections(value: unknown): value is HomeFeedSection[] {
     value.every(
       (s) =>
         uiRecord(s) &&
-        uiKeys(s, ['id', 'title'], ['description']) &&
+        uiKeys(s, ['id', 'title'], ['description', 'view']) &&
         typeof s.id === 'string' &&
         /^[a-z][a-z0-9.-]{0,63}$/.test(s.id) &&
         uiString(s.title, 128) &&
+        (s.view === undefined || (typeof s.view === 'string' && /^[a-z][a-z0-9.-]{0,63}$/.test(s.view))) &&
         (s.description === undefined || uiString(s.description, 256)),
     ) &&
     new Set(value.map((s) => s.id)).size === value.length

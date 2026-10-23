@@ -224,7 +224,6 @@ export async function buildServer(
     resolveIdentity: (userId) => accountIdentity(pool, userId),
   });
   await registerServerManagement(app, [importQueue, providerQueue, translationQueue]);
-  await registerPluginRuntimeRoutes(app, config, pool, new URL('../dist/plugin-runtime-assets/', import.meta.url));
   if (config.webRoot) await registerWebAssets(app, config.webRoot);
 
   const pruneResult = await pruneStaleUploadSessions(pool, config);
@@ -285,6 +284,9 @@ export async function buildServer(
   await sourceNetwork.initialize();
   app.addHook('onClose', () => sourceNetwork.close());
   await registerSourceNetworkSettingsRoutes(app, sourceNetwork);
+  await registerPluginRuntimeRoutes(app, config, pool, new URL('../dist/plugin-runtime-assets/', import.meta.url), () =>
+    sourceNetwork.resolve(),
+  );
   const managedMetadata = process.env.BOAA_MANAGED_METADATA_ENDPOINT;
   await registerWebNovelMetadataCollectorGateway(app, config, {
     ...(managedMetadata && managedMetadata === config.webNovelMetadataCollectorUrl

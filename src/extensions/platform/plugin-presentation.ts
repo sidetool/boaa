@@ -46,6 +46,7 @@ const groups: { id: PluginCapabilityId; title: string; permissions: Record<strin
     id: 'interface',
     title: '플러그인 화면과 기능',
     permissions: {
+      'app.search': '선택한 제목으로 BOAA 검색 화면을 엽니다.',
       'ui.render': '플러그인 화면을 표시합니다.',
       'commands.register': '사용자가 실행할 수 있는 기능을 추가합니다.',
     },
