@@ -1,4 +1,5 @@
 import type pg from 'pg';
+import type { PlatformFeature } from '../../../../packages/extension-contracts/plugin-platform-manifest';
 import type { PluginHttpOwner } from '../../../../packages/extension-contracts/plugin-http';
 import type { Installation, GrantRow } from '../../../../src/extensions/platform/store-model';
 
@@ -9,6 +10,7 @@ export async function requirePluginConnectionAuthority(
   owner: PluginHttpOwner,
   slot: string,
   roles: readonly string[],
+  feature?: PlatformFeature,
 ) {
   if (owner.profileId !== scope.accountId || !roles.length) throw Error('PLUGIN_CONNECTION_DENIED');
   const result = await db.query<{ installation: Installation; grants: GrantRow }>(
@@ -31,6 +33,10 @@ export async function requirePluginConnectionAuthority(
     grants.digest !== owner.digest ||
     grants.revision !== owner.generation ||
     !install.manifest?.contributes.connections?.includes(slot) ||
+    (feature !== undefined &&
+      ![...(install.manifest.features?.required ?? []), ...(install.manifest.features?.optional ?? [])].includes(
+        feature,
+      )) ||
     !roles.every(
       (role) =>
         (role === 'controller' || role === 'ui') &&

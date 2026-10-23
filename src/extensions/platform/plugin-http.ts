@@ -1,3 +1,4 @@
+import { pluginImageRequest } from '../../../packages/extension-contracts/plugin-images';
 import { uiRecord, uiKeys, uiInteger, type UiJson } from '@boaa/extension-contracts/ui-json';
 import { pluginHttpRequest, type PluginHttpOwner } from '../../../packages/extension-contracts/plugin-http';
 import type { Installation, PluginSession } from './store-model';
@@ -77,6 +78,65 @@ export class PluginHttp {
   /** Retire only the reviewed generation; a concurrent update may already have new connections. */
   async retire(row: Installation) {
     await this.host('retire', this.owner(row));
+  }
+  async image(session: PluginSession, input: UiJson, signal: AbortSignal): Promise<UiJson> {
+    await this.store.assertCall(session, session.fence, 'http.image');
+    requireStore(pluginImageRequest(input), 'IMAGE_INVALID_REQUEST');
+    const row = (await this.store.list()).find((r) => r.installationId === session.fence.installationId);
+    requireStore(
+      row?.active === session.fence.digest && row.manifest?.contributes.connections?.includes(input.slot),
+      'HTTP_CONNECTION_DENIED',
+    );
+    const owner = this.owner(row),
+      requestId = crypto.randomUUID(),
+      abort = new AbortController();
+    const combined = AbortSignal.any([signal, this.lifetime, abort.signal]);
+    let dispatched = false,
+      checking = false;
+    const poll = setInterval(() => {
+      if (checking) return;
+      checking = true;
+      void this.store
+        .assertCall(session, session.fence, 'http.image')
+        .catch(() => abort.abort())
+        .finally(() => {
+          checking = false;
+        });
+    }, 200);
+    const cancel = () => {
+      if (dispatched)
+        void this.transport('/api/plugins/connections/cancel', {
+          method: 'POST',
+          credentials: 'same-origin',
+          keepalive: true,
+          headers: { 'content-type': 'application/json', 'x-boaa-plugin-host': '1' },
+          body: JSON.stringify({ owner, requestId }),
+        }).catch(() => {});
+    };
+    combined.addEventListener('abort', cancel, { once: true });
+    try {
+      combined.throwIfAborted();
+      const connections = (await this.host('list', owner, {}, combined)) as PluginConnectionStatus[];
+      const connection = connections.find(
+        (c) => c.slot === input.slot && c.roles.includes('ui') && c.methods.includes('GET'),
+      );
+      requireStore(connection, 'HTTP_CONNECTION_REQUIRED');
+      await this.store.assertCall(session, session.fence, 'http.image');
+      combined.throwIfAborted();
+      dispatched = true;
+      const result = await this.host(
+        'image',
+        owner,
+        { requestId, revision: connection.revision, request: input },
+        combined,
+      );
+      await this.store.assertCall(session, session.fence, 'http.image');
+      combined.throwIfAborted();
+      return result as UiJson;
+    } finally {
+      clearInterval(poll);
+      combined.removeEventListener('abort', cancel);
+    }
   }
   async request(session: PluginSession, input: UiJson, signal: AbortSignal): Promise<UiJson> {
     await this.store.assertCall(session, session.fence, 'http.request');

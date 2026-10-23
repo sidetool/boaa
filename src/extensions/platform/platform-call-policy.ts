@@ -12,6 +12,7 @@ const policies: Readonly<Record<string, CallPolicy>> = {
   'storage.set': { roles: ['controller', 'ui'], permission: 'storage.own' },
   'storage.remove': { roles: ['controller', 'ui'], permission: 'storage.own' },
   'storage.list': { roles: ['controller', 'ui'], permission: 'storage.own' },
+  'http.image': { roles: ['ui'], permission: 'http.request' },
   'http.request': { roles: ['controller', 'ui'], permission: 'http.request' },
   'http.cancel': { roles: ['controller'], permission: 'http.request' },
   'settings.get': { roles: ['controller', 'ui'], permission: 'settings.own' },

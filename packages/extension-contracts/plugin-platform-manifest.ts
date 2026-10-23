@@ -29,6 +29,7 @@ export const PLATFORM_FEATURES = [
   'storage.own',
   'commands.register',
   'ui.views',
+  'ui.images',
   'reader.content.visible',
   'reader.decorations',
   'reader.state',
@@ -244,6 +245,11 @@ export function validatePlatformManifest(value: unknown): PlatformValidation {
       permission === 'settings.own' ? 'settings.schema' : permission === 'ui.render' ? 'ui.views' : permission;
     if (!f.required.includes(feature)) return bad('features.required');
   }
+  if (
+    (f.required.includes('ui.images') || f.optional.includes('ui.images')) &&
+    !hasRolePermission('ui', 'http.request')
+  )
+    return bad('features.ui.images');
   const access = value.requestedAccess;
   if (
     !uiRecord(access) ||

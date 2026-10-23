@@ -1,3 +1,6 @@
+import { pluginImageRequest } from '../../../../packages/extension-contracts/plugin-images';
+import { pluginTarget } from '../../../../packages/extension-contracts/plugin-http';
+import { pluginImageThumbnail } from '../plugins/image-thumbnail';
 import { requireUserId } from '../auth.js';
 import { randomUUID, randomBytes, createCipheriv, createDecipheriv } from 'node:crypto';
 import type pg from 'pg';
@@ -237,34 +240,68 @@ export function registerPluginConnectionRoutes(
         abortConnections(scope.accountId, owner);
         return { ok: true };
       }
-      if (action === 'cover') {
-        assert(uiKeys(body, ['owner', 'url']) && typeof body.url === 'string' && body.url.length <= 2048);
-        const target = new URL(String(body.url));
+      if (action === 'cover' || action === 'image') {
+        const isImage = action === 'image';
+        if (isImage)
+          assert(
+            uiKeys(body, ['owner', 'requestId', 'revision', 'request']) &&
+              typeof body.requestId === 'string' &&
+              /^[a-f0-9-]{36}$/.test(body.requestId) &&
+              typeof body.revision === 'string' &&
+              pluginImageRequest(body.request),
+          );
+        else assert(uiKeys(body, ['owner', 'url']) && typeof body.url === 'string' && body.url.length <= 2048);
+        const input = isImage
+          ? (body.request as import('../../../../packages/extension-contracts/plugin-images').PluginImageRequest)
+          : undefined;
+        const target = isImage ? undefined : new URL(String(body.url));
         const load = async () => {
           const current = await identity(req);
           assert(current.accountId === scope.accountId && current.libraryId === scope.libraryId);
           const rows = await pool.query<Connection>(`select * from plugin_connections where ${where}`, args);
           const row = rows.rows.find((connection) => {
             const base = new URL(connection.endpoint);
+            if (input)
+              return (
+                connection.slot === input.slot &&
+                connection.revision === body.revision &&
+                connection.roles.includes('ui') &&
+                connection.methods.includes('GET')
+              );
             return (
               connection.roles.includes('controller') &&
               connection.methods.includes('GET') &&
-              target.origin === base.origin &&
-              target.pathname.startsWith(base.pathname)
+              target!.origin === base.origin &&
+              target!.pathname.startsWith(base.pathname)
             );
           });
           assert(row);
-          await requirePluginConnectionAuthority(pool, scope, owner, row!.slot, ['controller']);
+          await requirePluginConnectionAuthority(
+            pool,
+            scope,
+            owner,
+            row!.slot,
+            [isImage ? 'ui' : 'controller'],
+            isImage ? 'ui.images' : undefined,
+          );
+          if (input) pluginTarget(row!.endpoint, input.path);
           return row!;
         };
         assert(
           pending.size < 16 &&
             [...pending.keys()].filter((key) => key.startsWith(prefix(scope.accountId, owner))).length < 4,
         );
-        const key = prefix(scope.accountId, owner) + randomUUID(),
+        const key = prefix(scope.accountId, owner) + (isImage ? String(body.requestId) : randomUUID()),
           controller = new AbortController();
+        if (isImage) {
+          const now = Date.now();
+          for (const [k, deadline] of seen) if (deadline < now) seen.delete(k);
+          assert(!seen.has(key) && seen.size < 2048);
+          seen.set(key, now + 60000);
+        }
+        assert(!pending.has(key));
         pending.set(key, { controller, owner });
-        const timeout = setTimeout(() => controller.abort(), 10000);
+        const timeout = setTimeout(() => controller.abort(), isImage ? 15000 : 10000);
         let checking = false;
         const poll = setInterval(() => {
           if (checking) return;
@@ -281,8 +318,13 @@ export function registerPluginConnectionRoutes(
         reply.raw.on('close', disconnect);
         try {
           const row = await load();
+          if (input?.cachedRevision === row.revision) {
+            assert((await load()).revision === row.revision);
+            controller.signal.throwIfAborted();
+            return { notModified: true, revision: row.revision };
+          }
           const result = await pluginCoverTransport(
-            String(body.url),
+            input ? pluginTarget(row.endpoint, input.path).href : String(body.url),
             row.endpoint,
             scope.origin,
             controller.signal,
@@ -291,9 +333,11 @@ export function registerPluginConnectionRoutes(
             },
             resolveDefaultProxy(),
           );
+          const image = isImage ? await pluginImageThumbnail(result, controller.signal) : result;
           const current = await load();
+          controller.signal.throwIfAborted();
           assert(current.revision === row.revision);
-          return result;
+          return isImage ? { ...image, revision: row.revision } : image;
         } finally {
           clearTimeout(timeout);
           clearInterval(poll);

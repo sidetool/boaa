@@ -1,3 +1,4 @@
+import { PLUGIN_IMAGE_REPLY_BYTES } from '../../../packages/extension-contracts/plugin-images';
 import type { PluginHttp } from './plugin-http';
 import { isUiJson, uiRecord, uiKeys, uiInteger, type UiJson } from '@boaa/extension-contracts/ui-json';
 import { canonicalJson, requireStore, UiStoreError } from '../ui/store-model';
@@ -284,7 +285,7 @@ class View implements PluginView {
     this.pending.set(data.id, operation);
     const timeout = setTimeout(
       () => operation.abort(),
-      ['http.request', 'controller.call'].includes(data.method) ? 25000 : 5000,
+      ['http.request', 'http.image', 'controller.call'].includes(data.method) ? 25000 : 5000,
     );
     let result: UiJson;
     let createdSubscription: number | undefined;
@@ -298,6 +299,9 @@ class View implements PluginView {
       let value: UiJson;
       if (data.method.startsWith('storage.')) {
         value = await storageCall(this.store, session, data.method, input);
+      } else if (data.method === 'http.image') {
+        requireStore(this.http, 'HTTP_UNAVAILABLE');
+        value = await this.http.image(session, input, operation.signal);
       } else if (data.method === 'http.request') {
         requireStore(this.http, 'HTTP_UNAVAILABLE');
         value = await this.http.request(session, input, operation.signal);
@@ -393,7 +397,7 @@ class View implements PluginView {
       clearTimeout(timeout);
       this.pending.delete(data.id);
     }
-    requireStore(isUiJson(result, 65536), 'OUTPUT_LIMIT');
+    requireStore(isUiJson(result, data.method === 'http.image' ? PLUGIN_IMAGE_REPLY_BYTES : 65536), 'OUTPUT_LIMIT');
     this.send({ kind: 'reply', id: data.id, result });
     if (result.ok && searchQuery !== undefined) {
       this.win.dispatchEvent(new CustomEvent('boaa:plugin-search', { detail: { query: searchQuery } }));

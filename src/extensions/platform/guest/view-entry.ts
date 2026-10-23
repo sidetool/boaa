@@ -1,3 +1,5 @@
+import { PluginImages } from './images';
+import { PLUGIN_IMAGE_REPLY_BYTES } from '../../../../packages/extension-contracts/plugin-images';
 import { SettingsSubscriptions } from './settings-subscriptions';
 import { BOAA_PACKAGE_LIMITS } from '@boaa/extension-contracts/package';
 import { isUiJson, uiRecord, uiKeys, uiInteger, uiUtf8Size, type UiJson } from '@boaa/extension-contracts/ui-json';
@@ -38,6 +40,7 @@ if (parent !== window) {
     const pending = new Map<
       number,
       {
+        method: string;
         resolve: (v: UiJson) => void;
         reject: (e: Error) => void;
         timer: ReturnType<typeof setTimeout>;
@@ -52,6 +55,7 @@ if (parent !== window) {
       if (stopped) return;
       stopped = true;
       revoke();
+      images?.close();
       for (const p of pending.values()) {
         clearTimeout(p.timer);
         p.detach();
@@ -78,12 +82,13 @@ if (parent !== window) {
         };
         const abort = () => cancel(method === 'http.request' ? 'HTTP_OUTCOME_UNKNOWN' : 'CANCELLED');
         pending.set(id, {
+          method,
           resolve,
           reject,
           detach: () => signal?.removeEventListener('abort', abort),
           timer: setTimeout(
             () => cancel(method === 'http.request' ? 'HTTP_OUTCOME_UNKNOWN' : 'TIMEOUT'),
-            ['http.request', 'controller.call'].includes(method) ? 25000 : 5000,
+            ['http.request', 'http.image', 'controller.call'].includes(method) ? 25000 : 5000,
           ),
         });
         signal?.addEventListener('abort', abort, { once: true });
@@ -91,6 +96,8 @@ if (parent !== window) {
       });
     };
     const subscriptions = new SettingsSubscriptions(request, fail);
+    const images = new PluginImages(request, () => pending.size < 3);
+    addEventListener('pagehide', () => images?.close());
     addEventListener('error', fail);
     addEventListener('unhandledrejection', fail);
     port.onmessageerror = fail;
@@ -128,6 +135,10 @@ if (parent !== window) {
         }
         const p = pending.get(data.id);
         if (!p) return;
+        if (!isUiJson(data.result, p.method === 'http.image' ? PLUGIN_IMAGE_REPLY_BYTES : 65536)) {
+          fail();
+          return;
+        }
         pending.delete(data.id);
         clearTimeout(p.timer);
         p.detach();
@@ -155,6 +166,7 @@ if (parent !== window) {
       loaded = true;
       const root = document.getElementById('boaa-plugin-root');
       const ctx = Object.freeze({
+        images: Object.freeze({ load: images.load.bind(images) }),
         app: Object.freeze({
           search: async (query: string): Promise<void> => {
             if (!navigator.userActivation?.isActive) throw Error('USER_ACTION_REQUIRED');

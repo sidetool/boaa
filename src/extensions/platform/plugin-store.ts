@@ -557,6 +557,12 @@ export class PlatformPluginStore {
     requireStore(policy && policy.roles.includes(binding.role), 'METHOD_NOT_ALLOWED');
     await this.db.run('readonly', guard, async (tx) => {
       const install = await authorize(tx, binding, policy.permission);
+      if (method === 'http.image')
+        requireStore(
+          install.manifest?.features.required.includes('ui.images') ||
+            install.manifest?.features.optional.includes('ui.images'),
+          'PERMISSION_DENIED',
+        );
       if (method === 'reader.decorations.changed') await authorize(tx, binding, 'reader.content.visible');
       if (method === 'tasks.run') requireStore(install.manifest?.entries.task, 'TASK_UNAVAILABLE');
       if (method === 'settings.register')

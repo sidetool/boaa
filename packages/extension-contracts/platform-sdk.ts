@@ -2,6 +2,7 @@
 import type { UiJson } from './ui-json';
 import type { PluginHttpRequest, PluginHttpResult } from './plugin-http';
 import type { PlatformContentBatch, PlatformDecorationResult } from './plugin-platform-sdk';
+import type { PluginImageInput } from './plugin-images';
 import type { HomeFeed } from './home-feed';
 export type { UiJson, PluginHttpRequest, PluginHttpResult, HomeFeed };
 export type { HomeFeedItem, HomeFeedSection } from './home-feed';
@@ -142,6 +143,10 @@ export interface PlatformControllerApi {
 
 /** UI code has DOM access only inside its sandbox. Supply HTMLElement as Root in a DOM-enabled project. */
 export interface PlatformViewContext<Root = unknown> {
+  /** Approved public image, local to this frame. Dispose when no longer displayed. */
+  readonly images: {
+    load(input: PluginImageInput, signal?: PlatformAbortSignal): Promise<{ readonly url: string; dispose(): void }>;
+  };
   /** Opens BOAA title search after a user action; requires app.search. */
   readonly app: { search(query: string): Promise<void> };
   readonly view: { readonly id: string; readonly root: Root | null };
