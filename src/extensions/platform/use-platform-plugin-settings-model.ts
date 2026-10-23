@@ -132,7 +132,12 @@ export function usePlatformPluginSettingsModel(session: ProductPluginSession) {
               endpoint: connection.endpoint,
               roles,
               methods: connection.methods,
-              headers: ['accept', 'content-type', 'accept-language'],
+              headers: [
+                'accept',
+                'content-type',
+                'accept-language',
+                ...(review.manifest.features.required.includes('http.origin') ? ['origin'] : []),
+              ],
               auth: { kind: 'none' },
               expectedRevision: null,
             });

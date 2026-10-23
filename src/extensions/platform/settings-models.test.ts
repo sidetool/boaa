@@ -142,51 +142,56 @@ it('ignores a review cancelled while installation preflight is pending', async (
   expect(f.http.retire).not.toHaveBeenCalled();
   model.close();
 });
-it('connects declared public services only after committing and does not overwrite existing credentials', async () => {
-  const f = fixture();
-  const manifest = {
-    ...f.review.manifest,
-    entries: { controller: { path: 'dist/controller.js', permissions: ['http.request'] } },
-    connections: [{ id: 'catalog', title: '작품 목록', endpoint: 'https://catalog.example/', methods: ['GET'] }],
-  } as InstallReview['manifest'];
-  Object.assign(f.review, { manifest });
-  const installed = { ...f.row, revision: 4, active: 'new', manifest: f.review.manifest };
-  f.store.install.mockImplementationOnce(async () => {
-    f.store.list.mockResolvedValue([installed]);
-  });
-  const model = await mount(() => usePlatformPluginSettingsModel(f.session));
-  act(() => model.current.showReview(f.review));
-  await act(async () => {
-    await model.current.approve();
-  });
-  expect(f.http.host).toHaveBeenCalledWith(
-    'approve',
-    installed,
-    expect.objectContaining({
-      slot: 'catalog',
-      endpoint: 'https://catalog.example/',
-      roles: ['controller'],
-      methods: ['GET'],
-      auth: { kind: 'none' },
-      expectedRevision: null,
-    }),
-  );
-  expect(f.store.install.mock.invocationCallOrder[0]).toBeLessThan(f.http.host.mock.invocationCallOrder[0]);
-  model.close();
-  const g = fixture();
-  Object.assign(g.review, { manifest });
-  g.store.install.mockImplementationOnce(async () => {
-    g.store.list.mockResolvedValue([installed]);
-  });
-  g.http.list.mockResolvedValue([{ slot: 'catalog', authenticated: true }] as never);
-  const other = await mount(() => usePlatformPluginSettingsModel(g.session));
-  act(() => other.current.showReview(g.review));
-  await act(async () => {
-    await other.current.approve();
-  });
-  expect(g.http.host).not.toHaveBeenCalled();
-  other.close();
-});
+it.each([false, true])(
+  'connects declared public services after commit, preserving credentials (own origin: %s)',
+  async (ownOrigin) => {
+    const f = fixture();
+    const manifest = {
+      ...f.review.manifest,
+      entries: { controller: { path: 'dist/controller.js', permissions: ['http.request'] } },
+      features: { required: ['http.request', ...(ownOrigin ? ['http.origin'] : [])], optional: [] },
+      connections: [{ id: 'catalog', title: '작품 목록', endpoint: 'https://catalog.example/', methods: ['GET'] }],
+    } as InstallReview['manifest'];
+    Object.assign(f.review, { manifest });
+    const installed = { ...f.row, revision: 4, active: 'new', manifest: f.review.manifest };
+    f.store.install.mockImplementationOnce(async () => {
+      f.store.list.mockResolvedValue([installed]);
+    });
+    const model = await mount(() => usePlatformPluginSettingsModel(f.session));
+    act(() => model.current.showReview(f.review));
+    await act(async () => {
+      await model.current.approve();
+    });
+    expect(f.http.host).toHaveBeenCalledWith(
+      'approve',
+      installed,
+      expect.objectContaining({
+        slot: 'catalog',
+        endpoint: 'https://catalog.example/',
+        roles: ['controller'],
+        methods: ['GET'],
+        headers: ['accept', 'content-type', 'accept-language', ...(ownOrigin ? ['origin'] : [])],
+        auth: { kind: 'none' },
+        expectedRevision: null,
+      }),
+    );
+    expect(f.store.install.mock.invocationCallOrder[0]).toBeLessThan(f.http.host.mock.invocationCallOrder[0]);
+    model.close();
+    const g = fixture();
+    Object.assign(g.review, { manifest });
+    g.store.install.mockImplementationOnce(async () => {
+      g.store.list.mockResolvedValue([installed]);
+    });
+    g.http.list.mockResolvedValue([{ slot: 'catalog', authenticated: true }] as never);
+    const other = await mount(() => usePlatformPluginSettingsModel(g.session));
+    act(() => other.current.showReview(g.review));
+    await act(async () => {
+      await other.current.approve();
+    });
+    expect(g.http.host).not.toHaveBeenCalled();
+    other.close();
+  },
+);
 it('retains revoke failures as semantic errors after stopping the plugin', async () => {
   const { session, row, http, store, service } = fixture();
   http.retire.mockRejectedValueOnce(new Error('offline'));

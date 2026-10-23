@@ -13,6 +13,27 @@ export interface PluginHttpRequest {
   headers?: Record<string, string>;
   body?: string;
   response: 'text' | 'json';
+  /** JSON field paths; * maps every array item or object value without reordering. */
+  pick?: string[][];
+}
+export function pluginJsonPick(value: unknown): value is string[][] {
+  return (
+    Array.isArray(value) &&
+    value.length > 0 &&
+    value.length <= 48 &&
+    value.every(
+      (path) =>
+        Array.isArray(path) &&
+        path.length > 0 &&
+        path.length <= 8 &&
+        path.every(
+          (part) =>
+            typeof part === 'string' &&
+            (part === '*' || /^[a-zA-Z0-9_-]{1,64}$/.test(part)) &&
+            !['__proto__', 'prototype', 'constructor'].includes(part),
+        ),
+    )
+  );
 }
 export const pluginSlot = (v: unknown): v is string => typeof v === 'string' && /^[a-z][a-z0-9.-]{0,63}$/.test(v);
 export function pluginHttpOwner(v: unknown): v is PluginHttpOwner {
@@ -32,12 +53,13 @@ export function pluginHttpRequest(v: unknown): v is PluginHttpRequest {
   return (
     isUiJson(v, 32 * 1024) &&
     uiRecord(v) &&
-    uiKeys(v, ['slot', 'path', 'method', 'response'], ['headers', 'body']) &&
+    uiKeys(v, ['slot', 'path', 'method', 'response'], ['headers', 'body', 'pick']) &&
     pluginSlot(v.slot) &&
     typeof v.path === 'string' &&
     v.path.length <= 2048 &&
     PLUGIN_HTTP_METHODS.includes(v.method as PluginHttpRequest['method']) &&
     ['text', 'json'].includes(String(v.response)) &&
+    (v.pick === undefined || (v.response === 'json' && pluginJsonPick(v.pick))) &&
     (v.body === undefined || (typeof v.body === 'string' && !['GET', 'HEAD'].includes(String(v.method)))) &&
     (v.headers === undefined ||
       (uiRecord(v.headers) &&

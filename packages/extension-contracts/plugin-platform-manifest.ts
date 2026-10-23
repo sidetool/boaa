@@ -23,6 +23,8 @@ export const PLATFORM_PERMISSIONS = [
 ] as const;
 export const PLATFORM_FEATURES = [
   'http.request',
+  'http.json-pick',
+  'http.origin',
   'home.feed',
   'app.search',
   'settings.schema',
@@ -250,6 +252,11 @@ export function validatePlatformManifest(value: unknown): PlatformValidation {
     !hasRolePermission('ui', 'http.request')
   )
     return bad('features.ui.images');
+  if (
+    [...f.required, ...f.optional].some((feature) => feature === 'http.json-pick' || feature === 'http.origin') &&
+    !permissions.has('http.request')
+  )
+    return bad('features.http');
   const access = value.requestedAccess;
   if (
     !uiRecord(access) ||

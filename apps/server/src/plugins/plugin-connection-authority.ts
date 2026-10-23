@@ -10,7 +10,7 @@ export async function requirePluginConnectionAuthority(
   owner: PluginHttpOwner,
   slot: string,
   roles: readonly string[],
-  feature?: PlatformFeature,
+  feature?: PlatformFeature | readonly PlatformFeature[],
 ) {
   if (owner.profileId !== scope.accountId || !roles.length) throw Error('PLUGIN_CONNECTION_DENIED');
   const result = await db.query<{ installation: Installation; grants: GrantRow }>(
@@ -34,8 +34,10 @@ export async function requirePluginConnectionAuthority(
     grants.revision !== owner.generation ||
     !install.manifest?.contributes.connections?.includes(slot) ||
     (feature !== undefined &&
-      ![...(install.manifest.features?.required ?? []), ...(install.manifest.features?.optional ?? [])].includes(
-        feature,
+      !(typeof feature === 'string' ? [feature] : feature).every((required) =>
+        [...(install.manifest.features?.required ?? []), ...(install.manifest.features?.optional ?? [])].includes(
+          required,
+        ),
       )) ||
     !roles.every(
       (role) =>

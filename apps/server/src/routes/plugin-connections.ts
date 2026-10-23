@@ -374,7 +374,19 @@ export function registerPluginConnectionRoutes(
         );
         const row = result.rows[0];
         assert(row && row.roles.includes(String(body.role)) && row.methods.includes(input.method));
-        await requirePluginConnectionAuthority(pool, scope, owner, input.slot, [String(body.role)]);
+        await requirePluginConnectionAuthority(
+          pool,
+          scope,
+          owner,
+          input.slot,
+          [String(body.role)],
+          [
+            ...(input.pick ? ['http.json-pick' as const] : []),
+            ...(input.headers && Object.keys(input.headers).some((key) => key.toLowerCase() === 'origin')
+              ? ['http.origin' as const]
+              : []),
+          ],
+        );
         return row;
       };
       const controller = new AbortController();

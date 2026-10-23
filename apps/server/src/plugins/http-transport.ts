@@ -8,9 +8,11 @@ import { isPublicSourceAddress } from '@boaa/extension-runtime/source-http';
 import {
   pluginEndpoint,
   pluginTarget,
+  pluginJsonPick,
   type PluginHttpRequest,
 } from '../../../../packages/extension-contracts/plugin-http';
 import { isUiJson, type UiJson } from '@boaa/extension-contracts/ui-json';
+import { pickPluginJson } from './json-pick';
 const lan = new BlockList();
 lan.addSubnet('10.0.0.0', 8);
 lan.addSubnet('172.16.0.0', 12);
@@ -83,11 +85,18 @@ export async function pluginHttpTransport(
   let agent: ReturnType<typeof pinnedProxyAgent>;
   const write = !['GET', 'HEAD', 'OPTIONS'].includes(input.method);
   try {
+    if (input.pick !== undefined && (input.response !== 'json' || !pluginJsonPick(input.pick)))
+      throw Error('HTTP_JSON_PICK_INVALID');
     const target = pluginTarget(endpoint, input.path);
     const approved = await approvePluginEndpoint(endpoint, boaaOrigin, allowed, undefined, serverPort);
-    const headers: Record<string, string> = { accept: 'application/json, text/plain', 'accept-encoding': 'identity' };
+    const headers: Record<string, string> = {
+      accept: 'application/json, text/plain',
+      'accept-encoding': 'identity',
+      'user-agent': 'BOAA/1.0',
+    };
     for (const [key, value] of Object.entries(input.headers ?? {})) {
-      if (!allowedHeaders.includes(key) || forbiddenHeaders.test(key) || key === credential?.header)
+      const ownOrigin = key === 'origin' && value === target.origin;
+      if (!allowedHeaders.includes(key) || (forbiddenHeaders.test(key) && !ownOrigin) || key === credential?.header)
         throw Error('HTTP_HEADER_DENIED');
       headers[key] = value;
     }
@@ -122,7 +131,11 @@ export async function pluginHttpTransport(
             let bytes = 0;
             res.on('data', (chunk: Buffer) => {
               bytes += chunk.length;
-              if (bytes > 24 * 1024) res.destroy(Error('HTTP_RESPONSE_LIMIT'));
+              const limit =
+                input.pick && input.response === 'json' && (res.statusCode ?? 0) >= 200 && (res.statusCode ?? 0) < 300
+                  ? 512 * 1024
+                  : 24 * 1024;
+              if (bytes > limit) res.destroy(Error('HTTP_RESPONSE_LIMIT'));
               else chunks.push(chunk);
             });
             res.on('error', reject);
@@ -156,6 +169,10 @@ export async function pluginHttpTransport(
           body = null;
         }
       }
+    }
+    if (input.pick && response.status >= 200 && response.status < 300 && body !== null) {
+      body = pickPluginJson(body, input.pick) as UiJson;
+      if (!isUiJson(body, 24 * 1024)) throw Error('HTTP_RESPONSE_LIMIT');
     }
     const result = { ok: true, status: response.status, headers: response.headers, body };
     if (!isUiJson(result, 56 * 1024)) throw Error('HTTP_RESPONSE_LIMIT');
