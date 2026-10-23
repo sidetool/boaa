@@ -165,3 +165,67 @@ it('cross-tab disable aborts the pending request and invalidates later authority
     await f.peer.close();
   }
 });
+
+it('queues a six-cover home row within the shared four-request owner budget', async () => {
+  const f = await fixture();
+  const releases: Array<() => void> = [];
+  let active = 0,
+    peak = 0;
+  const fetch = vi.fn(
+    () =>
+      new Promise<Response>((resolve) => {
+        active++;
+        peak = Math.max(peak, active);
+        releases.push(() => {
+          active--;
+          resolve(Response.json({ ok: true }));
+        });
+      }),
+  );
+  vi.stubGlobal('fetch', fetch);
+  try {
+    const owner = f.http.owner(f.row);
+    const pending = ['cover', 'cover', 'image', 'request', 'cover', 'cover'].map((action) =>
+      f.http.host(action, owner),
+    );
+    await vi.waitFor(() => expect(fetch).toHaveBeenCalledTimes(4));
+    releases.splice(0).forEach((release) => release());
+    await vi.waitFor(() => expect(fetch).toHaveBeenCalledTimes(6));
+    releases.splice(0).forEach((release) => release());
+    expect(await Promise.all(pending)).toHaveLength(6);
+    expect(peak).toBe(4);
+  } finally {
+    await f.store.close();
+    await f.peer.close();
+  }
+});
+
+it('drops queued cancelled covers without dispatch and keeps management outside the network queue', async () => {
+  const f = await fixture();
+  const releases: Array<() => void> = [];
+  const fetch = vi.fn((url: string) =>
+    url.endsWith('/list')
+      ? Promise.resolve(Response.json([]))
+      : new Promise<Response>((resolve) => releases.push(() => resolve(Response.json({ ok: true })))),
+  );
+  vi.stubGlobal('fetch', fetch);
+  try {
+    const owner = f.http.owner(f.row);
+    const running = Array.from({ length: 4 }, () => f.http.host('cover', owner));
+    await vi.waitFor(() => expect(fetch).toHaveBeenCalledTimes(4));
+    const abort = new AbortController();
+    const cancelled = expect(f.http.host('cover', owner, {}, abort.signal)).rejects.toThrow();
+    abort.abort();
+    await cancelled;
+    await expect(f.http.host('list', owner)).resolves.toEqual([]);
+    const next = f.http.host('cover', owner);
+    releases.splice(0).forEach((release) => release());
+    await vi.waitFor(() => expect(fetch).toHaveBeenCalledTimes(6));
+    releases.splice(0).forEach((release) => release());
+    await Promise.all([...running, next]);
+    expect(fetch.mock.calls.filter(([url]) => url.endsWith('/cover'))).toHaveLength(5);
+  } finally {
+    await f.store.close();
+    await f.peer.close();
+  }
+});

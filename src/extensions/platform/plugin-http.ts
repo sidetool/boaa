@@ -4,6 +4,7 @@ import { pluginHttpRequest, type PluginHttpOwner } from '../../../packages/exten
 import type { Installation, PluginSession } from './store-model';
 import type { PlatformPluginStore } from './plugin-store';
 import { requireStore } from '../ui/store-model';
+import { PluginHttpRequestQueue } from './http-request-queue';
 export interface PluginConnectionStatus {
   slot: string;
   endpoint: string;
@@ -15,6 +16,7 @@ export interface PluginConnectionStatus {
 }
 /** Host-only client. No guest can choose owner, role, revision, auth headers or absolute URL. */
 export class PluginHttp {
+  private requests = new PluginHttpRequestQueue();
   private pending = new WeakMap<PluginSession, Map<number, AbortController>>();
   async controller(session: PluginSession, method: string, input: UiJson, signal: AbortSignal): Promise<UiJson> {
     await this.store.assertCall(session, session.fence, method);
@@ -58,16 +60,23 @@ export class PluginHttp {
     data: Record<string, unknown> = {},
     signal?: AbortSignal,
   ): Promise<unknown> {
-    const response = await this.transport(`/api/plugins/connections/${action}`, {
-      method: 'POST',
-      credentials: 'same-origin',
-      cache: 'no-store',
-      headers: { 'content-type': 'application/json', 'x-boaa-plugin-host': '1' },
-      body: JSON.stringify({ owner, ...data }),
-      signal: signal ? AbortSignal.any([signal, this.lifetime]) : this.lifetime,
-    });
-    if (!response.ok) throw Error('PLUGIN_CONNECTION_DENIED');
-    return response.json();
+    const combined = signal ? AbortSignal.any([signal, this.lifetime]) : this.lifetime;
+    const send = async () => {
+      combined.throwIfAborted();
+      const response = await this.transport(`/api/plugins/connections/${action}`, {
+        method: 'POST',
+        credentials: 'same-origin',
+        cache: 'no-store',
+        headers: { 'content-type': 'application/json', 'x-boaa-plugin-host': '1' },
+        body: JSON.stringify({ owner, ...data }),
+        signal: combined,
+      });
+      if (!response.ok) throw Error('PLUGIN_CONNECTION_DENIED');
+      return response.json();
+    };
+    return ['cover', 'image', 'request'].includes(action)
+      ? this.requests.run(JSON.stringify([owner.profileId, owner.installationId]), combined, send)
+      : send();
   }
   async list(row: Pick<Installation, 'installationId' | 'active' | 'revision'>): Promise<PluginConnectionStatus[]> {
     return (await this.host('list', this.owner(row))) as PluginConnectionStatus[];
