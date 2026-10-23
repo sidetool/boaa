@@ -51,6 +51,13 @@ export interface PlatformStorage {
     limit?: number;
   }): Promise<{ items: { key: string; revision: number }[]; nextCursor?: string }>;
 }
+/** Separate disposable server cache: 256KiB/64 entries per installation, 48KiB per value.
+ * A stale hit may be displayed while the caller awaits a separate refresh. Never detach QuickJS work. */
+export interface PlatformCache {
+  get(key: string): Promise<import('./plugin-cache').PluginCacheResult>;
+  set(key: string, value: UiJson, options?: { ttlSeconds?: number; staleSeconds?: number }): Promise<unknown>;
+  remove(key: string): Promise<unknown>;
+}
 export interface PlatformSettings {
   get(): Promise<PlatformSettingsSnapshot>;
   set(expectedRevision: number, value: Record<string, UiJson>): Promise<PlatformSettingsSnapshot>;
@@ -108,6 +115,7 @@ export type PlatformDecorationInput = Readonly<
 >;
 export type PlatformDecoration = Omit<PlatformDecorationResult['layers'][number], 'id'> & { checkpoint?: UiJson };
 export interface PlatformControllerContext {
+  readonly cache: PlatformCache;
   readonly home: {
     register(id: string, handler: (signal: PlatformAbortSignal) => HomeFeed | Promise<HomeFeed>): PlatformDisposable;
   };
@@ -143,6 +151,7 @@ export interface PlatformControllerApi {
 
 /** UI code has DOM access only inside its sandbox. Supply HTMLElement as Root in a DOM-enabled project. */
 export interface PlatformViewContext<Root = unknown> {
+  readonly cache: PlatformCache;
   /** Approved public image, local to this frame. Dispose when no longer displayed. */
   readonly images: {
     load(input: PluginImageInput, signal?: PlatformAbortSignal): Promise<{ readonly url: string; dispose(): void }>;

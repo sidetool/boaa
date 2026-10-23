@@ -135,6 +135,16 @@ export function registerPluginStateRoutes(app: FastifyInstance, config: ServerCo
           )?.value;
           if (!oldInstall) continue;
           const install = change.value!;
+          if (
+            !install?.enabled ||
+            install.installationId !== oldInstall.installationId ||
+            install.active !== oldInstall.active ||
+            install.revision !== oldInstall.revision
+          )
+            await client.query(
+              'delete from plugin_cache_entries where account_id=$1 and library_id=$2 and installation_id=$3',
+              [owner.accountId, owner.libraryId, oldInstall.installationId],
+            );
           // Retire only after the state CAS succeeds, within its transaction. Other accounts are never affected.
           await client.query(
             `delete from plugin_connections where account_id=$1 and installation_id=$2 and (installation_id<>$3 or digest<>$4 or generation<>$5 or $6)`,

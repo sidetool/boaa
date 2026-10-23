@@ -188,6 +188,17 @@ if (parent !== window) {
             request('controller.call', { handler, value }, options?.signal),
         }),
         view: Object.freeze({ id: data.view, root }),
+        cache: Object.freeze({
+          get: (key: string) => request('cache.get', { key }),
+          set: (key: string, value: UiJson, options: { ttlSeconds?: number; staleSeconds?: number } = {}) =>
+            request('cache.set', {
+              key,
+              value,
+              ttlSeconds: options.ttlSeconds ?? 300,
+              staleSeconds: options.staleSeconds ?? 86400,
+            }),
+          remove: (key: string) => request('cache.remove', { key }),
+        }),
         storage: Object.freeze({
           get: (key: string) => request('storage.get', { key }),
           set: (key: string, value: UiJson, expectedRevision: number | null = null) =>

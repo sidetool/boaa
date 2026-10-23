@@ -5,6 +5,7 @@ import type { Installation, PluginSession } from './store-model';
 import type { PlatformPluginStore } from './plugin-store';
 import { requireStore } from '../ui/store-model';
 import { PluginHttpRequestQueue } from './http-request-queue';
+import { PluginCacheClient } from './plugin-cache-client';
 export interface PluginConnectionStatus {
   slot: string;
   endpoint: string;
@@ -16,6 +17,14 @@ export interface PluginConnectionStatus {
 }
 /** Host-only client. No guest can choose owner, role, revision, auth headers or absolute URL. */
 export class PluginHttp {
+  private connectionListeners = new Set<() => void>();
+  subscribeConnections(listener: () => void) {
+    this.connectionListeners.add(listener);
+    return () => {
+      this.connectionListeners.delete(listener);
+    };
+  }
+  readonly cache: PluginCacheClient;
   private requests = new PluginHttpRequestQueue();
   private pending = new WeakMap<PluginSession, Map<number, AbortController>>();
   async controller(session: PluginSession, method: string, input: UiJson, signal: AbortSignal): Promise<UiJson> {
@@ -45,7 +54,9 @@ export class PluginHttp {
     private profileId: string,
     private lifetime: AbortSignal,
     private transport: typeof fetch = (input, init) => globalThis.fetch(input, init),
-  ) {}
+  ) {
+    this.cache = new PluginCacheClient(store, profileId, lifetime, transport);
+  }
   owner(row: Pick<Installation, 'installationId' | 'active' | 'revision'>): PluginHttpOwner {
     return {
       profileId: this.profileId,
@@ -72,7 +83,9 @@ export class PluginHttp {
         signal: combined,
       });
       if (!response.ok) throw Error('PLUGIN_CONNECTION_DENIED');
-      return response.json();
+      const result = await response.json();
+      if (['approve', 'revoke', 'retire'].includes(action)) for (const listener of this.connectionListeners) listener();
+      return result;
     };
     return ['cover', 'image', 'request'].includes(action)
       ? this.requests.run(JSON.stringify([owner.profileId, owner.installationId]), combined, send)

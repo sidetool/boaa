@@ -8,6 +8,9 @@ interface CallPolicy {
 // Only role/method policy lives here. Session fencing, persisted grants and
 // method-specific installation requirements remain authoritative in the store.
 const policies: Readonly<Record<string, CallPolicy>> = {
+  'cache.get': { roles: ['controller', 'ui'], permission: 'storage.own' },
+  'cache.set': { roles: ['controller', 'ui'], permission: 'storage.own' },
+  'cache.remove': { roles: ['controller', 'ui'], permission: 'storage.own' },
   'storage.get': { roles: ['controller', 'ui'], permission: 'storage.own' },
   'storage.set': { roles: ['controller', 'ui'], permission: 'storage.own' },
   'storage.remove': { roles: ['controller', 'ui'], permission: 'storage.own' },

@@ -35,7 +35,7 @@ export async function requirePluginConnectionAuthority(
     !install.manifest?.contributes.connections?.includes(slot) ||
     (feature !== undefined &&
       !(typeof feature === 'string' ? [feature] : feature).every((required) =>
-        [...(install.manifest.features?.required ?? []), ...(install.manifest.features?.optional ?? [])].includes(
+        [...(install.manifest?.features?.required ?? []), ...(install.manifest?.features?.optional ?? [])].includes(
           required,
         ),
       )) ||

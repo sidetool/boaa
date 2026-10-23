@@ -38,6 +38,52 @@ function fixture() {
   const config = appendPluginHomeRows([], [section])[0];
   return { service, loader, config, row: () => loader.row(config) };
 }
+it('hydrates a server snapshot before dispatching home work and retains it across remounts', async () => {
+  const f = fixture();
+  let done!: (value: { page: HomePluginFeed; freshUntil: number; savedAt: number }) => void;
+  const service = {
+    ...f.service,
+    homeSnapshot: vi.fn(
+      () =>
+        new Promise<{ page: HomePluginFeed; freshUntil: number; savedAt: number }>((resolve) => {
+          done = resolve;
+        }),
+    ),
+  };
+  const loader = new HomePluginLoader(service);
+  const sync = loader.sync();
+  await vi.waitFor(() => expect(service.homeSnapshot).toHaveBeenCalledOnce());
+  loader.row(f.config).requestLoad!();
+  expect(service.homeFeed).not.toHaveBeenCalled();
+  done({ page, freshUntil: Date.now() + 60000, savedAt: Date.now() });
+  await sync;
+  expect(loader.row(f.config).items).toHaveLength(1);
+  loader.row(f.config).requestLoad!();
+  loader.suspend();
+  loader.resume();
+  expect(loader.row(f.config).items).toHaveLength(1);
+  await loader.sync();
+  loader.row(f.config).requestLoad!();
+  expect(service.homeFeed).not.toHaveBeenCalled();
+  expect(service.homeSnapshot).toHaveBeenCalledOnce();
+  loader.dispose();
+});
+it('shows an expired snapshot while a refresh fails without erasing the last good page', async () => {
+  const f = fixture();
+  const service = {
+    ...f.service,
+    homeSnapshot: vi.fn().mockResolvedValue({ page, freshUntil: Date.now() - 1, savedAt: Date.now() - 60000 }),
+  };
+  service.homeFeed.mockRejectedValue(Error('offline'));
+  const loader = new HomePluginLoader(service);
+  await loader.sync();
+  loader.row(f.config).requestLoad!();
+  expect(loader.row(f.config).items).toHaveLength(1);
+  await vi.waitFor(() => expect(loader.row(f.config).stale).toBe(true));
+  expect(loader.row(f.config)).toMatchObject({ status: 'ready', refreshing: false });
+  expect(loader.row(f.config).items).toHaveLength(1);
+  loader.dispose();
+});
 let renderer: ReactTestRenderer | undefined;
 afterEach(() => {
   act(() => renderer?.unmount());

@@ -27,7 +27,15 @@ async function fixture() {
     list: vi.fn(async () => rows),
     invoke: vi.fn(async () => ({ ok: true, value: { items: [{ id: 'one', title: 'Example', coverUrl: image }] } })),
   };
-  const http = { owner: vi.fn(() => ({})), host: vi.fn().mockResolvedValue(payload) };
+  const http = {
+    owner: vi.fn(() => ({})),
+    host: vi.fn().mockResolvedValue(payload),
+    list: vi
+      .fn()
+      .mockResolvedValue([
+        { endpoint: 'https://example.invalid/', roles: ['controller'], methods: ['GET'], revision: 'connection-1' },
+      ]),
+  };
   const runtime = new PluginHomeRuntime(host, http as unknown as PluginHttp);
   cleanup.push(() => runtime.close());
   let sequence = 0;
@@ -71,6 +79,16 @@ it('shares simultaneous cover requests without leaking URLs and isolates consume
   expect(f.http.host).toHaveBeenCalledOnce();
   f.runtime.close();
   expect(f.revoke).toHaveBeenCalledExactlyOnceWith('blob:synthetic-1');
+});
+it('rechecks consent for a cached home cover and revokes its URL after withdrawal', async () => {
+  const f = await fixture();
+  await f.runtime.cover(f.row.pluginId, 'popular', image);
+  expect(f.runtime.coverSnapshot(f.row.pluginId, 'popular', image)).toBe('blob:synthetic-1');
+  f.http.list.mockResolvedValue([]);
+  await expect(f.runtime.cover(f.row.pluginId, 'popular', image)).rejects.toThrow('HOME_COVER_DENIED');
+  expect(f.revoke).toHaveBeenCalledWith('blob:synthetic-1');
+  expect(f.runtime.coverSnapshot(f.row.pluginId, 'popular', image)).toBeUndefined();
+  expect(f.http.host).toHaveBeenCalledOnce();
 });
 it('preserves unaffected feed and cover cache when another plugin changes', async () => {
   const f = await fixture();

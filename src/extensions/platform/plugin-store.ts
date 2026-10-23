@@ -557,6 +557,12 @@ export class PlatformPluginStore {
     requireStore(policy && policy.roles.includes(binding.role), 'METHOD_NOT_ALLOWED');
     await this.db.run('readonly', guard, async (tx) => {
       const install = await authorize(tx, binding, policy.permission);
+      if (method.startsWith('cache.'))
+        requireStore(
+          install.manifest?.features.required.includes('cache.own') ||
+            install.manifest?.features.optional.includes('cache.own'),
+          'PERMISSION_DENIED',
+        );
       if (method === 'http.image')
         requireStore(
           install.manifest?.features.required.includes('ui.images') ||

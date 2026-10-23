@@ -32,6 +32,7 @@ export const PLATFORM_FEATURES = [
   'commands.register',
   'ui.views',
   'ui.images',
+  'cache.own',
   'reader.content.visible',
   'reader.decorations',
   'reader.state',
@@ -252,6 +253,8 @@ export function validatePlatformManifest(value: unknown): PlatformValidation {
     !hasRolePermission('ui', 'http.request')
   )
     return bad('features.ui.images');
+  if ((f.required.includes('cache.own') || f.optional.includes('cache.own')) && !permissions.has('storage.own'))
+    return bad('features.cache.own');
   if (
     [...f.required, ...f.optional].some((feature) => feature === 'http.json-pick' || feature === 'http.origin') &&
     !permissions.has('http.request')

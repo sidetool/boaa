@@ -24,6 +24,11 @@ export const bootstrap = `(function(rpc) {
       if(!manifest.homeSections?.includes(id) || !manifest.permissions.includes('home.feed'))throw Error('PERMISSION_DENIED');
       return add(feeds,id,fn);
     }}),
+    cache: freeze({
+      get: key => request('cache.get',{key}),
+      set: (key,value,options={}) => request('cache.set',{key,value,ttlSeconds:options.ttlSeconds??300,staleSeconds:options.staleSeconds??86400}),
+      remove: key => request('cache.remove',{key}),
+    }),
     storage: freeze({
       get: key => request('storage.get', {key}),
       set: (key,value,expectedRevision=null) => request('storage.set',{key,value,expectedRevision}),

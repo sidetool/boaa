@@ -4,11 +4,20 @@ import { HomePluginLoader, type HomePluginAdapter } from './plugin-home';
 
 const subscribeEmpty = () => () => undefined;
 const emptySnapshot = () => 0;
+const loaders = new WeakMap<object, HomePluginLoader>();
 
 export function usePluginHome(): HomePluginAdapter | undefined {
   const { session } = useProductPlugins();
   const service = session?.service;
-  const loader = useMemo(() => (service ? new HomePluginLoader(service) : undefined), [service]);
+  const loader = useMemo(() => {
+    if (!service) return undefined;
+    let value = loaders.get(service);
+    if (!value) {
+      value = new HomePluginLoader(service);
+      loaders.set(service, value);
+    }
+    return value;
+  }, [service]);
   const revision = useSyncExternalStore(
     loader?.subscribe ?? subscribeEmpty,
     loader?.getSnapshot ?? emptySnapshot,
@@ -24,7 +33,7 @@ export function usePluginHome(): HomePluginAdapter | undefined {
     sync();
     return () => {
       unsubscribe();
-      loader.dispose();
+      loader.suspend();
     };
   }, [loader, service]);
   return useMemo(

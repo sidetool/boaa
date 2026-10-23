@@ -21,6 +21,11 @@ export interface HomePluginService {
   getSnapshot(): number;
   homeSections(): Promise<HomePluginSection[]>;
   homeFeed(pluginId: string, sectionId: string, signal?: AbortSignal): Promise<HomePluginFeed>;
+  homeSnapshot?(
+    pluginId: string,
+    sectionId: string,
+  ): Promise<{ page: HomePluginFeed; freshUntil: number; savedAt: number } | null | undefined>;
+  homeCoverSnapshot?(pluginId: string, sectionId: string, url: string): string | undefined;
   homeCover(pluginId: string, sectionId: string, url: string, signal?: AbortSignal): Promise<string | undefined>;
 }
 export interface HomePluginAdapter {
@@ -32,6 +37,7 @@ export const pluginHomeRowId = (pluginId: string, sectionId: string) => `plugin:
 const identity = (section: HomePluginSection) =>
   JSON.stringify([section.installationId, section.digest, section.revision]);
 interface Entry {
+  hydrating?: boolean;
   section: HomePluginSection;
   page?: HomePluginFeed;
   fetchedAt?: number;
@@ -67,10 +73,6 @@ export class HomePluginLoader {
   }
   async sync() {
     const generation = ++this.generation;
-    for (const entry of this.entries.values()) {
-      entry.operation?.abort();
-      entry.operation = undefined;
-    }
     try {
       const sections = await this.service.homeSections();
       if (this.disposed || generation !== this.generation) return;
@@ -78,12 +80,30 @@ export class HomePluginLoader {
       for (const section of sections) {
         const key = pluginHomeRowId(section.pluginId, section.section.id);
         const previous = this.entries.get(key);
-        next.set(
-          key,
-          previous && identity(previous.section) === identity(section) ? { ...previous, section } : { section },
-        );
+        if (previous && identity(previous.section) !== identity(section)) previous.operation?.abort();
+        const entry: Entry = previous && identity(previous.section) === identity(section) ? previous : { section };
+        entry.hydrating = !entry.page && !entry.operation && Boolean(this.service.homeSnapshot);
+        entry.section = section;
+        next.set(key, entry);
       }
+      for (const [key, entry] of this.entries) if (!next.has(key)) entry.operation?.abort();
       this.entries = next;
+      this.changed();
+      await Promise.all(
+        [...next.values()].map(async (entry) => {
+          if (entry.page || entry.operation || !this.service.homeSnapshot) return;
+          const cached = await this.service
+            .homeSnapshot(entry.section.pluginId, entry.section.section.id)
+            .catch(() => undefined);
+          if (this.disposed || generation !== this.generation || entry.operation || entry.page) return;
+          if (cached) {
+            entry.page = cached.page;
+            entry.refreshAt = cached.freshUntil;
+            entry.fetchedAt = cached.savedAt;
+          }
+          entry.hydrating = false;
+        }),
+      );
     } catch {
       if (this.disposed || generation !== this.generation) return;
       for (const entry of this.entries.values()) {
@@ -92,6 +112,14 @@ export class HomePluginLoader {
       }
     }
     this.changed();
+  }
+  suspend() {
+    this.disposed = true;
+    this.generation++;
+    for (const entry of this.entries.values()) {
+      entry.operation?.abort();
+      entry.operation = undefined;
+    }
   }
   dispose() {
     this.disposed = true;
@@ -109,8 +137,13 @@ export class HomePluginLoader {
     const current = () => !this.disposed && this.entries.get(key) === entry;
     const view = section.section.view;
     const load = (force: boolean) => {
-      if (!current() || entry.operation || (!force && entry.refreshAt && entry.refreshAt > Date.now())) return;
-      const generation = this.generation;
+      if (
+        !current() ||
+        entry.hydrating ||
+        entry.operation ||
+        (!force && entry.refreshAt && entry.refreshAt > Date.now())
+      )
+        return;
       const operation = new AbortController();
       entry.operation = operation;
       entry.error = undefined;
@@ -118,13 +151,13 @@ export class HomePluginLoader {
       void this.service
         .homeFeed(section.pluginId, section.section.id, operation.signal)
         .then((page) => {
-          if (!current() || operation.signal.aborted || generation !== this.generation) return;
+          if (!current() || operation.signal.aborted) return;
           entry.page = page;
           entry.fetchedAt = Date.now();
           entry.refreshAt = Date.now() + Math.max(60, Math.min(page.ttlSeconds ?? 1800, 86400)) * 1000;
         })
         .catch(() => {
-          if (!current() || operation.signal.aborted || generation !== this.generation) return;
+          if (!current() || operation.signal.aborted) return;
           entry.error = '목록을 새로 불러오지 못했어요. 연결을 확인하고 다시 시도해 주세요.';
           entry.refreshAt = Date.now() + 60_000;
         })
@@ -140,7 +173,7 @@ export class HomePluginLoader {
       eyebrow: section.pluginName,
       ranked: entry.page?.items.some((item) => item.rank !== undefined),
       status: entry.page ? 'ready' : entry.error ? 'failed' : 'loading',
-      loadKey: key + identity(section) + this.generation,
+      loadKey: key + identity(section) + this.generation + (entry.hydrating ? ':hydrate' : ':ready'),
       refreshAt: entry.refreshAt,
       refreshing: Boolean(entry.operation),
       updatedAt: entry.page?.asOf ? Date.parse(entry.page.asOf) : entry.fetchedAt,
@@ -162,6 +195,9 @@ export class HomePluginLoader {
           author: item.author,
           rank: item.rank,
           coverKey: identity(section) + (item.coverUrl ?? ''),
+          thumbnailUrl: item.coverUrl
+            ? this.service.homeCoverSnapshot?.(section.pluginId, section.section.id, item.coverUrl)
+            : undefined,
           translateTitle: false,
           actionLabel: '검색',
           loadCover: item.coverUrl

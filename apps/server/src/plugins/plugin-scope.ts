@@ -3,7 +3,7 @@ import type pg from 'pg';
 
 /** Authenticate the cookie and resolve its account incarnation in one SQL statement.
  * A deployment bearer token is intentionally insufficient for plugin approval scope. */
-export async function pluginScope(pool: pg.Pool, token: string, userId: string) {
+export async function pluginScope(pool: Pick<pg.Pool, 'query'>, token: string, userId: string) {
   const tokenHash = createHash('sha256').update(token).digest('hex');
   // Normal identity checks are read-only. Only the first authenticated request initializes IDs.
   const current = await pool.query<{ serverId: string; accountId: string; libraryId: string }>(

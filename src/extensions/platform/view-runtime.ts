@@ -297,7 +297,10 @@ class View implements PluginView {
       const input = data.input;
       requireStore(uiRecord(input), 'INVALID_ARGUMENT');
       let value: UiJson;
-      if (data.method.startsWith('storage.')) {
+      if (data.method.startsWith('cache.')) {
+        requireStore(this.http, 'CACHE_UNAVAILABLE');
+        value = await this.http.cache.call(session, data.method, input, operation.signal);
+      } else if (data.method.startsWith('storage.')) {
         value = await storageCall(this.store, session, data.method, input);
       } else if (data.method === 'http.image') {
         requireStore(this.http, 'HTTP_UNAVAILABLE');

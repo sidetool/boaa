@@ -12,6 +12,11 @@ interface Owned {
   pluginId: string;
   identity: string;
 }
+export interface HomeSnapshot {
+  page: HomeFeed;
+  freshUntil: number;
+  savedAt: number;
+}
 interface CoverOperation extends Owned {
   abort: AbortController;
   promise: Promise<string>;
@@ -28,11 +33,25 @@ export class PluginHomeRuntime {
   private covers = new Map<string, Owned & { url: string }>();
   private pending = new Map<string, CoverOperation>();
   private closed = false;
+  private unwatch?: () => void;
   constructor(
     private readonly host: Host,
     private readonly http?: PluginHttp,
     private readonly off = false,
-  ) {}
+  ) {
+    this.unwatch = http?.subscribeConnections?.(() => {
+      for (const cover of this.covers.values()) URL.revokeObjectURL(cover.url);
+      this.covers.clear();
+    });
+  }
+  coverSnapshot(id: string, section: string, url: string): string | undefined {
+    if (this.closed) return undefined;
+    const feed = this.feeds.get(feedKey(id, section));
+    if (!feed?.feed.items.some((item) => item.coverUrl === url)) return undefined;
+    for (const [key, value] of this.covers)
+      if (value.pluginId === id && value.identity === feed.identity && JSON.parse(key)[3] === url) return value.url;
+    return undefined;
+  }
   private guard(signal?: AbortSignal) {
     requireStore(!this.closed && !this.off, 'PLUGINS_DISABLED');
     signal?.throwIfAborted();
@@ -70,7 +89,48 @@ export class PluginHomeRuntime {
     requireStore(uiRecord(result) && result.ok === true, 'HOME_FEED_FAILED');
     const feed = validateHomeFeed(result.value);
     this.feeds.set(feedKey(id, section), { pluginId: id, identity: identity(row), feed });
+    if (this.http?.cache) {
+      await this.http.cache
+        .host(
+          this.http.owner(row),
+          'home',
+          'controller',
+          {
+            action: 'set',
+            key: section,
+            value: feed as unknown as UiJson,
+            ttlSeconds: Math.max(60, Math.min(feed.ttlSeconds ?? 1800, 86400)),
+            staleSeconds: 86400,
+          },
+          signal,
+        )
+        .catch(() => {});
+      this.guard(signal);
+    }
     return feed;
+  }
+  async snapshot(id: string, section: string, signal?: AbortSignal): Promise<HomeSnapshot | null | undefined> {
+    if (!this.http?.cache) return undefined;
+    const row = await this.row(id, signal);
+    try {
+      const result = await this.http.cache.host(
+        this.http.owner(row),
+        'home',
+        'controller',
+        { action: 'get', key: section },
+        signal,
+      );
+      this.guard(signal);
+      const current = await this.row(id, signal);
+      requireStore(identity(row) === identity(current), 'CONTEXT_STALE');
+      if (!result.found) return null;
+      const page = validateHomeFeed(result.value);
+      this.feeds.set(feedKey(id, section), { pluginId: id, identity: identity(row), feed: page });
+      return { page, freshUntil: result.freshUntil, savedAt: result.savedAt };
+    } catch {
+      this.guard(signal);
+      return undefined;
+    }
   }
   private authorizeCover(row: Installation, section: string | undefined, url: string) {
     const feeds = section === undefined ? [...this.feeds.values()] : [this.feeds.get(feedKey(row.pluginId, section))];
@@ -87,7 +147,32 @@ export class PluginHomeRuntime {
   async cover(id: string, section: string, url: string, signal?: AbortSignal): Promise<string> {
     const row = await this.row(id, signal);
     this.authorizeCover(row, section, url);
-    const key = JSON.stringify([id, identity(row), url]);
+    // Even a local Blob hit must respect current connection consent.
+    const connections = await this.http!.list(row);
+    this.guard(signal);
+    requireStore(identity(await this.row(id, signal)) === identity(row), 'CONTEXT_STALE');
+    const target = new URL(url);
+    const connection = connections.find(
+      (c) =>
+        c.roles.includes('controller') &&
+        c.methods.includes('GET') &&
+        target.origin === new URL(c.endpoint).origin &&
+        target.pathname.startsWith(new URL(c.endpoint).pathname),
+    );
+    if (!connection) {
+      for (const [key, cover] of this.covers)
+        if (cover.pluginId === id) {
+          URL.revokeObjectURL(cover.url);
+          this.covers.delete(key);
+        }
+    }
+    requireStore(connection, 'HOME_COVER_DENIED');
+    const key = JSON.stringify([id, identity(row), connection.revision, url]);
+    for (const [oldKey, cover] of this.covers)
+      if (cover.pluginId === id && oldKey !== key && JSON.parse(oldKey)[3] === url) {
+        URL.revokeObjectURL(cover.url);
+        this.covers.delete(oldKey);
+      }
     const cached = this.covers.get(key);
     if (cached) {
       this.covers.delete(key);
@@ -141,6 +226,14 @@ export class PluginHomeRuntime {
     const current = await this.row(row.pluginId, signal);
     requireStore(identity(current) === identity(row), 'CONTEXT_STALE');
     this.authorizeCover(current, undefined, url);
+    const connections = await this.http!.list(current);
+    requireStore(
+      connections.some(
+        (c) => c.revision === JSON.parse(key)[2] && c.roles.includes('controller') && c.methods.includes('GET'),
+      ),
+      'HOME_COVER_DENIED',
+    );
+    this.guard(signal);
     requireStore(
       uiRecord(value) &&
         ['image/png', 'image/jpeg', 'image/webp'].includes(String(value.mime)) &&
@@ -178,6 +271,7 @@ export class PluginHomeRuntime {
   }
   close() {
     this.closed = true;
+    this.unwatch?.();
     this.feeds.clear();
     for (const value of this.covers.values()) URL.revokeObjectURL(value.url);
     this.covers.clear();

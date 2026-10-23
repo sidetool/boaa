@@ -3,6 +3,7 @@ import { pluginScope } from '../plugins/plugin-scope.js';
 export { pluginScope } from '../plugins/plugin-scope.js';
 import { registerPluginConnectionRoutes } from './plugin-connections.js';
 import { registerPluginStateRoutes } from './plugin-state.js';
+import { registerPluginCacheRoutes } from './plugin-cache.js';
 import { resolvePluginRequestOrigin } from '../plugins/plugin-origin.js';
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
@@ -33,6 +34,7 @@ export async function registerPluginRuntimeRoutes(
 ) {
   registerPluginConnectionRoutes(app, config, pool, resolveDefaultProxy);
   registerPluginStateRoutes(app, config, pool);
+  registerPluginCacheRoutes(app, config, pool);
   // A missing/corrupt deployment fails startup instead of serving a half-functional runtime.
   const [bootstrap, worker, wasm] = await Promise.all([
     readFile(new URL('view-bootstrap.js', assets), 'utf8'),

@@ -2,7 +2,10 @@ import { pluginImageRequest } from '../../../../packages/extension-contracts/plu
 import { pluginTarget } from '../../../../packages/extension-contracts/plugin-http';
 import { pluginImageThumbnail } from '../plugins/image-thumbnail';
 import { requireUserId } from '../auth.js';
-import { randomUUID, randomBytes, createCipheriv, createDecipheriv } from 'node:crypto';
+import { randomUUID, randomBytes, createCipheriv, createDecipheriv, createHash } from 'node:crypto';
+import { disposableCache } from '../plugins/disposable-cache';
+import { cacheAuthority } from '../plugins/cache-authority';
+import type { UiJson } from '@boaa/extension-contracts/ui-json';
 import type pg from 'pg';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { uiKeys, uiRecord } from '@boaa/extension-contracts/ui-json';
@@ -54,13 +57,13 @@ export function registerPluginConnectionRoutes(
   const allowed = privateOrigins(config.pluginPrivateOrigins ?? '[]');
   const pending = new Map<string, { controller: AbortController; owner: PluginHttpOwner }>();
   const seen = new Map<string, number>();
-  const identity = async (req: FastifyRequest) => {
+  const identity = async (req: FastifyRequest, db: Pick<pg.Pool, 'query'> = pool) => {
     // All endpoints require a same-origin host POST and a real account cookie.
     const origin = resolvePluginRequestOrigin(req, config);
     assert(req.headers.origin === origin && req.headers['x-boaa-plugin-host'] === '1');
     const token = requestCookie(req, SELF_HOST_SESSION_COOKIE);
     assert(token && token.length <= 512);
-    const scope = await pluginScope(pool, token!, requireUserId(req));
+    const scope = await pluginScope(db, token!, requireUserId(req));
     assert(scope);
     return { ...scope!, origin };
   };
@@ -255,10 +258,10 @@ export function registerPluginConnectionRoutes(
           ? (body.request as import('../../../../packages/extension-contracts/plugin-images').PluginImageRequest)
           : undefined;
         const target = isImage ? undefined : new URL(String(body.url));
-        const load = async () => {
-          const current = await identity(req);
+        const load = async (db: Pick<pg.Pool, 'query'> = pool) => {
+          const current = await identity(req, db);
           assert(current.accountId === scope.accountId && current.libraryId === scope.libraryId);
-          const rows = await pool.query<Connection>(`select * from plugin_connections where ${where}`, args);
+          const rows = await db.query<Connection>(`select * from plugin_connections where ${where}`, args);
           const row = rows.rows.find((connection) => {
             const base = new URL(connection.endpoint);
             if (input)
@@ -277,7 +280,7 @@ export function registerPluginConnectionRoutes(
           });
           assert(row);
           await requirePluginConnectionAuthority(
-            pool,
+            db,
             scope,
             owner,
             row!.slot,
@@ -321,7 +324,36 @@ export function registerPluginConnectionRoutes(
           if (input?.cachedRevision === row.revision) {
             assert((await load()).revision === row.revision);
             controller.signal.throwIfAborted();
+            reply.header('X-BOAA-Cache', 'validated');
             return { notModified: true, revision: row.revision };
+          }
+          const cacheKey = createHash('sha256')
+            .update(
+              JSON.stringify([
+                isImage ? 'thumbnail-320-v1' : 'original-v1',
+                row.revision,
+                input ? pluginTarget(row.endpoint, input.path).href : String(body.url),
+              ]),
+            )
+            .digest('hex');
+          const cacheOwner = { ...scope, installationId: owner.installationId };
+          const authorizeCache = async (db: Pick<pg.Pool, 'query'>) => {
+            assert((await load(db)).revision === row.revision);
+            controller.signal.throwIfAborted();
+            return cacheAuthority(db, scope, owner);
+          };
+          const cached = await disposableCache(
+            pool,
+            cacheOwner,
+            'image',
+            { action: 'get', key: cacheKey },
+            authorizeCache,
+          ).catch(() => ({ found: false as const }));
+          if (cached.found) {
+            assert((await load()).revision === row.revision);
+            controller.signal.throwIfAborted();
+            reply.header('X-BOAA-Cache', 'hit');
+            return isImage ? { ...(cached.value as object), revision: row.revision } : cached.value;
           }
           const result = await pluginCoverTransport(
             input ? pluginTarget(row.endpoint, input.path).href : String(body.url),
@@ -337,6 +369,16 @@ export function registerPluginConnectionRoutes(
           const current = await load();
           controller.signal.throwIfAborted();
           assert(current.revision === row.revision);
+          await disposableCache(
+            pool,
+            cacheOwner,
+            'image',
+            { action: 'set', key: cacheKey, value: image as unknown as UiJson, ttlSeconds: 3600, staleSeconds: 0 },
+            authorizeCache,
+          ).catch(() => {});
+          assert((await load()).revision === row.revision);
+          controller.signal.throwIfAborted();
+          reply.header('X-BOAA-Cache', 'miss');
           return isImage ? { ...image, revision: row.revision } : image;
         } finally {
           clearTimeout(timeout);

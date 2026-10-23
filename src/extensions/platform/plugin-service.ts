@@ -246,7 +246,10 @@ export class PluginService {
     signal.throwIfAborted();
     requireStore(uiRecord(input), 'INVALID_ARGUMENT');
     let value: UiJson;
-    if (method.startsWith('storage.')) {
+    if (method.startsWith('cache.')) {
+      requireStore(this.options.http, 'CACHE_UNAVAILABLE');
+      value = await this.options.http.cache.call(record.session!, method, input, signal);
+    } else if (method.startsWith('storage.')) {
       value = await storageCall(this.store, session, method, input);
     } else if (method === 'http.request' || method === 'http.cancel') {
       requireStore(this.options.http, 'HTTP_UNAVAILABLE');
@@ -685,6 +688,12 @@ export class PluginService {
   }
   homeFeed(id: string, section: string, signal?: AbortSignal) {
     return this.home.feed(id, section, signal);
+  }
+  homeSnapshot(id: string, section: string, signal?: AbortSignal) {
+    return this.home.snapshot(id, section, signal);
+  }
+  homeCoverSnapshot(id: string, section: string, url: string) {
+    return this.home.coverSnapshot(id, section, url);
   }
   homeCover(id: string, section: string, url: string, signal?: AbortSignal) {
     return this.home.cover(id, section, url, signal);
