@@ -9,7 +9,7 @@ ROOT = Path(__file__).resolve().parents[2]
 spec = importlib.util.spec_from_file_location('capture_sources', Path(__file__).with_name('capture-debian-sources.py'))
 capture = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(capture)
-COMPONENTS = ('server', 'web', 'updater', 'runtime-apk', 'runtime-browser', 'runtime-browser-camoufox', 'runtime-metadata')
+COMPONENTS = ('server', 'web', 'updater', 'runtime-apk', 'runtime-browser', 'runtime-browser-camoufox', 'runtime-metadata', 'plain-tts')
 
 
 def runtime_bases(root=ROOT):

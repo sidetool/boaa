@@ -122,6 +122,8 @@ export interface TTSAddonPanelProps {
   changeSystemVoice(value?: string): void;
   previewPlainVoice?(): Promise<void>;
   refreshPlainVoices?(): void;
+  /** Opens 설정 › 서버 관리, where an administrator installs the optional server narration voice. */
+  openServerSettings?(): void;
   saveSystemVoice(target: VoiceTarget, providerVoiceId: string): void | Promise<unknown>;
   saveHostedVoice(target: VoiceTarget, providerVoiceId: string): void | Promise<unknown>;
   saveHostedVoiceOption(

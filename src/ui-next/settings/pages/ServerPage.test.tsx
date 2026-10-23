@@ -181,6 +181,62 @@ it('explains the private provider before installing the metadata runtime', async
   expect(text(root)).toContain('제공자 폴더를 따로 연결해야');
 });
 
+it('offers the server narration voice as an optional install that keeps current voice choices', async () => {
+  const client = fakeClient(
+    status({
+      components: [
+        component({ id: 'metadata', installed: true, enabled: false }),
+        component({ id: 'tts', downloadBytes: 400 * 1024 ** 2 }),
+      ],
+    }),
+  );
+  const root = await mount(client);
+  expect(text(root)).toMatch(/작품 정보 수집기중지됨.*서버 낭독 음성설치 안 됨/);
+  expect(text(root)).toContain('받을 용량 400MB');
+  await click(button(root, '설치'));
+  expect(text(root)).toContain('최대 400MB를 받아 설치해요');
+  expect(text(root)).toContain('지금 듣는 목소리는 바뀌지 않아요');
+  await click(button(root, '확인:설치'));
+  expect(client.request).toHaveBeenLastCalledWith({ action: 'component', componentId: 'tts', enabled: true });
+});
+
+it('says what stopping the server narration voice affects and what it keeps', async () => {
+  const client = fakeClient(
+    status({ components: [component({ id: 'tts', installed: true, enabled: true, running: false })] }),
+  );
+  const root = await mount(client);
+  expect(text(root)).toContain('서버 낭독 음성사용 중');
+  await click(button(root, '중지'));
+  expect(text(root)).toContain('기기 목소리와 각자 고른 목소리 설정은 그대로예요');
+  expect(text(root)).not.toContain('지금 듣는 목소리는 바뀌지 않아요');
+  await click(button(root, '확인:중지'));
+  expect(client.request).toHaveBeenLastCalledWith({ action: 'component', componentId: 'tts', enabled: false });
+});
+
+it('still lets an administrator stop an installed runtime this server no longer supports', async () => {
+  const client = fakeClient(
+    status({
+      components: [
+        component({ id: 'tts', supported: false, installed: true, enabled: true, running: true, error: 'failed' }),
+        component({ id: 'apk', supported: false, installed: true, enabled: false }),
+        component({ id: 'metadata', supported: false }),
+      ],
+    }),
+  );
+  const root = await mount(client);
+  expect(text(root)).toContain('서버 낭독 음성이 서버에서 못 써요');
+  expect(text(root)).toContain('중지할 수는 있고');
+  // Stopping is the only action anywhere: no retry for the failing one, no enable or install for the others.
+  const actions = root.findAll(
+    (node) => node.type === 'button' && /^(설치|켜기|다시 시도|중지)$/.test(text(node).trim()),
+  );
+  expect(actions.map((node) => text(node).trim())).toEqual(['중지']);
+  await click(button(root, '중지'));
+  expect(text(root)).toContain('지원하는 버전으로 업데이트할 때까지 다시 켤 수 없어요');
+  await click(button(root, '확인:중지'));
+  expect(client.request).toHaveBeenLastCalledWith({ action: 'component', componentId: 'tts', enabled: false });
+});
+
 it('offers retry and stop for a failed runtime and hides controls for externally managed ones', async () => {
   const client = fakeClient(
     status({

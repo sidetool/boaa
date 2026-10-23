@@ -5,6 +5,15 @@ import TTSAddonPanel, { type TTSAddonPanelProps } from '../../features/tts/TTSAd
 import { DEFAULT_TTS_PLAYBACK_SETTINGS } from '../../providers/tts-playback-settings';
 import UiNextListenPanel from './UiNextListenPanel';
 
+// Who may open 서버 관리: the server must expose management and the account must hold manageServer.
+const access = vi.hoisted(() => ({ managed: false, manageServer: true }));
+vi.mock('../../features/server-management/use-server-management-client', () => ({
+  serverManagementApi: () => (access.managed ? {} : undefined),
+}));
+vi.mock('../../features/auth/self-host-account-api', () => ({
+  useSelfHostCapability: (capability: string) => (capability === 'manageServer' ? access.manageServer : true),
+}));
+
 // Use the existing TTSAddonPanel fixture's ports with separate spies for each action.
 function fixture(overrides: Partial<TTSAddonPanelProps> = {}): TTSAddonPanelProps {
   return {
@@ -99,6 +108,8 @@ let renderer: ReactTestRenderer | undefined;
 afterEach(() => {
   act(() => renderer?.unmount());
   renderer = undefined;
+  access.managed = false;
+  access.manageServer = true;
 });
 function mount(props = fixture()) {
   act(() => {
@@ -367,5 +378,137 @@ describe('UiNextListenPanel plain engine voices', () => {
     click(button(root, '듣기'));
     expect(props.refreshPlainVoices).toHaveBeenCalledOnce();
     expect(button(root, '재생')).toBeDefined();
+  });
+});
+
+describe('UiNextListenPanel optional server narration', () => {
+  const empty = {
+    available: false,
+    voices: [],
+    providers: [],
+    defaultVoiceId: '',
+  } as TTSAddonPanelProps['plainVoices'];
+  const onServer = (overrides: Partial<TTSAddonPanelProps> = {}) =>
+    fixture({
+      plainVoices: empty,
+      refreshPlainVoices: vi.fn(),
+      openServerSettings: vi.fn(),
+      playbackSettings: { ...DEFAULT_TTS_PLAYBACK_SETTINGS, voiceSource: 'server', serverVoiceId: 'supertonic:F1' },
+      ...overrides,
+    });
+  const setup = (root: ReactTestInstance) => root.findAllByProps({ 'aria-label': '서버 목소리 준비' });
+
+  it('guides an administrator to install the voice without touching the saved choice', () => {
+    access.managed = true;
+    const { root, props } = mount(onServer());
+    expect(text(setup(root)[0]!)).toContain('‘서버 낭독 음성’을 설치하거나 다시 켜면');
+    expect(root.findAllByProps({ role: 'status' })).toHaveLength(0);
+    expect(root.findByProps({ 'aria-label': '서버 목소리' }).props.value).toBe('supertonic:F1');
+    expect(button(root, '재생').props.disabled).toBe(true);
+    click(button(root, '서버 설정 열기'));
+    expect(props.openServerSettings).toHaveBeenCalledOnce();
+    expect(props.changePlaybackSettings).not.toHaveBeenCalled();
+    click(button(root, '다시 확인'));
+    expect(props.refreshPlainVoices).toHaveBeenCalledOnce();
+    click(button(root, '이 기기 목소리로 듣기'));
+    expect(props.changePlaybackSettings).toHaveBeenCalledExactlyOnceWith({ voiceSource: 'system' });
+  });
+  it('blocks a missing Supertonic choice while a paid engine remains and points administrators to it', () => {
+    access.managed = true;
+    const paidOnly = {
+      available: true,
+      defaultVoiceId: '',
+      voices: [{ id: 'gemini:Kore', label: 'Kore', lang: 'ko', providerId: 'gemini', paid: true }],
+      providers: [{ id: 'gemini', name: 'Gemini', available: true, paid: true }],
+    } as never;
+    for (const serverVoiceId of ['F1', undefined]) {
+      const { root, props } = mount(
+        onServer({
+          plainVoices: paidOnly,
+          playbackSettings: { ...DEFAULT_TTS_PLAYBACK_SETTINGS, voiceSource: 'server', serverVoiceId },
+        }),
+      );
+      expect(setup(root)).toHaveLength(0);
+      expect(button(root, '재생').props.disabled).toBe(true);
+      expect(root.findAllByProps({ className: 'un-listen-note is-paid' })).toHaveLength(0);
+      click(button(root, '서버 설정 열기'));
+      expect(props.openServerSettings).toHaveBeenCalledOnce();
+      expect(props.changePlaybackSettings).not.toHaveBeenCalled();
+      act(() => renderer?.unmount());
+      renderer = undefined;
+    }
+  });
+  it('does not send administrators to server settings for a paid voice that is simply chosen', () => {
+    access.managed = true;
+    const paidOnly = {
+      available: true,
+      defaultVoiceId: '',
+      voices: [{ id: 'gemini:Kore', label: 'Kore', lang: 'ko', providerId: 'gemini', paid: true }],
+      providers: [{ id: 'gemini', name: 'Gemini', available: true, paid: true }],
+    } as never;
+    const { root } = mount(
+      onServer({
+        plainVoices: paidOnly,
+        playbackSettings: { ...DEFAULT_TTS_PLAYBACK_SETTINGS, voiceSource: 'server', serverVoiceId: 'gemini:Kore' },
+      }),
+    );
+    expect(button(root, '재생').props.disabled).toBe(false);
+    expect(root.findAll((node) => node.type === 'button' && text(node).includes('서버 설정 열기'))).toHaveLength(0);
+  });
+  it('tells members who can install it and offers no action they cannot take', () => {
+    access.managed = true;
+    access.manageServer = false;
+    const { root } = mount(onServer());
+    expect(text(setup(root)[0]!)).toContain('서버 관리자가 서버 낭독 음성을 설치하거나 다시 켜면');
+    expect(root.findAll((node) => node.type === 'button' && text(node).includes('서버 설정 열기'))).toHaveLength(0);
+    // A saved 서버 choice stays selectable so nothing is switched behind the listener's back.
+    expect(root.findByProps({ label: '음성 사용' }).props.value).toBe('server');
+  });
+  it('hides the server choice from members while the server has no narration voice', () => {
+    access.managed = true;
+    access.manageServer = false;
+    const { root } = mount(onServer({ playbackSettings: { ...DEFAULT_TTS_PLAYBACK_SETTINGS } }));
+    expect(root.findAllByProps({ label: '음성 사용' })).toHaveLength(0);
+    expect(setup(root)).toHaveLength(0);
+    expect(root.findByProps({ 'aria-label': '기기 목소리' })).toBeTruthy();
+  });
+  it('keeps offering the server choice to administrators so they can find the install', () => {
+    access.managed = true;
+    const { root } = mount(onServer({ playbackSettings: { ...DEFAULT_TTS_PLAYBACK_SETTINGS } }));
+    expect(root.findByProps({ label: '음성 사용' }).props.value).toBe('system');
+    expect(setup(root)).toHaveLength(0);
+  });
+  it('tells administrators on the engine page that Supertonic is installed from server settings', () => {
+    access.managed = true;
+    const { root, props } = mount(onServer({ playbackSettings: { ...DEFAULT_TTS_PLAYBACK_SETTINGS } }));
+    click(button(root.findByProps({ 'aria-label': '더 많은 청취 설정' }), /^TTS 엔진 연결/));
+    expect(root.findAllByType('p').map(text).join('\n')).toContain(
+      'Supertonic 서버 낭독 음성은 서버 설정의 추가 기능에서',
+    );
+    click(button(root, '서버 설정 열기'));
+    expect(props.openServerSettings).toHaveBeenCalledOnce();
+  });
+  it('does not offer the install where server management is unavailable', () => {
+    const { root } = mount(onServer());
+    expect(text(setup(root)[0]!)).toContain('서버 관리자가');
+    expect(root.findAll((node) => node.type === 'button' && text(node).includes('서버 설정 열기'))).toHaveLength(0);
+  });
+  it('points administrators to server settings when the installed local voice is down', () => {
+    access.managed = true;
+    const down = {
+      available: false,
+      voices: [{ id: 'F1', label: 'F1', lang: 'ko', providerId: 'supertonic' }],
+      providers: [{ id: 'supertonic', name: 'Supertonic 3', available: false, paid: false }],
+    } as never;
+    const { root, props } = mount(
+      onServer({
+        plainVoices: down,
+        playbackSettings: { ...DEFAULT_TTS_PLAYBACK_SETTINGS, voiceSource: 'server', serverVoiceId: 'F1' },
+      }),
+    );
+    expect(setup(root)).toHaveLength(0);
+    click(button(root, '서버 설정 열기'));
+    expect(props.openServerSettings).toHaveBeenCalledOnce();
+    expect(props.changePlaybackSettings).not.toHaveBeenCalled();
   });
 });

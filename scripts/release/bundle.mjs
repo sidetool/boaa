@@ -18,6 +18,7 @@ const files = [
   'scripts/release/install.mjs',
   'scripts/release/upgrade-updater.mjs',
   'scripts/release/deployment.mjs',
+  'scripts/release/tts-component.mjs',
   'scripts/release/feed.mjs',
   'scripts/release/files.mjs',
   'scripts/release/verify-bundle.mjs',

@@ -74,7 +74,7 @@ async function fixture(t) {
     rollbackSafe: true,
     updaterProtocol: 1,
     images: Object.fromEntries(
-      ['server', 'web', 'apk', 'browser', 'browser-camoufox', 'metadata'].map((name) => [
+      ['server', 'web', 'apk', 'browser', 'browser-camoufox', 'metadata', 'tts'].map((name) => [
         name,
         {
           image: `ghcr.io/example/boaa-${name}`,
@@ -465,4 +465,86 @@ test('published beta.4 browser installations without an engine marker upgrade to
   assert.equal(f.updater.state.phase, 'complete');
   assert.equal(f.deployment.current.browserEngine, 'patchright');
   assert.match(f.deployment.config.services['runtime-browser'].image, /boaa-browser@/);
+});
+
+test('Supertonic is downloaded and prepared only on opt-in, before maintenance; stop retains models and choices', async (t) => {
+  const f = await fixture(t);
+  f.deployment.prepareComponents = async (_state, services) => {
+    if (services.includes('plain-tts')) f.calls.push('prepare-tts');
+  };
+  const initial = f.updater.state.components.find((item) => item.id === 'tts');
+  assert.equal(initial.enabled, false);
+  assert.equal(initial.installed, false);
+  await f.updater.perform({ action: 'component', componentId: 'tts', enabled: true });
+  assert.equal(f.updater.state.phase, 'complete');
+  assert.deepEqual(f.calls, ['pull', 'prepare-tts', 'lease', 'stop', 'apply:1.0.0', 'verify:1.0.0', 'commit:1.0.0']);
+  assert.match(f.deployment.config.services['plain-tts'].image, /boaa-tts@sha256:/);
+  assert.equal(f.deployment.config.services.api.environment.TTS_PLAIN_ENABLED, 'true');
+  assert.equal(f.deployment.config.services.api.environment.TTS_PROVIDER_DEFAULT, undefined);
+  assert.deepEqual(f.deployment.current.enabled, ['tts']);
+  const volume = f.deployment.config.volumes['plain-tts-models'];
+  f.calls.length = 0;
+  await f.updater.perform({ action: 'component', componentId: 'tts', enabled: false });
+  assert.equal(f.updater.state.phase, 'complete');
+  assert.ok(!f.calls.includes('prepare-tts'));
+  assert.equal(f.deployment.config.services.api.environment.TTS_PLAIN_ENABLED, 'false');
+  assert.deepEqual(f.deployment.current.enabled, []);
+  assert.deepEqual(f.deployment.current.installed, ['tts']);
+  assert.deepEqual(f.deployment.config.volumes['plain-tts-models'], volume);
+  await f.updater.perform({ action: 'update' });
+  assert.equal(f.updater.state.phase, 'complete');
+  assert.deepEqual(f.deployment.current.enabled, []);
+  assert.ok(!f.calls.includes('prepare-tts'));
+  assert.equal(f.deployment.config.services.api.environment.TTS_PLAIN_ENABLED, 'false');
+});
+
+test('a failed model download leaves the running app and installation state untouched', async (t) => {
+  const f = await fixture(t);
+  f.deployment.prepareComponents = async () => {
+    throw new Error('deployment_command_failed');
+  };
+  await f.updater.perform({ action: 'component', componentId: 'tts', enabled: true });
+  assert.equal(f.updater.state.phase, 'failed');
+  assert.deepEqual(f.calls, ['pull']);
+  assert.deepEqual(f.deployment.current.enabled, []);
+  assert.equal(f.deployment.config.services['plain-tts'], undefined);
+});
+
+test('TTS health failure rolls back without selecting another voice or engine', async (t) => {
+  const f = await fixture(t);
+  const verify = f.deployment.verify;
+  f.deployment.verify = async (state) => {
+    if (state.enabled.includes('tts')) throw new Error('update_health_failed');
+    return verify(state);
+  };
+  await f.updater.perform({ action: 'component', componentId: 'tts', enabled: true });
+  assert.equal(f.updater.state.phase, 'failed');
+  assert.equal(f.updater.state.error, 'update_rolled_back');
+  assert.deepEqual(f.deployment.current.enabled, []);
+  assert.equal(f.deployment.config.services.api.environment.TTS_PLAIN_ENABLED, undefined);
+});
+
+test('external TTS endpoints are not adopted or overwritten by component controls', async (t) => {
+  const f = await fixture(t);
+  f.deployment.config.services.api.environment.TTS_PLAIN_ENDPOINT_URL = 'http://custom-tts:9010/synthesize';
+  f.updater.refreshComponents();
+  assert.equal(f.updater.state.components.find((item) => item.id === 'tts').managed, false);
+  await f.updater.perform({ action: 'component', componentId: 'tts', enabled: true });
+  assert.equal(f.updater.state.error, 'component_external');
+  assert.deepEqual(f.calls, []);
+});
+
+test('old releases without a TTS image cannot install it, but an installed runtime can still be stopped', async (t) => {
+  const f = await fixture(t);
+  f.updater.refreshComponents({ images: {} });
+  assert.equal(f.updater.state.components.find((item) => item.id === 'tts').supported, false);
+  await f.updater.perform({ action: 'component', componentId: 'tts', enabled: true });
+  assert.equal(f.updater.state.error, 'component_unsupported');
+  assert.deepEqual(f.calls, []);
+  f.deployment.current.enabled = ['tts'];
+  f.deployment.current.installed = ['tts'];
+  f.updater.refreshComponents({ images: {} });
+  await f.updater.perform({ action: 'component', componentId: 'tts', enabled: false });
+  assert.equal(f.updater.state.phase, 'complete');
+  assert.deepEqual(f.deployment.current.enabled, []);
 });

@@ -1,4 +1,5 @@
 import { execFile, spawn } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { promisify } from 'node:util';
 import { createWriteStream } from 'node:fs';
 import { access, chmod, chown, mkdir, statfs } from 'node:fs/promises';
@@ -6,11 +7,18 @@ import { pipeline } from 'node:stream/promises';
 import path from 'node:path';
 import { atomicJson, readJson } from './files.mjs';
 import { releaseVersion } from './feed.mjs';
+import { TTS_ENDPOINT, TTS_MODEL_ID, TTS_MODEL_REVISION } from './tts-component.mjs';
 
 const execute = promisify(execFile);
 export const CORE = ['api', 'worker', 'web'];
-export const COMPONENTS = { apk: 'runtime-apk', browser: 'runtime-browser', metadata: 'runtime-metadata' };
-export const imageFor = (name) => (['api', 'worker'].includes(name) ? 'server' : name.replace('runtime-', ''));
+export const COMPONENTS = {
+  apk: 'runtime-apk',
+  browser: 'runtime-browser',
+  metadata: 'runtime-metadata',
+  tts: 'plain-tts',
+};
+export const imageFor = (name) =>
+  name === 'plain-tts' ? 'tts' : ['api', 'worker'].includes(name) ? 'server' : name.replace('runtime-', '');
 const safeProject = (value) => typeof value === 'string' && /^[a-z0-9][a-z0-9_-]*$/.test(value);
 export const dockerRun = async (args, timeout = 120000) => {
   try {
@@ -68,7 +76,15 @@ export function componentConfiguration(config, id, enabled, engine = configuredB
   const next = structuredClone(config);
   const environment = (next.services.api.environment ??= {});
   if (!next.services[COMPONENTS[id]]) throw new Error('component_unsupported');
-  if (id === 'apk') {
+  if (id === 'tts') {
+    const existing = environment.TTS_PLAIN_ENDPOINT_URL;
+    if (existing && existing !== TTS_ENDPOINT) throw new Error('component_external');
+    environment.TTS_PLAIN_ENABLED = enabled ? 'true' : 'false';
+    environment.TTS_PLAIN_ENDPOINT_URL = TTS_ENDPOINT;
+    environment.TTS_PLAIN_ALLOWED_HOSTS = 'plain-tts';
+    environment.TTS_PLAIN_MODEL_ID = TTS_MODEL_ID;
+    environment.TTS_PLAIN_MODEL_REVISION = TTS_MODEL_REVISION;
+  } else if (id === 'apk') {
     environment.BOAA_APK_RUNTIME_ENABLED = enabled ? '1' : '0';
   } else if (id === 'browser') {
     const existing = environment.BOAA_SOURCE_BROWSER_ENDPOINT;
@@ -117,6 +133,23 @@ export class DockerDeployment {
       const journal = await readJson(path.join(this.directory, 'journal.json'), null);
       if (!allowDrift && (!journal || ['complete', 'rolled-back', 'cancelled'].includes(journal.phase)))
         await this.assertCurrentMatches();
+      // Older updaters did not record the manually enabled plain-TTS overlay.
+      // Preserve that explicit choice when upgrading the management service.
+      const env = this.config.services.api.environment ?? {};
+      if (
+        this.config.services['plain-tts'] &&
+        env.TTS_PLAIN_ENABLED === 'true' &&
+        env.TTS_PLAIN_ENDPOINT_URL === TTS_ENDPOINT &&
+        !this.current.installed.includes('tts')
+      ) {
+        this.current = {
+          ...this.current,
+          installed: [...this.current.installed, 'tts'],
+          enabled: [...new Set([...this.current.enabled, 'tts'])],
+          componentVersions: { ...this.current.componentVersions, tts: this.current.version },
+        };
+        await atomicJson(path.join(this.directory, 'current.json'), this.current);
+      }
       return;
     }
     if (process.env.BOAA_MANAGED_RELEASE !== '1' || !releaseVersion(process.env.BOAA_RELEASE_VERSION))
@@ -159,11 +192,13 @@ export class DockerDeployment {
       schemaEpoch: Number(process.env.BOAA_RELEASE_SCHEMA_EPOCH || '1'),
       enabled: Object.keys(COMPONENTS).filter((id) => {
         const env = this.config.services.api.environment;
-        return id === 'apk'
-          ? env.BOAA_APK_RUNTIME_ENABLED === '1'
-          : id === 'browser'
-            ? env.BOAA_SOURCE_BROWSER_ENDPOINT === 'http://runtime-browser:8791'
-            : env.BOAA_MANAGED_METADATA_ENDPOINT === 'http://runtime-metadata:8792';
+        return id === 'tts'
+          ? env.TTS_PLAIN_ENABLED === 'true' && env.TTS_PLAIN_ENDPOINT_URL === TTS_ENDPOINT
+          : id === 'apk'
+            ? env.BOAA_APK_RUNTIME_ENABLED === '1'
+            : id === 'browser'
+              ? env.BOAA_SOURCE_BROWSER_ENDPOINT === 'http://runtime-browser:8791'
+              : env.BOAA_MANAGED_METADATA_ENDPOINT === 'http://runtime-metadata:8792';
       }),
       installed: [],
       config: path.join(this.directory, 'initial.config.json'),
@@ -201,6 +236,37 @@ export class DockerDeployment {
     for (const image of new Set(services.map((name) => config.services[name].image)))
       await this.run(['pull', '--platform', this.platform, image], 20 * 60_000);
   }
+  async prepareComponents(state, services) {
+    if (!services.includes('plain-tts')) return;
+    // Download and hash-check weights while the application remains available.
+    // This one-shot installer never loads the inference model into RAM.
+    const installer = `${this.project}-tts-install-${randomUUID()}`;
+    try {
+      await this.compose(
+        state.compose,
+        [
+          'run',
+          '--rm',
+          '--name',
+          installer,
+          '--no-deps',
+          '--pull',
+          'never',
+          '-T',
+          'plain-tts',
+          'python',
+          'install.py',
+          '--directory',
+          '/models',
+        ],
+        20 * 60_000,
+      );
+    } finally {
+      // A timed-out Compose client does not necessarily stop its one-shot container.
+      await this.run(['rm', '-f', installer], 15_000).catch(() => {});
+    }
+  }
+
   async stop(state) {
     await this.compose(state.compose, ['stop', '--timeout', '120', 'worker', 'api'], 180_000);
     const helpers = state.enabled.filter((id) => id !== 'apk').map((id) => COMPONENTS[id]);
@@ -309,7 +375,15 @@ export class DockerDeployment {
       ['up', '-d', '--no-deps', '--pull', 'never', '--wait', '--wait-timeout', '120', 'api', 'worker', 'web'],
       180_000,
     );
-    for (const id of Object.keys(COMPONENTS).filter((id) => !state.enabled.includes(id)))
+    const config = await readJson(state.config);
+    for (const id of Object.keys(COMPONENTS).filter(
+      (id) =>
+        !state.enabled.includes(id) &&
+        config.services[COMPONENTS[id]] &&
+        (id !== 'tts' ||
+          !config.services.api.environment?.TTS_PLAIN_ENDPOINT_URL ||
+          config.services.api.environment.TTS_PLAIN_ENDPOINT_URL === TTS_ENDPOINT),
+    ))
       await this.compose(state.compose, ['stop', '--timeout', '30', COMPONENTS[id]], 60_000);
   }
   async verify(state) {

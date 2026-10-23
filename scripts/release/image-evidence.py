@@ -365,7 +365,7 @@ def capture(image, component, output, syft):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--image', required=True)
-    parser.add_argument('--component', required=True, choices=['server', 'web', 'apk', 'browser', 'browser-camoufox', 'metadata', 'updater'])
+    parser.add_argument('--component', required=True, choices=['server', 'web', 'apk', 'browser', 'browser-camoufox', 'metadata', 'tts', 'updater'])
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--syft', default='syft')
     args = parser.parse_args()

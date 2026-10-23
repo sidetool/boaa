@@ -1,7 +1,7 @@
 /** Public status only. Deployment paths, credentials and raw helper logs never cross this boundary. */
 export type ReleaseChannel = 'stable' | 'beta';
 export type BrowserEngine = 'patchright' | 'camoufox';
-export type OptionalComponentId = 'apk' | 'browser' | 'metadata';
+export type OptionalComponentId = 'apk' | 'browser' | 'metadata' | 'tts';
 export type ManagementPhase =
   | 'idle'
   | 'checking'

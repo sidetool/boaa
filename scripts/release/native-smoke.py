@@ -110,6 +110,18 @@ with TestClient(app) as c:
  assert r.status_code==200 and r.json()['value']==42,r.text
 print('native imports and synthetic provider health pass')
 '''])
+    elif a.component == 'tts':
+        execute('native CPU inference dependencies and optional model boundary', 'python', ['-c', r"""
+import json, numpy, onnxruntime
+from pathlib import Path
+from helper import TextToSpeech
+from install import MANIFEST
+assert 'CPUExecutionProvider' in onnxruntime.get_available_providers()
+assert not list(Path('/models').rglob('*.onnx')), 'model weights must not ship in the image'
+assert len([f for f in MANIFEST['files'] if f['path'].startswith('voice_styles/')]) == 10
+assert Path('/app/LICENSE.upstream').is_file()
+print('Native NumPy/ONNX CPU imports pass; model download is optional and pinned')
+"""])
     elif a.component == 'updater':
         execute('Docker CLI, Compose and flock', 'sh', ['-ec', 'docker --version; docker compose version; flock -n /tmp/test.lock node --check scripts/release/updater.mjs'])
     elif a.component == 'web':

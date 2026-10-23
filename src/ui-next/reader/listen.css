@@ -48,6 +48,52 @@
   overflow-wrap: anywhere;
 }
 
+.un-listen-setup {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 14px;
+  border-radius: 14px;
+  background: rgb(255 255 255 / 5%);
+}
+
+.un-listen-setup-icon {
+  display: grid;
+  flex: none;
+  width: 34px;
+  height: 34px;
+  place-items: center;
+  border-radius: 11px;
+  background: var(--un-accent-soft);
+  color: var(--un-accent-2);
+}
+
+.un-listen-setup > div {
+  display: grid;
+  flex: 1;
+  gap: 4px;
+  min-width: 0;
+}
+
+.un-listen-setup b {
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.un-listen-setup p {
+  margin: 0;
+  color: var(--un-text-2);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.un-listen-setup-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+}
+
 /* ───────── player ───────── */
 
 .un-listen-player {

@@ -5,6 +5,7 @@ import {
 } from '../../providers/plain-tts-limits';
 import {
   AlertCircle,
+  AudioLines,
   ChevronLeft,
   ChevronRight,
   Minus,
@@ -25,6 +26,7 @@ import {
 } from 'lucide-react';
 import { useEffect, useState, type ReactNode } from 'react';
 import { useSelfHostCapability } from '../../features/auth/self-host-account-api';
+import { serverManagementApi } from '../../features/server-management/use-server-management-client';
 import { useOptionalAppRuntime } from '../../app/runtime/RuntimeProvider';
 import type { TTSPlaybackSettings } from '../../domain/types';
 import ProviderSettingsPanel from '../../features/providers/ProviderSettingsPanel';
@@ -100,7 +102,11 @@ function Group({ title, children, aside }: { title: string; children: ReactNode;
 
 /** ui-next 듣기 tab: a player first, then the few choices people change while listening. */
 export default function UiNextListenPanel(props: TTSAddonPanelProps) {
-  const localStatic = useOptionalAppRuntime()?.product?.kind === 'local-static';
+  const runtime = useOptionalAppRuntime();
+  const localStatic = runtime?.product?.kind === 'local-static';
+  // Only someone who can open 서버 관리 is offered the install; everyone else is told who can.
+  const canManageServer = useSelfHostCapability('manageServer');
+  const canInstallVoice = Boolean(props.openServerSettings && serverManagementApi(runtime) && canManageServer);
   // Server voices and per-speaker casting run on server providers; members listen with this device's voices.
   const providers = useSelfHostCapability('useProviders');
   const [page, setPage] = useState<Page>('main');
@@ -135,6 +141,19 @@ export default function UiNextListenPanel(props: TTSAddonPanelProps) {
   const selectedPaid = Boolean(selectedVoice?.paid ?? selectedEngine?.paid);
   const voiceGroups = groupByEngine(serverVoices, engines);
   const enginesDown = engines.filter((engine) => !engine.available);
+  // The server answered and has nothing to speak with: an optional install, not a fault.
+  const noServerEngines = Array.isArray(catalog?.providers) && engines.length === 0 && serverVoices.length === 0;
+  const voiceSetup = serverPlain && !serverReady && noServerEngines;
+  // Members never get a choice that cannot work; a saved 서버 choice stays visible so it is never switched silently.
+  const offerServerVoice = !noServerEngines || canInstallVoice || serverPlain;
+  // The local Supertonic voice is missing, stopped or down while the chosen voice cannot play. Paid engines may
+  // still be listed; the fix an administrator can make is in 서버 관리, never an automatic engine swap.
+  const localEngine = engines.find((engine) => engine.id === 'supertonic');
+  const localVoiceFix =
+    canInstallVoice &&
+    !voiceSetup &&
+    localEngine?.available !== true &&
+    (serverVoiceMissing || defaultUnavailable || (selectedEngineDown && selectedEngine?.id === 'supertonic'));
   const playbackUnavailable = plainMode
     ? serverPlain
       ? !serverReady || serverVoiceMissing || defaultUnavailable || selectedEngineDown
@@ -182,6 +201,15 @@ export default function UiNextListenPanel(props: TTSAddonPanelProps) {
             <p className="un-listen-note">
               연결한 엔진의 목소리는 듣기 탭의 서버 목소리에 바로 나타나요. 화자 분석이나 승인 없이 쓸 수 있어요.
             </p>
+            {canInstallVoice && (
+              // Supertonic is an optional server component now, not an engine connection; say where it lives.
+              <p className="un-listen-note">
+                Supertonic 서버 낭독 음성은 서버 설정의 추가 기능에서 설치하고 켜요.{' '}
+                <button type="button" className="un-listen-link" onClick={props.openServerSettings}>
+                  서버 설정 열기
+                </button>
+              </p>
+            )}
             <ProviderSettingsPanel
               scope="tts_synthesis"
               title="TTS 엔진"
@@ -198,7 +226,7 @@ export default function UiNextListenPanel(props: TTSAddonPanelProps) {
   }
 
   const status = serverPlain
-    ? serverReady
+    ? serverReady || voiceSetup
       ? undefined
       : { title: '서버 음성 확인 필요', message: props.plainVoices?.message ?? '서버 음성 목록을 확인하세요.' }
     : props.statusTone === 'ready'
@@ -232,6 +260,45 @@ export default function UiNextListenPanel(props: TTSAddonPanelProps) {
             <RefreshCw size={16} />
           </button>
         </div>
+      )}
+
+      {voiceSetup && (
+        <section className="un-listen-setup" aria-label="서버 목소리 준비">
+          <span className="un-listen-setup-icon" aria-hidden="true">
+            <AudioLines size={18} />
+          </span>
+          <div>
+            <b>서버 목소리가 아직 없어요</b>
+            <p>
+              {canInstallVoice
+                ? '서버 설정의 추가 기능에서 ‘서버 낭독 음성’을 설치하거나 다시 켜면 여기서 쓸 수 있어요.'
+                : '서버 관리자가 서버 낭독 음성을 설치하거나 다시 켜면 들을 수 있어요.'}{' '}
+              그동안은 이 기기 목소리로 들을 수 있어요.
+            </p>
+            <div className="un-listen-setup-actions">
+              {canInstallVoice && (
+                <button type="button" className="un-btn is-primary is-sm" onClick={props.openServerSettings}>
+                  <Server size={15} aria-hidden="true" />
+                  서버 설정 열기
+                </button>
+              )}
+              <button
+                type="button"
+                className="un-btn is-ghost is-sm"
+                onClick={() => changePlaybackSettings({ voiceSource: 'system' })}
+              >
+                이 기기 목소리로 듣기
+              </button>
+              {props.refreshPlainVoices && (
+                // Installing takes minutes; a listener already on 서버 does not reload the voice list by itself.
+                <button type="button" className="un-btn is-text is-sm" onClick={() => props.refreshPlainVoices?.()}>
+                  <RefreshCw size={14} aria-hidden="true" />
+                  다시 확인
+                </button>
+              )}
+            </div>
+          </div>
+        </section>
       )}
 
       <section className="un-listen-player" aria-label="재생">
@@ -389,7 +456,7 @@ export default function UiNextListenPanel(props: TTSAddonPanelProps) {
         )}
         {plainMode ? (
           <>
-            {!localStatic && providers && (
+            {!localStatic && providers && offerServerVoice && (
               <div className="un-listen-row">
                 <span className="un-listen-label">음성</span>
                 <Segmented
@@ -482,16 +549,25 @@ export default function UiNextListenPanel(props: TTSAddonPanelProps) {
             )}
             {serverPlain && (
               <p className="un-listen-note">
-                {serverVoiceMissing
-                  ? '저장된 목소리를 찾을 수 없습니다. 사용할 목소리를 다시 선택하세요.'
-                  : defaultUnavailable
-                    ? '기본 엔진이 준비되지 않았어요. 다른 엔진을 쓰려면 목소리를 직접 고르세요.'
-                    : selectedEngineDown
-                      ? `${selectedEngine?.name ?? '선택한 엔진'}에 연결할 수 없어요${selectedEngine?.message ? ` (${selectedEngine.message})` : ''}. 다른 엔진은 자동으로 대신하지 않으니 목소리를 직접 고르세요.`
-                      : (props.plainVoices?.message ??
-                        (serverReady
-                          ? `${serverVoices.length}개 서버 목소리를 쓸 수 있어요.`
-                          : '사용 가능한 서버 목소리를 불러오세요.'))}{' '}
+                {noServerEngines
+                  ? '서버 목소리가 준비되면 여기에 나타나요. 고른 목소리는 그대로 기억해요.'
+                  : serverVoiceMissing
+                    ? '저장된 목소리를 찾을 수 없습니다. 사용할 목소리를 다시 선택하세요.'
+                    : defaultUnavailable
+                      ? '기본 엔진이 준비되지 않았어요. 다른 엔진을 쓰려면 목소리를 직접 고르세요.'
+                      : selectedEngineDown
+                        ? `${selectedEngine?.name ?? '선택한 엔진'}에 연결할 수 없어요${selectedEngine?.message ? ` (${selectedEngine.message.replace(/[.。]\s*$/, '')})` : ''}. 다른 엔진은 자동으로 대신하지 않으니 목소리를 직접 고르세요.`
+                        : (props.plainVoices?.message ??
+                          (serverReady
+                            ? `${serverVoices.length}개 서버 목소리를 쓸 수 있어요.`
+                            : '사용 가능한 서버 목소리를 불러오세요.'))}{' '}
+                {localVoiceFix && (
+                  <>
+                    <button type="button" className="un-listen-link" onClick={props.openServerSettings}>
+                      서버 설정 열기
+                    </button>{' '}
+                  </>
+                )}
                 {props.refreshPlainVoices && (
                   <button type="button" className="un-listen-link" onClick={() => props.refreshPlainVoices?.()}>
                     새로고침
@@ -565,7 +641,7 @@ export default function UiNextListenPanel(props: TTSAddonPanelProps) {
             <Server size={19} aria-hidden="true" />
             <span>
               <b>TTS 엔진 연결</b>
-              <small>Supertonic, 외부 TTS API 키와 모델</small>
+              <small>외부·로컬 TTS API 키와 모델</small>
             </span>
             <ChevronRight size={18} aria-hidden="true" />
           </button>

@@ -59,9 +59,10 @@ at the same commit for transient errors as described below.
    For a full independent archive audit, download all assets into a separate
    directory and run `node scripts/release/verify-evidence.mjs <asset-directory>`.
    This remains the full-content verifier and streams hashes to bound memory.
+
 3. Inspect the substantive source diff, `server-evidence.json`, each
    `*-evidence.json`, `*-smoke.json`, both integration logs and `7z-rebuild.log`.
-   Confirm the fourteen child/config digests and seven index digests belong to that
+   Confirm the sixteen child/config digests and eight index digests belong to that
    commit. The collector reads actual final image architecture/configuration;
    merely counting two index descriptors is insufficient.
 4. Inspect component notices and corresponding source coverage, not only license
@@ -139,7 +140,7 @@ ghcr.io/sidetool/boaa-<component>@<reviewed-index-digest>`. Verify the registry
 <asset-directory>`. Native integration now pulls anonymously when the package is
    public and signs that exact child-digest receipt with the integration result.
    The publication checker authenticates the evidence and receipt hashes, then
-   checks all seven indexes, child manifests/config digests and anonymous access
+   checks all eight indexes, child manifests/config digests and anonymous access
    to every layer. An already-proven CI download is not repeated. For old releases,
    new private packages, missing/ambiguous receipts or different child digests,
    it performs the full anonymous pull. `--full-pull` forces all fourteen downloads.

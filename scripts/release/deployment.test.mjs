@@ -160,3 +160,36 @@ test('initial enabled Patchright is recorded as installed and existing managed s
   await deployment.initialize({ allowDrift: true });
   assert.deepEqual(deployment.current, stopped);
 });
+
+test('an enabled legacy plain-TTS overlay is adopted without starting or stopping services', async (t) => {
+  const directory = await mkdtemp(path.join(tmpdir(), 'boaa-tts-adopt-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const config = {
+    services: {
+      api: { environment: { TTS_PLAIN_ENABLED: 'true', TTS_PLAIN_ENDPOINT_URL: 'http://plain-tts:9010/synthesize' } },
+      'plain-tts': { image: 'operator-tts-image' },
+    },
+  };
+  const current = {
+    project: 'fixture',
+    version: '1.0.0',
+    enabled: [],
+    installed: [],
+    config: path.join(directory, 'config.json'),
+  };
+  await atomicJson(current.config, config);
+  await atomicJson(path.join(directory, 'current.json'), current);
+  const deployment = new DockerDeployment({
+    directory,
+    run: async () => {
+      throw new Error('unexpected Docker call');
+    },
+  });
+  deployment.assertCurrentMatches = async () => {};
+  await deployment.initialize();
+  assert.deepEqual(deployment.current.enabled, ['tts']);
+  assert.deepEqual(deployment.current.installed, ['tts']);
+  assert.equal(deployment.current.componentVersions.tts, '1.0.0');
+  await deployment.initialize();
+  assert.deepEqual(deployment.current.enabled, ['tts']);
+});

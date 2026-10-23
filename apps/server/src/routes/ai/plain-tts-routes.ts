@@ -61,6 +61,7 @@ export async function registerPlainTTSRoutes(
         modelId,
         revision: revision!,
         paid: false,
+        default: true,
         legacyIds: true,
         createProvider: async () => provider,
       }
@@ -216,11 +217,12 @@ export async function registerPlainTTSRoutes(
         }
       }),
     );
-    const first = results[0];
+    // Removing an optional runtime must not promote the next enabled (possibly paid) engine.
+    const first = results.find(({ source }) => source.default);
     const defaultVoice =
       first?.found.find((voice) => voice.id === first.source.providerOptions?.voice) ?? first?.found[0];
     const result: PlainTTSVoices = {
-      defaultVoiceId: defaultVoice ? voiceKey(first.source, defaultVoice.id) : '',
+      defaultVoiceId: first && defaultVoice ? voiceKey(first.source, defaultVoice.id) : '',
       available: results.some((item) => item.available),
       modelId,
       revision: catalogRevision(items),

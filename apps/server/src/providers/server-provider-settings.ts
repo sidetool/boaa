@@ -260,7 +260,8 @@ function chooseDefaultProviderId(
     scope === 'llm_labeling' ? aiSettings.defaultProviderId : env.TTS_PROVIDER_DEFAULT?.trim() || 'system';
   if (storedDefault && enabledProviderIds.includes(storedDefault)) return storedDefault;
   if (enabledProviderIds.includes(envDefault)) return envDefault;
-  return enabledProviderIds[0];
+  // An enabled TTS engine is not consent to make it the default (it may be paid).
+  return scope === 'tts_synthesis' ? undefined : enabledProviderIds[0];
 }
 
 function allowedProviderIdsForScope(scope: ProviderSettingsScope): Set<string> {

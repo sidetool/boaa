@@ -1,6 +1,6 @@
 import { createHash, createPublicKey, verify } from 'node:crypto';
 
-export const IMAGE_NAMES = ['server', 'web', 'apk', 'browser', 'browser-camoufox', 'metadata', 'updater'];
+export const IMAGE_NAMES = ['server', 'web', 'apk', 'browser', 'browser-camoufox', 'metadata', 'tts', 'updater'];
 export const UPDATER_PROTOCOL = 1;
 export const releaseVersion = (value) =>
   typeof value === 'string' && /^v?(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-beta\.(0|[1-9]\d*))?$/.test(value);

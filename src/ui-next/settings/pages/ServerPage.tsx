@@ -1,5 +1,6 @@
 import {
   AppWindow,
+  AudioLines,
   Check,
   CircleAlert,
   Cpu,
@@ -61,6 +62,8 @@ interface ComponentInfo {
   stopEffect: string;
   /** Something the server admin must provide outside the app before this runtime does anything. */
   requirement?: string;
+  /** What installing or turning on does not change, said before the person confirms. */
+  enableNote?: string;
   icon: ReactNode;
 }
 
@@ -87,8 +90,17 @@ const COMPONENTS: Record<OptionalComponentId, ComponentInfo> = {
     requirement: `실제로 정보를 가져오는 제공자는 앱에 들어 있지 않아요. 서버 관리자가 설치 폴더의 ${RELEASE_GUIDE}(‘선택 구성요소’)와 ${RUNTIME_GUIDE} 안내대로 제공자 폴더를 따로 연결해야 수집이 시작돼요.`,
     icon: <ScanSearch size={18} />,
   },
+  tts: {
+    title: '서버 낭독 음성',
+    object: '서버 낭독 음성을',
+    help: 'Supertonic으로 한국어 본문을 서버에서 자연스럽게 읽어요. 모델이 크고 메모리를 많이 써서 필요할 때만 설치하세요.',
+    stopEffect:
+      '‘서버’ 목소리로 듣는 사람은 다시 켤 때까지 들을 수 없어요. 기기 목소리와 각자 고른 목소리 설정은 그대로예요.',
+    enableNote: '지금 듣는 목소리는 바뀌지 않아요. 듣기 설정의 음성에서 ‘서버’를 고르면 쓸 수 있어요.',
+    icon: <AudioLines size={18} />,
+  },
 };
-const COMPONENT_ORDER: readonly OptionalComponentId[] = ['apk', 'browser', 'metadata'];
+const COMPONENT_ORDER: readonly OptionalComponentId[] = ['apk', 'browser', 'metadata', 'tts'];
 
 /** The steps of an update as the person sees them; the server phases map onto these. */
 const UPDATE_STEPS: readonly { label: string; phases: readonly ManagementPhase[] }[] = [
@@ -118,8 +130,11 @@ function componentErrorMessage(code: string): string {
   return managementErrorMessage(code, 'component').text;
 }
 
+/** Installed and switched on here; it can always be stopped, even after this server stopped supporting it. */
+const stoppable = (component: ServerComponent) => component.managed && component.installed && component.enabled;
+
 function componentState(component: ServerComponent, model: ServerManagementModel): ComponentState {
-  if (!component.supported) return 'unsupported';
+  if (!component.supported && !stoppable(component)) return 'unsupported';
   if (!component.managed) return 'external';
   const operation = model.status?.operation;
   if (
@@ -135,6 +150,8 @@ function componentState(component: ServerComponent, model: ServerManagementModel
     !operation.completedAt
   )
     return 'working';
+  // Only stopping is offered from here: no retry, install or enable for something this server cannot run.
+  if (!component.supported) return 'unsupported';
   // Running fine but waiting on server-side configuration that retrying cannot fix.
   if (component.error === 'component_provider_missing' && component.installed && component.enabled) return 'setup';
   if (component.error) return 'error';
@@ -218,7 +235,7 @@ function ComponentRow({
         {component.installed && component.enabled && stop}
       </>
     );
-  } else if (state === 'on' || state === 'setup') {
+  } else if (state === 'on' || state === 'setup' || (state === 'unsupported' && stoppable(component))) {
     action = stop;
   } else if (state === 'off') {
     action = button('enable', <Play size={14} aria-hidden="true" />, '켜기');
@@ -241,6 +258,12 @@ function ComponentRow({
         )}
         {state === 'queued' && (
           <small className="un-server-meta">updater가 요청을 받으면 시작해요. 서버가 잠시 다시 시작될 수 있어요.</small>
+        )}
+        {state === 'unsupported' && stoppable(component) && (
+          <small className="un-server-meta">
+            아직 켜져 있지만 지금 서버 버전에서는 지원하지 않아요. 중지할 수는 있고, 다시 켜려면 지원하는 버전이
+            필요해요.
+          </small>
         )}
         {state === 'external' && (
           <small className="un-server-meta">서버 설정에서 직접 관리하고 있어서 여기서 바꿀 수 없어요.</small>
@@ -617,11 +640,15 @@ function ComponentConfirm({
         <>
           {change.kind === 'install' && size && <p>최대 {size}를 받아 설치해요.</p>}
           {change.kind === 'stop' && <p>{info.stopEffect}</p>}
+          {change.kind === 'stop' && !change.component.supported && (
+            <p>지금 서버 버전에서는 지원하지 않아서, 중지하면 지원하는 버전으로 업데이트할 때까지 다시 켤 수 없어요.</p>
+          )}
           <p>
             적용하는 동안 서버가 잠시 다시 시작돼 서재와 소스 연결이 잠깐 끊겨요. 진행 중인 가져오기·다운로드가 있다면
             끝난 뒤에 하는 게 좋아요.
           </p>
           {info.requirement && change.kind !== 'stop' && <p>{info.requirement}</p>}
+          {info.enableNote && change.kind !== 'stop' && <p>{info.enableNote}</p>}
           <p>설치한 확장과 설정, 로그인 정보는 지우지 않아요.</p>
         </>
       )}

@@ -9,7 +9,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-COMPONENTS = ['server', 'web', 'apk', 'browser', 'browser-camoufox', 'metadata', 'updater']
+COMPONENTS = ['server', 'web', 'apk', 'browser', 'browser-camoufox', 'metadata', 'tts', 'updater']
 
 
 def anonymous_available(repository):

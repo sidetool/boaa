@@ -69,7 +69,7 @@ jobs:
           if changed-allowed: raise SystemExit('application_changed_rebuild_required: '+str(sorted(changed-allowed)))
           jobs=api(f'repos/{repo}/actions/runs/{run}/jobs?per_page=100')['jobs']
           passed={j['name'] for j in jobs if j['conclusion']=='success'}
-          expected={'validate'}|{f'build ({c}, {a})' for c in ['server','web','updater','apk','browser','browser-camoufox','metadata'] for a in ['amd64','arm64']}
+          expected={'validate'}|{f'build ({c}, {a})' for c in ['server','web','updater','apk','browser','browser-camoufox','metadata','tts'] for a in ['amd64','arm64']}
           if not expected<=passed: raise SystemExit('native_matrix_incomplete')
           with open(os.environ['GITHUB_OUTPUT'],'a') as out: out.write('commit='+commit+'\n')
           print('Reusing verified application commit',commit,'with fixture commit',os.environ['GITHUB_SHA'])
@@ -187,7 +187,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        component: [server, web, apk, browser, browser-camoufox, metadata, updater]
+        component: [server, web, apk, browser, browser-camoufox, metadata, tts, updater]
         architecture: [amd64, arm64]
     runs-on: ${{ matrix.architecture == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
     timeout-minutes: 90
@@ -204,7 +204,7 @@ jobs:
         run: |
           set -euo pipefail
           recipe="deploy/$COMPONENT.Dockerfile"
-          case "$COMPONENT" in apk|browser|browser-camoufox|metadata) recipe="deploy/runtime-$COMPONENT.Dockerfile" ;; esac
+          case "$COMPONENT" in apk|browser|browser-camoufox|metadata) recipe="deploy/runtime-$COMPONENT.Dockerfile" ;; tts) recipe="deploy/plain-tts.Dockerfile" ;; esac
           printf 'recipe=%s\nversion=%s\ncommit=%s\n' "$recipe" "${RELEASE_VERSION#v}" "$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
       - name: Build final native image locally with reusable layers
         uses: docker/build-push-action@v7.4.0
@@ -241,6 +241,11 @@ jobs:
           python3 scripts/release/image-evidence.py --image "boaa-$COMPONENT:final" --component "$COMPONENT" --output evidence
           python3 scripts/release/capture-debian-sources.py --image "boaa-$COMPONENT:final" --component "$COMPONENT" --output evidence
           python3 scripts/release/verify-server-evidence.py --prefix "$COMPONENT-$ARCHITECTURE" --directory evidence
+      - name: Verify optional TTS installation, synthesis, stop and offline model reuse
+        if: matrix.component == 'tts'
+        env:
+          BOAA_TTS_SMOKE_IMAGE: boaa-tts:final
+        run: node scripts/release/tts-smoke.mjs
       - name: Publish image sources before registry upload
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -390,7 +395,7 @@ jobs:
           printf '%s' "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
           gh release download "$RELEASE_VERSION" --dir release --skip-existing
           mkdir image-metadata
-          cp release/{server,web,updater,apk,browser,browser-camoufox,metadata}-{amd64,arm64}.json image-metadata/
+          cp release/{server,web,updater,apk,browser,browser-camoufox,metadata,tts}-{amd64,arm64}.json image-metadata/
           export BOAA_IMAGE_TAG="candidate-$(git rev-parse HEAD)"
           node scripts/release/collect-images.mjs
           node scripts/release/bundle.mjs

@@ -1,6 +1,25 @@
 # Basic Korean narration
 
-The optional `compose.plain-tts.yaml` service runs Supertonic 3 on CPU. It provides
+Supertonic is an optional CPU narration component, excluded from the default managed installation.
+Ordinary narration defaults to device voices; installing Supertonic does not change saved listening choices.
+
+In a managed Docker installation, an owner opens **설정 → 서버 관리 → 추가 기능 → 서버 낭독 음성**
+and chooses **설치**. The signed runtime image and pinned 401 MB model bundle are downloaded only after
+that request. Models are verified before the brief application restart, so a failed model download leaves
+BOAA running. Successful installation makes the voices available under **듣기 → 음성 → 서버**.
+Choose **중지** in server management to stop the runtime and release its process memory; the model volume
+and saved voice selections remain. Restarting the component reuses verified model files. App updates keep
+an uninstalled/stopped runtime off, and an explicitly enabled legacy `plain-tts` overlay stays enabled.
+This setting needs the updater shipped with the TTS-capable release; an older updater must first be upgraded
+with the signed installer bundle's `scripts/release/upgrade-updater.mjs` (see `deploy/release-management.md`).
+The service definition for an older managed installation is added by the updater on the next change.
+
+An enabled remote provider is not automatically promoted to the default when Supertonic is absent/stopped.
+An explicitly configured server-provider default may supply its default voice; selecting a paid voice remains
+an explicit choice. Existing voice IDs are preserved and unavailable voices are not silently substituted.
+
+For manually operated source deployments, the optional `compose.plain-tts.yaml` overlay remains available.
+It runs the same Supertonic 3 runtime on CPU. It provides
 ten Korean voices independently of character analysis, voice approval and AI jobs.
 In the reader select **TTS → 기본 목소리 → 서버 음성**, choose a voice and preview it.
 Selection is saved as the default, or as a book override when explicitly enabled.
@@ -94,7 +113,6 @@ process-wide authentication. JSON uploads do not require a schema migration or a
 
 References: [Gemini TTS](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/text-to-speech/overview),
 [Cloud TTS authentication](https://docs.cloud.google.com/text-to-speech/docs/authentication).
-
 
 ### 연속 듣기 합성 단위와 요청 제한
 

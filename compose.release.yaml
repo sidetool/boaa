@@ -601,7 +601,35 @@ services:
     depends_on:
       runtime-bootstrap:
         condition: service_completed_successfully
+  plain-tts:
+    profiles: [tts]
+    image: ghcr.io/${BOAA_IMAGE_OWNER:-sidetool}/boaa-tts:${BOAA_VERSION:-0.1.1-beta.6}
+    environment:
+      MODEL_AUTO_INSTALL: 'false'
+    volumes:
+      - plain-tts-models:/models
+    expose: ['9010']
+    mem_limit: 1536m
+    cpus: 4
+    init: true
+    restart: unless-stopped
+    security_opt: ['no-new-privileges:true']
+    cap_drop: [ALL]
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'python',
+          '-c',
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:9010/health', timeout=3)",
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 8
+      start_period: 60s
+    logging: *id001
 volumes:
+  plain-tts-models: null
   postgres-data: null
   redis-data: null
   minio-data: null

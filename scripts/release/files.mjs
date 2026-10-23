@@ -48,7 +48,7 @@ export function validateRequest(value) {
     throw new Error('management_request_invalid');
   if (
     value.action === 'component' &&
-    (!['apk', 'browser', 'metadata'].includes(value.componentId) || typeof value.enabled !== 'boolean')
+    (!['apk', 'browser', 'metadata', 'tts'].includes(value.componentId) || typeof value.enabled !== 'boolean')
   )
     throw new Error('management_request_invalid');
   if (

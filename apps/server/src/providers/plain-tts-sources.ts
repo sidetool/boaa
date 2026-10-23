@@ -22,6 +22,8 @@ export interface PlainTTSSource {
   modelId?: string;
   revision: string;
   paid: boolean;
+  /** Only an explicitly configured default may supply the unspecified server voice. */
+  default?: boolean;
   legacyIds?: boolean;
   providerOptions?: Record<string, unknown>;
   createProvider(): Promise<TTSSynthesisProvider>;
@@ -57,6 +59,7 @@ export async function loadPlainTTSSources(
       name: id === 'local-endpoint' && modelId === 'supertonic-3-ko' ? 'Supertonic 3' : entry.displayName,
       modelId,
       paid: id !== 'local-endpoint',
+      default: id === settings.defaultProviderId,
       providerOptions,
       revision: structuredIntegrityHash({
         id,

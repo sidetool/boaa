@@ -16,6 +16,7 @@ import {
   prepareMailbox,
 } from './deployment.mjs';
 import { OPERATION_RESULT_LIMIT, recordOperationResult } from './operation-results.mjs';
+import { TTS_ENDPOINT, TTS_MODEL_BYTES, withOptionalTTS } from './tts-component.mjs';
 
 const safeError = (error) =>
   /^(?:release|deployment|update|updater|component|management)_[a-z_]+$/.test(error?.message ?? '')
@@ -179,9 +180,17 @@ export class ServerUpdater {
           ? env.BOAA_SOURCE_BROWSER_ENDPOINT
           : id === 'metadata'
             ? env.WEBNOVEL_METADATA_COLLECTOR_URL
-            : '';
+            : id === 'tts'
+              ? env.TTS_PLAIN_ENDPOINT_URL
+              : '';
       const external = Boolean(
-        endpoint && endpoint !== (id === 'browser' ? 'http://runtime-browser:8791' : 'http://runtime-metadata:8792'),
+        endpoint &&
+        endpoint !==
+          (id === 'tts'
+            ? TTS_ENDPOINT
+            : id === 'browser'
+              ? 'http://runtime-browser:8791'
+              : 'http://runtime-metadata:8792'),
       );
       return {
         id,
@@ -212,10 +221,10 @@ export class ServerUpdater {
         running: current.enabled.includes(id) && Boolean(before?.running),
         managed: !external,
         supported:
-          Boolean(config.services[COMPONENTS[id]]) &&
-          (image ? image.platforms.includes(platform) : (before?.supported ?? true)),
+          (id === 'tts' || Boolean(config.services[COMPONENTS[id]])) &&
+          (manifest ? Boolean(image?.platforms.includes(platform)) : (before?.supported ?? true)),
         ...(image
-          ? { downloadBytes: image.downloadBytes }
+          ? { downloadBytes: image.downloadBytes + (id === 'tts' ? TTS_MODEL_BYTES : 0) }
           : before?.downloadBytes !== undefined
             ? { downloadBytes: before.downloadBytes }
             : {}),
@@ -349,13 +358,13 @@ export class ServerUpdater {
   async change(request) {
     await this.deployment.assertCurrentMatches?.();
     const previous = this.deployment.current;
-    let config = structuredClone(this.deployment.config),
+    let config = withOptionalTTS(structuredClone(this.deployment.config), previous.project),
       target = { ...previous, enabled: [...previous.enabled], installed: [...previous.installed] };
     let release, localImage;
     if (request.action === 'component') {
       const item = this.state.components.find((item) => item.id === request.componentId);
       if (!item?.managed) throw new Error('component_external');
-      if (!item.supported) throw new Error('component_unsupported');
+      if (request.enabled && !item.supported) throw new Error('component_unsupported');
       const engine = request.engine ?? item.engine ?? 'patchright';
       if (request.componentId === 'browser' && !request.enabled && engine !== item.engine)
         throw new Error('management_request_invalid');
@@ -451,6 +460,7 @@ export class ServerUpdater {
     await this.phase('downloading');
     if (!localImage) await this.deployment.pull(config, services);
     target = await this.deployment.stage(config, target, randomUUID());
+    await this.deployment.prepareComponents?.(target, services);
     await this.phase('preflight');
     let transaction;
     try {

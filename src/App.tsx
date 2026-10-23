@@ -819,6 +819,11 @@ export default function App() {
     setSettingsInitialTab('sources');
     readerSettingsController.openPanel();
   }, [readerSettingsController]);
+  const openServerSettings = useCallback(() => {
+    setUpdatesRequest(0);
+    setSettingsInitialTab('server');
+    readerSettingsController.openPanel();
+  }, [readerSettingsController]);
   const trustedAnalysisWorkflows = extensionRuntime.trustedExtensions.getAnalysisWorkflows();
   const baseBookAITTSPreparationRunner = useMemo(
     () =>
@@ -5710,6 +5715,7 @@ export default function App() {
                   await plainTTS.preview();
                 }}
                 refreshPlainVoices={plainTTS.refresh}
+                openServerSettings={openServerSettings}
                 bookOverrideEnabled={ttsBookOverrideEnabled}
                 pitchSupported={plainMode ? !plainServerSelected : selectedTTSPitchSupported}
                 resumeLabel={

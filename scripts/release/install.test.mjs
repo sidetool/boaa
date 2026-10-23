@@ -57,10 +57,10 @@ test('verified initial install pins every image, generates secrets and starts Pa
   const f = await fixture(t);
   await install(f.options);
   const override = JSON.parse(await readFile(path.join(f.directory, '.boaa-release/bootstrap.json'), 'utf8'));
-  assert.equal(Object.keys(override.services).length, 8);
+  assert.equal(Object.keys(override.services).length, 9);
   assert.ok(Object.values(override.services).every((service) => service.image.includes('@sha256:')));
   for (const call of f.calls)
-    for (const optional of ['runtime-apk', 'runtime-metadata']) assert.ok(!call.includes(optional));
+    for (const optional of ['runtime-apk', 'runtime-metadata', 'plain-tts']) assert.ok(!call.includes(optional));
   assert.match(await readFile(path.join(f.directory, '.env'), 'utf8'), /POSTGRES_PASSWORD=[a-f0-9]{64}/);
   await assert.rejects(install(f.options), /deployment_already_installed/);
   assert.equal(f.calls.length, 2);

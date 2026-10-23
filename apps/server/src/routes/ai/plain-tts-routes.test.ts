@@ -249,6 +249,7 @@ describe('ordinary narration across providers', () => {
               modelId: 'gemini-3.8-flash-lite-tts',
               revision: 'remote-v1',
               paid: true,
+              default: true,
               providerOptions: { voice: 'old', instructions: 'Calm' },
               createProvider: async () => ({ ...f.provider, providerId: 'gemini-tts', synthesize: remote }),
             },
@@ -468,4 +469,23 @@ it('verifies regex-filtered speech against source and refuses unsupported regex 
   const invalid = await f.request({ rules: [{ ...rules[0], pattern: '(?=x)' }] });
   expect(invalid.statusCode).toBe(400);
   expect(f.synthesize).toHaveBeenCalledTimes(1);
+});
+
+it('does not promote an enabled paid engine to the default when optional Supertonic is not installed', async () => {
+  const remote = vi.fn<TTSSynthesisProvider['synthesize']>();
+  const f = await fixture({ TTS_PLAIN_ENABLED: 'false' }, async () => [
+    {
+      id: 'gemini-tts',
+      name: 'Gemini',
+      revision: 'configured-but-not-default',
+      paid: true,
+      createProvider: async () => ({ ...f.provider, providerId: 'gemini-tts', synthesize: remote }),
+    },
+  ]);
+  const catalog = (await f.app.inject('/api/tts/plain/voices')).json();
+  expect(catalog.available).toBe(true);
+  expect(catalog.defaultVoiceId).toBe('');
+  expect(catalog.voices[0].id).toBe('gemini-tts:M1');
+  expect((await f.request({ modelRevision: catalog.revision })).statusCode).toBe(400);
+  expect(remote).not.toHaveBeenCalled();
 });

@@ -33,7 +33,7 @@ const signed = (value) => {
 
 test('evidence must match the trusted signature, reviewed commit and complete native matrix', () => {
   const e = fixture();
-  assert.equal(signedEvidence(...signed(e)).images.length, 14);
+  assert.equal(signedEvidence(...signed(e)).images.length, IMAGE_NAMES.length * 2);
   const args = signed(e);
   args[0] = Buffer.from(JSON.stringify({ ...e, commit: 'd'.repeat(40) }));
   assert.throws(() => signedEvidence(...args), /signature/);
@@ -107,13 +107,13 @@ test('only signed, successful, exact-child anonymous CI downloads can avoid a se
     await writeFile(path.join(dir, 'server-evidence.json.sig'), signature);
   }
   await save();
-  assert.equal((await registryEvidence(dir, pem)).length, 14);
+  assert.equal((await registryEvidence(dir, pem)).length, IMAGE_NAMES.length * 2);
   integrations.amd64.pulls[0].anonymous = false;
   integrations.amd64.pulls[1].digest = `sha256:${'d'.repeat(64)}`;
   integrations.amd64.pulls.push(integrations.amd64.pulls[2]);
   delete integrations.arm64.pulls; // Old releases must still do full anonymous pulls.
   await save();
-  assert.equal((await registryEvidence(dir, pem)).length, 4);
+  assert.equal((await registryEvidence(dir, pem)).length, IMAGE_NAMES.length - 3);
   await writeFile(path.join(dir, 'integration-amd64.json'), '{}');
   await assert.rejects(registryEvidence(dir, pem), /changed/);
   integrations.amd64.commit = 'e'.repeat(40);

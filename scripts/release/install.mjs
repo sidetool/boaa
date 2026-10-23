@@ -49,6 +49,7 @@ export async function install({
     'runtime-apk': 'apk',
     'runtime-browser': 'browser',
     'runtime-metadata': 'metadata',
+    ...(manifest.images.tts ? { 'plain-tts': 'tts' } : {}),
   };
   for (const [service, name] of Object.entries(names)) {
     const image = manifest.images[name];

@@ -16,7 +16,7 @@ cd /srv/boaa
 node scripts/release/install.mjs --version vX.Y.Z --key /trusted/boaa-release-public.pub
 ```
 
-설치기는 서명을 검증한 manifest의 digest로 모든 BOAA 이미지를 고정한다. `.env`가 없으면 무작위 비밀 값을 생성하고, 기존 `.env`는 보존한다. 기본 다운로드에는 API/작업자/웹/업데이터, 저장소 서비스와 Patchright 브라우저 인증 실행기가 포함된다. 실제 브라우저 프로세스는 요청이 있을 때만 시작하며 60초 유휴 후 종료한다. Camoufox(실험), APK Java, Python 메타데이터 실행기는 필요할 때 설정에서 별도로 설치한다. 브라우저를 제외하려면 설치 명령에 `--browser off`를 추가한다. 기본 브라우저 설치에는 Patchright 엔진이 명시된 서명 릴리즈가 필요하다. 기존 설치의 중지 상태와 선택 엔진은 앱 업데이트 시 유지한다.
+설치기는 서명을 검증한 manifest의 digest로 모든 BOAA 이미지를 고정한다. `.env`가 없으면 무작위 비밀 값을 생성하고, 기존 `.env`는 보존한다. 기본 다운로드에는 API/작업자/웹/업데이터, 저장소 서비스와 Patchright 브라우저 인증 실행기가 포함된다. 실제 브라우저 프로세스는 요청이 있을 때만 시작하며 60초 유휴 후 종료한다. Camoufox(실험), APK Java, Python 메타데이터 실행기, Supertonic 서버 낭독 음성은 필요할 때 설정에서 별도로 설치한다. Supertonic을 설치하기 전에는 음성 이미지나 모델을 다운로드하지 않으며 기본 듣기는 기기 음성을 사용한다. 브라우저를 제외하려면 설치 명령에 `--browser off`를 추가한다. 기본 브라우저 설치에는 Patchright 엔진이 명시된 서명 릴리즈가 필요하다. 기존 설치의 중지 상태와 선택 엔진은 앱 업데이트 시 유지한다.
 
 기존 소스 설치를 이 명령으로 덮어쓰지 않는다. 같은 Compose project 이름, DB·객체 저장소·서버 데이터 볼륨, 암호화 키를 유지한 별도 전환 계획이 필요하다. 기존 설치의 설정·볼륨과 업데이터 기록이 맞지 않으면 관리 기능을 활성화하지 않는다. 자동 백업은 제공된 postgres 서비스와 `/data/server` 데이터 경로를 사용하는 구성만 지원한다. 외부 DB 또는 다른 데이터 경로는 자동 적용을 차단한다.
 
@@ -134,7 +134,6 @@ openssl pkey -in /secure/boaa-release-private.pem -pubout -out deploy/release-pu
 
 구현 참고: [Docker의 다중 아키텍처 CI 문서](https://docs.docker.com/build/ci/github-actions/multi-platform/), [GitHub artifact 다운로드](https://github.com/actions/download-artifact).
 
-
 ## beta.4 → beta.5: upgrade the updater first
 
 Beta.5 adds a separately downloadable Camoufox image and the matching metadata browser protocol. The old updater cannot validate that image set. Verify and extract the beta.5 installer bundle into a separate directory, retaining the installed trusted public key, then run:
@@ -152,3 +151,24 @@ Beta.5 metadata images explicitly advertise support for Patchright and Camoufox.
 Use the normal beta-channel update action. The schema epoch remains 2 and the existing updater can install this release. Existing browser enablement and operator settings are preserved. New installations include the default Patchright browser runtime; use `--browser off` to omit it.
 
 Beta.6 includes source-to-work navigation, translation and listening settings refinements, interactive page turns, and comic chapter-boundary navigation fixes. Page curl uses the pinned MIT-licensed StPageFlip calculation core; corresponding source and notices are included.
+
+## Optional Supertonic narration
+
+The signed release now includes a separate `tts` image. It is never pulled or started by the default installer.
+Server settings exposes the `tts` component as **서버 낭독 음성**, backed by the `plain-tts` service.
+Enabling it pulls the image and verifies the pinned model bundle in `plain-tts-models` before maintenance;
+only then are the API configuration and runtime switched together. Failed startup rolls back through the
+existing transaction. Stopping retains the model volume and saved listening choices and releases runtime RAM.
+A stopped component stays stopped across app updates. No paid provider is selected merely because the local
+voice disappeared. Download estimates include the image and 401 MB model bundle.
+
+Updaters from earlier releases reject the extra image key. Use the new signed installer bundle and its
+`upgrade-updater.mjs` procedure before updating the app; the refreshed updater supplies a dormant service
+definition to older managed layouts. Existing explicit `compose.plain-tts.yaml` configurations are adopted
+without automatically disabling their voice service. Custom TTS endpoints remain externally managed.
+The standalone Compose overlay remains an explicit operator opt-in, independent of the managed UI.
+
+Validation: `node --test --test-concurrency=1 scripts/release/*.test.mjs`; build
+`deploy/plain-tts.Dockerfile`, then run `BOAA_TTS_SMOKE_IMAGE=<local-image> node scripts/release/tts-smoke.mjs`.
+The isolated smoke checks first installation, real Korean synthesis, stop and verified model reuse offline.
+It removes only its own temporary container and volume.

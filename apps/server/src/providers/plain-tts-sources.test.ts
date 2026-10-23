@@ -35,6 +35,8 @@ describe('ordinary TTS provider configuration', () => {
     const f = fixture();
     const sources = await loadPlainTTSSources(f.pool, f.config, f.env);
     expect(sources.map((s) => s.id)).toEqual(['gemini-tts', 'local-endpoint']);
+    expect(sources[0].default).toBe(true);
+    expect(sources[1].default).toBe(false);
     expect(sources[0].modelId).toBe('gemini-3.8-flash-lite-tts');
     expect(sources[1].name).toBe('Supertonic 3');
     expect(JSON.stringify(sources)).not.toMatch(/fixture-only|disabled-fixture|127\.0\.0\.1/);
@@ -50,4 +52,13 @@ describe('ordinary TTS provider configuration', () => {
     const after = (await loadPlainTTSSources(f.pool, f.config, f.env))[0];
     expect(after.revision).not.toBe(before.revision);
   });
+});
+
+it('does not infer a paid default from the enabled list when no default is selected', async () => {
+  const f = fixture();
+  f.row.default_provider_id = '';
+  f.row.enabled_provider_ids = ['gemini-tts'];
+  const sources = await loadPlainTTSSources(f.pool, f.config, f.env);
+  expect(sources).toHaveLength(1);
+  expect(sources[0].default).toBe(false);
 });
