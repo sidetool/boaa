@@ -122,3 +122,39 @@ describe('automatic reading modes', () => {
     expect(restored).toBe(source);
   });
 });
+
+it('skips chapter separators in RSVP and preserves its word offset when rows are prepended', () => {
+  vi.stubGlobal('getComputedStyle', () => ({ lineHeight: '32px' }));
+  try {
+    const presentation = new AutoReadingPresentation();
+    const body = { id: 'body', text: '첫말 둘째말', documentKind: 'text' };
+    let paragraphs = [{ id: 'separator', text: '' }, body];
+    const element = { dataset: { paragraphId: body.id } };
+    const env = {
+      root: {
+        querySelector: () => null,
+        querySelectorAll: () => [element],
+        getBoundingClientRect: () => ({ left: 0, width: 320 }),
+      },
+      overlay: { style: {}, dataset: {}, replaceChildren: vi.fn(), textContent: '' },
+      top: 64,
+      bottom: 700,
+      count: 2,
+      anchor: () => ({ blockIndex: 0, offset: 0 }),
+      paragraph: (index: number) => paragraphs[index],
+      load: vi.fn(),
+      range: () => undefined,
+      advance: () => 'moving',
+    } as unknown as Parameters<AutoReadingPresentation['advance']>[2];
+    expect(presentation.advance('rsvp', 1, env)).toBe('moving');
+    expect(env.overlay.textContent).toBe('첫말');
+    paragraphs = [{ id: 'older', text: '이전 화' }, ...paragraphs];
+    env.count++;
+    presentation.shiftCoordinates(1);
+    expect(presentation.advance('rsvp', 1, env)).toBe('moving');
+    expect(env.overlay.textContent).toBe('둘째말');
+    expect(env.load).not.toHaveBeenCalled();
+  } finally {
+    vi.unstubAllGlobals();
+  }
+});

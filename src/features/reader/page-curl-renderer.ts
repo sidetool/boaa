@@ -5,12 +5,17 @@ import { createPageFold, curlPolygon } from './page-curl-geometry';
  * static sheet, revealed next sheet, folded sheet. Neither page's content nor
  * ownership changes while the pointer is held, including at progress 0/1.
  */
-export function createPageCurl(stage: HTMLElement, forward: boolean, direction: 1 | -1) {
+export function createPageCurl(
+  stage: HTMLElement,
+  forward: boolean,
+  direction: 1 | -1,
+  sheets?: { current: HTMLElement[]; incoming: HTMLElement[] },
+) {
   const comic = stage.classList.contains('fixed-doc-viewport');
-  const current = [
+  const current = sheets?.current ?? [
     ...stage.querySelectorAll<HTMLElement>(comic ? '.is-turn-current > article' : '.reader-paginated-page.is-current'),
   ];
-  const incoming = [
+  const incoming = sheets?.incoming ?? [
     ...stage.querySelectorAll<HTMLElement>(comic ? '.is-turn-preview > article' : '.reader-paginated-page.is-preview'),
   ];
   if (!current.length || !incoming.length) return undefined;
@@ -38,6 +43,7 @@ export function createPageCurl(stage: HTMLElement, forward: boolean, direction: 
     opacity: '0',
   });
   const images: HTMLImageElement[] = [];
+  const scrollOffsets: Array<{ copy: Element; x: number; y: number }> = [];
   const originals = all.map((source) => source.style.visibility);
   const cloneContent = (pages: HTMLElement[]) => {
     const content = document.createElement('div');
@@ -51,6 +57,12 @@ export function createPageCurl(stage: HTMLElement, forward: boolean, direction: 
     for (const source of pages) {
       const copy = source.cloneNode(true) as HTMLElement;
       const rect = rects.get(source)!;
+      const sourceNodes = [source, ...source.querySelectorAll('*')];
+      [copy, ...copy.querySelectorAll('*')].forEach((node, index) => {
+        const original = sourceNodes[index];
+        if (original.scrollTop || original.scrollLeft)
+          scrollOffsets.push({ copy: node, x: original.scrollLeft, y: original.scrollTop });
+      });
       copy.removeAttribute('id');
       copy.querySelectorAll('[id]').forEach((node) => node.removeAttribute('id'));
       copy
@@ -114,6 +126,10 @@ export function createPageCurl(stage: HTMLElement, forward: boolean, direction: 
   // the original sheet visible until every snapshot has decoded. Opacity hides
   // the entire subtree, including copies with explicit visibility: visible.
   stage.append(overlay);
+  scrollOffsets.forEach(({ copy, x, y }) => {
+    copy.scrollLeft = x;
+    copy.scrollTop = y;
+  });
   stage.dataset.turnRenderer = 'curl';
   const ready = images.length
     ? Promise.all(images.map((image) => image.decode())).then(() => {

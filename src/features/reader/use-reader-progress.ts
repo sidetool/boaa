@@ -23,6 +23,11 @@ export interface ReaderProgressOptions {
   readonly repository: ReaderBodyRepository;
   readonly novel: Pick<Novel, 'id' | 'totalChapters' | 'activeContentRevisionId'>;
   readonly chapter: Chapter;
+  readonly resolveLocation?: (location: ReaderLocationSnapshot) => {
+    chapter: Chapter;
+    repository?: ReaderBodyRepository;
+    location: ReaderLocationSnapshot;
+  };
   readonly getVisibleParagraph: () => { index?: number; paragraph?: Paragraph; offsetInParagraph?: number };
   readonly onVisualLocation: (location: ReaderLocationSnapshot) => void;
   readonly onLocationCommitted: (location: ReaderLocationSnapshot, bookProgress: number, updatedAt: string) => void;
@@ -67,6 +72,7 @@ export function useReaderPositionPersistence(
   optionsRef.current = options;
   const generationRef = useRef(0);
   const ownerEpochRef = useRef(0);
+  const scheduledChapter = useRef<string>();
   const persistenceRef = useRef<DebouncedProgressPersistence<PendingReaderPosition>>();
   if (!persistenceRef.current) {
     persistenceRef.current = new DebouncedProgressPersistence(
@@ -116,11 +122,15 @@ export function useReaderPositionPersistence(
       const current = optionsRef.current;
       if (current.isActive === false) return;
       const generation = ++generationRef.current;
+      const resolved = current.resolveLocation?.(location);
+      const chapter = resolved?.chapter ?? current.chapter;
+      if (scheduledChapter.current && scheduledChapter.current !== chapter.id) void persistenceRef.current!.flush();
+      scheduledChapter.current = chapter.id;
       persistenceRef.current!.schedule({
-        repository: current.repository,
+        repository: resolved?.repository ?? current.repository,
         novel: current.novel,
-        chapter: current.chapter,
-        location,
+        chapter,
+        location: resolved?.location ?? location,
         offsetInParagraph,
         generation,
         ownerEpoch: ownerEpochRef.current,
@@ -169,8 +179,9 @@ export function useReaderProgress(options: ReaderProgressOptions): ReaderProgres
     const max = Math.max(root.scrollHeight - root.clientHeight, 1);
     const progress = clamp(root.scrollTop / max, 0, 1);
     const visible = getVisibleParagraph();
+    if (optionsRef.current.resolveLocation && !visible.paragraph) return undefined;
     const paragraphIndex = visible.paragraph?.index ?? (visible.index === undefined ? 0 : visible.index + 1);
-    return {
+    const location: ReaderLocationSnapshot = {
       progress,
       scrollTop: root.scrollTop,
       paragraphIndex,
@@ -182,6 +193,7 @@ export function useReaderProgress(options: ReaderProgressOptions): ReaderProgres
         Math.max(chapter.paragraphCount - 1, 0),
       ),
     };
+    return optionsRef.current.resolveLocation?.(location).location ?? location;
   }, []);
 
   const handleScroll = useCallback(() => {

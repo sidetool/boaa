@@ -5242,12 +5242,13 @@ export default function App() {
     },
     startTTS: (paragraphIndex: number) => void startTTS(paragraphIndex),
     toggleTTS: (paragraphIndex: number) => (ttsPlaying ? stopTTS() : void startTTS(paragraphIndex)),
+    observeChapter: bookWorkspace.observeReaderChapter,
     modeChanged: bookWorkspace.setReaderMode,
     locationCommitted: (location, bookProgress, updatedAt) => {
       if (!selectedNovel || !currentChapter) return;
       bookWorkspace.commitLocation({
         novelId: selectedNovel.id,
-        chapterId: currentChapter.id,
+        chapterId: location.chapterId ?? currentChapter.id,
         location,
         bookProgress,
         updatedAt,

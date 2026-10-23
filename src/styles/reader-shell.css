@@ -93,7 +93,7 @@
   filter: brightness(var(--reading-brightness, 1));
 }
 
-.reader-scroll:not(.reader-paginated-root) {
+.reader-scroll:not(.reader-paginated-root):not(.is-page-host) {
   clip-path: inset(var(--reader-content-inset-top) 0 var(--reader-content-inset-bottom) 0);
 }
 
@@ -123,7 +123,8 @@
   width: 100%;
 }
 
-.reader-viewport-layer.is-active {
+.reader-viewport-layer.is-active,
+.reader-viewport-layer.is-page-host {
   z-index: 1;
   visibility: visible;
 }
@@ -345,4 +346,45 @@
 .reader-screen.scroll-to-page-settling .reader-paginated-root.is-active {
   visibility: hidden;
   pointer-events: none;
+}
+
+/* Keep a single native scrolling owner across automatic reading modes. The
+   page layer takes no document space and stays pinned while its scroll body is
+   positioned underneath. Revealing that body never replaces the touch target. */
+.reader-scroll > .reader-paginated-root {
+  position: sticky;
+  top: calc(-1 * var(--reader-content-inset-top));
+  height: 100dvh;
+  margin-top: calc(-1 * var(--reader-content-inset-top));
+  margin-bottom: calc(var(--reader-content-inset-top) - 100dvh);
+  margin-left: calc(-1 * var(--reader-layout-margin-x));
+  margin-right: calc(-1 * var(--reader-layout-margin-x));
+  z-index: 2;
+  filter: none;
+}
+
+.reader-scroll.is-page-host > .reader-document {
+  visibility: hidden;
+}
+
+.reader-screen.scroll-to-page-settling .reader-scroll.is-page-host > .reader-document {
+  visibility: visible;
+}
+
+.reader-paginated-root.native-scroll-ready {
+  touch-action: pan-y;
+  overflow: clip;
+}
+
+.reader-screen.addon-open .reader-scroll > .reader-paginated-root {
+  margin-right: calc(-1 * max(var(--reader-layout-margin-x), calc(var(--reader-panel-width) + 20px)));
+}
+.reader-screen.immersive.addon-open .reader-scroll > .reader-paginated-root {
+  margin-right: calc(-1 * var(--reader-layout-margin-x));
+}
+
+.reader-screen.scroll-to-page-settling .reader-scroll.is-page-host {
+  pointer-events: none;
+  touch-action: none;
+  clip-path: inset(var(--reader-content-inset-top) 0 var(--reader-content-inset-bottom) 0);
 }

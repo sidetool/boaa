@@ -28,6 +28,7 @@ export interface AnnotationSelection {
 }
 
 export interface AnnotationLocation {
+  readonly chapterId?: string;
   readonly progress: number;
   readonly scrollTop: number;
   readonly paragraphIndex: number;

@@ -5,6 +5,12 @@ import FixedDocumentScreen from '../fixed-document/FixedDocumentScreen';
 import { UiNextStreamLoading } from '../../ui-next/reader/UiNextStreamLoading';
 import { deferred } from './source-command-test-fixtures';
 import { SourceStreamReader, type SourceStreamReaderProps } from './SourceStreamReader';
+import { saveSourceStreamPosition } from '../../external-sources/source-stream-history';
+
+vi.mock('../../external-sources/source-stream-history', () => ({
+  readSourceStreamPosition: () => undefined,
+  saveSourceStreamPosition: vi.fn(),
+}));
 
 vi.mock('../fixed-document/FixedDocumentScreen', () => ({ default: vi.fn(() => null) }));
 vi.mock('./use-source-reading-preferences', () => ({
@@ -53,6 +59,35 @@ function button(root: ReactTestInstance, name: string) {
 }
 
 describe('ComicStreamReader ui-next loading', () => {
+  it('saves a newly joined episode through the capture callback retained by the original viewport', async () => {
+    const { props } = fixture({
+      profileKey: 'synthetic-work',
+      historyKey: 'synthetic:six',
+      port: { open: vi.fn(async () => session()) },
+      neighbor: vi.fn(async () => ({
+        remoteId: 'seven',
+        title: '7화',
+        historyKey: 'synthetic:seven',
+        onSave: vi.fn(async () => undefined),
+      })),
+    });
+    const root = await mount(props);
+    const original = root.findByType(FixedDocumentScreen).props;
+    await act(async () => {
+      original.remoteNavigation.continuous.prepare(1);
+    });
+    const chapters = root.findByType(FixedDocumentScreen).props.chapters;
+    expect(chapters).toHaveLength(8);
+    expect(saveSourceStreamPosition).not.toHaveBeenCalled();
+    original.remoteNavigation.savePosition({ page: 5, chapterId: chapters[5].id, fraction: 0.42, ratio: 1.5 });
+    expect(saveSourceStreamPosition).toHaveBeenLastCalledWith('synthetic:seven', {
+      page: 1,
+      chapterId: chapters[5].id,
+      fraction: 0.42,
+      ratio: 1.5,
+      count: 4,
+    });
+  });
   it('shows the comic loading stage before the stream opens', async () => {
     const { props } = fixture();
     const root = await mount(props);

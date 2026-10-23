@@ -90,6 +90,8 @@ export interface ReadingProfile {
   flow: ReadingProfileFlow;
   modeLock: ReadingModeLock;
   pageTurnMotion: PageTurnMotion;
+  /** Scroll-only chapter joining; missing values retain the explicit boundary gesture. */
+  scrollChapterTransition?: 'manual' | 'continuous';
   pageSpread: PageSpread;
 }
 
@@ -778,6 +780,7 @@ export interface ComicReadingProfile {
   gap?: number;
   background?: 'black' | 'charcoal' | 'white';
   pageTurnMotion?: 'instant' | 'slide' | 'page';
+  scrollChapterTransition?: 'manual' | 'continuous';
 }
 
 export interface Bookmark {

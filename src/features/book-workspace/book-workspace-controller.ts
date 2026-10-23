@@ -865,6 +865,28 @@ export class BookWorkspaceController {
     await this.openChapterFromList(projection.firstUnreadChapter, restore);
   };
 
+  /** Passive scroll observation does not reopen the chapter or interrupt audio. */
+  readonly observeReaderChapter = (observed: Chapter): void => {
+    const chapter = this.state.chapters.find((candidate) => candidate.id === observed.id);
+    if (!chapter || chapter.novelId !== this.state.selectedNovel?.id || this.state.currentChapter?.id === chapter.id)
+      return;
+    const generation = this.navigationGeneration;
+    const novel = this.state.selectedNovel!;
+    this.updateState({ currentChapter: chapter });
+    void this.ports.adjacent
+      .loadReaderArtifacts(chapter.id, novel.id)
+      .then((artifacts) => {
+        if (
+          !this.navigationIsCurrent(generation) ||
+          this.state.currentChapter?.id !== chapter.id ||
+          this.state.selectedNovel?.id !== novel.id
+        )
+          return;
+        this.ports.adjacent.applyReaderArtifacts(artifacts);
+      })
+      .catch(() => undefined);
+  };
+
   readonly commitLocation = ({
     novelId,
     chapterId,

@@ -125,6 +125,7 @@ export function normalizeReadingProfile(
     flow,
     modeLock,
     pageTurnMotion,
+    scrollChapterTransition: value?.scrollChapterTransition === 'continuous' ? 'continuous' : 'manual',
     pageSpread:
       value?.pageSpread === 'double' || value?.pageSpread === 'auto' || value?.pageSpread === 'single'
         ? value.pageSpread

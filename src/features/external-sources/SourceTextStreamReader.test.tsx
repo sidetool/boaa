@@ -76,7 +76,7 @@ async function harness() {
     nextEpisode: { remoteId: 'next', title: 'Next' },
     onClose: vi.fn(),
     onSave: vi.fn(async () => {}),
-    textReader: { settings: {}, settingsOpen: false, actions: { notify: vi.fn() } },
+    textReader: { settings: defaultSettings, settingsOpen: false, actions: { notify: vi.fn() } },
   } as unknown as Parameters<typeof SourceTextStreamReader>[0];
   let renderer!: ReactTestRenderer;
   await act(async () => {
@@ -184,6 +184,30 @@ function loadingText(node: ReactTestInstance): string {
 }
 
 describe('SourceTextStreamReader loading and transition UI', () => {
+  it.each(['connection', 'work'] as const)(
+    'retires the old document while the %s replacement is pending',
+    async (kind) => {
+      const pending = deferred<{ text: string }>();
+      const props = loadingProps({ profileKey: 'work-a' });
+      const root = await renderLoading(props);
+      expect(root.findAllByType(ReaderScreen)).toHaveLength(1);
+      const replacement =
+        kind === 'connection'
+          ? { ...props, port: { kind: 'text' as const, open: vi.fn(() => pending.promise) } }
+          : { ...props, profileKey: 'work-b' };
+      if (kind === 'work') vi.mocked(props.port.open).mockImplementation(() => pending.promise);
+      await act(async () => {
+        uiRenderer!.update(<SourceTextStreamReader {...replacement} />);
+      });
+      expect(root.findAllByType(ReaderScreen)).toHaveLength(0);
+      expect(root.findAllByType(UiNextStreamLoading)).toHaveLength(1);
+      await act(async () => {
+        pending.resolve({ text: '새 소유자의 본문' });
+      });
+      expect(root.findAllByType(ReaderScreen)).toHaveLength(1);
+    },
+  );
+
   it('uses the ui-next text loading stage until the first episode opens', async () => {
     const pending = deferred<{ text: string }>();
     const props = loadingProps({ port: { kind: 'text', open: vi.fn(() => pending.promise) } });

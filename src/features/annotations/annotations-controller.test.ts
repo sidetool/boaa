@@ -1,3 +1,4 @@
+import { createAnnotationActions } from './annotation-controller-actions';
 import { describe, expect, it, vi } from 'vitest';
 import type { Bookmark, Chapter, Novel, Paragraph, ReaderHighlight, ReaderNote } from '../../domain/types';
 import { persistentIdVersion } from '../../domain/id-hash-contract';
@@ -307,4 +308,67 @@ describe('annotations controller contracts', () => {
       expect.objectContaining({ paragraphId: paragraph.id, paragraphIndex: paragraph.index, chapterProgress: 0.42 }),
     );
   });
+});
+
+it('uses the visible or selected chapter while continuous-scroll observation is still pending', async () => {
+  const harness = createHarness();
+  const nextParagraph = { ...paragraph, id: 'paragraph_2', chapterId: chapters[1].id };
+  harness.reader.getLocation = () => ({
+    chapterId: chapters[1].id,
+    progress: 0.2,
+    scrollTop: 10,
+    paragraphIndex: 1,
+    paragraph: nextParagraph,
+  });
+  harness.reader.getSelection = () => ({ paragraphId: nextParagraph.id, text: '본문' });
+  harness.reader.getCachedParagraphById = () => nextParagraph;
+  vi.mocked(harness.repository.getParagraph).mockResolvedValue(nextParagraph);
+  const actions = createAnnotationActions({
+    repository: harness.repository,
+    persistence: harness.persistence,
+    reader: harness.reader,
+    novel,
+    chapter: chapters[0],
+    chapters,
+    readerProgress: 0.9,
+    bookmarks: [],
+    highlights: [],
+    notes: [],
+    noteDraft: '이어 읽기 메모',
+    scope: 'all',
+    query: '',
+    view: buildAnnotationView({
+      collections: { bookmarks: [], highlights: [], notes: [] },
+      chapters,
+      progress: 0,
+      query: '',
+      scope: 'all',
+      sort: 'recent',
+    }),
+    setBookmarks: vi.fn(),
+    setHighlights: vi.fn(),
+    setNotes: vi.fn(),
+    resetEditor: vi.fn(),
+    editNote: vi.fn(),
+    isNovelCurrent: () => true,
+    openChapter: vi.fn(),
+    onMutationCommitted: vi.fn(),
+    onPersistenceError: vi.fn(),
+    notify: vi.fn(),
+  });
+  await actions.toggleBookmark();
+  await actions.saveNoteDraft();
+  await actions.setHighlight('yellow');
+  expect(harness.repository.saveBookmark).toHaveBeenCalledWith(
+    expect.objectContaining({ chapterId: chapters[1].id, paragraphId: nextParagraph.id }),
+    expect.anything(),
+  );
+  expect(harness.repository.saveNote).toHaveBeenCalledWith(
+    expect.objectContaining({ chapterId: chapters[1].id, paragraphId: nextParagraph.id }),
+    expect.anything(),
+  );
+  expect(harness.repository.saveHighlight).toHaveBeenCalledWith(
+    expect.objectContaining({ chapterId: chapters[1].id, paragraphId: nextParagraph.id }),
+    expect.anything(),
+  );
 });

@@ -151,6 +151,19 @@ export function UiNextComicSettings(props: UiNextComicSettingsProps) {
           </Row>
         </>
       )}
+      {vertical && (
+        <Row label="회차 넘김">
+          <Segmented
+            label="회차 넘김"
+            value={profile.scrollChapterTransition ?? 'manual'}
+            options={[
+              { value: 'manual', label: '한 화씩' },
+              { value: 'continuous', label: '이어 읽기' },
+            ]}
+            onChange={(scrollChapterTransition) => update({ scrollChapterTransition })}
+          />
+        </Row>
+      )}
       {viewMode === 'continuous' && (
         <Row label="페이지 간격">
           <Segmented

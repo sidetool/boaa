@@ -51,9 +51,10 @@ export function useSourceHubModel({
     controller.workReadingSessionId,
     Boolean(controller.streaming && !controller.streamingBookId),
   );
+  const streamStorageScope = useOptionalAppRuntime()?.readerRuntime.session?.storageScope;
   const streamNavigation = useSourceStreamNavigation(
     controller,
-    sourceReadingPreferences(useOptionalAppRuntime()?.readerRuntime.session?.storageScope).prefetch > 0,
+    sourceReadingPreferences(streamStorageScope).prefetch > 0,
   );
   const scrollRef = useRef<HTMLDivElement>(null);
   useDownloadSelectionFocus(
@@ -209,6 +210,21 @@ export function useSourceHubModel({
     const nextItem = streamNavigation.nextItem;
     streamReaderProps = {
       textReader,
+      neighbor: async (remoteId, direction, signal) => {
+        const target = await streamNavigation.resolveNeighbor(remoteId, direction, signal);
+        signal.throwIfAborted();
+        if (!target) return undefined;
+        if (!controller.canStreamItem?.(target)) throw new Error('이 회차는 스트리밍으로 열 수 없습니다.');
+        return {
+          remoteId: target.key.remoteId,
+          remoteRevision: target.remoteRevision,
+          title: target.release?.title ?? target.title,
+          historyKey: JSON.stringify([streamStorageScope, externalItemKeyId(target.key)]),
+          onSave: () => (controller.saveStream ?? controller.importItem)(target),
+          onTextPosition: (position) => controller.saveTextStreamPosition?.(target, position) ?? Promise.resolve(),
+          onPageSettled: (page, count, fraction) => controller.saveStreamPosition?.(target, page, count, fraction),
+        };
+      },
       fromStart: controller.streaming.fromStart,
       historyKey: controller.streaming.historyKey ?? externalItemKeyId(item.key),
       title: item.release?.title ?? item.title,

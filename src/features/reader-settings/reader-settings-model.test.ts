@@ -1,3 +1,4 @@
+import { normalizeReadingProfile } from './reading-profile';
 import { describe, expect, it } from 'vitest';
 import { defaultSettings } from '../../repositories/reader-defaults';
 import { readerSettingsEqual } from './reader-settings-model';
@@ -17,4 +18,14 @@ describe('readerSettingsEqual', () => {
     expect(readerSettingsEqual(defaultSettings, { ...defaultSettings, sourceProgressBasis: 'source' })).toBe(true);
     expect(readerSettingsEqual(defaultSettings, { ...defaultSettings, sourceProgressBasis: 'downloaded' })).toBe(false);
   });
+});
+
+
+it('keeps chapter joins opt-in and preserves the preference across reading modes', () => {
+  expect(normalizeReadingProfile(undefined).scrollChapterTransition).toBe('manual');
+  expect(normalizeReadingProfile({ scrollChapterTransition: 'unknown' as 'manual' }).scrollChapterTransition).toBe('manual');
+  for (const modeLock of ['auto', 'scroll', 'paginated'] as const) {
+    expect(normalizeReadingProfile({ modeLock, scrollChapterTransition: 'continuous' })).toMatchObject({ modeLock, scrollChapterTransition: 'continuous' });
+  }
+  expect(readerSettingsEqual(defaultSettings, { ...defaultSettings, readingProfile: { ...defaultSettings.readingProfile, scrollChapterTransition: 'continuous' } })).toBe(false);
 });

@@ -343,7 +343,7 @@ describe('automatic text scrolling', () => {
     act(() => controller.setSpeed(6));
     act(() => controller.start());
     advance(21);
-    expect(advanceAutoReading).toHaveBeenCalledExactlyOnceWith('line', 1);
+    expect(advanceAutoReading).toHaveBeenCalledExactlyOnceWith('line', 1, false);
     act(() => controller.setMode('page'));
     expect(controller.running).toBe(false);
     expect(resetAutoReading).toHaveBeenCalled();
@@ -351,7 +351,7 @@ describe('automatic text scrolling', () => {
     act(() => controller.setSpeed(12));
     act(() => controller.start());
     advance(21);
-    expect(advanceAutoReading).toHaveBeenCalledExactlyOnceWith('page', 1);
+    expect(advanceAutoReading).toHaveBeenCalledExactlyOnceWith('page', 1, false);
     act(() => controller.setMode('rsvp'));
     advanceAutoReading.mockClear();
     act(() => controller.setSpeed(4));

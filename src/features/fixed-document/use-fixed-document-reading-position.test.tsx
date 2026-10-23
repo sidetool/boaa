@@ -38,7 +38,12 @@ it('flushes the final viewport page/fraction even when navigation precedes the n
     viewport.save?.({ page: 1, fraction: 0.73, ratio: 3 });
     await flush();
   });
-  expect(save).toHaveBeenLastCalledWith(1, chapters[1], novel, { page: 1, fraction: 0.73, ratio: 3 });
+  expect(save).toHaveBeenLastCalledWith(1, chapters[1], novel, {
+    page: 1,
+    fraction: 0.73,
+    ratio: 3,
+    chapterId: chapters[1].id,
+  });
   await act(async () => {
     renderer.unmount();
   });

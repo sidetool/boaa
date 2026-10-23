@@ -1,3 +1,4 @@
+import { ContinuousSourceTextReader } from './ContinuousSourceTextReader';
 import { translationSnapshot } from '../translation/translation-snapshot';
 import { preloadBookWorkspaceReaderBody } from '../book-workspace/book-workspace-reader-preload';
 import { packageOperationMessage } from '../../extensions/packages/package-operation-error';
@@ -48,14 +49,45 @@ export function SourceTextStreamReader(
     navigationBusy,
   } = props;
   const [handle] = useState(() => new ReaderScreenHandle());
-  const source = useMemo(() => ({ cache: new SourceReadCache(), port }), [port]);
-  const { cache } = source;
+  const source = useMemo(
+    () => ({ cache: new SourceReadCache(), port, workScope: props.profileKey, saves: new Set<string>() }),
+    [port, props.profileKey],
+  );
+  const { cache, saves } = source;
   const preferences = useSourceReadingPreferences(true);
-  const [opened, setOpened] = useState<{
+  const [openedState, setOpened] = useState<{
+    owner: typeof source;
     key: string;
     document: Awaited<ReturnType<typeof sourceTextDocument>>;
     epoch: number;
   }>();
+  const opened = openedState?.owner === source ? openedState : undefined;
+  const joinedSession = useRef<{ key: string; document: Awaited<ReturnType<typeof sourceTextDocument>> }>();
+  if (
+    opened &&
+    textReader.settings.readingProfile.scrollChapterTransition === 'continuous' &&
+    props.neighbor &&
+    joinedSession.current?.key !== `${opened.key}:${opened.epoch}`
+  ) {
+    const location = handle.getLocation();
+    const anchor = handle.getAnchor();
+    const position = location
+      ? {
+          id: opened.document.chapter.id,
+          novelId: opened.document.novel.id,
+          chapterId: opened.document.chapter.id,
+          paragraphId: location.paragraph?.id,
+          paragraphIndex: location.paragraphIndex,
+          offsetInParagraph: location.offsetInParagraph ?? 0,
+          chapterProgress: location.progress,
+          scrollTop: location.scrollTop,
+          deviceId: 'reader',
+          updatedAt: new Date().toISOString(),
+          anchor,
+        }
+      : opened.document.position;
+    joinedSession.current = { key: `${opened.key}:${opened.epoch}`, document: { ...opened.document, position } };
+  }
   const [error, setError] = useState('');
   const [attempt, setAttempt] = useState(0);
   const [moving, setMoving] = useState(false);
@@ -64,7 +96,6 @@ export function SourceTextStreamReader(
   const retryMove = useRef<() => Promise<void>>();
   const latest = useRef(props);
   latest.current = props;
-  const saves = useRef(new Set<string>());
   useEffect(() => () => cache.clear(), [cache]);
   useEffect(() => {
     const controller = new AbortController();
@@ -106,7 +137,7 @@ export function SourceTextStreamReader(
               }
             : document.position;
         const request = handle.prepareOpen(document.chapter.id, { restore: Boolean(position), position });
-        setOpened({ key: historyKey, document, epoch: request.sequence });
+        setOpened({ owner: source, key: historyKey, document, epoch: request.sequence });
         movement.current = false;
         setMoving(false);
       })
@@ -120,7 +151,19 @@ export function SourceTextStreamReader(
         }
       });
     return () => controller.abort();
-  }, [port, cache, remoteId, remoteRevision, historyKey, profileKey, props.title, props.fromStart, attempt, handle]);
+  }, [
+    source,
+    port,
+    cache,
+    remoteId,
+    remoteRevision,
+    historyKey,
+    profileKey,
+    props.title,
+    props.fromStart,
+    attempt,
+    handle,
+  ]);
   useEffect(() => {
     if (
       !opened ||
@@ -128,18 +171,19 @@ export function SourceTextStreamReader(
       preferences.mode !== 'stream-save' ||
       props.saved ||
       props.saveBusy ||
-      saves.current.has(historyKey)
+      saves.has(historyKey)
     )
       return;
-    saves.current.add(historyKey);
+    saves.add(historyKey);
     void latest.current.onSave().catch(() => undefined);
-  }, [opened, historyKey, preferences.mode, props.saved, props.saveBusy]);
+  }, [opened, historyKey, preferences.mode, props.saved, props.saveBusy, saves]);
   useEffect(() => {
     if (props.saved && opened?.key === historyKey)
       void opened.document
         .flushSavedPosition()
         .catch(() => latest.current.textReader.actions.notify('읽던 위치를 저장하지 못했습니다.', 'warning'));
   }, [props.saved, opened, historyKey]);
+  const joined = Boolean(opened && joinedSession.current?.key === `${opened.key}:${opened.epoch}` && props.neighbor);
   const nextId = props.nextEpisode?.remoteId;
   const nextRevision = props.nextEpisode?.remoteRevision;
   useEffect(() => {
@@ -150,6 +194,7 @@ export function SourceTextStreamReader(
       controller.abort();
       controller = new AbortController();
       if (
+        joined ||
         !opened ||
         opened.key !== historyKey ||
         !preferences.prefetch ||
@@ -183,7 +228,7 @@ export function SourceTextStreamReader(
       window.removeEventListener('online', warm);
       window.removeEventListener('offline', warm);
     };
-  }, [opened, historyKey, preferences.prefetch, nextId, nextRevision, cache, port]);
+  }, [joined, opened, historyKey, preferences.prefetch, nextId, nextRevision, cache, port]);
   const move = async (action: typeof next, isCurrent = () => true) => {
     if (!action || movement.current || navigationBusy || opened?.key !== historyKey || !isCurrent()) return;
     direction.current = action === previous ? -1 : 1;
@@ -221,6 +266,15 @@ export function SourceTextStreamReader(
         error={error || undefined}
         onRetry={() => setAttempt((n) => n + 1)}
         onClose={props.onClose}
+      />
+    );
+
+  if (joinedSession.current?.key === `${opened.key}:${opened.epoch}` && props.neighbor)
+    return (
+      <ContinuousSourceTextReader
+        key={`${opened.key}:${opened.epoch}`}
+        {...props}
+        initial={joinedSession.current.document}
       />
     );
 

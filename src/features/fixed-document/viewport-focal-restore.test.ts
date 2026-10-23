@@ -5,6 +5,44 @@ import { renewViewportFocalRestore, scheduleViewportFocalRestore } from './viewp
 afterEach(() => vi.unstubAllGlobals());
 
 describe('viewport focal restore ownership', () => {
+  it('restores the same page identity after prepending changes its numeric index', () => {
+    const frames: FrameRequestCallback[] = [];
+    vi.stubGlobal('window', {
+      requestAnimationFrame: (callback: FrameRequestCallback) => frames.push(callback),
+      cancelAnimationFrame: vi.fn(),
+    });
+    const pending = {
+      current: {
+        pageIndex: 0,
+        pageId: 'episode-2-page-0',
+        normalizedX: 0.5,
+        normalizedY: 0.6,
+        viewportOffsetX: 195,
+        viewportOffsetY: 300,
+      } as ViewportFocalAnchor | undefined,
+    };
+    const scrollBy = vi.fn();
+    const page = (id: string, top: number) => ({
+      dataset: { pageId: id },
+      getBoundingClientRect: () => ({ left: 0, top, width: 390, height: 3000 }),
+    });
+    const viewport = {
+      current: {
+        getBoundingClientRect: () => ({ left: 0, top: 0, width: 390, height: 600 }),
+        querySelectorAll: () => [page('episode-1-page-0', -4500), page('episode-2-page-0', -1428)],
+        querySelector: () => {
+          throw new Error('Stale numeric index must not be used');
+        },
+        scrollBy,
+      } as unknown as HTMLElement,
+    };
+    scheduleViewportFocalRestore(pending, viewport);
+    frames.shift()!(0);
+    frames.shift()!(16);
+    expect(scrollBy).toHaveBeenCalledExactlyOnceWith({ left: 0, top: 72 });
+    expect(pending.current).toBeUndefined();
+  });
+
   it('does not let an old second RAF consume a resize received before the next React commit', () => {
     const frames = new Map<number, FrameRequestCallback>();
     let sequence = 0;

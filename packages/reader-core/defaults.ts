@@ -35,6 +35,7 @@ export const DEFAULT_READING_PROFILE: ReadingProfile = {
   brightness: 1,
   flow: 'scroll',
   modeLock: 'auto',
+  scrollChapterTransition: 'manual',
   pageTurnMotion: 'smooth',
   pageSpread: 'single',
 };

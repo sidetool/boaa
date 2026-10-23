@@ -1,12 +1,14 @@
 import { filterAndSortReleases } from './source-release-list-model';
 import { useEffect, useRef, useState } from 'react';
 import { externalItemKeyId } from '../../external-sources/contracts';
-import type { ExternalSourceController } from './external-source-controller-contract';
+import type { ExternalSourceController, ExternalSourceItemView } from './external-source-controller-contract';
 
 /** Fetch through catalog cursors without losing the currently open episode on failure. */
 export function useSourceStreamNavigation(controller: ExternalSourceController, prefetchEnabled = false) {
   const [request, setRequest] = useState<{
     origin: string;
+    sessionOrigin?: string;
+    resolveItem?: (item: ExternalSourceItemView | undefined) => void;
     offset: number;
     seen: Set<string>;
     loading: boolean;
@@ -85,16 +87,26 @@ export function useSourceStreamNavigation(controller: ExternalSourceController, 
     if (!request || request.opening || request.loading) return;
     const fail = (message: string) => {
       request.reject(new Error(message));
-      setRequest((current) => (current === request ? undefined : current));
+      if (pending.current?.reject === request.reject) pending.current = undefined;
+      setRequest((current) => (current?.reject === request.reject ? undefined : current));
     };
-    if (identity !== request.origin || !request.isCurrent()) {
+    if (identity !== (request.sessionOrigin ?? request.origin) || !request.isCurrent()) {
       fail('회차 이동이 취소됐습니다.');
       return;
     }
-    const target = items[index + request.offset];
-    if (index >= 0 && target) {
+    const originIndex = request.resolveItem
+      ? items.findIndex((candidate) => externalItemKeyId(candidate.key) === request.origin)
+      : index;
+    const target = items[originIndex + request.offset];
+    if (originIndex >= 0 && target) {
       if (target.importState === 'unsupported') {
         fail('지원하지 않는 회차 형식입니다. 회차 목록에서 확인해 주세요.');
+        return;
+      }
+      if (request.resolveItem) {
+        request.resolveItem(target);
+        pending.current = undefined;
+        setRequest((current) => (current?.reject === request.reject ? undefined : current));
         return;
       }
       request.opening = true;
@@ -108,7 +120,7 @@ export function useSourceStreamNavigation(controller: ExternalSourceController, 
           : latest.current.importAndOpen(target);
       void operation
         .then(request.resolve, request.reject)
-        .finally(() => setRequest((current) => (current === request ? undefined : current)));
+        .finally(() => setRequest((current) => (current?.reject === request.reject ? undefined : current)));
       return;
     }
     if (catalog?.error) {
@@ -121,7 +133,7 @@ export function useSourceStreamNavigation(controller: ExternalSourceController, 
       void catalog.retry().then(
         () => {
           request.loading = false;
-          setRequest((current) => (current === request ? { ...request } : current));
+          setRequest((current) => (current?.reject === request.reject ? { ...request } : current));
         },
         (error: unknown) => fail(error instanceof Error ? error.message : '목차를 확인하지 못했습니다.'),
       );
@@ -129,6 +141,16 @@ export function useSourceStreamNavigation(controller: ExternalSourceController, 
     }
     if (catalogLoading) return;
     if (!catalogCursor) {
+      if (request.resolveItem && originIndex < 0) {
+        fail('현재 회차를 목차에서 찾을 수 없습니다.');
+        return;
+      }
+      if (request.resolveItem) {
+        request.resolveItem(undefined);
+        pending.current = undefined;
+        setRequest(undefined);
+        return;
+      }
       fail('더 이동할 회차가 없습니다.');
       return;
     }
@@ -141,7 +163,7 @@ export function useSourceStreamNavigation(controller: ExternalSourceController, 
     void controller.loadMore().then(
       () => {
         request.loading = false;
-        setRequest((current) => (current === request ? { ...request } : current));
+        setRequest((current) => (current?.reject === request.reject ? { ...request } : current));
       },
       (error: unknown) => fail(error instanceof Error ? error.message : '회차 목록을 불러오지 못했습니다.'),
     );
@@ -166,7 +188,44 @@ export function useSourceStreamNavigation(controller: ExternalSourceController, 
       setRequest(value);
     });
   return {
-    busy: Boolean(request),
+    busy: Boolean(request && !request.resolveItem),
+    resolveNeighbor: (remoteId: string, direction: -1 | 1, signal: AbortSignal) =>
+      new Promise<ExternalSourceItemView | undefined>((resolve, reject) => {
+        signal.throwIfAborted();
+        const originItem = items.find((candidate) => candidate.key.remoteId === remoteId);
+        if (!identity || !originItem || pending.current) {
+          reject(new Error('회차 목록을 확인하는 중입니다. 다시 시도해 주세요.'));
+          return;
+        }
+        const finish = () => signal.removeEventListener('abort', abort);
+        const value = {
+          origin: externalItemKeyId(originItem.key),
+          sessionOrigin: identity,
+          offset: direction,
+          seen: new Set<string>(),
+          loading: false,
+          opening: false,
+          resolve: () => undefined,
+          resolveItem: (item: ExternalSourceItemView | undefined) => {
+            finish();
+            resolve(item);
+          },
+          reject: (error: Error) => {
+            finish();
+            reject(error);
+          },
+          isCurrent: () => !signal.aborted,
+        };
+        const abort = () => {
+          if (pending.current?.reject === value.reject) pending.current = undefined;
+          setRequest((current) => (current?.reject === value.reject ? undefined : current));
+          value.reject(new Error('회차 준비가 취소됐습니다.'));
+        };
+        signal.addEventListener('abort', abort, { once: true });
+        pending.current = value;
+        setRequest(value);
+      }),
+    findItem: (remoteId: string) => items.find((candidate) => candidate.key.remoteId === remoteId),
     nextItem: index >= 0 ? items[index + 1] : undefined,
     previous:
       identity && (index > 0 || catalogCursor || catalogLoading || catalog?.error)

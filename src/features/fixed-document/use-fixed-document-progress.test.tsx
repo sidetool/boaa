@@ -50,6 +50,37 @@ describe('fixed document progress persistence', () => {
     expect(save).toHaveBeenCalledOnce();
   });
 
+  it('flushes the previous episode before debouncing the next episode in one scroll root', async () => {
+    const save = vi.fn();
+    const novel = testNovel({ format: 'image_archive' });
+    const chapters = [
+      { ...testChapter(1), documentSectionId: 'episode-one' },
+      { ...testChapter(2), documentSectionId: 'episode-two' },
+    ];
+    let page = 0;
+    function Harness() {
+      useFixedDocumentProgress(page, chapters[page], novel, save);
+      return null;
+    }
+    let renderer!: ReactTestRenderer;
+    await act(async () => {
+      renderer = create(<Harness />);
+    });
+    page = 1;
+    await act(async () => {
+      renderer.update(<Harness />);
+    });
+    expect(save).toHaveBeenCalledExactlyOnceWith(0, chapters[0], novel);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(350);
+    });
+    expect(save).toHaveBeenNthCalledWith(2, 1, chapters[1], novel);
+    await act(async () => {
+      renderer.unmount();
+    });
+    expect(save).toHaveBeenCalledTimes(2);
+  });
+
   it('serializes saves and captures the original book before an in-flight save finishes', async () => {
     let finishFirst!: () => void;
     const save = vi.fn().mockImplementationOnce(

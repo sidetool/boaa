@@ -17,7 +17,11 @@ export function scheduleViewportFocalRestore(pending: PendingAnchor, viewportRef
     settleFrame = window.requestAnimationFrame(() => {
       if (pending.current !== anchor) return;
       const viewport = viewportRef.current;
-      const page = viewport?.querySelector<HTMLElement>(`[data-page-index="${anchor.pageIndex}"]`);
+      const page = anchor.pageId
+        ? [...(viewport?.querySelectorAll<HTMLElement>('[data-page-id]') ?? [])].find(
+            (element) => element.dataset.pageId === anchor.pageId,
+          )
+        : viewport?.querySelector<HTMLElement>(`[data-page-index="${anchor.pageIndex}"]`);
       if (!viewport || !page) {
         pending.current = undefined;
         return;

@@ -37,7 +37,7 @@ import {
 } from './reader-pagination-model';
 import { ReaderPageWindow } from './reader-page-window';
 import { loadSharedParagraphPage } from './shared-paragraph-pages';
-import { measureAdjacentPage } from './pagination-measurement';
+import { measureAdjacentPage, measurePageAnchorOffset } from './pagination-measurement';
 
 const PAGINATION_RENDERER_VERSION = 'reader-pagination-v10-opening';
 const PAGE_MAP_CACHE_LIMIT = 24;
@@ -117,6 +117,8 @@ export function PaginatedReaderViewport(
     pluginLayers.getLayoutRevision,
   );
   const rootRef = useRef<HTMLElement>(null);
+  const acceptsPageInput = useRef(isActive);
+  acceptsPageInput.current = isActive;
   const autoOverlayRef = useRef<HTMLDivElement>(null);
   const autoPresentation = useRef(new AutoReadingPresentation());
   const autoGeneration = useRef(0);
@@ -375,6 +377,37 @@ export function PaginatedReaderViewport(
     };
   }, [pageMapKey, session, pluginLayoutRevision]);
 
+  const { pageTransitionPending, onPrepareNativeScroll } = props;
+  const prepareNativeScroll = useCallback(
+    async (anchor: ReaderAnchor, fragments: readonly ReaderPageFragment[], signal?: AbortSignal) => {
+      const fragment = fragments[0];
+      if (!fragment) return;
+      if (pageTransitionPending || !onPrepareNativeScroll || !measureRef.current || !rootRef.current) return;
+      const offset = measurePageAnchorOffset(
+        {
+          template: measureRef.current,
+          host: rootRef.current,
+          chapter: chapterHeading,
+          paragraphCount: chapter.paragraphCount,
+          getParagraph: getParagraphAtIndex,
+          getPluginLayers: (id) => pluginLayers.getSnapshot(id),
+        },
+        fragment,
+      );
+      const breaks: Record<string, number[]> = {};
+      for (const part of fragments) breaks[part.paragraph.id] = [part.startOffset, part.endOffset];
+      await onPrepareNativeScroll(anchor, offset, breaks, signal);
+    },
+    [
+      pageTransitionPending,
+      onPrepareNativeScroll,
+      chapterHeading,
+      chapter.paragraphCount,
+      getParagraphAtIndex,
+      pluginLayers,
+    ],
+  );
+
   const commitPage = useCallback(
     async (boundary: ReaderPageBoundary, navigation: number, direction?: -1 | 1) => {
       const primaryBoundary = boundary;
@@ -382,6 +415,8 @@ export function PaginatedReaderViewport(
       if (navigation !== navigationRef.current || session.controller.signal.aborted) return false;
       const secondaryBoundary = spreadActive ? await session.window.adjacent(primaryBoundary.end, 1) : undefined;
       const secondaryFragments = secondaryBoundary ? await session.window.materialize(secondaryBoundary) : [];
+      if (navigation !== navigationRef.current || session.controller.signal.aborted) return false;
+      await prepareNativeScroll(primaryBoundary.start, fragments, session.controller.signal);
       if (navigation !== navigationRef.current || session.controller.signal.aborted) return false;
       const previous = viewRef.current;
       window.clearTimeout(transitionTimerRef.current);
@@ -408,7 +443,7 @@ export function PaginatedReaderViewport(
       setPreparing(false);
       return true;
     },
-    [pageMapKey, session, settings.readingProfile.pageTurnMotion, spreadActive],
+    [pageMapKey, session, settings.readingProfile.pageTurnMotion, spreadActive, prepareNativeScroll],
   );
 
   const seek = useCallback(
@@ -579,7 +614,10 @@ export function PaginatedReaderViewport(
   ]);
 
   useEffect(() => {
-    if (!isActive || preparing || !currentBoundary) return;
+    // Measuring neighbors can occupy several frames even from an idle callback.
+    // Let both the flow entrance and ordinary page animation finish first.
+    // requestIdleCallback can run between animation frames, not just afterwards.
+    if (!isActive || preparing || props.pageTransitionPending || transitionDirection || !currentBoundary) return;
     let cancelled = false;
     const warm = async () => {
       if (cancelled) return;
@@ -643,6 +681,8 @@ export function PaginatedReaderViewport(
     pageMapIdentity,
     pageMapKey,
     preparing,
+    props.pageTransitionPending,
+    transitionDirection,
     pluginLayoutRevision,
     repository,
     session,
@@ -698,7 +738,16 @@ export function PaginatedReaderViewport(
       const secondaryFragments = secondaryBoundary ? await session.window.materialize(secondaryBoundary) : [];
       return { key: pageMapKey, boundary, fragments, secondaryBoundary, secondaryFragments };
     },
-    commit: (next) => {
+    commit: async (next, signal) => {
+      const previous = viewRef.current;
+      await prepareNativeScroll(next.boundary.start, next.fragments, signal);
+      if (signal.aborted || session.controller.signal.aborted) {
+        // A canceled turn still shows its source page. Restore that page's native
+        // scroller before accepting another gesture; the rejected target stays hidden.
+        if (previous && previous === viewRef.current && !session.controller.signal.aborted)
+          await prepareNativeScroll(previous.boundary.start, previous.fragments, session.controller.signal);
+        return;
+      }
       window.clearTimeout(transitionTimerRef.current);
       setOutgoingFragments([]);
       setOutgoingSecondaryFragments([]);
@@ -759,7 +808,11 @@ export function PaginatedReaderViewport(
       const navigation = navigationRef.current;
       void pageTurnQueueRef.current.then(() => {
         if (navigation === navigationRef.current && !session.controller.signal.aborted)
-          window.requestAnimationFrame(() => onScrollIntent(deltaY));
+          window.requestAnimationFrame(() => {
+            // Native scrolling can take ownership while this input is queued.
+            if (acceptsPageInput.current && navigation === navigationRef.current && !session.controller.signal.aborted)
+              onScrollIntent(deltaY);
+          });
       });
     },
     [onScrollIntent, session],
@@ -1005,7 +1058,7 @@ export function PaginatedReaderViewport(
 
   return (
     <section
-      className={`reader-scroll reader-viewport-layer ${isActive ? 'is-active' : 'is-inactive'} font-${settings.font} mode-${mode} reader-paginated-root${spreadActive ? ' is-spread' : ''}`}
+      className={`reader-scroll reader-viewport-layer ${isActive ? 'is-active' : 'is-inactive'} font-${settings.font} mode-${mode} reader-paginated-root${props.nativeScrollReady ? ' native-scroll-ready' : ''}${spreadActive ? ' is-spread' : ''}`}
       ref={rootRef}
       style={paginationStyle}
       tabIndex={isActive ? 0 : -1}
@@ -1014,6 +1067,7 @@ export function PaginatedReaderViewport(
       data-pagination-ready={view?.key === pageMapKey && !preparing ? 'true' : 'false'}
       data-reader-layer="paginated"
       onPointerDown={(event) => {
+        event.stopPropagation();
         if (event.isPrimary) turnPointers.current.clear();
         turnPointers.current.add(event.pointerId);
         if (turnPointers.current.size > 1) {
@@ -1030,6 +1084,7 @@ export function PaginatedReaderViewport(
           pageTurn.down(event.pointerId, event.clientX, event.clientY);
       }}
       onPointerMove={(event) => {
+        event.stopPropagation();
         if (window.getSelection()?.toString()) {
           pageTurn.cancel();
           return;
@@ -1040,6 +1095,7 @@ export function PaginatedReaderViewport(
         }
       }}
       onPointerUp={(event) => {
+        event.stopPropagation();
         turnPointers.current.delete(event.pointerId);
         if (pageTurn.up(event.pointerId, event.clientX)) gestureHandlers.onPointerCancel();
         else gestureHandlers.onPointerUp(event);
@@ -1047,6 +1103,7 @@ export function PaginatedReaderViewport(
           event.currentTarget.releasePointerCapture(event.pointerId);
       }}
       onPointerCancel={(event) => {
+        event.stopPropagation();
         turnPointers.current.clear();
         pageTurn.up(event.pointerId, event.clientX, true);
         gestureHandlers.onPointerCancel();
@@ -1060,6 +1117,8 @@ export function PaginatedReaderViewport(
         gestureHandlers.onPointerCancel();
       }}
       onWheel={(event) => {
+        // The parent's capture handler can switch to native scroll in this same event.
+        if (!isActive || props.nativeScrollReady) return;
         if (event.ctrlKey || Math.abs(event.deltaY) < Math.abs(event.deltaX)) return;
         if (settings.readingProfile.modeLock !== 'paginated') {
           requestScrollAfterPageTurn(event.deltaY);

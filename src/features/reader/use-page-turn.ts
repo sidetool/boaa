@@ -33,7 +33,7 @@ export function usePageTurn<T>(input: {
   manualReady?: boolean;
   curl?: boolean;
   prepare(direction: Direction, signal: AbortSignal): Promise<T | undefined>;
-  commit(preview: T): void | Promise<void>;
+  commit(preview: T, signal: AbortSignal): void | Promise<void>;
   edge?(direction: Direction): void | Promise<void>;
   error?(error: unknown): void;
 }) {
@@ -129,7 +129,7 @@ export function usePageTurn<T>(input: {
         }
         turn.committing = true;
         try {
-          if (turn.preview !== undefined) await latest.current.commit(turn.preview);
+          if (turn.preview !== undefined) await latest.current.commit(turn.preview, turn.controller.signal);
           else await latest.current.edge?.(turn.direction);
           // Let the new current layer paint beneath the final preview before removing it.
           if (live.current !== turn) return;

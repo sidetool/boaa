@@ -87,6 +87,34 @@ describe('page turn ownership', () => {
     });
   };
 
+  it('aborts asynchronous precommit work when the turn is canceled', async () => {
+    const h = harness();
+    let finish!: () => void;
+    let signal!: AbortSignal;
+    h.commit.mockImplementation((_next: string, activeSignal: AbortSignal) => {
+      signal = activeSignal;
+      return new Promise<void>((resolve) => {
+        finish = resolve;
+      });
+    });
+    act(() => {
+      h.turn.turn(1);
+    });
+    await h.resolve();
+    await advance(500);
+    expect(signal.aborted).toBe(false);
+    act(() => {
+      h.turn.cancel();
+    });
+    expect(signal.aborted).toBe(true);
+    await act(async () => {
+      finish();
+    });
+    await advance(100);
+    expect(h.turn.active).toBe(false);
+    expect(h.commit).toHaveBeenCalledTimes(1);
+  });
+
   it('waits for snapshot decoding before activation or a released turn can commit', async () => {
     let decode!: () => void;
     curl.ready = new Promise<void>((resolve) => {
@@ -105,7 +133,7 @@ describe('page turn ownership', () => {
     });
     expect(curl.activate).toHaveBeenCalledTimes(1);
     await advance(1000);
-    expect(h.commit).toHaveBeenCalledExactlyOnceWith('next');
+    expect(h.commit).toHaveBeenCalledExactlyOnceWith('next', expect.any(AbortSignal));
     expect(h.turn.active).toBe(false);
   });
 
@@ -176,7 +204,7 @@ describe('page turn ownership', () => {
       });
       await h.resolve();
       await advance(700);
-      expect(h.commit).toHaveBeenCalledExactlyOnceWith('next');
+      expect(h.commit).toHaveBeenCalledExactlyOnceWith('next', expect.any(AbortSignal));
     },
   );
 
@@ -191,7 +219,7 @@ describe('page turn ownership', () => {
     expect(h.commit).not.toHaveBeenCalled();
     act(() => h.turn.ready());
     await advance(400);
-    expect(h.commit).toHaveBeenCalledExactlyOnceWith('next');
+    expect(h.commit).toHaveBeenCalledExactlyOnceWith('next', expect.any(AbortSignal));
     expect(h.turn.active).toBe(false);
   });
 
@@ -302,7 +330,7 @@ describe('page turn ownership', () => {
     expect(h.commit).not.toHaveBeenCalled();
     expect(curl.draw.mock.calls.some(([progress]) => progress > 0 && progress < 1)).toBe(true);
     await advance(500);
-    expect(h.commit).toHaveBeenCalledExactlyOnceWith('next');
+    expect(h.commit).toHaveBeenCalledExactlyOnceWith('next', expect.any(AbortSignal));
     expect(curl.destroy).toHaveBeenCalledOnce();
     expect(h.turn.active).toBe(false);
   });

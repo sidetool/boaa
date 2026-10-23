@@ -87,6 +87,7 @@ export function ReaderLookPage({
 }) {
   const model = createReaderAppearanceModel({ controller, profile, updateProfile, themeTarget: 'reader' });
   const colors = model.readerColors;
+  const chapterTransition = profile.scrollChapterTransition ?? 'manual';
   const builtinFont = (['builtin-serif', 'builtin-sans', 'builtin-mono'] as const).find((id) => id === profile.fontId);
 
   return (
@@ -360,6 +361,30 @@ export function ReaderLookPage({
               />
             }
           />
+          {profile.modeLock !== 'paginated' && (
+            <Pref
+              stacked
+              title="회차 넘김"
+              help={
+                profile.modeLock === 'auto'
+                  ? '스크롤로 읽을 때 적용돼요.'
+                  : chapterTransition === 'continuous'
+                    ? '화가 끝나면 다음 화가 바로 이어져요.'
+                    : '화 끝에서 한 번 더 내리면 넘어가요.'
+              }
+              control={
+                <Segmented
+                  label="회차 넘김"
+                  value={chapterTransition}
+                  options={[
+                    { value: 'manual', label: '한 화씩' },
+                    { value: 'continuous', label: '이어 읽기' },
+                  ]}
+                  onChange={(scrollChapterTransition) => updateProfile({ scrollChapterTransition })}
+                />
+              }
+            />
+          )}
           {profile.modeLock !== 'scroll' && (
             <>
               <Pref

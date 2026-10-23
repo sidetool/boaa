@@ -5,8 +5,8 @@ import { autoReadingRate, isAutoReadingMode, type AutoReadingMode, type AutoRead
 
 export interface AutoReadingViewport {
   readonly flow?: 'scroll' | 'paginated';
-  readonly advanceAutoScroll?: (pixels: number) => AutoReadingResult;
-  readonly advanceAutoReading?: (mode: AutoReadingMode, amount: number) => AutoReadingResult;
+  readonly advanceAutoScroll?: (pixels: number, continueChapter?: boolean) => AutoReadingResult;
+  readonly advanceAutoReading?: (mode: AutoReadingMode, amount: number, continueChapter?: boolean) => AutoReadingResult;
   readonly resetAutoReading?: () => void;
 }
 
@@ -225,8 +225,12 @@ export function useAutoScroll(
       if (pixels > 0 || endSince !== undefined) {
         const result =
           mode === 'pixel'
-            ? viewport.current?.advanceAutoScroll?.(pixels)
-            : viewport.current?.advanceAutoReading?.(mode, pixels);
+            ? viewport.current?.advanceAutoScroll?.(pixels, !temporaryOwner.current && latest.current.continueChapter)
+            : viewport.current?.advanceAutoReading?.(
+                mode,
+                pixels,
+                !temporaryOwner.current && latest.current.continueChapter,
+              );
         if (!result || result === 'failed') {
           stop();
           return;

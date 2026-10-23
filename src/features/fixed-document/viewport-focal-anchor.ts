@@ -7,10 +7,12 @@ export interface FocalRect {
 
 export interface PageFocalRect extends FocalRect {
   readonly pageIndex: number;
+  readonly pageId?: string;
 }
 
 export interface ViewportFocalAnchor {
   readonly pageIndex: number;
+  readonly pageId?: string;
   readonly normalizedX: number;
   readonly normalizedY: number;
   readonly viewportOffsetX: number;
@@ -55,6 +57,7 @@ export function captureViewportFocalAnchor(input: {
 
   return {
     pageIndex: page.pageIndex,
+    pageId: page.pageId,
     normalizedX: clampUnit((clientX - page.left) / page.width),
     normalizedY: clampUnit((clientY - page.top) / page.height),
     viewportOffsetX: clientX - input.viewport.left,

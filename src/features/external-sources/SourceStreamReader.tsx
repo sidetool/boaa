@@ -1,3 +1,4 @@
+import { ContinuousComicWindow } from './continuous-comic-window';
 import { latestSourceStreamPosition } from '../../external-sources/source-stream-position';
 import { Suspense, lazy, useEffect, useMemo, useRef, useState } from 'react';
 import { isTextStream, type SourceReadingPort } from '../../external-sources/source-text-stream';
@@ -24,7 +25,7 @@ function ComicStreamReader({
   workTitle,
   remoteId,
   historyKey = remoteId,
-  profileKey = historyKey,
+  profileKey: workScope,
   fromStart = false,
   port,
   onClose,
@@ -36,26 +37,35 @@ function ComicStreamReader({
   next,
   nextEpisode,
   navigationBusy,
+  neighbor,
 }: Omit<SourceStreamReaderProps, 'port'> & { port: SourceStreamPort }) {
   const preferences = useSourceReadingPreferences();
-  const buffer = useMemo(() => new SourceStreamBuffer(port), [port]);
-  const [opened, setOpened] = useState<{
+  const profileKey = workScope ?? historyKey;
+  const { buffer, saveAttempts } = useMemo(
+    () => ({ buffer: new SourceStreamBuffer(port), workScope, saveAttempts: new Set<string>() }),
+    [port, workScope],
+  );
+  const [openedState, setOpened] = useState<{
+    owner: SourceStreamBuffer;
     session: SourceStreamSession;
     key: string;
     title: string;
     epoch: number;
     fromStart: boolean;
   }>();
+  const opened = openedState?.owner === buffer ? openedState : undefined;
   const [error, setError] = useState('');
   const [attempt, setAttempt] = useState(0);
-  const [loaded, setLoaded] = useState('');
+  const [loaded, setLoaded] = useState<typeof openedState>();
   const movingRef = useRef(false);
+  const retryJoinedDirection = useRef<-1 | 1>(1);
   const [moving, setMoving] = useState(false);
+  const [, refreshJoined] = useState(0);
+  const [joinedEntry, setJoinedEntry] = useState<{ owner: ContinuousComicWindow; id: string; version: number }>();
   const [layout, setLayout] = useState<SourceComicLayoutState>();
   const [foreground, setForeground] = useState(() => document.visibilityState !== 'hidden' && navigator.onLine);
-  const callbacks = useRef({ onSave, onPageSettled, nextEpisode });
-  callbacks.current = { onSave, onPageSettled, nextEpisode };
-  const saveAttempts = useRef(new Set<string>());
+  const callbacks = useRef({ onSave, onPageSettled, nextEpisode, neighbor, saved, saveBusy, mode: preferences.mode });
+  callbacks.current = { onSave, onPageSettled, nextEpisode, neighbor, saved, saveBusy, mode: preferences.mode };
   useEffect(() => () => buffer.close(), [buffer]);
   useEffect(() => {
     const update = () => setForeground(document.visibilityState !== 'hidden' && navigator.onLine);
@@ -75,7 +85,14 @@ function ComicStreamReader({
       .open(remoteId, controller.signal)
       .then((session) => {
         if (controller.signal.aborted) return;
-        setOpened((before) => ({ session, key: historyKey, title, fromStart, epoch: (before?.epoch ?? -1) + 1 }));
+        setOpened((before) => ({
+          owner: buffer,
+          session,
+          key: historyKey,
+          title,
+          fromStart,
+          epoch: (before?.epoch ?? -1) + 1,
+        }));
         movingRef.current = false;
         setMoving(false);
         buffer.retain([remoteId, ...(callbacks.current.nextEpisode ? [callbacks.current.nextEpisode.remoteId] : [])]);
@@ -98,11 +115,59 @@ function ComicStreamReader({
             stableId('source_stream', opened.key),
             opened.title,
             opened.session,
-            () => setLoaded(opened.key),
+            () => setLoaded(opened),
             workTitle,
           )
         : undefined,
     [opened, workTitle],
+  );
+  const joined = useMemo(
+    () =>
+      opened && neighbor
+        ? new ContinuousComicWindow(
+            {
+              remoteId,
+              title: opened.title,
+              historyKey: opened.key,
+              onSave,
+              onPageSettled,
+            },
+            opened.session,
+            buffer,
+            (id, direction, signal) => callbacks.current.neighbor!(id, direction, signal),
+            () => refreshJoined((value) => value + 1),
+            (episode) => {
+              if (
+                callbacks.current.mode === 'stream-save' &&
+                !(episode.remoteId === remoteId && (callbacks.current.saved || callbacks.current.saveBusy)) &&
+                !saveAttempts.has(`save:${episode.remoteId}`)
+              ) {
+                saveAttempts.add(`save:${episode.remoteId}`);
+                void episode.onSave().catch(() => undefined);
+              }
+            },
+            workTitle,
+          )
+        : undefined,
+    // Root entry owns the work session; callbacks are read through refs.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [opened, buffer, Boolean(neighbor)],
+  );
+  useEffect(() => joined?.acquire(), [joined]);
+  const currentJoinedEntry = joinedEntry?.owner === joined ? joinedEntry : undefined;
+  const displayed = joined
+    ? { novel: joined.novel, chapters: joined.chapters, repository: joined.repository, assets: joined.assets }
+    : projection;
+  const joinedChapters = joined?.chapters;
+  const pageLocations = useMemo(
+    () =>
+      new Map(
+        joinedChapters?.flatMap((chapter) => {
+          const location = joined?.locateId(chapter.id);
+          return location ? [[chapter.id, location] as const] : [];
+        }) ?? [],
+      ),
+    [joined, joinedChapters],
   );
   const position = useMemo(() => {
     if (!opened || opened.fromStart) return undefined;
@@ -116,25 +181,24 @@ function ComicStreamReader({
     if (
       !opened ||
       opened.key !== historyKey ||
-      loaded !== historyKey ||
+      loaded !== opened ||
       preferences.mode !== 'stream-save' ||
       saved ||
       saveBusy ||
-      saveAttempts.current.has(`save:${remoteId}`)
+      saveAttempts.has(`save:${remoteId}`)
     )
       return;
-    saveAttempts.current.add(`save:${remoteId}`);
+    saveAttempts.add(`save:${remoteId}`);
     // Failures are reported by the existing download task and retried from the episode list.
     void callbacks.current.onSave().catch(() => undefined);
-  }, [opened, loaded, historyKey, remoteId, preferences.mode, saved, saveBusy]);
+  }, [opened, loaded, historyKey, remoteId, preferences.mode, saved, saveBusy, saveAttempts]);
   const nextId = nextEpisode?.remoteId;
   const prefetchPages =
     foreground && !(navigator as Navigator & { connection?: { saveData?: boolean } }).connection?.saveData
       ? preferences.prefetch
       : 0;
   useEffect(() => {
-    if (!nextId || !opened || opened.key !== historyKey || loaded !== historyKey || !foreground || !prefetchPages)
-      return;
+    if (!nextId || !opened || opened.key !== historyKey || loaded !== opened || !foreground || !prefetchPages) return;
     if ((navigator as Navigator & { connection?: { saveData?: boolean } }).connection?.saveData) return;
     const controller = new AbortController();
     // Wait until the current viewer has submitted its visible pages, then warm one neighbor.
@@ -174,7 +238,28 @@ function ComicStreamReader({
       throw error;
     }
   };
-  if (!opened || !projection)
+  const moveJoined = async (direction: -1 | 1, isCurrent?: () => boolean) => {
+    if (!joined || movingRef.current || (isCurrent && !isCurrent())) return;
+    movingRef.current = true;
+    setMoving(true);
+    retryJoinedDirection.current = direction;
+    try {
+      const entry = await joined.adjacent(direction);
+      if (entry && !joined.controller.signal.aborted && (!isCurrent || isCurrent())) {
+        const chapter = direction === 1 ? entry.projection.chapters[0] : entry.projection.chapters.at(-1);
+        if (chapter)
+          setJoinedEntry((value) => ({
+            owner: joined,
+            id: chapter.id,
+            version: (value?.owner === joined ? value.version : 0) + 1,
+          }));
+      }
+    } finally {
+      movingRef.current = false;
+      setMoving(false);
+    }
+  };
+  if (!opened || !projection || !displayed)
     return (
       <UiNextStreamLoading
         workTitle={workTitle}
@@ -189,28 +274,81 @@ function ComicStreamReader({
     <>
       <Suspense fallback={<UiNextStreamLoading workTitle={workTitle} episodeTitle={opened.title} onClose={onClose} />}>
         <FixedDocumentScreen
-          {...projection}
-          initialChapterId={projection.chapters[position?.page ?? 0]?.id}
-          entryRequestVersion={opened.epoch}
+          {...displayed}
+          initialChapterId={
+            currentJoinedEntry?.id ??
+            joined?.initialChapterIds[position?.page ?? 0] ??
+            projection.chapters[position?.page ?? 0]?.id
+          }
+          entryRequestVersion={opened.epoch + (currentJoinedEntry?.version ?? 0)}
           onBack={onClose}
           remoteNavigation={{
-            invalidatePage: opened.session.invalidatePage,
-            scope: `stream:${opened.epoch}`,
-            nextScope: `stream:${opened.epoch + 1}`,
+            continuous: joined
+              ? {
+                  status: joined.status(1),
+                  previousStatus: joined.status(-1),
+                  prepare: (direction, retry) => {
+                    void joined.prepare(direction, retry);
+                  },
+                  observed: (index) => joined.observe(index),
+                }
+              : undefined,
+            invalidatePage: joined ? (index) => joined.invalidate(index) : opened.session.invalidatePage,
+            scope: `stream:${opened.epoch}:${currentJoinedEntry?.version ?? 0}`,
+            nextScope: joined
+              ? `stream:${opened.epoch}:${(currentJoinedEntry?.version ?? 0) + 1}`
+              : `stream:${opened.epoch + 1}:0`,
             profileKey,
             busy: moving || navigationBusy || opened.key !== historyKey,
             prefetchPages,
-            previous: previous ? (isCurrent) => move(previous, isCurrent) : undefined,
-            next: next ? (isCurrent) => move(next, isCurrent) : undefined,
+            previous: joined
+              ? joined.canNavigate(-1)
+                ? (isCurrent) => moveJoined(-1, isCurrent)
+                : undefined
+              : previous
+                ? (isCurrent) => move(previous, isCurrent)
+                : undefined,
+            next: joined
+              ? joined.canNavigate(1)
+                ? (isCurrent) => moveJoined(1, isCurrent)
+                : undefined
+              : next
+                ? (isCurrent) => move(next, isCurrent)
+                : undefined,
             nextTitle: nextEpisode?.title,
-            error,
-            retry: () => setAttempt((value) => value + 1),
-            initialPosition: position,
-            savePosition: (value) =>
-              saveSourceStreamPosition(opened.key, { ...value, count: opened.session.pageCount }),
+            error:
+              error ||
+              (joined && (joined.status(1) === 'error' || joined.status(-1) === 'error')
+                ? '회차를 불러오지 못했습니다.'
+                : ''),
+            retry: joined
+              ? () => void moveJoined(retryJoinedDirection.current)
+              : () => setAttempt((value) => value + 1),
+            initialPosition: currentJoinedEntry ? undefined : position,
+            savePosition: (value) => {
+              const id = value.chapterId ?? joinedChapters?.[value.page]?.id;
+              // Viewport capture is entry-scoped and may retain this callback
+              // while the same window gains chapters. Resolve new page IDs
+              // through that window, retaining the old map for a final flush.
+              const location = id ? (joined?.locateId(id) ?? pageLocations.get(id)) : undefined;
+              if (location)
+                saveSourceStreamPosition(location.entry.episode.historyKey, {
+                  ...value,
+                  page: location.page,
+                  count: location.entry.count,
+                });
+              else if (!joined) saveSourceStreamPosition(opened.key, { ...value, count: opened.session.pageCount });
+            },
           }}
           onPageSettled={(page, _chapter, _novel, position) => {
-            if (opened.key === historyKey) return onPageSettled?.(page, opened.session.pageCount, position?.fraction);
+            const location = pageLocations.get(_chapter.id);
+            if (location) {
+              const currentIndex = joined?.chapters.findIndex((chapter) => chapter.id === _chapter.id) ?? -1;
+              if (currentIndex >= 0) joined!.observe(currentIndex);
+              return location.entry.episode.onPageSettled?.(location.page, location.entry.count, position?.fraction);
+            }
+            if (!joined && opened.key === historyKey)
+              return onPageSettled?.(page, opened.session.pageCount, position?.fraction);
           }}
           onLayoutStateChange={setLayout}
         />
@@ -228,7 +366,18 @@ function ComicStreamReader({
   );
 }
 
+export interface SourceStreamEpisode {
+  remoteId: string;
+  title: string;
+  remoteRevision?: string;
+  historyKey: string;
+  onSave(): Promise<void>;
+  onPageSettled?(page: number, count: number, fraction?: number): void | Promise<void>;
+  onTextPosition?: SourceStreamReaderProps['onTextPosition'];
+}
+
 export type SourceStreamReaderProps = {
+  neighbor?(remoteId: string, direction: -1 | 1, signal: AbortSignal): Promise<SourceStreamEpisode | undefined>;
   /** Work identity, distinct from title (the current episode). Also used for locally cached streams. */
   workTitle?: string;
   title: string;

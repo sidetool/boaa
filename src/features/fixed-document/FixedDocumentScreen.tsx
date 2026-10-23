@@ -1,3 +1,10 @@
+import {
+  ReaderChapterLead,
+  READER_CHAPTER_LEAD_HEIGHT,
+  ReaderChapterSeparator,
+  READER_CHAPTER_SEPARATOR_HEIGHT,
+} from '../reader/ReaderChapterSeparator';
+import { useReaderScrollPosition } from '../reader/use-reader-scroll-position';
 import { usePageTurn } from '../reader/use-page-turn';
 import { ReaderChapterEnd } from '../reader/ReaderChapterEnd';
 import { useOptionalAppRuntime } from '../../app/runtime/RuntimeProvider';
@@ -64,7 +71,7 @@ import {
   useRef,
   useState,
 } from 'react';
-import { useVirtualizer } from '@tanstack/react-virtual';
+import { defaultRangeExtractor, useVirtualizer } from '@tanstack/react-virtual';
 import type { PDFPageProxy } from 'pdfjs-dist';
 import type {
   Chapter,
@@ -166,6 +173,12 @@ function mobileComicSectionLabel(title: string): string {
 }
 
 export interface ComicRemoteNavigation {
+  readonly continuous?: {
+    readonly status: 'ready' | 'loading' | 'error' | 'end';
+    readonly previousStatus?: 'ready' | 'loading' | 'error' | 'end';
+    prepare(direction: -1 | 1, retry?: boolean): void;
+    observed(page: number): void;
+  };
   readonly invalidatePage?: (index: number) => void;
   readonly scope: string;
   readonly nextScope: string;
@@ -412,8 +425,10 @@ export default function FixedDocumentScreen({
     initialChapterId,
     entryRequestVersion,
     listeningPosition,
+    preserveNativeAnchor: () => joinedChapters,
     onNavigate: (normalized) => {
       if (!continuousView) return;
+      if (joinedChapters) joinedScroll.beginNavigation();
       const virtualIndex = continuousVirtualIndexByPage.get(normalized);
       if (virtualIndex === undefined) pendingContinuousPageRef.current = normalized;
       else if (stableComicFlow) scrollComicFlowToPage(normalized);
@@ -484,6 +499,35 @@ export default function FixedDocumentScreen({
   const [autoReadingOpen, setAutoReadingOpen] = useState(false);
   const [comicProfile, setComicProfile] = useState<ComicReadingProfile>(DEFAULT_COMIC_READING_PROFILE);
   const [comicPageHints, setComicPageHints] = useState<Map<number, ComicPageLayoutHint>>(() => new Map());
+  const pageMetadataOwner = useRef(sortedChapters);
+  useLayoutEffect(() => {
+    const before = pageMetadataOwner.current;
+    pageMetadataOwner.current = sortedChapters;
+    if (before === sortedChapters || !before.some((chapter, index) => sortedChapters[index]?.id !== chapter.id)) return;
+    const indexes = new Map(sortedChapters.map((chapter, index) => [chapter.id, index]));
+    setComicPageHints(
+      (current) =>
+        new Map(
+          [...current].flatMap(([index, hint]) => {
+            const target = indexes.get(before[index]?.id);
+            return target === undefined ? [] : [[target, hint] as const];
+          }),
+        ),
+    );
+    setComicProfile((current) =>
+      !current.pageCrops
+        ? current
+        : {
+            ...current,
+            pageCrops: Object.fromEntries(
+              Object.entries(current.pageCrops).flatMap(([index, crop]) => {
+                const target = indexes.get(before[Number(index)]?.id);
+                return target === undefined ? [] : [[String(target), crop]];
+              }),
+            ),
+          },
+    );
+  }, [sortedChapters]);
   const [comicCropStatus, setComicCropStatus] = useState<'idle' | 'running' | 'failed'>('idle');
   const [comicCropProgress, setComicCropProgress] = useState<{ current: number; total: number; detected: number }>();
   const [comicCropFailedPages, setComicCropFailedPages] = useState(0);
@@ -506,6 +550,14 @@ export default function FixedDocumentScreen({
     requestedViewMode === 'spread' && viewportSize.width < 720 ? 'single' : requestedViewMode;
   const continuousView = isContinuousComicViewMode(effectiveViewMode);
   const seamlessContinuousView = effectiveViewMode === 'continuous-seamless';
+  const joinedChapters =
+    continuousView && novel.format === 'image_archive' && comicProfile.scrollChapterTransition === 'continuous';
+  const joinedScroll = useReaderScrollPosition(viewportRef, continuousContentRef, joinedChapters, true, false);
+  useLayoutEffect(() => {
+    if (!joinedChapters) joinedScroll.resetMeasurements();
+    // Retiring joined layout must not carry its shifted coordinates into manual/page mode.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [joinedChapters]);
 
   const captureFocalAnchor = useCallback(
     (clientX?: number, clientY?: number) => {
@@ -516,6 +568,7 @@ export default function FixedDocumentScreen({
         const rect = element.getBoundingClientRect();
         return {
           pageIndex: Number(element.dataset.pageIndex),
+          pageId: element.dataset.pageId,
           left: rect.left,
           top: rect.top,
           width: rect.width,
@@ -591,10 +644,28 @@ export default function FixedDocumentScreen({
       zoom,
     ],
   );
-  const comicSpreads = useMemo(
-    () => (effectiveViewMode === 'spread' ? buildComicSpreads(totalPages, comicProfile, comicPageHints) : []),
-    [comicPageHints, comicProfile, effectiveViewMode, totalPages],
-  );
+  const comicSpreads = useMemo(() => {
+    if (effectiveViewMode !== 'spread') return [];
+    // A joined stream still starts each episode with its own cover/parity rules.
+    // Never pair the last page of one episode with the first page of the next.
+    if (!remoteNavigation?.continuous) return buildComicSpreads(totalPages, comicProfile, comicPageHints);
+    return documentSections.flatMap((section) => {
+      const start = section.startPageIndex;
+      const localHints = new Map(
+        [...comicPageHints]
+          .filter(([index]) => index >= start && index < start + section.pageCount)
+          .map(([index, hint]) => [index - start, hint]),
+      );
+      const map = (index: number | undefined) => (index === undefined ? undefined : start + index);
+      return buildComicSpreads(section.pageCount, comicProfile, localHints).map((spread) => ({
+        ...spread,
+        left: map(spread.left),
+        right: map(spread.right),
+        widePage: map(spread.widePage),
+        readingOrder: spread.readingOrder.map((index) => start + index),
+      }));
+    });
+  }, [comicPageHints, comicProfile, effectiveViewMode, totalPages, documentSections, remoteNavigation?.continuous]);
   const currentDocumentSectionIndex = useMemo(
     () => continuousComicSectionIndex(documentSections, pageIndex),
     [documentSections, pageIndex],
@@ -639,19 +710,47 @@ export default function FixedDocumentScreen({
   );
   const continuousPageIndexes = useMemo(
     () =>
-      continuousComicPageIndexes(
-        totalPages,
-        currentDocumentSection ? [currentDocumentSection] : [],
-        currentDocumentSection?.startPageIndex ?? 0,
+      joinedChapters
+        ? Array.from({ length: totalPages }, (_, index) => index)
+        : continuousComicPageIndexes(
+            totalPages,
+            currentDocumentSection ? [currentDocumentSection] : [],
+            currentDocumentSection?.startPageIndex ?? 0,
+          ),
+    [currentDocumentSection, totalPages, joinedChapters],
+  );
+  const chapterEnds = useMemo(
+    () =>
+      new Map(
+        documentSections.map((section, index) => [
+          section.startPageIndex + section.pageCount - 1,
+          { section, next: documentSections[index + 1] },
+        ]),
       ),
-    [currentDocumentSection, totalPages],
+    [documentSections],
+  );
+  const continuousRows = useMemo(
+    () => [
+      ...(joinedChapters ? [{ page: 0, boundary: true, lead: true }] : []),
+      ...continuousPageIndexes.flatMap((page) =>
+        joinedChapters && chapterEnds.has(page)
+          ? [
+              { page, boundary: false, lead: false },
+              { page, boundary: true, lead: false },
+            ]
+          : [{ page, boundary: false, lead: false }],
+      ),
+    ],
+    [continuousPageIndexes, joinedChapters, chapterEnds],
   );
   const continuousVirtualIndexByPage = useMemo(
-    () => new Map(continuousPageIndexes.map((globalPageIndex, virtualIndex) => [globalPageIndex, virtualIndex])),
-    [continuousPageIndexes],
+    () => new Map(continuousRows.flatMap((row, index) => (row.boundary ? [] : [[row.page, index] as const]))),
+    [continuousRows],
   );
-  const continuousSectionKey = currentDocumentSection?.id ?? `${novel.id}:all-pages`;
-  const stableComicFlow = seamlessContinuousView && novel.format === 'image_archive';
+  const continuousSectionKey = joinedChapters
+    ? `${novel.id}:joined`
+    : (currentDocumentSection?.id ?? `${novel.id}:all-pages`);
+  const stableComicFlow = seamlessContinuousView && novel.format === 'image_archive' && !joinedChapters;
   const comicFlow = useComicPageFlow(stableComicFlow, continuousPageIndexes, viewportRef, continuousContentRef);
   const scrollComicFlowToPage = comicFlow.scrollToPage;
   const { estimateContinuousPageSize, seamlessContinuousPageWidth } = useComicPageSizes(
@@ -664,19 +763,49 @@ export default function FixedDocumentScreen({
     stableComicFlow,
   );
   const continuousPageKey = useCallback(
-    (index: number) => sortedChapters[continuousPageIndexes[index]]?.id ?? `${novel.id}:${index}`,
-    [continuousPageIndexes, novel.id, sortedChapters],
+    (index: number) => {
+      const row = continuousRows[index];
+      const id = sortedChapters[row?.page]?.id ?? `${novel.id}:${index}`;
+      return row?.lead ? `${novel.id}:lead` : row?.boundary ? `${id}:boundary` : id;
+    },
+    [continuousRows, novel.id, sortedChapters],
   );
+  const focalPage = pendingFocalAnchorRef.current;
+  const focalPageIndex = focalPage?.pageId
+    ? sortedChapters.findIndex((chapter) => chapter.id === focalPage.pageId)
+    : focalPage?.pageIndex;
+  const focalVirtualIndex = focalPageIndex === undefined ? undefined : continuousVirtualIndexByPage.get(focalPageIndex);
   const continuousVirtualizer = useVirtualizer({
-    count: continuousView && !stableComicFlow ? continuousPageIndexes.length : 0,
+    count: continuousView && !stableComicFlow ? continuousRows.length : 0,
     getItemKey: continuousPageKey,
+    // A shorter layout can clamp native scrollTop before focal restoration.
+    // Keep its exact target mounted even outside the clamped visible range,
+    // so restoration can measure it without a competing scroll-to-index job.
+    rangeExtractor: (range) => {
+      const indexes = defaultRangeExtractor(range);
+      return focalVirtualIndex === undefined || indexes.includes(focalVirtualIndex)
+        ? indexes
+        : [...indexes, focalVirtualIndex].sort((a, b) => a - b);
+    },
     getScrollElement: () => viewportRef.current,
-    estimateSize: (virtualIndex) => estimateContinuousPageSize(continuousPageIndexes[virtualIndex] ?? pageIndex),
+    // The virtualizer subscribes only when the DOM scroll root changes. Install
+    // the coordinate observer from the first render, before the async profile
+    // enables joining on this same root; replacing the option cannot resubscribe.
+    observeElementOffset: joinedScroll.observeOffset,
+    ...(joinedChapters ? { scrollToFn: joinedScroll.scrollTo } : {}),
+    estimateSize: (virtualIndex) =>
+      continuousRows[virtualIndex]?.lead
+        ? READER_CHAPTER_LEAD_HEIGHT
+        : continuousRows[virtualIndex]?.boundary
+          ? READER_CHAPTER_SEPARATOR_HEIGHT
+          : estimateContinuousPageSize(continuousRows[virtualIndex]?.page ?? pageIndex),
     gap: seamlessContinuousView ? -1 : 32,
     overscan: 2,
   });
-  continuousVirtualizer.shouldAdjustScrollPositionOnItemSizeChange = (item, _delta, instance) =>
-    shouldAnchorContinuousPageResize(item.end, instance.scrollOffset ?? 0, Boolean(pendingFocalAnchorRef.current));
+  continuousVirtualizer.shouldAdjustScrollPositionOnItemSizeChange = joinedChapters
+    ? joinedScroll.adjustMeasuredSize
+    : (item, _delta, instance) =>
+        shouldAnchorContinuousPageResize(item.end, instance.scrollOffset ?? 0, Boolean(pendingFocalAnchorRef.current));
   const sidebarVirtualizer = useVirtualizer({
     count: sidebarOpen ? totalPages : 0,
     getScrollElement: () => sidebarRef.current,
@@ -684,9 +813,74 @@ export default function FixedDocumentScreen({
     overscan: 4,
   });
   const continuousItems = continuousVirtualizer.getVirtualItems();
+  const joinedShape = sortedChapters.map((chapter) => chapter.id).join('|');
+  const joinedAnchor = useRef<{
+    key: string | number | bigint;
+    start: number;
+    shape: string;
+    measuredCompensation: number;
+  }>();
+  useLayoutEffect(() => {
+    if (!joinedChapters) {
+      joinedAnchor.current = undefined;
+      return;
+    }
+    const before = joinedAnchor.current;
+    if (before && before.shape !== joinedShape) {
+      const ids = new Set(sortedChapters.map((chapter) => chapter.id));
+      for (const key of continuousVirtualizer.itemSizeCache.keys())
+        if (
+          typeof key === 'string' &&
+          key !== `${novel.id}:lead` &&
+          !ids.has(key) &&
+          !ids.has(key.replace(/:boundary$/, ''))
+        )
+          continuousVirtualizer.itemSizeCache.delete(key);
+      continuousVirtualizer.getTotalSize();
+      const current = continuousVirtualizer.measurementsCache.find((row) => row.key === before.key);
+      if (current) {
+        joinedScroll.compensateStructure(current.start - before.start, current.index, before.measuredCompensation);
+        continuousVirtualizer.calculateRange();
+        joinedAnchor.current = {
+          key: current.key,
+          start: current.start,
+          shape: joinedShape,
+          measuredCompensation: joinedScroll.measuredCompensation,
+        };
+        return;
+      }
+    }
+    continuousVirtualizer.getTotalSize();
+    const start = continuousVirtualizer.range?.startIndex ?? 0;
+    // The lead is a moving window edge, not a page identity. When an earlier
+    // episode is inserted, anchor the first real page beneath it instead.
+    let anchorIndex = start;
+    while (continuousRows[anchorIndex]?.lead) anchorIndex++;
+    const row = continuousVirtualizer.measurementsCache[anchorIndex];
+    if (row)
+      joinedAnchor.current = {
+        key: row.key,
+        start: row.start,
+        shape: joinedShape,
+        measuredCompensation: joinedScroll.measuredCompensation,
+      };
+  });
+  useEffect(() => {
+    if (!joinedChapters) return;
+    const ids = new Set(sortedChapters.map((chapter) => chapter.id));
+    setImageDimensions((current) =>
+      [...current.keys()].some((id) => !ids.has(id)) ? new Map([...current].filter(([id]) => ids.has(id))) : current,
+    );
+  }, [joinedChapters, sortedChapters]);
+  useEffect(() => {
+    if (!joinedChapters) return;
+    if (pageIndex >= totalPages - 3) remoteNavigation?.continuous?.prepare(1);
+    else if (pageIndex <= 1) remoteNavigation?.continuous?.prepare(-1);
+  }, [joinedChapters, pageIndex, totalPages, remoteNavigation?.continuous]);
   const sidebarItems = sidebarVirtualizer.getVirtualItems();
   const continuousDisplayedPages = continuousItems
-    .map((item) => continuousPageIndexes[item.index])
+    .filter((item) => !continuousRows[item.index]?.boundary)
+    .map((item) => continuousRows[item.index]?.page)
     .filter((index) => index !== undefined);
   const displayedPages = stableComicFlow
     ? continuousPageIndexes
@@ -735,11 +929,12 @@ export default function FixedDocumentScreen({
         ...(streamPrefetch === 0 ? wanted : [...wanted, ...nextAutoPages]),
         ...(turnRequest?.pages ?? []),
       ]);
-    if (!currentDocumentSection) return new Set(wanted);
+    if (joinedChapters || !currentDocumentSection) return new Set(wanted);
     const sectionEnd = currentDocumentSection.startPageIndex + currentDocumentSection.pageCount;
     return new Set(wanted.filter((index) => index >= currentDocumentSection.startPageIndex && index < sectionEnd));
   }, [
     continuousView,
+    joinedChapters,
     currentDocumentSection,
     displayedPageKey,
     pageIndex,
@@ -1036,13 +1231,18 @@ export default function FixedDocumentScreen({
   const updateComicProfile = useCallback(
     (change: Partial<ComicReadingProfile>) => {
       comicProfileEditVersion.current++;
-      setComicProfile((current) => {
-        const next = { ...current, ...change };
-        void comicReadingProfileRepository.save(remoteNavigation?.profileKey ?? novel.id, next, comicCropKey(novel));
-        return next;
-      });
+      const apply = () =>
+        setComicProfile((current) => {
+          const next = { ...current, ...change };
+          void comicReadingProfileRepository.save(remoteNavigation?.profileKey ?? novel.id, next, comicCropKey(novel));
+          return next;
+        });
+      // Joining/splitting the scroll document changes row coordinates just like
+      // a layout change. Keep the point being read, not merely its page number.
+      if (change.scrollChapterTransition !== undefined) preserveFocalPoint(apply);
+      else apply();
     },
-    [novel, remoteNavigation?.profileKey, comicReadingProfileRepository],
+    [novel, remoteNavigation?.profileKey, comicReadingProfileRepository, preserveFocalPoint],
   );
 
   const changeComicViewMode = (next: ViewMode) => {
@@ -1419,6 +1619,14 @@ export default function FixedDocumentScreen({
   useLayoutEffect(() => {
     if (!continuousView) return;
     const pendingPage = pendingContinuousPageRef.current;
+    // A settings/layout change owns an exact point, not a page-start target.
+    // Starting a second scrollToIndex reconciliation here would keep chasing
+    // its old row number after the focal restore or a neighbor prepend.
+    if (pendingPage === undefined && pendingFocalAnchorRef.current) {
+      if (joinedChapters) joinedScroll.cancelNavigation();
+      return;
+    }
+    if (joinedChapters) joinedScroll.beginNavigation();
     const targetPage = pendingPage ?? pageIndex;
     const virtualIndex = continuousVirtualIndexByPage.get(targetPage) ?? 0;
     pendingContinuousPageRef.current = undefined;
@@ -1602,7 +1810,7 @@ export default function FixedDocumentScreen({
     '--fixed-doc-viewport-height': `${viewportSize.height}px`,
   } as CSSProperties;
   const continuousSectionFooterHeight =
-    continuousView && currentDocumentSection
+    !joinedChapters && continuousView && currentDocumentSection
       ? hasNextSection
         ? CONTINUOUS_SECTION_BOUNDARY_HEIGHT
         : CONTINUOUS_SECTION_NAV_HEIGHT
@@ -1630,18 +1838,30 @@ export default function FixedDocumentScreen({
     pages: archiveImages.pages,
     errors: archiveImages.errors,
     footerHeight: continuousSectionFooterHeight,
+    tailStatus: joinedChapters ? remoteNavigation?.continuous?.status : undefined,
+    chapterEnd: joinedChapters
+      ? () => {
+          if (!currentDocumentSection) return undefined;
+          const index = currentDocumentSection.startPageIndex + currentDocumentSection.pageCount - 1;
+          const virtualIndex = continuousVirtualIndexByPage.get(index);
+          const row = virtualIndex === undefined ? undefined : continuousVirtualizer.measurementsCache[virtualIndex];
+          return row ? Math.max(0, row.end - joinedScroll.shift - (viewportRef.current?.clientHeight ?? 0)) : undefined;
+        }
+      : undefined,
     turn: () => turnPage(1),
     reportError: archiveImages.reportError,
-    nextChapter: nextDocumentSection
-      ? {
-          scope: `${novel.id}:${nextDocumentSection.id}:${autoScopeSuffix}`,
-          open: async (isCurrent) => {
-            if (isCurrent()) goToPage(nextDocumentSection.startPageIndex);
-          },
-        }
-      : remoteNavigation?.next
-        ? { scope: `${remoteNavigation.nextScope}:${autoScopeSuffix}`, open: remoteNavigation.next }
-        : undefined,
+    nextChapter: joinedChapters
+      ? undefined
+      : nextDocumentSection
+        ? {
+            scope: `${novel.id}:${nextDocumentSection.id}:${autoScopeSuffix}`,
+            open: async (isCurrent) => {
+              if (isCurrent()) goToPage(nextDocumentSection.startPageIndex);
+            },
+          }
+        : remoteNavigation?.next
+          ? { scope: `${remoteNavigation.nextScope}:${autoScopeSuffix}`, open: remoteNavigation.next }
+          : undefined,
   });
   useEffect(() => {
     if (continuousView) {
@@ -1661,6 +1881,7 @@ export default function FixedDocumentScreen({
     chapterId: continuousSectionKey,
     enabled:
       continuousView &&
+      !joinedChapters &&
       !autoReading.running &&
       !remoteNavigation?.busy &&
       documentStatus === 'ready' &&
@@ -1835,16 +2056,19 @@ export default function FixedDocumentScreen({
       if (!viewport) return;
       const nearestVirtualIndex = continuousPageNearestViewportCenter(
         continuousVirtualizer.getVirtualItems(),
-        viewport.scrollTop,
+        viewport.scrollTop + (joinedChapters ? joinedScroll.shift : 0),
         viewport.clientHeight,
       );
       const nearest = stableComicFlow
         ? comicFlow.nearestPage()
         : nearestVirtualIndex === undefined
           ? undefined
-          : continuousPageIndexes[nearestVirtualIndex];
+          : continuousRows[nearestVirtualIndex]?.page;
       if (nearest === undefined) return;
       observePage(nearest);
+      if (joinedChapters) {
+        remoteNavigation?.continuous?.observed(nearest);
+      }
     });
   };
   const rtlComic = novel.format === 'image_archive' && comicProfile.direction === 'rtl';
@@ -1855,7 +2079,7 @@ export default function FixedDocumentScreen({
   const rightTurnStep: -1 | 1 = rtlComic ? -1 : 1;
 
   const renderPages = (indexes: readonly number[], preview = false) =>
-    indexes.map((index) => (
+    indexes.flatMap((index) => [
       <article
         key={sortedChapters[index]?.id ?? index}
         ref={
@@ -1868,6 +2092,7 @@ export default function FixedDocumentScreen({
         }
         data-index={continuousVirtualIndexByPage.get(index) ?? index}
         data-page-index={index}
+        data-page-id={sortedChapters[index]?.id}
         className={`${preview ? 'is-preview' : index === pageIndex ? 'is-current' : ''}${effectiveViewMode === 'spread' ? ' is-spread-page' : ''}${effectiveViewMode === 'spread' && comicSpreads[comicSpreadForPage(comicSpreads, preview ? (comicTurn.preview?.index ?? pageIndex) : pageIndex)]?.widePage === index ? ' is-double-page' : ''}`}
         style={
           stableComicFlow
@@ -1878,7 +2103,8 @@ export default function FixedDocumentScreen({
             : continuousView
               ? ({
                   transform: `translateY(${
-                    continuousItems.find((item) => item.index === continuousVirtualIndexByPage.get(index))?.start ?? 0
+                    (continuousItems.find((item) => item.index === continuousVirtualIndexByPage.get(index))?.start ??
+                      0) - (joinedChapters ? joinedScroll.shift : 0)
                   }px)`,
                   ...(!seamlessContinuousView &&
                   novel.format === 'image_archive' &&
@@ -2001,8 +2227,8 @@ export default function FixedDocumentScreen({
             </div>
           </div>
         )}
-      </article>
-    ));
+      </article>,
+    ]);
 
   return (
     <main
@@ -2459,13 +2685,65 @@ export default function FixedDocumentScreen({
                   continuousView && !stableComicFlow
                     ? {
                         ...pageStyle,
-                        height: continuousVirtualizer.getTotalSize() + continuousSectionFooterHeight,
+                        height: joinedScroll.preserveNativeRange(
+                          continuousVirtualizer.getTotalSize() +
+                            continuousSectionFooterHeight -
+                            (joinedChapters ? joinedScroll.shift : 0),
+                          Boolean(joinedChapters && joinedAnchor.current && joinedAnchor.current.shape !== joinedShape),
+                        ),
                       }
                     : pageStyle
                 }
               >
                 {renderPages(displayedPages)}
-                {continuousView && currentDocumentSection && (
+                {joinedChapters &&
+                  continuousItems
+                    .filter((item) => continuousRows[item.index]?.boundary)
+                    .map((item) => {
+                      const row = continuousRows[item.index];
+                      const boundary = chapterEnds.get(row.page)!;
+                      const previousStatus = remoteNavigation?.continuous?.previousStatus ?? 'end';
+                      return (
+                        <div
+                          key={item.key}
+                          className="fixed-doc-chapter-join"
+                          data-index={item.index}
+                          ref={continuousVirtualizer.measureElement}
+                          style={{
+                            position: 'absolute',
+                            top: 0,
+                            left: 0,
+                            width: '100%',
+                            transform: `translateY(${item.start - joinedScroll.shift}px)`,
+                          }}
+                        >
+                          {row.lead ? (
+                            <ReaderChapterLead
+                              unit="회차"
+                              tone="comic"
+                              status={
+                                previousStatus === 'ready'
+                                  ? 'idle'
+                                  : previousStatus === 'end'
+                                    ? 'start'
+                                    : previousStatus
+                              }
+                              onRetry={() => remoteNavigation?.continuous?.prepare(-1, true)}
+                            />
+                          ) : (
+                            <ReaderChapterSeparator
+                              unit="회차"
+                              tone="comic"
+                              currentTitle={boundary.section.title}
+                              nextTitle={boundary.next?.title}
+                              status={boundary.next ? 'ready' : (remoteNavigation?.continuous?.status ?? 'end')}
+                              onRetry={() => remoteNavigation?.continuous?.prepare(1, true)}
+                            />
+                          )}
+                        </div>
+                      );
+                    })}
+                {continuousView && !joinedChapters && currentDocumentSection && (
                   <div
                     className="fixed-doc-section-footer"
                     style={{

@@ -2,7 +2,7 @@ import type { Dispatch, SetStateAction } from 'react';
 import type { Bookmark, ReaderHighlight, ReaderNote } from '../../domain/types';
 import { buildAnnotationsMarkdown, copyAnnotationMarkdown, downloadAnnotationMarkdown } from './annotation-export';
 import { navigateToAnnotation, type AnnotationNavigationTarget } from './annotation-navigation';
-import type { AnnotationControllerOptions, AnnotationScope } from './annotation-contract';
+import type { AnnotationControllerOptions, AnnotationScope, AnnotationSelection } from './annotation-contract';
 import type { AnnotationViewModel } from './annotation-model';
 import { AnnotationPersistence } from './annotation-persistence';
 
@@ -38,15 +38,19 @@ async function reportPersistenceFailure(
 }
 
 export function createAnnotationActions(input: AnnotationActionInput) {
-  const mutationContext = () =>
-    input.novel && input.chapter
-      ? {
-          novel: input.novel,
-          chapter: input.chapter,
-          reader: input.reader,
-          readerProgress: input.readerProgress,
-        }
-      : undefined;
+  const mutationContext = (location = input.reader.getLocation(), selection?: AnnotationSelection) => {
+    if (!input.novel) return undefined;
+    const selected = selection?.paragraphId ? input.reader.getCachedParagraphById(selection.paragraphId) : undefined;
+    const id = selected?.chapterId ?? location?.paragraph?.chapterId ?? location?.chapterId ?? input.chapter?.id;
+    const chapter = input.chapters.find((chapter) => chapter.id === id && chapter.novelId === input.novel!.id);
+    if (!chapter) return undefined;
+    return {
+      novel: input.novel,
+      chapter,
+      reader: input.reader,
+      readerProgress: location?.progress ?? input.readerProgress,
+    };
+  };
   const committed = async () => {
     try {
       await input.onMutationCommitted();
@@ -84,7 +88,7 @@ export function createAnnotationActions(input: AnnotationActionInput) {
 
   return {
     async toggleBookmark(location = input.reader.getLocation()) {
-      const context = mutationContext();
+      const context = mutationContext(location);
       if (!context) return;
       try {
         const result = await input.persistence.toggleBookmark({ ...context, bookmarks: input.bookmarks }, location);
@@ -100,7 +104,7 @@ export function createAnnotationActions(input: AnnotationActionInput) {
       }
     },
     async saveNoteDraft() {
-      const context = mutationContext();
+      const context = mutationContext(input.reader.getLocation(), input.reader.getSelection());
       if (!context) return;
       try {
         const result = await input.persistence.saveNote(
@@ -126,7 +130,7 @@ export function createAnnotationActions(input: AnnotationActionInput) {
       location = input.reader.getLocation(),
       selection = input.reader.getSelection(),
     ) {
-      const context = mutationContext();
+      const context = mutationContext(location, selection);
       if (!context) return;
       if (!selection?.text.trim()) {
         input.notify('하이라이트할 문장을 먼저 선택해 주세요.', 'info');

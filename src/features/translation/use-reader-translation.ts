@@ -353,10 +353,35 @@ export function useReaderTranslation(model: ReaderScreenModel, repository: Reade
     model.transient,
     repository,
   ]);
-  const texts = useMemo(
-    () => (displaying ? new Map(result?.paragraphs.map((p) => [p.id, p.text])) : undefined),
-    [displaying, result?.paragraphs],
-  );
+  // Keep nearby translated chapters stable while their original text shares one scroll root.
+  const retained = useRef<{ key: string; client: typeof client; chapters: Map<string, ReadonlyMap<string, string>> }>({
+    key: '',
+    client,
+    chapters: new Map(),
+  });
+  const texts = useMemo(() => {
+    const key = JSON.stringify([model.novel.id, model.novel.activeContentRevisionId, configuration?.revision]);
+    if (retained.current.key !== key || retained.current.client !== client)
+      retained.current = { key, client, chapters: new Map() };
+    if (!displaying) return undefined;
+    if (model.settings.readingProfile.scrollChapterTransition !== 'continuous')
+      return new Map(result?.paragraphs.map((p) => [p.id, p.text]));
+    if (result?.chapterKey && result.paragraphs.length) {
+      retained.current.chapters.delete(result.chapterKey);
+      retained.current.chapters.set(result.chapterKey, new Map(result.paragraphs.map((p) => [p.id, p.text])));
+    }
+    while (retained.current.chapters.size > 3)
+      retained.current.chapters.delete(retained.current.chapters.keys().next().value!);
+    return new Map([...retained.current.chapters.values()].flatMap((chapter) => [...chapter]));
+  }, [
+    displaying,
+    result,
+    client,
+    configuration?.revision,
+    model.novel.id,
+    model.novel.activeContentRevisionId,
+    model.settings.readingProfile.scrollChapterTransition,
+  ]);
   return {
     available,
     configuration,

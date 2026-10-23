@@ -1,3 +1,4 @@
+import { sliceParagraphForPage } from './reader-pagination-model';
 import { ReaderTranslationContext } from '../translation/reader-translation-context';
 import {
   useContext,
@@ -51,6 +52,7 @@ export interface ReaderParagraphRowProps {
   readonly staticLayout?: boolean;
   readonly sourceOffset?: number;
   readonly sourceText?: string;
+  readonly flowBreaks?: readonly number[];
 }
 
 function EpubImage({
@@ -237,6 +239,7 @@ function ReaderParagraphRowComponent({
   staticLayout = false,
   sourceOffset = 0,
   sourceText,
+  flowBreaks,
 }: ReaderParagraphRowProps) {
   const translations = useContext(ReaderTranslationContext);
   const translated = translations?.get(paragraph.id);
@@ -264,13 +267,32 @@ function ReaderParagraphRowComponent({
     () => composePluginText(paragraph.text, decoratedText, decoration.pluginLayers ?? [], sourceOffset),
     [paragraph.text, decoratedText, decoration.pluginLayers, sourceOffset],
   );
-  const originalTextContent = useMemo(
-    () => <InlineEpubText paragraph={paragraph} onLink={onDocumentLink} segments={composedText} />,
-    [composedText, onDocumentLink, paragraph],
-  );
+  const textContent = useMemo(() => {
+    if (translated !== undefined) return <span className="reader-translated-text">{translated}</span>;
+    const text = paragraph.text;
+    const boundaries = [
+      0,
+      ...new Set((flowBreaks ?? []).filter((offset) => offset > 0 && offset < text.length)),
+      text.length,
+    ].sort((a, b) => a - b);
+    const content = (begin: number, end: number) => (
+      <InlineEpubText
+        paragraph={sliceParagraphForPage(paragraph, begin, end)}
+        onLink={onDocumentLink}
+        segments={sliceSegments(composedText, begin, end)}
+      />
+    );
+    if (boundaries.length === 2)
+      return <InlineEpubText paragraph={paragraph} onLink={onDocumentLink} segments={composedText} />;
+    // Keep the page-edge wrapping during the native-scroll handoff without
+    // replacing the source paragraph or changing its selection/annotation offsets.
+    return boundaries.slice(0, -1).map((begin, index) => (
+      <span key={begin} style={{ display: 'block', textIndent: begin === 0 ? undefined : 0 }}>
+        {content(begin, boundaries[index + 1])}
+      </span>
+    ));
+  }, [composedText, flowBreaks, onDocumentLink, paragraph, translated]);
 
-  const textContent =
-    translated === undefined ? originalTextContent : <span className="reader-translated-text">{translated}</span>;
   // Translated offsets must never create annotations against the original text.
   // Annotate the existing text element without adding wrappers or changing pagination layout.
   const textAnchor = {

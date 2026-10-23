@@ -31,6 +31,7 @@ export function useFixedDocumentProgress(
     [options.owner],
   );
   const scheduled = useRef<string>();
+  const scheduledSection = useRef<string>();
   const scheduleLatest = useCallback(() => {
     const current = latest.current;
     if (!current.chapter || current.options.ready === false) return;
@@ -46,6 +47,9 @@ export function useFixedDocumentProgress(
     if (scheduled.current === key) return;
     scheduled.current = key;
     const chapter = current.chapter;
+    const section = `${current.novel.id}:${chapter.documentSectionId ?? current.novel.id}`;
+    if (scheduledSection.current && scheduledSection.current !== section) void persistence.flush();
+    scheduledSection.current = section;
     persistence.schedule(() =>
       position
         ? current.save(current.pageIndex, chapter, current.novel, position)

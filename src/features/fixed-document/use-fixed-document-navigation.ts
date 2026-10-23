@@ -25,24 +25,42 @@ export function useFixedDocumentNavigation(input: {
   entryRequestVersion?: number;
   listeningPosition?: Pick<ListeningPosition, 'anchor'>;
   onNavigate(page: number): void;
+  preserveNativeAnchor?: () => boolean;
 }) {
   const latest = useRef(input);
   latest.current = input;
   const [position, setPosition] = useState(() => {
     const pageIndex = initialPage(input.chapters, input.readingPosition, input.initialChapterId);
-    return { pageIndex, pageDraft: String(pageIndex + 1) };
+    return {
+      pageIndex,
+      pageDraft: String(pageIndex + 1),
+      chapterId: input.chapters[pageIndex]?.id,
+      chapters: input.chapters,
+    };
   });
   const goToPage = useCallback((next: number) => {
     if (!Number.isFinite(next)) return;
     const pageIndex = clampFixedDocumentPage(next, latest.current.chapters.length);
-    setPosition({ pageIndex, pageDraft: String(pageIndex + 1) });
+    setPosition({
+      pageIndex,
+      pageDraft: String(pageIndex + 1),
+      chapterId: latest.current.chapters[pageIndex]?.id,
+      chapters: latest.current.chapters,
+    });
     latest.current.onNavigate(pageIndex);
   }, []);
   const observePage = useCallback((next: number) => {
     if (!Number.isFinite(next)) return;
     const pageIndex = clampFixedDocumentPage(next, latest.current.chapters.length);
     setPosition((current) =>
-      current.pageIndex === pageIndex ? current : { pageIndex, pageDraft: String(pageIndex + 1) },
+      current.pageIndex === pageIndex && current.chapters === latest.current.chapters
+        ? current
+        : {
+            pageIndex,
+            pageDraft: String(pageIndex + 1),
+            chapterId: latest.current.chapters[pageIndex]?.id,
+            chapters: latest.current.chapters,
+          },
     );
   }, []);
   const setPageDraft = useCallback((pageDraft: string) => setPosition((current) => ({ ...current, pageDraft })), []);
@@ -54,10 +72,38 @@ export function useFixedDocumentNavigation(input: {
     if (!input.initialChapterId) goToPage(initialPage(input.chapters, input.readingPosition));
   }, [input.bookId, input.initialChapterId, input.chapters, input.readingPosition, goToPage]);
   useFixedDocumentEntry(input.bookId, input.initialChapterId, input.chapters, goToPage, input.entryRequestVersion);
-  useFixedDocumentPageAnchor(input.bookId, input.chapters, position.pageIndex, goToPage);
+  const reindexPage = useCallback(
+    (index: number) => {
+      if (latest.current.preserveNativeAnchor?.()) observePage(index);
+      else goToPage(index);
+    },
+    [goToPage, observePage],
+  );
+  useFixedDocumentPageAnchor(input.bookId, input.chapters, position.pageIndex, reindexPage);
   useEffect(() => {
     const anchor = input.listeningPosition?.anchor;
     if (anchor?.kind === 'fixed_text' && anchor.bookId === input.bookId) goToPage(anchor.pageIndex);
   }, [goToPage, input.listeningPosition, input.bookId]);
-  return { ...position, goToPage, observePage, setPageDraft };
+  const remapped =
+    position.chapters !== input.chapters && position.chapterId
+      ? input.chapters.findIndex((chapter) => chapter.id === position.chapterId)
+      : position.pageIndex;
+  const pageIndex = remapped >= 0 ? remapped : position.pageIndex;
+  useLayoutEffect(() => {
+    if (position.chapters !== input.chapters)
+      setPosition((current) => ({
+        ...current,
+        chapters: input.chapters,
+        chapterId: input.chapters[pageIndex]?.id,
+        pageIndex,
+        pageDraft: String(pageIndex + 1),
+      }));
+  }, [input.chapters, position.chapters, pageIndex]);
+  return {
+    pageIndex,
+    pageDraft: pageIndex === position.pageIndex ? position.pageDraft : String(pageIndex + 1),
+    goToPage,
+    observePage,
+    setPageDraft,
+  };
 }

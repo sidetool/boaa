@@ -3,7 +3,7 @@ import { decorateReaderText } from '../../reader/text-decorations';
 import type { PluginParagraphLayer } from '../../reader/plugin-decoration-layers';
 import type { Paragraph, ReaderAnchor, ReaderPageBoundary } from '../../domain/types';
 import { chapterSequenceLabel, showChapterSequence, type ReaderChapterHeadingData } from './ReaderChapterHeading';
-import { compareReaderAnchors } from './reader-pagination-model';
+import { compareReaderAnchors, type ReaderPageFragment } from './reader-pagination-model';
 
 function appendMeasurementInline(
   content: HTMLElement,
@@ -159,6 +159,30 @@ export interface PageMeasurementInput {
   readonly chapter: ReaderChapterHeadingData;
   readonly paragraphCount: number;
   readonly getParagraph: (index: number) => Promise<Paragraph | undefined>;
+}
+
+/** The destination's resting glyph offset, independent of page-turn transforms. */
+export function measurePageAnchorOffset(input: PageMeasurementInput, fragment: ReaderPageFragment): number {
+  const measure = input.template.cloneNode(false) as HTMLElement;
+  input.host.append(measure);
+  try {
+    resetMeasurementPage(measure, input.chapter, fragment.paragraphIndex === 0 && fragment.startOffset === 0);
+    const block = measurementBlock(
+      fragment.paragraph,
+      fragment.startOffset,
+      fragment.endOffset,
+      input.getPluginLayers?.(fragment.paragraph.id),
+    );
+    measure.append(block);
+    const text = document.createTreeWalker(block, NodeFilter.SHOW_TEXT).nextNode();
+    if (!text) return block.getBoundingClientRect().top - measure.getBoundingClientRect().top;
+    const range = document.createRange();
+    range.setStart(text, 0);
+    range.setEnd(text, Math.min(1, text.textContent?.length ?? 0));
+    return range.getBoundingClientRect().top - measure.getBoundingClientRect().top;
+  } finally {
+    measure.remove();
+  }
 }
 
 /** Measure only the source adjacent to the requested edge, including oversized paragraphs. */

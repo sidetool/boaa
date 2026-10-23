@@ -19,6 +19,7 @@ export function ReaderSettingsLayout({
   updateProfile: (patch: ReadingProfileOverride) => void;
 }) {
   const themeColors = resolveReaderThemeColors(profile);
+  const chapterTransition = profile.scrollChapterTransition ?? 'manual';
   return (
     <>
       <section className="reader-settings-group reader-settings-layout-section">
@@ -260,6 +261,30 @@ export function ReaderSettingsLayout({
             페이지
           </button>
         </div>
+        {profile.modeLock !== 'paginated' && (
+          <div className="reader-settings-subsection">
+            <h3>회차 넘김</h3>
+            <div className="segmented full" aria-label="회차 넘김">
+              <button
+                type="button"
+                className={chapterTransition === 'manual' ? 'active' : ''}
+                onClick={() => updateProfile({ scrollChapterTransition: 'manual' })}
+                aria-pressed={chapterTransition === 'manual'}
+              >
+                한 화씩
+              </button>
+              <button
+                type="button"
+                className={chapterTransition === 'continuous' ? 'active' : ''}
+                onClick={() => updateProfile({ scrollChapterTransition: 'continuous' })}
+                aria-pressed={chapterTransition === 'continuous'}
+              >
+                이어 읽기
+              </button>
+            </div>
+            {profile.modeLock === 'auto' && <p className="field-help">스크롤로 읽을 때 적용됩니다.</p>}
+          </div>
+        )}
         {profile.modeLock !== 'scroll' && (
           <div className="reader-settings-subsection">
             <h3>페이지 조판</h3>

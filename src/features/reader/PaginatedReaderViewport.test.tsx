@@ -19,11 +19,102 @@ vi.mock('./use-reader-progress', () => {
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.unstubAllGlobals();
   vi.clearAllMocks();
 });
 
 describe('inactive pagination work', () => {
+  it('defers neighbor measurement until an ordinary smooth page turn finishes', async () => {
+    vi.useFakeTimers();
+    const idleCallbacks: Array<() => void> = [];
+    vi.stubGlobal('requestIdleCallback', (callback: () => void) => idleCallbacks.push(callback));
+    vi.stubGlobal('cancelIdleCallback', vi.fn());
+    vi.stubGlobal('window', {
+      setTimeout: globalThis.setTimeout,
+      clearTimeout: globalThis.clearTimeout,
+      cancelAnimationFrame: vi.fn(),
+      matchMedia: () => ({ matches: false }),
+    });
+    vi.stubGlobal('document', Object.assign(new EventTarget(), { fonts: { ready: Promise.resolve() } }));
+    vi.stubGlobal(
+      'ResizeObserver',
+      class {
+        observe() {}
+        disconnect() {}
+      },
+    );
+    const chapter = testChapter(1, { id: 'smooth-warmup', novelId: 'book', paragraphCount: 1 });
+    const paragraph = { id: 'smooth-paragraph', novelId: 'book', chapterId: chapter.id, index: 1, text: '앞뒤' };
+    const anchor = {
+      bookId: 'book',
+      contentRevisionId: 'smooth-revision',
+      sectionId: chapter.id,
+      blockId: paragraph.id,
+      blockIndex: 0,
+      offset: 0,
+    };
+    vi.mocked(loadReaderPageMap).mockResolvedValue({
+      id: 'smooth-map',
+      chapterId: chapter.id,
+      contentRevisionId: anchor.contentRevisionId,
+      layoutKey: 'fixture',
+      rendererVersion: 'fixture',
+      boundaries: [
+        { index: 0, start: anchor, end: { ...anchor, offset: 1 } },
+        { index: 1, start: { ...anchor, offset: 1 }, end: { ...anchor, offset: 2 } },
+      ],
+      createdAt: '2026-10-23T00:00:00.000Z',
+      lastAccessedAt: '2026-10-23T00:00:00.000Z',
+    });
+    const apiRef: { current?: ReaderViewportApi } = {};
+    const props = {
+      novel: testNovel({ id: 'book', activeContentRevisionId: anchor.contentRevisionId }),
+      chapter,
+      chapters: [chapter],
+      repository: { getParagraphPage: vi.fn(async () => ({ paragraphs: [paragraph] })) },
+      settings: { ...defaultSettings, readingProfile: { ...defaultSettings.readingProfile, pageTurnMotion: 'smooth' } },
+      mode: 'read',
+      search: { highlightQuery: '' },
+      screenHandle: new ReaderScreenHandle(),
+      apiRef,
+      onApiReady: vi.fn(),
+      onVisualLocation: vi.fn(),
+      onPaginationFailure: vi.fn(),
+      onRevealChrome: vi.fn(),
+      isActive: true,
+    } as unknown as ReaderViewportLayerProps & { onPaginationFailure: () => void };
+    let renderer!: ReactTestRenderer;
+    try {
+      await act(async () => {
+        renderer = create(<PaginatedReaderViewport {...props} />, {
+          createNodeMock: () => ({ clientWidth: 390, clientHeight: 700, replaceChildren: vi.fn() }),
+        });
+      });
+      expect(apiRef.current?.getAnchor()).toEqual(anchor);
+      const scheduled = idleCallbacks.length;
+      expect(scheduled).toBeGreaterThan(0);
+      const oldIdle = idleCallbacks.at(-1)!;
+      await act(async () => {
+        apiRef.current?.pageJump(1);
+      });
+      expect(props.onPaginationFailure).not.toHaveBeenCalled();
+      expect(apiRef.current?.getAnchor()?.offset).toBe(1);
+      expect(idleCallbacks).toHaveLength(scheduled);
+      await act(async () => {
+        oldIdle();
+        await vi.advanceTimersByTimeAsync(200);
+      });
+      expect(idleCallbacks).toHaveLength(scheduled);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(40);
+      });
+      expect(idleCallbacks).toHaveLength(scheduled + 1);
+    } finally {
+      act(() => renderer?.unmount());
+    }
+  });
+
   it('keeps the visible page map when only the book revision changes', async () => {
     const idleCallbacks: Array<() => void> = [];
     vi.stubGlobal('requestIdleCallback', (callback: () => void) => idleCallbacks.push(callback));
@@ -234,7 +325,7 @@ describe('inactive pagination work', () => {
     },
   );
 
-  it('pauses layout and adjacent reads while hidden, then reuses the anchor on activation', async () => {
+  it('pauses adjacent reads while hidden or entering page mode, then reuses the anchor', async () => {
     const idleCallbacks: Array<() => void> = [];
     vi.stubGlobal('requestIdleCallback', (callback: () => void) => idleCallbacks.push(callback));
     vi.stubGlobal('cancelIdleCallback', vi.fn());
@@ -291,7 +382,9 @@ describe('inactive pagination work', () => {
       onPaginationFailure: vi.fn(),
     } as unknown as ReaderViewportLayerProps & { onPaginationFailure: () => void };
     let renderer!: ReactTestRenderer;
-    const render = (isActive: boolean) => <PaginatedReaderViewport {...props} isActive={isActive} />;
+    const render = (isActive: boolean, pageTransitionPending = false) => (
+      <PaginatedReaderViewport {...props} isActive={isActive} pageTransitionPending={pageTransitionPending} />
+    );
     try {
       await act(async () => {
         renderer = create(render(false), {
@@ -312,6 +405,15 @@ describe('inactive pagination work', () => {
       expect(apiRef.current?.getAnchor()).toEqual(anchor);
       expect(apiRef.current?.getLocation()).toMatchObject({ progress: 1, paragraphIndex: 1, offsetInParagraph: 0 });
       expect(getParagraphPage).toHaveBeenCalledTimes(1);
+      const beforeEntrance = idleCallbacks.length;
+      const cancelledEntranceIdle = idleCallbacks.at(-1)!;
+      await act(async () => renderer.update(render(true, true)));
+      await act(async () => cancelledEntranceIdle());
+      expect(idleCallbacks).toHaveLength(beforeEntrance);
+      expect(getParagraphPage).toHaveBeenCalledTimes(1);
+      expect(apiRef.current?.getAnchor()).toEqual(anchor);
+      await act(async () => renderer.update(render(true)));
+      expect(idleCallbacks).toHaveLength(beforeEntrance + 1);
       const cancelledIdle = idleCallbacks.at(-1)!;
       await act(async () => renderer.update(render(false)));
       await act(async () => cancelledIdle());

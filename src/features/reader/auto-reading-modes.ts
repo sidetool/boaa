@@ -57,6 +57,7 @@ export function nextReadingToken(
 
 interface AutoReadingEnvironment {
   root: HTMLElement;
+  contentRoot?: HTMLElement;
   overlay: HTMLElement;
   top: number;
   bottom: number;
@@ -111,6 +112,13 @@ export class AutoReadingPresentation {
     }
   }
 
+  shiftCoordinates(delta: number) {
+    if (!delta) return;
+    this.generation++;
+    this.loading = undefined;
+    if (this.cursor) this.cursor.index = Math.max(0, this.cursor.index + delta);
+  }
+
   private load(index: number, env: AutoReadingEnvironment) {
     if (this.loading === index) return;
     this.loading = index;
@@ -131,7 +139,9 @@ export class AutoReadingPresentation {
     const status = env.advance(0);
     if (status === 'waiting') return status;
     const line =
-      Number.parseFloat(getComputedStyle(env.root.querySelector('.reader-document') ?? env.root).lineHeight) || 32;
+      Number.parseFloat(
+        getComputedStyle(env.contentRoot ?? env.root.querySelector('.reader-document') ?? env.root).lineHeight,
+      ) || 32;
     const height = Math.max(line * 2, env.bottom - env.top);
     if (mode === 'pixel') return env.advance(amount);
     if (mode === 'line') return env.advance(amount > 0 ? line : 0);
@@ -146,7 +156,7 @@ export class AutoReadingPresentation {
         const rawBoundary = env.top + this.revealedHeight;
         const boundary =
           mode === 'blind-line' && this.revealedHeight < height
-            ? wholeLineBoundary(env.root, rawBoundary, env.top)
+            ? wholeLineBoundary(env.contentRoot ?? env.root, rawBoundary, env.top)
             : rawBoundary;
         env.overlay.style.top = `${boundary}px`;
         env.overlay.style.height = `${Math.max(0, env.top + height - boundary)}px`;
@@ -188,7 +198,12 @@ export class AutoReadingPresentation {
         this.load(this.cursor.index, env);
         return 'waiting';
       }
-      const element = [...env.root.querySelectorAll<HTMLElement>('[data-paragraph-id]')].find(
+      // Separators and blank paragraphs have no readable DOM node.
+      if (paragraph.documentKind !== 'image' && !paragraph.text.trim()) {
+        this.cursor = { index: this.cursor.index + 1, offset: 0 };
+        continue;
+      }
+      const element = [...(env.contentRoot ?? env.root).querySelectorAll<HTMLElement>('[data-paragraph-id]')].find(
         (node) => node.dataset.paragraphId === paragraph.id,
       );
       if (!element) {

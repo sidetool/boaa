@@ -41,6 +41,24 @@ describe('archive foreground image loading', () => {
     vi.restoreAllMocks();
   });
 
+  it('keeps decoded URLs by identity when previous chapters insert pages', async () => {
+    const h = harness();
+    h.loader.update(0, [0, 1], (index) => `source:${index}`);
+    h.requests[0].resolve(page(0));
+    await settle();
+    const url = h.snapshot().pages.get(0)!.url;
+    h.loader.reindex((identity) => (identity === 'source:0' ? 3 : undefined));
+    h.loader.update(3, [3], (index) => `source:${index - 3}`);
+    await settle();
+    expect(h.snapshot().pages.get(3)?.url).toBe(url);
+    expect(URL.revokeObjectURL).not.toHaveBeenCalledWith(url);
+    h.requests[1].resolve(page(1));
+    await settle();
+    expect(h.snapshot().pages.has(1)).toBe(false);
+    expect(h.snapshot().pages.get(3)?.url).toBe(url);
+    h.loader.dispose();
+  });
+
   it('retries a stalled page without leaving the reader and ignores its late completion', async () => {
     const h = harness();
     h.loader.update(0, [0, 1]);

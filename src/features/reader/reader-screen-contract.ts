@@ -25,6 +25,7 @@ export interface ReaderSelection {
 }
 
 export interface ReaderLocationSnapshot {
+  readonly chapterId?: string;
   readonly progress: number;
   readonly scrollTop: number;
   readonly paragraphIndex: number;
@@ -62,6 +63,7 @@ export interface ReaderOverlayState {
 
 export interface ReaderScreenModel {
   readonly transient?: boolean;
+  readonly continuousSource?: import('./continuous-text-window').ContinuousTextSource;
   readonly navigation?: {
     readonly pending?: import('../external-sources/use-source-library-open').SourceLibraryPending;
     readonly busy: boolean;
@@ -123,6 +125,7 @@ export interface ReaderScreenActions {
   readonly selectCorrectionSegment: (segmentId: string) => void;
   readonly startTTS: (paragraphIndex: number) => void;
   readonly toggleTTS: (paragraphIndex: number) => void;
+  readonly observeChapter?: (chapter: Chapter) => void;
   readonly modeChanged: (mode: ReaderMode) => void;
   readonly locationCommitted: (location: ReaderLocationSnapshot, bookProgress: number, updatedAt: string) => void;
   readonly locationPersistenceFailed: (error: unknown) => void;

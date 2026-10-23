@@ -28,26 +28,37 @@ export function useFixedDocumentReadingPosition(input: {
     const current = latest.current;
     const initial =
       current.initial ?? fixedDocumentPosition(current.chapters, current.readingPosition, current.initialChapterId);
-    return { identity: input.identity, initial, position: initial };
+    const owned = initial ? { ...initial, chapterId: current.chapters[initial.page]?.id } : undefined;
+    return { identity: input.identity, initial: owned, position: owned };
   }, [input.identity]);
   const [, render] = useState(0);
   useComicViewportPosition({
     ...input,
     initial: entry.initial,
+    restorePage: (page, chapterId) => {
+      const index = chapterId ? latest.current.chapters.findIndex((chapter) => chapter.id === chapterId) : page;
+      if (index >= 0) latest.current.restorePage?.(index);
+    },
     save: (position) => {
-      entry.position = position;
+      entry.position = { ...position, chapterId: position.chapterId ?? latest.current.chapters[position.page]?.id };
       input.savePosition?.(position);
       render((value) => value + 1);
     },
   });
   const position = input.continuous ? entry.position : undefined;
-  const page = position?.page ?? input.page;
+  const located = position?.chapterId
+    ? input.chapters.findIndex((chapter) => chapter.id === position.chapterId)
+    : position?.page;
+  const page = located !== undefined && located >= 0 ? located : input.page;
   return useFixedDocumentProgress(
     page,
     input.chapters[page],
     input.novel,
     (pageIndex, chapter, novel, position) => {
-      const resolvedPage = position?.page ?? pageIndex;
+      const mapped = position?.chapterId
+        ? input.chapters.findIndex((candidate) => candidate.id === position.chapterId)
+        : undefined;
+      const resolvedPage = mapped !== undefined && mapped >= 0 ? mapped : (position?.page ?? pageIndex);
       return input.save(resolvedPage, input.chapters[resolvedPage] ?? chapter, novel, position);
     },
     {

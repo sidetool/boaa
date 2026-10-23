@@ -78,6 +78,24 @@ export class ArchivePageLoader {
     this.pump();
   }
 
+  /** Preserve decoded URLs when earlier releases insert pages before the viewport. */
+  reindex(indexForIdentity: (identity: string) => number | undefined): void {
+    if (this.disposed) return;
+    const pages = [...this.pages.values()];
+    for (const controller of this.inFlight.values()) controller.abort();
+    this.pages.clear();
+    this.errors.clear();
+    this.identities.clear();
+    for (const page of pages) {
+      const index = indexForIdentity(page.identity);
+      if (index === undefined) URL.revokeObjectURL(page.url);
+      else {
+        this.pages.set(index, page);
+        this.identities.set(index, page.identity);
+      }
+    }
+  }
+
   dispose(): void {
     this.disposed = true;
     this.wanted = [];

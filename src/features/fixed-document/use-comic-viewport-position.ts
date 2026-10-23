@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, type RefObject } from 'react';
 export interface ComicViewportPosition {
   page: number;
+  chapterId?: string;
   fraction: number;
   ratio: number;
 }
@@ -15,7 +16,7 @@ export function useComicViewportPosition(input: {
   initial?: ComicViewportPosition;
   save?: (position: ComicViewportPosition) => void;
   /** Bring an offscreen virtual row back into the loading window during entry restoration. */
-  restorePage?: (page: number) => void;
+  restorePage?: (page: number, chapterId?: string) => void;
 }) {
   // New streamed entries without history start at the top before pages are measured.
   useLayoutEffect(() => {
@@ -60,6 +61,7 @@ export function useComicViewportPosition(input: {
       if (bounds.height <= 0 || bounds.width <= 0) return;
       latest = {
         page: Number(row.dataset.pageIndex),
+        ...(row.dataset.pageId ? { chapterId: row.dataset.pageId } : {}),
         fraction: Math.max(0, Math.min(0.999999, (top - bounds.top) / bounds.height)),
         ratio: bounds.height / bounds.width,
       };
@@ -72,11 +74,15 @@ export function useComicViewportPosition(input: {
       frame = requestAnimationFrame(() => {
         frame = requestAnimationFrame(() => {
           if (restoring && input.initial) {
-            const row = body.querySelector<HTMLElement>(`article[data-page-index="${input.initial.page}"]`);
+            const row = body.querySelector<HTMLElement>(
+              input.initial.chapterId
+                ? `article[data-page-id="${CSS.escape(input.initial.chapterId)}"]`
+                : `article[data-page-index="${input.initial.page}"]`,
+            );
             if (!row) {
               // A resize can move the virtual loading window away from the saved page.
               // Waiting for that page to decode would deadlock: it is no longer requested.
-              restorePage.current?.(input.initial.page);
+              restorePage.current?.(input.initial.page, input.initial.chapterId);
               return;
             }
             // Keep the target in view even while its image is loading. Only decoded

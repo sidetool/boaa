@@ -15,6 +15,8 @@ interface ComicAutoReadingInput {
   pages: ReadonlyMap<number, { url: string }>;
   errors: ReadonlyMap<number, string>;
   footerHeight: number;
+  chapterEnd?: () => number | undefined;
+  tailStatus?: 'ready' | 'loading' | 'error' | 'end';
   turn: () => void;
   reportError: (index: number, url: string) => void;
   nextChapter?: { scope: string; open: (isCurrent: () => boolean) => Promise<void> };
@@ -80,7 +82,7 @@ export function useComicAutoReading(input: ComicAutoReadingInput) {
   };
   adapter.current = {
     flow: input.continuous ? 'scroll' : 'paginated',
-    advanceAutoScroll: (pixels) => {
+    advanceAutoScroll: (pixels, continueChapter = false) => {
       const viewport = input.viewport.current;
       if (!viewport) return 'waiting';
       const bounds = viewport.getBoundingClientRect();
@@ -93,8 +95,12 @@ export function useComicAutoReading(input: ComicAutoReadingInput) {
       });
       const state = settled(visible, true);
       if (state !== 'moving') return state;
-      const end = Math.max(0, viewport.scrollHeight - input.footerHeight - viewport.clientHeight);
-      if (viewport.scrollTop >= end - 1) return 'end';
+      let end = Math.max(0, viewport.scrollHeight - input.footerHeight - viewport.clientHeight);
+      if (!continueChapter) end = Math.min(end, input.chapterEnd?.() ?? end);
+      if (viewport.scrollTop >= end - 1)
+        return continueChapter && input.tailStatus && ['ready', 'loading'].includes(input.tailStatus)
+          ? 'waiting'
+          : 'end';
       viewport.scrollTop = Math.min(end, viewport.scrollTop + pixels);
       return 'moving';
     },

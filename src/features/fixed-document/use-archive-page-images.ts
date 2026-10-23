@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, useMemo } from 'react';
 import type { Chapter } from '../../domain/types';
 import type { BookAssetRepository } from '../../repositories/book-asset-repository';
 import type { ReaderRepository } from '../../repositories/reader-repository';
@@ -47,7 +47,8 @@ export function useArchivePageImages(input: {
   const dimensionsCallbackRef = useRef(input.onDimensions);
   dimensionsCallbackRef.current = input.onDimensions;
   const invalidCallbackRef = useRef(onPageInvalid);
-  const [state, setState] = useState({ bookId, sessionKey, snapshot: EMPTY_SNAPSHOT });
+  invalidCallbackRef.current = onPageInvalid;
+  const [state, setState] = useState({ bookId, sessionKey, chapters, snapshot: EMPTY_SNAPSHOT });
   const loaderRef = useRef<ArchivePageLoader>();
   const metadataRef = useRef(new Map<string, NonNullable<Awaited<ReturnType<ReaderRepository['getParagraphPage']>>>>());
   const legacyAssetIdentityRef = useRef(new Map<string, string>());
@@ -101,9 +102,8 @@ export function useArchivePageImages(input: {
   }, []);
 
   useEffect(() => {
-    invalidCallbackRef.current = onPageInvalid;
     snapshotRef.current = EMPTY_SNAPSHOT;
-    setState({ bookId, sessionKey: sessionKeyRef.current, snapshot: EMPTY_SNAPSHOT });
+    setState({ bookId, sessionKey: sessionKeyRef.current, chapters: chaptersRef.current, snapshot: EMPTY_SNAPSHOT });
     if (!enabled) return;
     const loader = new ArchivePageLoader(
       async (index, signal) => {
@@ -137,7 +137,7 @@ export function useArchivePageImages(input: {
           }
         }
         snapshotRef.current = snapshot;
-        setState({ bookId, sessionKey: sessionKeyRef.current, snapshot });
+        setState({ bookId, sessionKey: sessionKeyRef.current, chapters: chaptersRef.current, snapshot });
       },
     );
     loaderRef.current = loader;
@@ -145,10 +145,31 @@ export function useArchivePageImages(input: {
       loader.dispose();
       if (loaderRef.current === loader) loaderRef.current = undefined;
     };
-  }, [assets, bookId, enabled, loadMetadata, onPageInvalid]);
+  }, [assets, bookId, enabled, loadMetadata]);
 
+  const pageIndexByIdentity = useMemo(
+    () =>
+      new Map(
+        chapters.flatMap((chapter, index) => {
+          const asset = legacyAssetIdentityRef.current.get(chapter.id);
+          return [
+            [pageIdentity(chapter, sourceRevision), index] as const,
+            ...(asset ? [[`${chapter.id}:asset:${asset}`, index] as const] : []),
+          ];
+        }),
+      ),
+    [chapters, sourceRevision],
+  );
+  const previousChapters = useRef(chapters);
   useEffect(() => {
     sessionKeyRef.current = sessionKey;
+    if (previousChapters.current !== chapters) {
+      const before = previousChapters.current;
+      previousChapters.current = chapters;
+      if (before.some((chapter, index) => chapters[index]?.id !== chapter.id)) {
+        loaderRef.current?.reindex((identity) => pageIndexByIdentity.get(identity));
+      }
+    }
     if (!enabled || !chapters.length) return;
     const wanted = wantedKey.split(',').filter(Boolean).map(Number);
     // Keep scrolling on the loader's bounded queue. Waiting for every neighbour's
@@ -159,7 +180,17 @@ export function useArchivePageImages(input: {
       (index) => resolvedIdentity(index, chapters, sourceRevision),
       retainedPages,
     );
-  }, [chapters, currentPage, enabled, resolvedIdentity, sessionKey, sourceRevision, wantedKey, retainedPages]);
+  }, [
+    chapters,
+    currentPage,
+    enabled,
+    resolvedIdentity,
+    sessionKey,
+    sourceRevision,
+    wantedKey,
+    retainedPages,
+    pageIndexByIdentity,
+  ]);
 
   useEffect(() => {
     const previousSession = validatedSessionRef.current;
@@ -200,6 +231,14 @@ export function useArchivePageImages(input: {
   }, [chapters, enabled, loadMetadata, resolvedIdentity, sessionKey]);
 
   if (!enabled || state.bookId !== bookId) return { ...EMPTY_SNAPSHOT, retry, reportError };
+  if (state.chapters !== chapters && state.chapters.some((chapter, index) => chapters[index]?.id !== chapter.id)) {
+    const pages = new Map<number, import('./archive-page-loader').ArchivePageImage>();
+    for (const page of state.snapshot.pages.values()) {
+      const index = pageIndexByIdentity.get(page.identity);
+      if (index !== undefined) pages.set(index, page);
+    }
+    return { pages, errors: EMPTY_SNAPSHOT.errors, retry, reportError };
+  }
   if (state.sessionKey === sessionKey) return { ...state.snapshot, retry, reportError };
   // For legacy data, retain only the same page while its asset metadata is revalidated.
   // A changed immutable asset then invalidates the URL through the loader, without trusting title hashes.
