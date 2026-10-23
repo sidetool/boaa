@@ -27,6 +27,7 @@ interface Running {
   stopped: boolean;
   configRevision: number;
   views: number;
+  homeCalls: number;
   paintVersion: number;
   paintPlan?: DecorationPlan;
   ordered: string[];
@@ -52,6 +53,7 @@ export class PluginService {
   private actions?: PluginReaderSession;
   private unbind: () => void;
   private records = new Map<string, Running>();
+  private homeAdmissions = new Set<AbortController>();
   private faults = new Map<string, { revision: number; code: string }>();
   private closed = false;
   private reader = false;
@@ -145,17 +147,21 @@ export class PluginService {
   }
   private ensure(row: Installation): Running {
     const existing = this.records.get(row.pluginId);
+    // A controller waiting for storage/session setup already owns its future slot.
+    const workers = () =>
+      controllerResources('controller').workers + [...this.records.values()].filter((record) => !record.vm).length;
     // Release unused, completed controllers before admitting another plugin.
-    if (!existing && controllerResources('controller').workers >= 4)
+    if (!existing && workers() >= 4)
       for (const record of [...this.records.values()]) {
         if (
           record.vm?.idle &&
+          record.homeCalls === 0 &&
           record.views === 0 &&
           !record.row.manifest?.activation.includes('onAppSession') &&
           (!this.reader || !record.row.manifest?.activation.includes('onReader'))
         )
           this.stop(record);
-        if (controllerResources('controller').workers < 4) break;
+        if (workers() < 4) break;
       }
     requireStore(!this.options.off, 'PLUGINS_DISABLED');
     requireStore(!this.closed && row.enabled && row.manifest?.entries.controller, 'CONTROLLER_UNAVAILABLE');
@@ -163,7 +169,7 @@ export class PluginService {
     if (previous?.row.revision === row.revision) return previous;
     if (previous) this.stop(previous);
     requireStore(this.faults.get(row.pluginId)?.revision !== row.revision, 'RECOVERY_REQUIRED');
-    requireStore(controllerResources('controller').workers < 4, 'WORKER_LIMIT');
+    requireStore(workers() < 4, 'WORKER_LIMIT');
     this.faults.delete(row.pluginId);
     const record: Running = {
       row,
@@ -172,6 +178,7 @@ export class PluginService {
       stopped: false,
       configRevision: 0,
       views: 0,
+      homeCalls: 0,
       paintVersion: 0,
       ordered: [],
       orderedCache: new OrderedDecoration(),
@@ -682,19 +689,67 @@ export class PluginService {
   homeCover(id: string, section: string, url: string, signal?: AbortSignal) {
     return this.home.cover(id, section, url, signal);
   }
-  private async invokeHomeFeed(row: Installation, section: string, signal?: AbortSignal): Promise<UiJson> {
-    const record = this.ensure(row);
-    if (!record.active) {
-      requireStore(row.manifest?.activation.includes('onHome'), 'NOT_ACTIVE');
-      await this.activate(record);
-    }
-    await this.store.assertSession(record.session!, record.session!.fence, 'home.feed');
-    this.guard(record);
-    const result = await record.vm!.invoke('homeFeed', { id: section }, signal);
-    await this.store.assertSession(record.session!, record.session!.fence, 'home.feed');
-    this.guard(record);
+  /** Bounded FIFO admission; only startup is retried, never a dispatched guest operation. */
+  private async admitHome(row: Installation, signal?: AbortSignal): Promise<Running> {
     signal?.throwIfAborted();
-    return result;
+    requireStore(!this.closed, 'SERVICE_CLOSED');
+    requireStore(this.homeAdmissions.size < 32, 'WORKER_LIMIT');
+    const abort = new AbortController();
+    const cancel = () => abort.abort();
+    signal?.addEventListener('abort', cancel, { once: true });
+    this.homeAdmissions.add(abort);
+    const deadline = Date.now() + 30_000;
+    try {
+      for (;;) {
+        abort.signal.throwIfAborted();
+        requireStore(!this.closed, 'SERVICE_CLOSED');
+        if (this.homeAdmissions.values().next().value === abort) {
+          const current = await this.currentRow(row.pluginId);
+          abort.signal.throwIfAborted();
+          requireStore(
+            current.enabled &&
+              current.installationId === row.installationId &&
+              current.revision === row.revision &&
+              current.active === row.active,
+            'CONTEXT_STALE',
+          );
+          try {
+            const record = this.ensure(current);
+            // Protect startup and authority-check gaps as well as the VM invocation itself.
+            record.homeCalls++;
+            return record;
+          } catch (error) {
+            if (!(error instanceof UiStoreError && error.code === 'WORKER_LIMIT')) throw error;
+          }
+        }
+        const remaining = deadline - Date.now();
+        requireStore(remaining > 0, 'WORKER_LIMIT');
+        await sleepControllerJob(Math.min(50, remaining), abort.signal);
+      }
+    } finally {
+      signal?.removeEventListener('abort', cancel);
+      this.homeAdmissions.delete(abort);
+    }
+  }
+  private async invokeHomeFeed(row: Installation, section: string, signal?: AbortSignal): Promise<UiJson> {
+    const record = await this.admitHome(row, signal);
+    try {
+      signal?.throwIfAborted();
+      if (!record.active) {
+        requireStore(row.manifest?.activation.includes('onHome'), 'NOT_ACTIVE');
+        await this.activate(record);
+      }
+      await this.store.assertSession(record.session!, record.session!.fence, 'home.feed');
+      this.guard(record);
+      signal?.throwIfAborted();
+      const result = await record.vm!.invoke('homeFeed', { id: section }, signal);
+      await this.store.assertSession(record.session!, record.session!.fence, 'home.feed');
+      this.guard(record);
+      signal?.throwIfAborted();
+      return result;
+    } finally {
+      record.homeCalls--;
+    }
   }
   async command(id: string, command: string, value: UiJson = null, signal?: AbortSignal): Promise<UiJson> {
     const row = await this.currentRow(id);
@@ -774,6 +829,7 @@ export class PluginService {
   async close(): Promise<void> {
     if (this.closed) return;
     this.closed = true;
+    for (const abort of this.homeAdmissions) abort.abort();
     this.home.close();
     this.listeners.clear();
     this.actions?.close();
