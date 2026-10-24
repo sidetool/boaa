@@ -1007,6 +1007,25 @@ a.un-pref-link {
 }
 
 /* 파일 서버 추가 */
+/* Keep this scrolling sheet on the same compositor layer when its entrance ends.
+   Dropping the transform can briefly expose the settings behind its header on Android. */
+@media (max-width: 899px) {
+  .un-layer.is-auto .un-sheet.un-rfadd-sheet {
+    transform: translate3d(0, 0, 0);
+    animation-name: un-rfadd-slide-up;
+  }
+}
+
+@keyframes un-rfadd-slide-up {
+  from {
+    transform: translate3d(0, 100%, 0);
+  }
+
+  to {
+    transform: translate3d(0, 0, 0);
+  }
+}
+
 .un-rfadd {
   display: grid;
   gap: 12px;
