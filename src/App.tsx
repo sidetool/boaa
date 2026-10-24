@@ -1,3 +1,4 @@
+import { RemoteFileManager } from './external-sources/remote-files/remote-file-manager';
 import { TTSContentIdentity } from './providers/tts-content-identity';
 import { useSpokenTextFilters } from './features/tts/use-spoken-text-filters';
 import { createAccountReaderDb } from './storage/reader-database';
@@ -525,6 +526,33 @@ export default function App() {
     [externalSourceState, allowSharedSourceIntegrations, externalAccountFetch, readerRuntime.session?.signal],
   );
   const [externalSourceBrokerRevision, setExternalSourceBrokerRevision] = useState(0);
+  const remoteFiles = useMemo(
+    () =>
+      allowSharedSourceIntegrations && remoteApiClient
+        ? new RemoteFileManager((...args) => remoteApiClient.fetchRemoteFiles(...args))
+        : undefined,
+    [allowSharedSourceIntegrations, remoteApiClient],
+  );
+  useEffect(() => {
+    if (!remoteFiles) return;
+    const unsubscribe = remoteFiles.subscribe(() => setExternalSourceBrokerRevision((value) => value + 1));
+    const refresh = () => {
+      void remoteFiles.refresh().catch(() => undefined);
+    };
+    refresh();
+    window.addEventListener('focus', refresh);
+    const dispose = () => {
+      unsubscribe();
+      remoteFiles.dispose();
+    };
+    readerRuntime.session?.signal.addEventListener('abort', dispose, { once: true });
+    return () => {
+      window.removeEventListener('focus', refresh);
+      readerRuntime.session?.signal.removeEventListener('abort', dispose);
+      dispose();
+    };
+  }, [remoteFiles, readerRuntime.session]);
+
   const textServerExternalSourceBroker = useMemo(
     () =>
       new TextServerSourceAccountBroker(TEXT_SERVER_EXTERNAL_SOURCE_ID, externalSourceState, {
@@ -587,6 +615,8 @@ export default function App() {
         get: (brokerId) => {
           if (brokerId === DROPBOX_EXTERNAL_SOURCE_BROKER_ID) return dropboxExternalSourceBroker;
           if (brokerId === GOOGLE_DRIVE_EXTERNAL_SOURCE_BROKER_ID) return googleDriveExternalSourceBroker;
+          const fileBroker = remoteFiles?.broker(brokerId);
+          if (fileBroker) return fileBroker;
           if (localStatic || !allowSharedSourceIntegrations) return undefined;
           if (brokerId === SUWAYOMI_EXTERNAL_SOURCE_BROKER_ID) return suwayomiExternalSourceBroker;
           if (brokerId === TEXT_SERVER_EXTERNAL_SOURCE_BROKER_ID) return textServerExternalSourceBroker;
@@ -600,6 +630,7 @@ export default function App() {
       googleDriveExternalSourceBroker,
       suwayomiExternalSourceBroker,
       textServerExternalSourceBroker,
+      remoteFiles,
       allowSharedSourceIntegrations,
     ],
   );
@@ -609,13 +640,23 @@ export default function App() {
         [
           dropboxBuiltInExternalSource,
           googleDriveBuiltInExternalSource,
+          ...(remoteFiles?.sources() ?? []),
           ...(localStatic || !allowSharedSourceIntegrations ? [] : [suwayomiBuiltInExternalSource]),
         ],
         installedExtensions
           ? compositeSourceRegistry(extensionRuntime.trustedExtensions, installedExtensions)
           : extensionRuntime.trustedExtensions,
       ),
-    [extensionRuntime.trustedExtensions, localStatic, installedExtensions, allowSharedSourceIntegrations],
+    // The manager mutates its server catalog in place and signals revisions to rebuild descriptors.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [
+      extensionRuntime.trustedExtensions,
+      localStatic,
+      installedExtensions,
+      allowSharedSourceIntegrations,
+      remoteFiles,
+      externalSourceBrokerRevision,
+    ],
   );
   const desktopLocalLLMProviderIds = useMemo(
     () => new Set<string>(nativeLocalLLMProviderIds(platformRuntime.kind)),
@@ -1561,6 +1602,9 @@ export default function App() {
     notify: showToast,
     confirm: (message) => window.confirm(message),
   });
+  useEffect(() => {
+    if (settingsOpen || externalSourceFeature.open) void remoteFiles?.refresh().catch(() => undefined);
+  }, [remoteFiles, settingsOpen, externalSourceFeature.open]);
   const readingSession = useReaderSession({
     active:
       externalSourceFeature.open && externalSourceFeature.streaming
@@ -5995,6 +6039,7 @@ export default function App() {
               ) : undefined
             }
             externalSources={externalSourceFeature}
+            remoteFiles={remoteFiles}
             webNovelMetadataCollector={webNovelMetadataCollector}
             bookEnrichmentAutomation={bookEnrichmentAutomation}
             libraryCount={novels.length}

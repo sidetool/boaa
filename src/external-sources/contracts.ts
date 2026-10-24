@@ -145,6 +145,7 @@ export interface NormalizedDownloadedExternalSource extends DownloadedExternalSo
 export type ExternalSourceConnectionState = 'disconnected' | 'reauthorization_required' | 'connected' | 'unavailable';
 
 export interface ExternalSourceConnectionStatus {
+  readonly scope?: 'device' | 'server';
   readonly state: ExternalSourceConnectionState;
   readonly accountConnectionId?: string;
   readonly label?: string;
@@ -160,7 +161,7 @@ export interface ExternalSourceConnectionOption {
 export interface ExternalSourceConnectionField {
   readonly id: string;
   readonly label: string;
-  readonly type: 'text' | 'password' | 'select';
+  readonly type: 'text' | 'password' | 'select' | 'textarea';
   readonly required?: boolean;
   readonly placeholder?: string;
   readonly defaultValue?: string;

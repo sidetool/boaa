@@ -823,6 +823,30 @@ a.un-pref-link {
   font-weight: 600;
 }
 
+.un-srcset-group-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 32px;
+}
+
+.un-srcset-add {
+  flex: none;
+}
+
+.un-srcset-add-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 10px 10px 16px;
+  border-radius: 16px;
+  background: rgb(255 255 255 / 3%);
+  color: var(--un-text-3);
+  font-size: 13.5px;
+}
+
 .un-srcset-list {
   margin: 0;
   padding: 0;
@@ -980,6 +1004,29 @@ a.un-pref-link {
   .un-srcset-panel {
     padding-left: 16px;
   }
+}
+
+/* 파일 서버 추가 */
+.un-rfadd {
+  display: grid;
+  gap: 12px;
+}
+
+.un-rfadd .un-pref-field {
+  padding: 0;
+}
+
+.un-rfadd-lead {
+  margin: 0;
+  color: var(--un-text-3);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.un-rfadd-fold {
+  display: grid;
+  gap: 12px;
+  padding: 4px 0 8px;
 }
 
 /* 기능 확장 */

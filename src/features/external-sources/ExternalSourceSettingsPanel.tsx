@@ -137,7 +137,20 @@ function SourceCard({
                     {source.connectionForm.fields.map((field) => (
                       <label key={field.id}>
                         <span>{field.label}</span>
-                        {field.type === 'select' ? (
+                        {field.type === 'textarea' ? (
+                          <textarea
+                            value={values[field.id] ?? ''}
+                            required={field.required}
+                            disabled={controller.busy}
+                            placeholder={field.placeholder}
+                            rows={4}
+                            autoComplete="off"
+                            spellCheck={false}
+                            onChange={(event) =>
+                              setValues((current) => ({ ...current, [field.id]: event.target.value }))
+                            }
+                          />
+                        ) : field.type === 'select' ? (
                           <select
                             value={values[field.id] ?? ''}
                             required={field.required}

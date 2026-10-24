@@ -8,11 +8,18 @@ import {
   Link2Off,
   LoaderCircle,
   PlugZap,
+  Plus,
   Search,
+  Server,
   Star,
+  Trash2,
 } from 'lucide-react';
-import type { ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
 import type { ExternalSourceConnectionStatus } from '../../../external-sources/contracts';
+import {
+  isRemoteFileSourceId,
+  type RemoteFileAddPort,
+} from '../../../external-sources/remote-files/remote-file-manager';
 import type {
   ExternalSourceController,
   ExternalSourceView,
@@ -23,6 +30,7 @@ import { SourceExtensionManagerPanel } from '../../../features/extensions/Source
 import type { ReaderSettingsController } from '../../../features/reader-settings/useReaderSettingsDraft';
 import { cx } from '../../components/primitives';
 import { EmptyState, Notice, PrefChips, PrefField, PrefFold, PrefSection, PrefSwitch } from '../../components/prefs';
+import { RemoteFileAddSheet } from './RemoteFileAddSheet';
 
 const STATUS: Record<ExternalSourceConnectionStatus['state'], string> = {
   connected: '연결됨',
@@ -46,7 +54,8 @@ function SourceRow({
 }) {
   const model = useSourceConnectionSettingsModel(source, controller);
   const { connection } = model;
-  const Icon = model.unavailable ? CloudOff : source.kind === 'cloud_file' ? Cloud : PlugZap;
+  const remoteFile = isRemoteFileSourceId(source.id);
+  const Icon = model.unavailable ? CloudOff : remoteFile ? Server : source.kind === 'cloud_file' ? Cloud : PlugZap;
   const retry = model.needsReauthorization;
   const connectLabel = source.connectionForm?.submitLabel ?? (retry ? '다시 연결' : '연결');
 
@@ -106,8 +115,14 @@ function SourceRow({
                   disabled={model.busy}
                   onClick={() => void model.disconnect()}
                 >
-                  {model.busy ? <LoaderCircle size={15} className="un-spin" /> : <Link2Off size={15} />}
-                  연결 끊기
+                  {model.busy ? (
+                    <LoaderCircle size={15} className="un-spin" />
+                  ) : remoteFile ? (
+                    <Trash2 size={15} />
+                  ) : (
+                    <Link2Off size={15} />
+                  )}
+                  {remoteFile ? '서버 삭제' : '연결 끊기'}
                 </button>
               </div>
               {source.extensionManager && (
@@ -130,7 +145,20 @@ function SourceRow({
               {source.connectionForm?.help && <p className="un-srcset-help">{source.connectionForm.help}</p>}
               {model.fields.map((field) => (
                 <PrefField key={field.id} label={field.label} help={field.help}>
-                  {field.type === 'select' ? (
+                  {field.type === 'textarea' ? (
+                    <textarea
+                      value={model.values[field.id] ?? ''}
+                      required={field.required}
+                      disabled={model.busy}
+                      placeholder={field.placeholder}
+                      rows={4}
+                      autoComplete="off"
+                      spellCheck={false}
+                      onChange={(event) =>
+                        model.setValues((current) => ({ ...current, [field.id]: event.target.value }))
+                      }
+                    />
+                  ) : field.type === 'select' ? (
                     <select
                       value={model.values[field.id] ?? ''}
                       required={field.required}
@@ -176,11 +204,13 @@ function SourceList({
   title,
   sources,
   empty,
+  action,
   ...rest
 }: {
   title: string;
   sources: readonly ExternalSourceView[];
   empty: string;
+  action?: ReactNode;
   controller: ExternalSourceController;
   favorites: readonly string[];
   toggleFavorite(id: string): void;
@@ -188,7 +218,10 @@ function SourceList({
 }) {
   return (
     <div className="un-srcset-group">
-      <h4>{title}</h4>
+      <div className="un-srcset-group-head">
+        <h4>{title}</h4>
+        {action}
+      </div>
       {sources.length ? (
         <ul className="un-pref-group un-srcset-list">
           {sources.map((source) => (
@@ -219,14 +252,24 @@ export function SourcesPage({
   externalSources,
   settingsController,
   onBrowse,
+  remoteFiles,
 }: {
   installedPackages?: ReactNode;
   sourceReadingSettings: ReactNode;
   externalSources: ExternalSourceController;
   settingsController: Pick<ReaderSettingsController, 'settings' | 'updateSettings'>;
   onBrowse(id: ExternalSourceView['id']): void;
+  /** Absent when this session cannot add file servers (local mode or not the server owner). */
+  remoteFiles?: RemoteFileAddPort;
 }) {
   const model = useExternalSourceSettingsModel(externalSources);
+  const [adding, setAdding] = useState(false);
+  const addServer = remoteFiles && (
+    <button type="button" className="un-btn is-ghost is-sm un-srcset-add" onClick={() => setAdding(true)}>
+      <Plus size={15} />
+      추가하기
+    </button>
+  );
   const shared = {
     controller: externalSources,
     favorites: model.favorites,
@@ -295,10 +338,24 @@ export function SourcesPage({
           <Notice tone="danger">즐겨찾기를 저장하지 못했어요. 브라우저 저장 공간을 확인해 주세요.</Notice>
         )}
         {model.filtered.length === 0 ? (
-          <EmptyState icon={<Search size={22} />} title="맞는 소스가 없어요" body="검색어나 거르기를 바꿔 보세요." />
+          <>
+            <EmptyState icon={<Search size={22} />} title="맞는 소스가 없어요" body="검색어나 거르기를 바꿔 보세요." />
+            {addServer && (
+              <div className="un-srcset-add-row">
+                <span>WebDAV·SFTP 파일 서버</span>
+                {addServer}
+              </div>
+            )}
+          </>
         ) : (
           <>
-            <SourceList title="기본 소스" sources={model.builtIn} empty="쓸 수 있는 기본 소스가 없어요." {...shared} />
+            <SourceList
+              title="기본 소스"
+              sources={model.builtIn}
+              empty="쓸 수 있는 기본 소스가 없어요."
+              action={addServer}
+              {...shared}
+            />
             <SourceList
               title="설치한 소스"
               sources={model.plugins}
@@ -308,6 +365,7 @@ export function SourcesPage({
           </>
         )}
       </PrefSection>
+      {adding && remoteFiles && <RemoteFileAddSheet port={remoteFiles} onClose={() => setAdding(false)} />}
 
       {sourceReadingSettings}
 

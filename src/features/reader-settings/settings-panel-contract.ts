@@ -128,6 +128,7 @@ export interface ReaderSettingsPanelProps {
   readonly extensions: readonly AppExtensionSnapshot[];
   readonly installedPackages?: ReactNode;
   readonly externalSources: ExternalSourceController;
+  readonly remoteFiles?: import('../../external-sources/remote-files/remote-file-manager').RemoteFileAddPort;
   readonly webNovelMetadataCollector?: WebNovelMetadataCollectorBroker;
   readonly bookEnrichmentAutomation?: BookEnrichmentAutomationController;
   readonly libraryCount?: number;

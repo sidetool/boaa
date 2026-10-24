@@ -58,6 +58,7 @@ export function UiNextSettingsTabContent(props: SettingsTabContentProps) {
           installedPackages={props.installedPackages}
           sourceReadingSettings={props.sourceReadingSettings}
           externalSources={props.externalSources}
+          remoteFiles={props.remoteFiles}
           settingsController={props.controller}
           onBrowse={(id) => props.openDestination(() => props.externalSources.show(id))}
         />

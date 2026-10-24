@@ -3096,7 +3096,17 @@ export function useExternalSourceController(options: UseExternalSourceController
 
   const disconnect = useCallback(async () => {
     if (!activeSourceId || busy) return;
-    if (!optionsRef.current.confirm('이 기기에서 외부 저장소 연결을 해제할까요? 이미 가져온 책은 유지됩니다.')) return;
+    const serverSaved =
+      optionsRef.current.registry.getExternalSourceStatus(activeSourceId, optionsRef.current.hostContext).scope ===
+      'server';
+    if (
+      !optionsRef.current.confirm(
+        serverSaved
+          ? '이 서버와 저장한 연결 정보를 계정에서 삭제할까요? 모든 기기에서 사라지며, 서버의 원본 파일과 이미 가져온 책은 유지됩니다.'
+          : '이 기기에서 외부 저장소 연결을 해제할까요? 이미 가져온 책은 유지됩니다.',
+      )
+    )
+      return;
     setBusy(true);
     try {
       await optionsRef.current.registry.disconnectExternalSource(activeSourceId, optionsRef.current.hostContext);

@@ -435,6 +435,36 @@ export class RemoteApiClient {
     return response;
   }
 
+  async fetchRemoteFiles(
+    id: string | undefined,
+    action: 'statuses' | 'status' | 'connect' | 'update' | 'disconnect' | 'list' | 'download',
+    body: unknown,
+    signal: AbortSignal,
+  ): Promise<Response> {
+    const collection = action === 'statuses' || action === 'connect';
+    if (!collection && (!id || !/^[a-f0-9-]{36}$/.test(id))) throw new Error('파일 서버 연결을 다시 확인해 주세요.');
+    const suffix = action === 'list' || action === 'download' ? '/' + action : '';
+    const token = this.options.getAuthToken?.()?.trim();
+    return this.fetchOwned(`${this.baseUrl}/remote-files${collection ? '' : '/' + id}${suffix}`, {
+      method:
+        action === 'status' || action === 'statuses'
+          ? 'GET'
+          : action === 'disconnect'
+            ? 'DELETE'
+            : action === 'update'
+              ? 'PUT'
+              : 'POST',
+      credentials: 'same-origin',
+      redirect: 'error',
+      signal,
+      headers: {
+        ...(body === undefined ? {} : { 'Content-Type': 'application/json' }),
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    });
+  }
+
   private async fetch(
     path: string,
     init: RequestInit,
