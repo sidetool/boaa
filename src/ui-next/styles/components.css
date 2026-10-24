@@ -281,27 +281,8 @@
   z-index: 140;
   display: flex;
   background: rgb(0 0 0 / 55%);
-}
-
-/* A native leaf modal keeps background scroll layers inert and below the sliding panel.
-   The scrim is present at full strength from the first frame; only the panel moves. */
-dialog.ui-next.un-layer {
-  width: 100%;
-  max-width: none;
-  height: 100%;
-  max-height: none;
-  margin: 0;
-  padding: 0;
-  overflow: hidden;
-  border: 0;
-}
-
-dialog.ui-next.un-layer:not([open]) {
-  display: none;
-}
-
-dialog.ui-next.un-layer::backdrop {
-  background: transparent;
+  /* Fade the backdrop, not the sheet: underlying controls must not shine through while it slides in. */
+  animation: un-backdrop-in 0.2s;
 }
 
 .un-layer.is-auto {
@@ -447,6 +428,12 @@ dialog.ui-next.un-layer::backdrop {
 .un-action small {
   color: var(--un-text-3);
   font-size: 14px;
+}
+
+@keyframes un-backdrop-in {
+  from {
+    background-color: transparent;
+  }
 }
 
 @keyframes un-fade-in {

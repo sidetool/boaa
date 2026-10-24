@@ -99,7 +99,6 @@ export function RemoteFileAddSheet({ port, onClose }: { port: RemoteFileAddPort;
 
   return (
     <Sheet
-      topLayer
       open
       onClose={dismiss}
       title="파일 서버 추가"

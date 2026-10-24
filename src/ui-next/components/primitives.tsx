@@ -1,5 +1,5 @@
 import { Check, X } from 'lucide-react';
-import { useLayoutEffect, useRef, type ReactNode } from 'react';
+import { useEffect, useRef, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import type { LibraryAction } from '../library/contract';
 import '../styles/components.css';
@@ -65,7 +65,6 @@ export function Sheet({
   variant = 'auto',
   closeDisabled = false,
   className,
-  topLayer = false,
 }: {
   open: boolean;
   onClose: () => void;
@@ -77,24 +76,17 @@ export function Sheet({
   closeDisabled?: boolean;
   /** Extra class on the sheet panel for content-specific sizing. */
   className?: string;
-  /** Leaf modals can opt into the browser top layer, above composited background scrollers. */
-  topLayer?: boolean;
 }) {
-  const modal = useRef<HTMLDialogElement | null>(null);
   const panel = useRef<HTMLElement>(null);
   const close = useRef(onClose);
   close.current = closeDisabled ? () => undefined : onClose;
   const requestClose = () => close.current();
 
-  useLayoutEffect(() => {
+  useEffect(() => {
     if (!open) return;
     const previous = document.activeElement as HTMLElement | null;
-    const previousOverflow = document.documentElement.style.overflow;
-    const dialog = modal.current;
     openSheets += 1;
     document.documentElement.style.overflow = 'hidden';
-    // Establish the native modal layer before the first slide frame is painted.
-    dialog?.showModal();
     panel.current?.focus({ preventScroll: true });
     const self = Symbol('sheet');
     sheetStack.push(self);
@@ -133,38 +125,20 @@ export function Sheet({
       window.removeEventListener('keydown', onKey, true);
       sheetStack.splice(sheetStack.indexOf(self), 1);
       openSheets -= 1;
-      dialog?.close();
-      if (!openSheets) document.documentElement.style.overflow = previousOverflow;
+      if (!openSheets) document.documentElement.style.overflow = '';
       previous?.focus?.({ preventScroll: true });
     };
-  }, [open, topLayer]);
+  }, [open]);
 
   if (!open) return null;
-  const Layer = topLayer ? 'dialog' : 'div';
   return createPortal(
-    <Layer
-      ref={
-        topLayer
-          ? (element: HTMLElement | null) => {
-              modal.current = element instanceof HTMLDialogElement ? element : null;
-            }
-          : undefined
-      }
-      className={cx('ui-next un-layer', `is-${variant}`)}
-      role={topLayer ? undefined : 'presentation'}
-      aria-label={topLayer && typeof title === 'string' ? title : undefined}
-      onCancel={(event) => {
-        event.preventDefault();
-        requestClose();
-      }}
-      onClick={requestClose}
-    >
+    <div className={cx('ui-next un-layer', `is-${variant}`)} role="presentation" onClick={requestClose}>
       <section
         ref={panel}
         className={cx('un-sheet', className)}
-        role={topLayer ? undefined : 'dialog'}
-        aria-modal={topLayer ? undefined : true}
-        aria-label={!topLayer && typeof title === 'string' ? title : undefined}
+        role="dialog"
+        aria-modal="true"
+        aria-label={typeof title === 'string' ? title : undefined}
         tabIndex={-1}
         onClick={(event) => event.stopPropagation()}
       >
@@ -186,7 +160,7 @@ export function Sheet({
         <div className="un-sheet-body">{children}</div>
         {footer && <footer className="un-sheet-foot">{footer}</footer>}
       </section>
-    </Layer>,
+    </div>,
     document.body,
   );
 }
