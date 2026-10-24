@@ -1,5 +1,6 @@
 import { PlainTTSSessionCache, waitForPlainTTSAudio } from '../../providers/plain-tts-session-cache';
 import { requestPlainTTSWithRetry } from '../../providers/plain-tts-retry';
+import { ttsQueueItemFingerprint } from '../../providers/tts-playback-resume';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Paragraph, SpokenTextRule, TTSPlaybackSettings } from '../../domain/types';
 import {
@@ -101,6 +102,19 @@ export function usePlainTTS(input: {
       batchCharacters: input.settings.plainBatchCharacters,
       contentRevision: revision,
     });
+  const lastPlayback = useRef<{
+    cache: PlainTTSSessionCache;
+    scope: string;
+    chapterId: string;
+    index: number;
+    fingerprint: string;
+  }>();
+  const retryTarget = () => {
+    const target = lastPlayback.current;
+    return target && target.cache === audioCache && target.scope === scopeFor() && target.chapterId === input.chapterId
+      ? { index: target.index, fingerprint: target.fingerprint }
+      : undefined;
+  };
   const reusableStart = (index: number) => audioCache.batch(scopeFor(), input.chapterId ?? '', index)?.[0] ?? index;
   const jumpIndex = (index: number, direction: -1 | 1) => {
     const positions = audioCache.batch(scopeFor(), input.chapterId ?? '', index);
@@ -135,12 +149,27 @@ export function usePlainTTS(input: {
     paragraph: Paragraph,
     sessionId: number,
     onProgress?: (fraction: number) => void,
+    regeneration?: { prepared(): void },
   ): Promise<boolean> => {
     const operation = input.controller.beginHostedPlayback(sessionId, '음성 준비 중');
-    if (!operation) return true;
+    if (!operation) {
+      regeneration?.prepared();
+      return true;
+    }
     try {
       const request = requestFor(playable, paragraph);
       const key = structuredIntegrityHash({ chapter: paragraph.chapterId, request });
+      lastPlayback.current = {
+        cache: audioCache,
+        scope: scopeFor(request.contentRevision),
+        chapterId: paragraph.chapterId,
+        index: paragraph.index - 1,
+        fingerprint: ttsQueueItemFingerprint(playable),
+      };
+      if (regeneration) {
+        audioCache.remove(key);
+        input.controller.setHostedStatus(operation, '현재 음성 다시 만드는 중');
+      }
       const blob = await waitForPlainTTSAudio(
         audioCache.getOrCreate({
           key,
@@ -148,17 +177,26 @@ export function usePlainTTS(input: {
           scope: scopeFor(request.contentRevision),
           positions: playable.plainBatchPositions?.map((p) => p.paragraphIndex) ?? [],
           fetch: (signal) =>
-            requestPlainTTSWithRetry(() => input.client!.synthesizePlainTTS(paragraph.chapterId, request, signal), {
-              signal,
-              onWait: (seconds) =>
-                input.controller.setHostedStatus(
-                  operation,
-                  `음성 제공자 대기 중 · ${Math.ceil(seconds)}초 후 다시 시도`,
+            requestPlainTTSWithRetry(
+              () =>
+                input.client!.synthesizePlainTTS(
+                  paragraph.chapterId,
+                  regeneration ? { ...request, regenerate: true } : request,
+                  signal,
                 ),
-            }),
+              {
+                signal,
+                onWait: (seconds) =>
+                  input.controller.setHostedStatus(
+                    operation,
+                    `음성 제공자 대기 중 · ${Math.ceil(seconds)}초 후 다시 시도`,
+                  ),
+              },
+            ),
         }),
         operation.controller.signal,
       );
+      regeneration?.prepared();
       if (!input.controller.isSessionCurrent(sessionId)) return true;
       input.controller.setHostedStatus(operation, undefined);
       return await input.controller.playAudio(blob, sessionId, onProgress);
@@ -173,6 +211,7 @@ export function usePlainTTS(input: {
         );
       return false;
     } finally {
+      regeneration?.prepared();
       input.controller.finishOperation(operation);
     }
   };
@@ -264,5 +303,17 @@ export function usePlainTTS(input: {
       }
     }
   };
-  return { catalog, ready, refresh, play, prefetch, preview, previewBusy, stopPreview, reusableStart, jumpIndex };
+  return {
+    catalog,
+    ready,
+    refresh,
+    play,
+    prefetch,
+    preview,
+    previewBusy,
+    stopPreview,
+    reusableStart,
+    jumpIndex,
+    retryTarget,
+  };
 }

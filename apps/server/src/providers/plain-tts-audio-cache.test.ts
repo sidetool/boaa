@@ -4,6 +4,25 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { createPlainTTSAudioCache } from './plain-tts-audio-cache.js';
 describe('private ordinary TTS audio cache', () => {
+  it('removes only the requested audio after pending disk writes, including across restarts', async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), 'boaa-tts-'));
+    try {
+      const cache = createPlainTTSAudioCache(dir);
+      const audio = { data: Buffer.from('old'), contentType: 'audio/wav' };
+      const write = cache.put('retry', audio);
+      const remove = cache.remove('retry');
+      await Promise.all([write, remove]);
+      await cache.put('untouched', audio);
+      expect(await createPlainTTSAudioCache(dir).get('retry')).toBeUndefined();
+      expect(await cache.get('untouched')).toEqual(audio);
+      const replacement = { ...audio, data: Buffer.from('fresh') };
+      await cache.put('retry', replacement);
+      expect(await createPlainTTSAudioCache(dir).get('retry')).toEqual(replacement);
+      await cache.remove('missing');
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
   it('survives a new cache instance and does not cross owner/revision keys', async () => {
     const dir = await mkdtemp(path.join(tmpdir(), 'boaa-tts-'));
     try {

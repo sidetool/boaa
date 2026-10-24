@@ -10,6 +10,16 @@ export function createPlainTTSAudioCache(directory: string, options: { maxBytes?
   const filename = (key: string) => path.join(directory, createHash('sha256').update(key).digest('hex') + '.audio');
   let tail = Promise.resolve();
   return {
+    remove(key: string): Promise<void> {
+      // Serialize invalidation with writes that were already in progress.
+      const work = tail.then(() =>
+        unlink(filename(key)).catch((error: NodeJS.ErrnoException) => {
+          if (error.code !== 'ENOENT') throw error;
+        }),
+      );
+      tail = work.catch(() => {});
+      return work;
+    },
     async get(key: string): Promise<Audio | undefined> {
       try {
         const file = filename(key),

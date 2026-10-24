@@ -111,6 +111,10 @@ export interface TTSAddonPanelProps {
   refreshStatus(): void | Promise<unknown>;
   jump(direction: -1 | 1): void;
   start(): void | Promise<unknown>;
+  /** Regenerate the current ordinary server-voice item, then play it from its start. */
+  retryAudio?(): void;
+  readonly retryAudioAvailable?: boolean;
+  readonly retryAudioBusy?: boolean;
   resume(): void;
   pause(): void;
   stop(): void;

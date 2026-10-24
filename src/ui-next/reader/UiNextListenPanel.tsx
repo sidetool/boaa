@@ -356,7 +356,21 @@ export default function UiNextListenPanel(props: TTSAddonPanelProps) {
           >
             <SkipForward size={22} />
           </button>
-          <span className="un-listen-ctl-spacer" aria-hidden="true" />
+          {props.retryAudio ? (
+            <button
+              type="button"
+              className="un-listen-ctl un-listen-retry"
+              onClick={props.retryAudio}
+              disabled={playbackUnavailable || !props.retryAudioAvailable || props.retryAudioBusy || props.hostedBusy}
+              aria-label={props.retryAudioBusy ? '음성 다시 만드는 중' : '현재 음성 다시 생성'}
+              aria-busy={props.retryAudioBusy || undefined}
+              title="현재 음성을 새로 생성해 재생해요. API 사용량이 발생할 수 있어요."
+            >
+              <RefreshCw size={20} aria-hidden="true" />
+            </button>
+          ) : (
+            <span className="un-listen-ctl-spacer" aria-hidden="true" />
+          )}
         </div>
         {props.resumeLabel && !props.playing && (
           <button type="button" className="un-listen-resume" onClick={() => void props.resumeSavedPlayback()}>

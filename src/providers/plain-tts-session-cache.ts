@@ -78,6 +78,11 @@ export class PlainTTSSessionCache {
     }
   }
 
+  remove(key: string) {
+    this.entries.get(key)?.controller.abort();
+    this.entries.delete(key);
+  }
+
   clear() {
     for (const entry of this.entries.values()) entry.controller.abort();
     this.entries.clear();

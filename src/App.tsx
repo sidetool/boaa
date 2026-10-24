@@ -4296,8 +4296,20 @@ export default function App() {
 
   const ttsSourceReaderRef = useRef(externalSourceFeature.libraryReader);
   ttsSourceReaderRef.current = externalSourceFeature.libraryReader;
+  const [retryAudioBusy, setRetryAudioBusy] = useState(false);
+  const retryAudioToken = useRef<object>();
+  useEffect(() => {
+    retryAudioToken.current = undefined;
+    setRetryAudioBusy(false);
+  }, [ttsSessionOwner, ttsControllerChapterId]);
 
-  const runTTSAt = async (index: number, sessionId: number, startQueueItemFingerprint?: string) => {
+  const runTTSAt = async (
+    index: number,
+    sessionId: number,
+    startQueueItemFingerprint?: string,
+    regeneration?: { prepared(): void },
+  ) => {
+    let retryFirstAudio = regeneration;
     const chapter = currentChapter;
     const sessionSignal = ttsExecutionController.sessionSignal(sessionId);
     if (!sessionSignal) return;
@@ -4442,26 +4454,36 @@ export default function App() {
       playHostedSegment: plainServerSelected
         ? (playable, paragraph) => {
             let followedParagraphId = paragraph.id;
-            return plainTTS.play(playable, paragraph, sessionId, (fraction) => {
-              const target = estimatedPlainTTSParagraph(playable, fraction);
-              if (
-                !target ||
-                target.paragraphId === followedParagraphId ||
-                !ttsExecutionController.isSessionCurrent(sessionId)
-              )
-                return;
-              followedParagraphId = target.paragraphId;
-              ttsExecutionController.setFollowedParagraph(sessionId, target.paragraphIndex);
-              ttsExecutionController.setActivePlayback(sessionId, {
-                paragraphId: target.paragraphId,
-                speakerLabel: playable.speakerLabel,
-                segmentIds: playable.sourceSegmentIds,
-                ranges: playable.sourceRanges
-                  .filter((range) => range.paragraphId === target.paragraphId)
-                  .map((range) => ({ start: range.startOffset, end: range.endOffset })),
-              });
-              if (document.visibilityState === 'visible') void scrollToParagraph(target.paragraphId);
-            });
+            const retry = retryFirstAudio;
+            retryFirstAudio = undefined;
+            if (retry && ttsQueueItemFingerprint(playable) !== startQueueItemFingerprint)
+              throw new Error('낭독 단위가 변경됐습니다. 현재 위치에서 재생한 뒤 다시 시도해 주세요.');
+            return plainTTS.play(
+              playable,
+              paragraph,
+              sessionId,
+              (fraction) => {
+                const target = estimatedPlainTTSParagraph(playable, fraction);
+                if (
+                  !target ||
+                  target.paragraphId === followedParagraphId ||
+                  !ttsExecutionController.isSessionCurrent(sessionId)
+                )
+                  return;
+                followedParagraphId = target.paragraphId;
+                ttsExecutionController.setFollowedParagraph(sessionId, target.paragraphIndex);
+                ttsExecutionController.setActivePlayback(sessionId, {
+                  paragraphId: target.paragraphId,
+                  speakerLabel: playable.speakerLabel,
+                  segmentIds: playable.sourceSegmentIds,
+                  ranges: playable.sourceRanges
+                    .filter((range) => range.paragraphId === target.paragraphId)
+                    .map((range) => ({ start: range.startOffset, end: range.endOffset })),
+                });
+                if (document.visibilityState === 'visible') void scrollToParagraph(target.paragraphId);
+              },
+              retry,
+            );
           }
         : !plainMode && hostedTTSPlaybackReady
           ? (playable, paragraph) => playHostedTtsSegment(playable, paragraph, sessionId)
@@ -4669,9 +4691,14 @@ export default function App() {
     });
   };
 
-  const speakAt = async (index: number, sessionId: number, fingerprint?: string) => {
+  const speakAt = async (
+    index: number,
+    sessionId: number,
+    fingerprint?: string,
+    regeneration?: { prepared(): void },
+  ) => {
     try {
-      await runTTSAt(index, sessionId, fingerprint);
+      await runTTSAt(index, sessionId, fingerprint, regeneration);
     } catch (error) {
       if (!ttsExecutionController.isSessionCurrent(sessionId)) return;
       const message = error instanceof Error ? error.message : '낭독을 준비하지 못했습니다. 다시 재생해 주세요.';
@@ -4683,8 +4710,17 @@ export default function App() {
 
   const startTTS = async (
     requestedIndex?: number,
-    options: { preserveSleepTimer?: boolean; revealPanel?: boolean; queueItemFingerprint?: string } = {},
+    options: {
+      preserveSleepTimer?: boolean;
+      revealPanel?: boolean;
+      queueItemFingerprint?: string;
+      regeneration?: { prepared(): void; isCurrent(): boolean };
+    } = {},
   ) => {
+    if (!options.regeneration) {
+      retryAudioToken.current = undefined;
+      setRetryAudioBusy(false);
+    }
     const chapter = currentChapter;
     if (!chapter?.paragraphCount) return;
     if (!spokenFilters.ready) {
@@ -4703,18 +4739,53 @@ export default function App() {
       setAddonTab('tts');
     }
     const status = await refreshTTSState();
+    if (options.regeneration && !options.regeneration.isCurrent()) return;
     if (!status) return;
     if (!status.canSpeak && !selectedTTSPlaybackReady) {
       showToast(status.message, 'warning');
       return;
     }
     const requestedStart = requestedIndex ?? ttsIndex ?? readerScreenHandle.getLocation()?.ttsIndex ?? 0;
-    const startIndex = plainServerSelected ? plainTTS.reusableStart(requestedStart) : requestedStart;
+    const startIndex =
+      plainServerSelected && !options.regeneration ? plainTTS.reusableStart(requestedStart) : requestedStart;
     const sessionId = ttsExecutionController.beginSession(chapter.novelId, chapter.id, startIndex, {
       preserveSleepTimer: options.preserveSleepTimer,
     });
     if (sessionId === undefined) return;
-    await speakAt(startIndex, sessionId, options.queueItemFingerprint);
+    await speakAt(startIndex, sessionId, options.queueItemFingerprint, options.regeneration);
+  };
+
+  const retryPlainAudio = () => {
+    const target = plainTTS.retryTarget();
+    if (
+      !plainServerSelected ||
+      !plainTTS.ready ||
+      !target ||
+      ttsIndex === undefined ||
+      retryAudioToken.current ||
+      hostedTTSBusy
+    )
+      return;
+    const token = {};
+    retryAudioToken.current = token;
+    setRetryAudioBusy(true);
+    const prepared = () => {
+      if (retryAudioToken.current !== token) return;
+      retryAudioToken.current = undefined;
+      setRetryAudioBusy(false);
+    };
+    bookPlaybackCoordinator.cancel();
+    ttsExecutionController.stopAll({ preserveSleepTimer: true });
+    void startTTS(target.index, {
+      preserveSleepTimer: true,
+      queueItemFingerprint: target.fingerprint,
+      regeneration: { prepared, isCurrent: () => retryAudioToken.current === token },
+    })
+      .catch((error: unknown) => {
+        if (retryAudioToken.current === token)
+          showToast(error instanceof Error ? error.message : '음성을 다시 만들지 못했습니다.', 'warning');
+      })
+      .finally(prepared);
   };
 
   const { prepare: prepareFixedDocumentTTS } = useFixedDocumentTTSPreparation({
@@ -5074,6 +5145,8 @@ export default function App() {
   const resumeTTS = ttsExecutionController.resume;
 
   const stopTTS = () => {
+    retryAudioToken.current = undefined;
+    setRetryAudioBusy(false);
     plainTTS.stopPreview();
     bookPlaybackCoordinator.cancel();
     ttsExecutionController.stopAll();
@@ -5816,6 +5889,9 @@ export default function App() {
                 refreshStatus={refreshTTSState}
                 jump={jumpTTS}
                 start={startTTS}
+                retryAudio={plainServerSelected ? retryPlainAudio : undefined}
+                retryAudioAvailable={Boolean(plainTTS.ready && ttsIndex !== undefined && plainTTS.retryTarget())}
+                retryAudioBusy={retryAudioBusy}
                 resume={resumeTTS}
                 pause={pauseTTS}
                 stop={stopTTS}

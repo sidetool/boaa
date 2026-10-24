@@ -1,4 +1,7 @@
 import Fastify, { type FastifyInstance } from 'fastify';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import type pg from 'pg';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Paragraph } from '../../../../../src/domain/types';
@@ -26,7 +29,7 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
-async function fixture(envPatch: NodeJS.ProcessEnv = {}, sources?: () => Promise<PlainTTSSource[]>) {
+async function fixture(envPatch: NodeJS.ProcessEnv = {}, sources?: () => Promise<PlainTTSSource[]>, dataDir?: string) {
   const paragraph: Paragraph = {
     id: 'paragraph_plain',
     novelId: 'book_plain',
@@ -75,11 +78,23 @@ async function fixture(envPatch: NodeJS.ProcessEnv = {}, sources?: () => Promise
   };
   const app = Fastify();
   apps.push(app);
-  await registerPlainTTSRoutes(app, { query } as unknown as pg.Pool, loadConfig({ DEFAULT_USER_ID: 'user_plain' }), {
-    provider,
-    sources,
+  const config = { ...loadConfig({ DEFAULT_USER_ID: 'user_plain' }), ...(dataDir ? { dataDir } : {}) };
+  await registerPlainTTSRoutes(app, { query } as unknown as pg.Pool, config, {
+    provider: dataDir ? undefined : provider,
+    sources: dataDir
+      ? async () => [
+          {
+            id: 'local',
+            name: 'Fixture',
+            revision: 'model_1',
+            legacyIds: true,
+            paid: false,
+            createProvider: async () => provider,
+          },
+        ]
+      : sources,
     env: {
-      TTS_PLAIN_ENABLED: 'true',
+      TTS_PLAIN_ENABLED: dataDir ? 'false' : 'true',
       TTS_PLAIN_MODEL_ID: 'supertonic3',
       TTS_PLAIN_MODEL_REVISION: 'model_1',
       ...envPatch,
@@ -119,6 +134,74 @@ async function fixture(envPatch: NodeJS.ProcessEnv = {}, sources?: () => Promise
 }
 
 describe('plain paragraph TTS routes', () => {
+  it('bypasses persistent audio and retains the replacement across a server restart', async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), 'boaa-retry-'));
+    try {
+      const first = await fixture({}, undefined, dir);
+      const original = await first.request();
+      expect(original.statusCode).toBe(200);
+      const restarted = await fixture({}, undefined, dir);
+      expect((await restarted.request()).rawPayload).toEqual(original.rawPayload);
+      expect(restarted.synthesize).not.toHaveBeenCalled();
+      const fresh = { ...restarted.audio, audio: new Uint8Array([5, 4, 3]).buffer };
+      restarted.synthesize.mockResolvedValue(fresh);
+      expect((await restarted.request({ regenerate: true })).rawPayload).toEqual(Buffer.from(fresh.audio));
+      const again = await fixture({}, undefined, dir);
+      expect((await again.request()).rawPayload).toEqual(Buffer.from(fresh.audio));
+      expect(again.synthesize).not.toHaveBeenCalled();
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+  it('regenerates only the verified item and replaces its cached audio for normal playback', async () => {
+    const f = await fixture();
+    const old = await f.request();
+    const fresh = { ...f.audio, audio: new Uint8Array([9, 8, 7]).buffer };
+    f.synthesize.mockResolvedValue(fresh);
+    expect((await f.request()).rawPayload).toEqual(old.rawPayload);
+    expect(f.synthesize).toHaveBeenCalledTimes(1);
+    const retried = await f.request({ regenerate: true });
+    expect(retried.statusCode).toBe(200);
+    expect(retried.rawPayload).toEqual(Buffer.from(fresh.audio));
+    expect((await f.request()).rawPayload).toEqual(retried.rawPayload);
+    expect(f.synthesize).toHaveBeenCalledTimes(2);
+    f.setOwner('revoked');
+    expect((await f.request({ regenerate: true })).statusCode).toBe(404);
+    expect(f.synthesize).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not reuse or restore rejected audio when regeneration fails', async () => {
+    const f = await fixture();
+    await f.request();
+    f.synthesize.mockRejectedValueOnce(new Error('provider unavailable'));
+    expect((await f.request({ regenerate: true })).statusCode).toBe(502);
+    expect((await f.request()).statusCode).toBe(200);
+    expect(f.synthesize).toHaveBeenCalledTimes(3);
+    expect((await f.request({ regenerate: 'true' })).statusCode).toBe(400);
+    expect(f.synthesize).toHaveBeenCalledTimes(3);
+  });
+
+  it('supersedes an old pending prefetch and coalesces concurrent explicit retries', async () => {
+    const f = await fixture();
+    const old = deferred<typeof f.audio>();
+    const fresh = deferred<typeof f.audio>();
+    f.synthesize.mockImplementationOnce(() => old.promise).mockImplementationOnce(() => fresh.promise);
+    const original = f.request().then((r) => r);
+    await vi.waitFor(() => expect(f.synthesize).toHaveBeenCalledTimes(1));
+    const retry = f.request({ regenerate: true }).then((r) => r);
+    await vi.waitFor(() => expect(f.synthesize).toHaveBeenCalledTimes(2));
+    const duplicate = f.request({ regenerate: true }).then((r) => r);
+    await vi.waitFor(() => expect(f.query).toHaveBeenCalledTimes(3));
+    const replacement = { ...f.audio, audio: new Uint8Array([4, 5, 6]).buffer };
+    fresh.resolve(replacement);
+    expect((await retry).rawPayload).toEqual(Buffer.from(replacement.audio));
+    expect((await duplicate).rawPayload).toEqual(Buffer.from(replacement.audio));
+    old.resolve(f.audio);
+    await original;
+    expect((await f.request()).rawPayload).toEqual(Buffer.from(replacement.audio));
+    expect(f.synthesize).toHaveBeenCalledTimes(2);
+  });
+
   it('discovers the configured local model and synthesizes from owned source without analysis data', async () => {
     const f = await fixture();
     const catalog = await f.app.inject('/api/tts/plain/voices');

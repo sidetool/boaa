@@ -110,6 +110,8 @@ export async function registerPlainTTSRoutes(
   const cache = new Map<string, Audio>();
   let cacheBytes = 0;
   const pending = new Map<string, Promise<Audio>>();
+  const regenerating = new Set<string>();
+  let activeRequests = 0;
   const maxBytes = 64 * 1024 * 1024;
   const cooldowns = new Map<string, { until: number; failures: number }>();
   async function synthesize(
@@ -118,88 +120,108 @@ export async function registerPlainTTSRoutes(
     voiceId: string,
     rate: number,
     source: PlainTTSSource,
+    regenerate = false,
   ): Promise<Audio> {
+    const current = pending.get(key);
+    if (current && (!regenerate || regenerating.has(key))) return current;
     const hit = cache.get(key);
-    if (hit) {
+    if (hit && !regenerate) {
       cache.delete(key);
       cache.set(key, hit);
       return hit;
     }
-    const current = pending.get(key);
-    if (current) return current;
-    if (pending.size >= 4)
+    if (activeRequests >= 4)
       throw new PlainTTSError(429, '서버 음성이 다른 문장을 준비 중입니다. 잠시 후 다시 재생하세요.');
-    const task = (async () => {
-      const persisted = await diskCache?.get(key);
-      if (persisted) return persisted;
-      const now = new Date().toISOString();
-      const adapter = await source.createProvider();
-      const profile: VoiceProfile = {
-        id: 'plain-default',
-        novelId: '',
-        role: 'narrator',
-        providerId: adapter.providerId,
-        providerVoiceId: voiceId,
-        label: voiceId,
-        language: 'ko-KR',
-        speed: 1,
-        pitch: 1,
-        emotionPolicy: 'neutral',
-        isUserSelected: true,
-        createdAt: now,
-        updatedAt: now,
-      };
-      // Ordinary listening owns voice/rate/container; cast render options must not override its controls.
-      const providerOptions = { ...source.providerOptions };
-      for (const option of ['responseFormat', 'outputFormat', 'audioEncoding', 'format', 'speed', 'speakingRate'])
-        delete providerOptions[option];
-      const cooldown = cooldowns.get(source.id);
-      if (cooldown && cooldown.until > Date.now())
-        throw new PlainTTSError(
-          429,
-          '음성 제공자의 요청 제한이 풀리기를 기다리고 있습니다.',
-          Math.ceil((cooldown.until - Date.now()) / 1000),
-        );
-      let result;
-      try {
-        result = await adapter.synthesize({
-          text,
-          voiceProfile: profile,
-          speed: rate,
-          format: 'wav',
-          providerOptions: { ...providerOptions, voice: voiceId },
-          signal: AbortSignal.timeout(45_000),
-        });
-        if ((cooldowns.get(source.id)?.until ?? 0) <= Date.now()) cooldowns.delete(source.id);
-      } catch (error) {
-        if (classifyPlainTTSFailure(error).status === 429) {
-          const failures = Math.min(3, (cooldowns.get(source.id)?.failures ?? 0) + 1);
-          const seconds = 10 * 2 ** (failures - 1);
-          cooldowns.set(source.id, { failures, until: Date.now() + seconds * 1000 });
-          app.log.warn({ event: 'plain_tts_failed', errorCategory: 'tts_rate_limited', upstreamStatus: 429 });
+    if (regenerate) {
+      regenerating.add(key);
+      if (hit) {
+        cacheBytes -= hit.data.length;
+        cache.delete(key);
+      }
+    }
+    activeRequests++;
+    // Schedule after assigning the task so even synchronous fake adapters obey the identity fence.
+    const task = Promise.resolve()
+      .then(async () => {
+        if (regenerate) await diskCache?.remove(key);
+        const persisted = regenerate ? undefined : await diskCache?.get(key);
+        if (persisted) return persisted;
+        const now = new Date().toISOString();
+        const adapter = await source.createProvider();
+        const profile: VoiceProfile = {
+          id: 'plain-default',
+          novelId: '',
+          role: 'narrator',
+          providerId: adapter.providerId,
+          providerVoiceId: voiceId,
+          label: voiceId,
+          language: 'ko-KR',
+          speed: 1,
+          pitch: 1,
+          emotionPolicy: 'neutral',
+          isUserSelected: true,
+          createdAt: now,
+          updatedAt: now,
+        };
+        // Ordinary listening owns voice/rate/container; cast render options must not override its controls.
+        const providerOptions = { ...source.providerOptions };
+        for (const option of ['responseFormat', 'outputFormat', 'audioEncoding', 'format', 'speed', 'speakingRate'])
+          delete providerOptions[option];
+        const cooldown = cooldowns.get(source.id);
+        if (cooldown && cooldown.until > Date.now())
           throw new PlainTTSError(
             429,
-            '음성 제공자의 요청 한도 또는 처리 용량에 도달했습니다. 잠시 기다린 뒤 다시 시도합니다.',
-            seconds,
+            '음성 제공자의 요청 제한이 풀리기를 기다리고 있습니다.',
+            Math.ceil((cooldown.until - Date.now()) / 1000),
           );
+        let result;
+        try {
+          result = await adapter.synthesize({
+            text,
+            voiceProfile: profile,
+            speed: rate,
+            format: 'wav',
+            providerOptions: { ...providerOptions, voice: voiceId },
+            signal: AbortSignal.timeout(45_000),
+          });
+          if ((cooldowns.get(source.id)?.until ?? 0) <= Date.now()) cooldowns.delete(source.id);
+        } catch (error) {
+          if (classifyPlainTTSFailure(error).status === 429) {
+            const failures = Math.min(3, (cooldowns.get(source.id)?.failures ?? 0) + 1);
+            const seconds = 10 * 2 ** (failures - 1);
+            cooldowns.set(source.id, { failures, until: Date.now() + seconds * 1000 });
+            app.log.warn({ event: 'plain_tts_failed', errorCategory: 'tts_rate_limited', upstreamStatus: 429 });
+            throw new PlainTTSError(
+              429,
+              '음성 제공자의 요청 한도 또는 처리 용량에 도달했습니다. 잠시 기다린 뒤 다시 시도합니다.',
+              seconds,
+            );
+          }
+          throw error;
         }
-        throw error;
-      }
-      const audio = { data: Buffer.from(result.audio), contentType: result.contentType };
-      if (!audio.contentType.startsWith('audio/') || !audio.data.length || audio.data.length > 16 * 1024 * 1024)
-        throw new PlainTTSError(502, '서버 음성의 오디오 응답이 올바르지 않습니다.');
-      while (cacheBytes + audio.data.length > maxBytes && cache.size) {
-        const oldest = cache.keys().next().value!;
-        cacheBytes -= cache.get(oldest)!.data.length;
-        cache.delete(oldest);
-      }
-      await diskCache?.put(key, audio);
-      cache.set(key, audio);
-      cacheBytes += audio.data.length;
-      return audio;
-    })().finally(() => {
-      pending.delete(key);
-    });
+        const audio = { data: Buffer.from(result.audio), contentType: result.contentType };
+        if (!audio.contentType.startsWith('audio/') || !audio.data.length || audio.data.length > 16 * 1024 * 1024)
+          throw new PlainTTSError(502, '서버 음성의 오디오 응답이 올바르지 않습니다.');
+        // A superseded prefetch may finish, but must never overwrite a user's regenerated audio.
+        if (pending.get(key) !== task) return audio;
+        while (cacheBytes + audio.data.length > maxBytes && cache.size) {
+          const oldest = cache.keys().next().value!;
+          cacheBytes -= cache.get(oldest)!.data.length;
+          cache.delete(oldest);
+        }
+        await diskCache?.put(key, audio);
+        if (pending.get(key) !== task) return audio;
+        cache.set(key, audio);
+        cacheBytes += audio.data.length;
+        return audio;
+      })
+      .finally(() => {
+        activeRequests--;
+        if (pending.get(key) === task) {
+          pending.delete(key);
+          regenerating.delete(key);
+        }
+      });
     pending.set(key, task);
     return task;
   }
@@ -261,6 +283,8 @@ export async function registerPlainTTSRoutes(
           const body = request.body;
           if (!body || typeof body !== 'object' || Array.isArray(body))
             throw new PlainTTSError(400, '낭독 요청이 올바르지 않습니다.');
+          if (body.regenerate !== undefined && (typeof body.regenerate !== 'boolean' || sample))
+            throw new PlainTTSError(400, '음성 재생성 요청이 올바르지 않습니다.');
           const { voiceId, rate, modelRevision } = body;
           if (
             typeof voiceId !== 'string' ||
@@ -398,7 +422,7 @@ export async function registerPlainTTSRoutes(
             rate,
             text,
           });
-          const audio = await synthesize(key, text, selectedVoice.id, rate, source);
+          const audio = await synthesize(key, text, selectedVoice.id, rate, source, body.regenerate === true);
           // Ownership and revision may change while inference runs.
           if (!sample) {
             await loadSource();

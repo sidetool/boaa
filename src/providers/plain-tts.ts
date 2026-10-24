@@ -34,6 +34,8 @@ export interface PlainTTSVoices {
 }
 
 export interface PlainTTSRequest {
+  /** Explicit user retry: replace this source-verified audio, including persistent caches. */
+  regenerate?: boolean;
   voiceId: string;
   modelRevision: string;
   rate: number;

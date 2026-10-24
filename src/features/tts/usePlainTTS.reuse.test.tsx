@@ -2,6 +2,7 @@ import { act, create, type ReactTestRenderer } from 'react-test-renderer';
 import { expect, it, vi } from 'vitest';
 import { usePlainTTS } from './usePlainTTS';
 import { buildPlainTTSBatch } from '../../providers/plain-tts';
+import { ttsQueueItemFingerprint } from '../../providers/tts-playback-resume';
 import { DEFAULT_TTS_PLAYBACK_SETTINGS } from '../../providers/tts-playback-settings';
 import type { Paragraph } from '../../domain/types';
 
@@ -96,16 +97,51 @@ it('joins prefetch, replays without synthesis after speed changes and navigates 
   expect(synthesize).toHaveBeenCalledWith('c', expect.objectContaining({ rate: 1 }), expect.any(AbortSignal));
   expect(playAudio).toHaveBeenCalledTimes(2);
   expect(playAudio.mock.calls[0][0]).toBe(blob);
+  expect(hook.retryTarget()).toEqual({ index: 0, fingerprint: ttsQueueItemFingerprint(playable) });
+  const prepared = vi.fn();
+  let retry!: Promise<boolean>;
+  await act(async () => {
+    retry = hook.play(playable, paragraphs[0], 3, undefined, { prepared });
+    await Promise.resolve();
+  });
+  expect(prepared).not.toHaveBeenCalled();
+  expect(synthesize).toHaveBeenCalledTimes(2);
+  expect(synthesize).toHaveBeenLastCalledWith(
+    'c',
+    expect.objectContaining({ regenerate: true }),
+    expect.any(AbortSignal),
+  );
+  const replacement = new Blob(['regenerated']);
+  await act(async () => {
+    resolve(replacement);
+    expect(await retry).toBe(true);
+  });
+  expect(prepared).toHaveBeenCalled();
+  expect(playAudio).toHaveBeenLastCalledWith(replacement, 3, undefined);
+  await act(async () => {
+    await hook.play(playable, paragraphs[0], 4);
+  });
+  expect(synthesize).toHaveBeenCalledTimes(2);
+  expect(playAudio).toHaveBeenLastCalledWith(replacement, 4, undefined);
+  synthesize.mockRejectedValueOnce(new Error('regeneration failed'));
+  const playedBeforeFailure = playAudio.mock.calls.length;
+  await act(async () => {
+    expect(await hook.play(playable, paragraphs[0], 5, undefined, { prepared })).toBe(false);
+  });
+  expect(playAudio).toHaveBeenCalledTimes(playedBeforeFailure);
+  expect(hook.retryTarget()).toEqual({ index: 0, fingerprint: ttsQueueItemFingerprint(playable) });
   voice = 'another';
   await act(async () => {
     root.update(<Harness rate={1.8} />);
   });
   expect(hook.reusableStart(2)).toBe(2);
+  expect(hook.retryTarget()).toBeUndefined();
   voice = 'voice';
   owner = {};
   await act(async () => {
     root.update(<Harness rate={1.8} />);
   });
   expect(hook.reusableStart(2)).toBe(2);
+  expect(hook.retryTarget()).toBeUndefined();
   act(() => root.unmount());
 });

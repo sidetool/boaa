@@ -188,6 +188,41 @@
   background: rgb(255 255 255 / 8%);
 }
 
+.un-listen-retry {
+  justify-self: end;
+  width: 40px;
+  height: 40px;
+  color: var(--un-text-2);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .un-listen-retry[aria-busy='true'] svg {
+    animation: un-listen-retry-spin 1s linear infinite;
+  }
+}
+
+@keyframes un-listen-retry-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (max-width: 380px) {
+  .un-listen-controls {
+    gap: 2px;
+  }
+
+  .un-listen-controls > .un-listen-ctl {
+    width: 40px;
+    height: 44px;
+  }
+
+  .un-listen-controls > .un-listen-play {
+    width: 60px;
+    height: 60px;
+  }
+}
+
 .un-listen-play {
   width: 68px;
   height: 68px;

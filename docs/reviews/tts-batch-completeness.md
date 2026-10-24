@@ -41,3 +41,11 @@ Gemini 일반 낭독 캐시 키에 음성 검증 버전을 추가해 이전 코�
 이미 요청한 묶음 안의 문단을 선택하면 그 묶음 시작으로 되돌려 같은 오디오를 재생한다. 이전·다음 버튼은 알려진 묶음 경계를 사용하며, 이동 안내와 기존 세부 설정 설명에 이를 명시했다. 정확한 문단별 타임스탬프가 없으므로 추정 시각으로 오디오를 잘라내지는 않는다. 아직 준비하지 않은 구간, 다른 합성 조건, 페이지 새로고침/메모리 퇴출 뒤에는 요청이 필요할 수 있으며 서버의 기존 캐시 정책을 따른다. 모든 재요청이 유료 제공자 재호출을 뜻하는 것은 아니다.
 
 검증: 관련 17개 파일 테스트, 웹 타입검사, 변경 파일 ESLint/Prettier. 실제 Chromium에서 합성한 테스트 WAV를 사용해 배속 변경 전후 같은 audio/src 유지, 재생 위치 유지, 일시정지 중 배속 변경과 재개를 확인했다. 실제 유료 API와 휴대폰 실기 테스트는 하지 않았고, 운영에는 반영하지 않았다. 로그 `/tmp/boaa-tts-reuse-tests-final.log`, `/tmp/boaa-tts-reuse-tsc-final.log`; 브라우저 검사 `/tmp/boaa-tts-live-audio-smoke.mjs`.
+
+## Explicit ordinary server-voice retry
+
+The listening player's refresh button regenerates the current audio item from its original paragraph/batch start and queue fingerprint. Estimated highlighting is not the retry cursor. It stops the current playback, preserves the sleep timer, disables repeated clicks while preparing, and resumes with the replacement. Failure retains the retry position and never advances to the next item. Account, chapter, voice, content and filter changes invalidate the retry target.
+
+The source-verified `regenerate: true` request bypasses and replaces that item's browser, server-memory and persistent audio caches. Other items retain their caches. Concurrent retries share the current regeneration; superseded prefetches cannot overwrite it or remove its pending entry. All in-flight requests, including superseded work, count against the existing four-request admission limit. Sample requests do not accept regeneration.
+
+This is an explicit new provider request and may incur usage charges. It does not prove that a generative provider's replacement speech matches the source semantically.

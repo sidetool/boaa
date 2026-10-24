@@ -134,6 +134,34 @@ function click(node: ReactTestInstance) {
 }
 
 describe('UiNextListenPanel playback', () => {
+  it('places explicit regeneration after next and disables it while preparing', () => {
+    const retryAudio = vi.fn();
+    const props = fixture({
+      playing: true,
+      paused: true,
+      retryAudio,
+      retryAudioAvailable: true,
+      playbackSettings: { ...DEFAULT_TTS_PLAYBACK_SETTINGS, voiceSource: 'server' },
+      plainVoices: { available: true, defaultVoiceId: 'voice', voices: [{ id: 'voice', label: 'Voice', lang: 'ko' }] },
+    });
+    const { root } = mount(props);
+    const controls = root.findByProps({ className: 'un-listen-controls' });
+    expect(controls.findAllByType('button').map((b) => b.props['aria-label'])).toEqual([
+      '정지',
+      '이전 문단',
+      '계속 듣기',
+      '다음 문단',
+      '현재 음성 다시 생성',
+    ]);
+    expect(button(root, '현재 음성 다시 생성').props.disabled).toBeFalsy();
+    click(button(root, '현재 음성 다시 생성'));
+    expect(retryAudio).toHaveBeenCalledOnce();
+    expect(props.resume).not.toHaveBeenCalled();
+    act(() => renderer!.update(<UiNextListenPanel {...props} retryAudioBusy />));
+    expect(button(renderer!.root, '음성 다시 만드는 중').props.disabled).toBe(true);
+    act(() => renderer!.update(<UiNextListenPanel {...props} retryAudioAvailable={false} />));
+    expect(button(renderer!.root, '현재 음성 다시 생성').props.disabled).toBe(true);
+  });
   it.each([
     [false, false, '재생', 'start'],
     [true, false, '일시정지', 'pause'],
