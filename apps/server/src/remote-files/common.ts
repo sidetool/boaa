@@ -17,6 +17,7 @@ export interface SavedRemoteConnection extends RemoteFileConnectionInput {
   root: string;
 }
 export interface RemoteFileSession {
+  check(): Promise<void>;
   list(path: string): Promise<RemoteFileEntry[]>;
   download(path: string): Promise<Readable>;
   close(): void;

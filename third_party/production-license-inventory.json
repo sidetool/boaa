@@ -9,16 +9,16 @@
     "libc": "glibc"
   },
   "summary": {
-    "componentCount": 223,
+    "componentCount": 225,
     "byLicense": {
       "0BSD": 1,
       "Apache-2.0": 44,
       "Apache-2.0 OR MIT": 1,
       "BSD-2-Clause": 9,
       "BSD-3-Clause": 17,
-      "ISC": 8,
+      "ISC": 9,
       "LGPL-3.0-or-later": 1,
-      "MIT": 140,
+      "MIT": 141,
       "SEE LICENSE IN License.txt": 1,
       "Unlicense": 1
     }
@@ -1377,6 +1377,13 @@
     },
     {
       "ecosystem": "npm",
+      "name": "saxes",
+      "version": "6.0.0",
+      "license": "ISC",
+      "homepage": "https://github.com/lddubeau/saxes#readme"
+    },
+    {
+      "ecosystem": "npm",
       "name": "scheduler",
       "version": "0.23.2",
       "license": "MIT",
@@ -1570,6 +1577,13 @@
       "version": "8.21.0",
       "license": "MIT",
       "homepage": "https://github.com/websockets/ws"
+    },
+    {
+      "ecosystem": "npm",
+      "name": "xmlchars",
+      "version": "2.2.0",
+      "license": "MIT",
+      "homepage": "https://github.com/lddubeau/xmlchars#readme"
     },
     {
       "ecosystem": "npm",

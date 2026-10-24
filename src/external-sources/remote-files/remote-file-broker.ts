@@ -32,8 +32,10 @@ export const remoteFileErrors: Record<string, string> = {
     '저장한 SSH 서버 지문과 달라 연결을 중단했어요. 서버가 바뀐 것이 맞는지 확인한 뒤 연결을 해제하고 다시 등록해 주세요.',
   invalid_host_key: '서버 지문은 SHA256: 형식으로 입력해 주세요.',
   not_found: '폴더나 파일을 찾지 못했어요.',
+  not_directory: '시작 경로에 파일이 아닌 폴더를 지정해 주세요.',
   redirect: '리디렉션되지 않는 WebDAV 폴더 주소를 입력해 주세요.',
-  listing_limit: '폴더에 항목이 너무 많아요. 더 작은 하위 폴더를 시작 경로로 지정해 주세요.',
+  listing_limit: '폴더가 5만 항목 또는 목록 용량 한도를 넘었어요. 하위 폴더로 나누어 열어 주세요.',
+  listing_expired: '보관한 폴더 목록이 만료됐어요. 새로고침해 주세요.',
   invalid_response: '서버의 폴더 응답을 읽지 못했어요.',
   timeout: '서버 응답 시간이 초과됐어요. 주소와 네트워크를 확인해 주세요.',
   size_limit: '파일은 최대 512MB까지 가져올 수 있어요.',
@@ -61,16 +63,21 @@ export class RemoteFileBroker implements ExternalSourceBroker {
     this.lifetime.abort();
     this.saved = { connected: false };
   }
-  private signal(signal?: AbortSignal, download = false) {
+  private signal(signal?: AbortSignal, download = false, listing = false) {
     return AbortSignal.any([
       this.lifetime.signal,
-      AbortSignal.timeout(download ? 300_000 : 35_000),
+      AbortSignal.timeout(download ? 300_000 : listing ? 125_000 : 35_000),
       ...(signal ? [signal] : []),
     ]);
   }
   private async request(action: Parameters<RemoteFileFetch>[1], body?: unknown, signal?: AbortSignal) {
     if (!this.fetcher) throw new Error('BOAA 서버에 연결한 뒤 사용할 수 있어요.');
-    const response = await this.fetcher(this.saved.id, action, body, this.signal(signal, action === 'download'));
+    const response = await this.fetcher(
+      this.saved.id,
+      action,
+      body,
+      this.signal(signal, action === 'download', action === 'list'),
+    );
     if (!response.ok) {
       const value = await response.json().catch(() => ({}));
       throw new Error(
@@ -188,7 +195,13 @@ export class RemoteFileBroker implements ExternalSourceBroker {
     const page: RemoteFilePage = await (
       await this.request(
         'list',
-        { path: input.parentRef ?? '/', query: input.query, cursor: input.cursor, generation },
+        {
+          path: input.parentRef ?? '/',
+          query: input.query,
+          cursor: input.cursor,
+          generation,
+          ...(input.cacheMode === 'reload' && !input.cursor ? { reload: true } : {}),
+        },
         signal,
       )
     ).json();

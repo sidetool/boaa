@@ -19,7 +19,7 @@ afterEach(async () => {
 });
 const signal = () => AbortSignal.timeout(10000);
 const content = Buffer.from('한글 book content\n'.repeat(16000));
-async function webdav() {
+async function webdav(count = 1) {
   const calls: Array<{ method: string; path: string; authorization?: string; depth?: string }> = [];
   let malicious = false;
   const server = createServer((req, res) => {
@@ -33,7 +33,21 @@ async function webdav() {
       res.writeHead(401).end();
       return;
     }
-    if (req.method === 'PROPFIND') {
+    if (req.method === 'PROPFIND' && req.headers.depth === '0') {
+      res
+        .writeHead(207, { 'content-type': 'application/xml' })
+        .end(
+          '<d:multistatus xmlns:d="DAV:"><d:response><d:href>/dav/</d:href><d:propstat><d:prop><d:resourcetype><d:collection/></d:resourcetype></d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat></d:response></d:multistatus>',
+        );
+    } else if (req.method === 'PROPFIND' && count > 1) {
+      res.writeHead(207, { 'content-type': 'application/xml' });
+      res.write('<d:multistatus xmlns:d="DAV:">');
+      for (let n = count; n > 0; n--)
+        res.write(
+          `<d:response><d:href>/dav/folder${n}/</d:href><d:propstat><d:prop><d:resourcetype><d:collection/></d:resourcetype><d:getetag>v1</d:getetag></d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat></d:response>`,
+        );
+      res.end('</d:multistatus>');
+    } else if (req.method === 'PROPFIND') {
       res
         .writeHead(207, { 'content-type': 'application/xml' })
         .end(
@@ -95,14 +109,15 @@ it('connects real WebDAV, encrypts persistent credentials, browses UTF8 and down
     ),
   ).toEqual(content);
   expect(fixture.calls.map((c) => c.method)).toEqual(['PROPFIND', 'PROPFIND', 'GET']);
-  expect(fixture.calls[0].depth).toBe('1');
+  expect(fixture.calls[0].depth).toBe('0');
+  expect(fixture.calls[1].depth).toBe('1');
   await expect(reopened.list('owner', status.id!, { generation: 'stale' }, signal())).rejects.toThrow(
     'connection_changed',
   );
   fixture.malicious();
-  await expect(reopened.list('owner', status.id!, { generation: status.generation }, signal())).rejects.toThrow(
-    'invalid_response',
-  );
+  await expect(
+    reopened.list('owner', status.id!, { generation: status.generation, reload: true }, signal()),
+  ).rejects.toThrow('invalid_response');
   reopened.disconnect('owner', status.id!);
   expect(new RemoteFileService(new EncryptedSourceCredentialVault(root, key)).status('owner', status.id!)).toEqual({
     connected: false,
@@ -123,6 +138,9 @@ it('does not save an in-flight connection after cancellation', async () => {
   });
   let closed = 0;
   const service = new RemoteFileService(new SessionSourceCredentialVault(), async () => ({
+    check: async () => {
+      await held;
+    },
     list: async () => {
       await held;
       return [];
@@ -140,7 +158,8 @@ it('does not save an in-flight connection after cancellation', async () => {
   expect(service.statuses('owner')).toEqual([]);
   expect(closed).toBe(1);
 });
-async function sshFixture() {
+async function sshFixture(count = 1) {
+  let reads = 0;
   const key = generateKeyPairSync('rsa', {
     modulusLength: 2048,
     privateKeyEncoding: { type: 'pkcs1', format: 'pem' },
@@ -163,12 +182,28 @@ async function sshFixture() {
           const s = accept(),
             status = utils.sftp.STATUS_CODE;
           let listed = false;
+          let offset = 0;
           const attrs = { mode: 0o100644, size: content.length, uid: 1, gid: 1, atime: 1, mtime: 1700000000 };
           s.on('REALPATH', (id, path) =>
             s.name(id, [{ filename: path === '/' ? '/books' : path, longname: '', attrs }]),
           );
           s.on('OPENDIR', (id) => s.handle(id, Buffer.from('directory')));
           s.on('READDIR', (id) => {
+            reads++;
+            if (count > 1) {
+              if (offset >= count) {
+                s.status(id, status.EOF);
+                return;
+              }
+              const entries = Array.from({ length: Math.min(250, count - offset) }, (_, i) => ({
+                filename: `folder${count - offset - i}`,
+                longname: '',
+                attrs: { ...attrs, mode: 0o040755 },
+              }));
+              offset += entries.length;
+              s.name(id, entries);
+              return;
+            }
             if (listed) s.status(id, status.EOF);
             else {
               listed = true;
@@ -197,6 +232,7 @@ async function sshFixture() {
   return {
     endpoint: `sftp://127.0.0.1:${(server.address() as { port: number }).port}`,
     authentications: () => authentications,
+    reads: () => reads,
   };
 }
 it('uses real encrypted SFTP, pins the server key, excludes symlinks and reads exact bytes', async () => {
@@ -279,6 +315,9 @@ it('serializes additions at the connection limit and invalidates a removed conne
   let hold: Promise<void> | undefined;
   const vault = new SessionSourceCredentialVault();
   const service = new RemoteFileService(vault, async () => ({
+    check: async () => {
+      await hold;
+    },
     list: async () => {
       await hold;
       return [];
@@ -304,3 +343,45 @@ it('serializes additions at the connection limit and invalidates a removed conne
   expect(results.filter((x) => x.status === 'fulfilled')).toHaveLength(1);
   expect(service.statuses('owner')).toHaveLength(16);
 });
+
+it.each(['webdav', 'sftp'] as const)(
+  'browses 30,001 real %s folders with one enumeration, persistent reuse and stable cursors',
+  async (protocol) => {
+    const fixture = protocol === 'webdav' ? await webdav(30_001) : await sshFixture(30_001);
+    const root = await mkdtemp(join(tmpdir(), 'boaa-large-listing-'));
+    cleanup.push(() => rm(root, { recursive: true, force: true }));
+    const vault = new SessionSourceCredentialVault();
+    const service = new RemoteFileService(vault, undefined, root);
+    const status = await service.connect('owner', protocol, input(fixture.endpoint), signal());
+    if ('reads' in fixture) expect(fixture.reads()).toBe(0);
+    else expect(fixture.calls.map((c) => c.depth)).toEqual(['0']);
+    const request = { generation: status.generation };
+    const first = await service.list('owner', status.id!, request, AbortSignal.timeout(60_000));
+    expect(first.entries).toHaveLength(200);
+    expect(first.entries[0].name).toBe('folder1');
+    const ids = new Set(first.entries.map((e) => e.path));
+    let cursor = first.nextCursor;
+    while (cursor) {
+      const page = await service.list('owner', status.id!, { ...request, cursor }, signal());
+      for (const row of page.entries) {
+        expect(ids.has(row.path)).toBe(false);
+        ids.add(row.path);
+      }
+      cursor = page.nextCursor;
+    }
+    expect(ids.size).toBe(30_001);
+    if ('reads' in fixture) expect(fixture.reads()).toBe(122);
+    else expect(fixture.calls.map((c) => c.depth)).toEqual(['0', '1']);
+    const before = 'reads' in fixture ? fixture.reads() : fixture.calls.length;
+    const reopened = new RemoteFileService(vault, undefined, root);
+    expect((await reopened.list('owner', status.id!, request, signal())).entries).toEqual(first.entries);
+    const search = await reopened.list('owner', status.id!, { ...request, query: 'folder30001' }, signal());
+    expect(search.entries.map((e) => e.name)).toEqual(['folder30001']);
+    const next = await reopened.list('owner', status.id!, { ...request, cursor: first.nextCursor }, signal());
+    expect(next.entries[0].name).toBe('folder201');
+    expect('reads' in fixture ? fixture.reads() : fixture.calls.length).toBe(before);
+    await expect(reopened.list('other', status.id!, request, signal())).rejects.toThrow('not_connected');
+    for (const file of await readdir(root)) expect(file).toMatch(/^[a-f0-9-]+\.json$/);
+  },
+  90_000,
+);

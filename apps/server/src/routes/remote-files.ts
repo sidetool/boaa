@@ -12,9 +12,11 @@ const safeCodes = new Set([
   'credentials_required',
   'authentication',
   'not_found',
+  'not_directory',
   'redirect',
   'upstream',
   'listing_limit',
+  'listing_expired',
   'invalid_response',
   'timeout',
   'size_limit',
@@ -59,7 +61,10 @@ export async function registerRemoteFileRoutes(app: FastifyInstance, service: Re
         };
         request.raw.once('aborted', cancel);
         reply.raw.once('close', cancel);
-        const timer = setTimeout(() => abort.abort(), operation === 'download' ? 300_000 : 30_000);
+        const timer = setTimeout(
+          () => abort.abort(),
+          operation === 'download' ? 300_000 : operation === 'list' ? 120_000 : 30_000,
+        );
         let streaming = false;
         const cleanup = () => {
           clearTimeout(timer);

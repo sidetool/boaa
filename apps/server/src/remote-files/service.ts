@@ -1,5 +1,5 @@
 import { Transform } from 'node:stream';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import type { SourceCredentialVault } from '../extensions/source-credential-vault.js';
 import {
   REMOTE_FILE_EXTENSIONS,
@@ -11,8 +11,11 @@ import {
 import { connectionInput, failure, type SavedRemoteConnection, type RemoteFileSession } from './common.js';
 import { openWebDav } from './webdav.js';
 import { openSftp } from './sftp.js';
+import { RemoteListingCache } from './listing-cache.js';
+import { RemoteListingStore } from './listing-store.js';
 export type RemoteFileOpener = (config: SavedRemoteConnection, signal: AbortSignal) => Promise<RemoteFileSession>;
 export class RemoteFileService {
+  private readonly listings: RemoteListingCache;
   private active = new Map<string, number>();
   private epochs = new Map<string, number>();
   private epoch(owner: string, id: string) {
@@ -20,11 +23,18 @@ export class RemoteFileService {
   }
   private bump(owner: string, id: string) {
     this.epochs.set(this.scope(owner, id), this.epoch(owner, id) + 1);
+    this.listings.invalidate(owner, id);
   }
   constructor(
     private readonly vault: SourceCredentialVault,
     private readonly open: RemoteFileOpener = (c, s) => (c.protocol === 'webdav' ? openWebDav(c, s) : openSftp(c, s)),
-  ) {}
+    cacheDirectory?: string,
+  ) {
+    this.listings = new RemoteListingCache(
+      Date.now,
+      cacheDirectory ? new RemoteListingStore(cacheDirectory) : undefined,
+    );
+  }
   private scope(owner: string, id: string) {
     return JSON.stringify([owner, 'remote-files', id]);
   }
@@ -106,7 +116,7 @@ export class RemoteFileService {
       };
       signal.throwIfAborted();
       session = await this.open(config, signal);
-      await session.list('/');
+      await session.check();
       signal.throwIfAborted();
       if (this.epoch(owner, id) !== epoch || this.read(owner, id)?.generation !== before?.generation)
         throw failure('connection_changed');
@@ -178,26 +188,60 @@ export class RemoteFileService {
     }
   }
   async list(owner: string, id: string, body: Record<string, unknown>, signal: AbortSignal) {
-    const path = remoteFilePath(body.path ?? '/'),
-      query = body.query ?? '',
-      cursor = body.cursor ?? '0';
-    if (typeof query !== 'string' || query.length > 256 || typeof cursor !== 'string' || !/^\d{1,4}$/.test(cursor))
+    const path = remoteFilePath(body.path ?? '/');
+    const query = body.query ?? '';
+    const cursor = body.cursor ?? '0';
+    if (
+      typeof query !== 'string' ||
+      query.length > 256 ||
+      typeof cursor !== 'string' ||
+      (body.reload !== undefined && typeof body.reload !== 'boolean')
+    )
       throw failure('invalid_request');
-    const offset = Number(cursor);
-    if (offset % 200 !== 0 || offset > 5000) throw failure('invalid_request');
-    return this.use(owner, id, body.generation, signal, async (session) => {
-      const all = (await session.list(path))
-        .filter((e) => e.directory || REMOTE_FILE_EXTENSIONS.test(e.name))
-        .filter((e) => !query || e.name.toLocaleLowerCase().includes(query.toLocaleLowerCase()))
-        .sort(
-          (a, b) =>
-            Number(b.directory) - Number(a.directory) || a.name.localeCompare(b.name, undefined, { numeric: true }),
-        );
-      return {
-        entries: all.slice(offset, offset + 200),
-        nextCursor: offset + 200 < all.length ? String(offset + 200) : undefined,
-      };
+    const hash = createHash('sha256').update(query).digest('hex').slice(0, 32);
+    const match = cursor === '0' ? undefined : /^([a-f0-9-]{36}):([0-9]{1,5}):([a-f0-9]{32})$/.exec(cursor);
+    if (cursor !== '0' && !match) throw failure('invalid_request');
+    const offset = match ? Number(match[2]) : 0;
+    if (offset % 200 || offset >= 50_000 || (match && match[3] !== hash) || (match && body.reload))
+      throw failure('invalid_request');
+    const config = this.read(owner, id);
+    if (!config) throw failure('not_connected');
+    const epoch = this.epoch(owner, id);
+    const check = () => {
+      signal.throwIfAborted();
+      if (
+        body.generation !== config.generation ||
+        this.read(owner, id)?.generation !== config.generation ||
+        this.epoch(owner, id) !== epoch
+      )
+        throw failure('connection_changed');
+    };
+    check();
+    const snapshot = await this.listings.get({
+      owner,
+      connection: id,
+      key: JSON.stringify([owner, id, config.generation, path]),
+      snapshot: match?.[1],
+      reload: body.reload === true,
+      signal,
+      load: (scanSignal) =>
+        this.use(owner, id, config.generation, scanSignal, async (session) =>
+          (await session.list(path))
+            .filter((e) => e.directory || REMOTE_FILE_EXTENSIONS.test(e.name))
+            .sort(
+              (a, b) =>
+                Number(b.directory) - Number(a.directory) || a.name.localeCompare(b.name, undefined, { numeric: true }),
+            ),
+        ),
     });
+    check();
+    const all = query
+      ? snapshot.entries.filter((e) => e.name.toLocaleLowerCase().includes(query.toLocaleLowerCase()))
+      : snapshot.entries;
+    return {
+      entries: all.slice(offset, offset + 200),
+      nextCursor: offset + 200 < all.length ? `${snapshot.id}:${offset + 200}:${hash}` : undefined,
+    };
   }
   async download(owner: string, id: string, body: Record<string, unknown>, signal: AbortSignal) {
     const path = remoteFilePath(body.path);

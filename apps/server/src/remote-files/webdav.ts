@@ -1,6 +1,6 @@
 import http, { type IncomingMessage } from 'node:http';
 import https from 'node:https';
-import { DOMParser } from '@xmldom/xmldom';
+import { readDavResponses } from './webdav-xml.js';
 import {
   REMOTE_FILE_MAX_BYTES,
   REMOTE_FILE_MAX_ENTRIES,
@@ -14,7 +14,7 @@ import {
   type RemoteFileSession,
   type SavedRemoteConnection,
 } from './common.js';
-const MAX_XML_BYTES = 2 * 1024 * 1024;
+const MAX_XML_BYTES = 32 * 1024 * 1024;
 const propfind =
   '<?xml version="1.0" encoding="utf-8"?><d:propfind xmlns:d="DAV:"><d:prop><d:resourcetype/><d:getcontentlength/><d:getlastmodified/><d:getetag/></d:prop></d:propfind>';
 export async function openWebDav(config: SavedRemoteConnection, signal: AbortSignal): Promise<RemoteFileSession> {
@@ -27,7 +27,7 @@ export async function openWebDav(config: SavedRemoteConnection, signal: AbortSig
     u.pathname = base.pathname + remoteFilePath(path).split('/').filter(Boolean).map(encodeURIComponent).join('/');
     return u;
   };
-  const request = async (method: string, path: string): Promise<IncomingMessage> => {
+  const request = async (method: string, path: string, depth = 1): Promise<IncomingMessage> => {
     signal.throwIfAborted();
     return new Promise((resolve, reject) => {
       const url = urlFor(path);
@@ -46,7 +46,7 @@ export async function openWebDav(config: SavedRemoteConnection, signal: AbortSig
             'Accept-Encoding': 'identity',
             ...(method === 'PROPFIND'
               ? {
-                  Depth: '1',
+                  Depth: String(depth),
                   'Content-Type': 'application/xml; charset=utf-8',
                   'Content-Length': Buffer.byteLength(propfind),
                 }
@@ -86,39 +86,32 @@ export async function openWebDav(config: SavedRemoteConnection, signal: AbortSig
       for (const r of active) r.destroy();
       active.clear();
     },
+    async check() {
+      let found = false;
+      await readDavResponses(await request('PROPFIND', '/', 0), 64 * 1024, 1, (self) => {
+        if (!self.href) throw failure('invalid_response');
+        const url = new URL(self.href, urlFor('/'));
+        if (
+          url.origin !== base.origin ||
+          url.username ||
+          url.password ||
+          url.search ||
+          url.hash ||
+          remoteFilePath(decodeURIComponent(url.pathname)) !== root
+        )
+          throw failure('invalid_response');
+        if (!self.properties?.directory) throw failure('not_directory');
+        found = true;
+      });
+      if (!found) throw failure('invalid_response');
+    },
     async list(path) {
       path = remoteFilePath(path);
       const response = await request('PROPFIND', path);
-      const chunks: Buffer[] = [];
-      let length = 0;
-      for await (const chunk of response) {
-        length += chunk.length;
-        if (length > MAX_XML_BYTES) {
-          response.destroy();
-          throw failure('listing_limit');
-        }
-        chunks.push(Buffer.from(chunk));
-      }
-      const xml = Buffer.concat(chunks).toString('utf8');
-      if (/<!DOCTYPE|<!ENTITY/i.test(xml)) throw failure('invalid_response');
-      const errors: string[] = [];
-      const document = new DOMParser({
-        onError: (level, message) => {
-          if (level !== 'warning') errors.push(message);
-        },
-      }).parseFromString(xml, 'application/xml');
-      if (
-        errors.length ||
-        document.documentElement?.localName !== 'multistatus' ||
-        document.documentElement.namespaceURI !== 'DAV:'
-      )
-        throw failure('invalid_response');
-      const responses = Array.from(document.getElementsByTagNameNS('DAV:', 'response'));
-      if (responses.length > REMOTE_FILE_MAX_ENTRIES + 1) throw failure('listing_limit');
       const result: RemoteFileEntry[] = [],
         seen = new Set<string>();
-      for (const item of responses) {
-        const href = item.getElementsByTagNameNS('DAV:', 'href')[0]?.textContent;
+      await readDavResponses(response, MAX_XML_BYTES, REMOTE_FILE_MAX_ENTRIES + 1, (item) => {
+        const href = item.href;
         if (!href) throw failure('invalid_response');
         let u: URL;
         try {
@@ -145,19 +138,14 @@ export async function openWebDav(config: SavedRemoteConnection, signal: AbortSig
         }
         if (absolute !== root && root !== '/' && !absolute.startsWith(root + '/')) throw failure('invalid_response');
         const relative = remoteFilePath(root === '/' ? absolute : absolute.slice(root.length));
-        if (relative === path) continue;
-        if (relative.slice(0, relative.lastIndexOf('/')) !== (path === '/' ? '' : path)) continue;
-        const propstat = Array.from(item.getElementsByTagNameNS('DAV:', 'propstat')).find((x) =>
-          /\s200(?:\s|$)/.test(x.getElementsByTagNameNS('DAV:', 'status')[0]?.textContent ?? ''),
-        );
-        if (!propstat) continue;
-        const prop = propstat.getElementsByTagNameNS('DAV:', 'prop')[0];
-        if (!prop) throw failure('invalid_response');
-        const text = (tag: string) => prop.getElementsByTagNameNS('DAV:', tag)[0]?.textContent ?? '';
-        const directory = prop.getElementsByTagNameNS('DAV:', 'collection').length > 0;
-        const size = text('getcontentlength') === '' ? undefined : Number(text('getcontentlength'));
+        if (relative === path) return;
+        if (relative.slice(0, relative.lastIndexOf('/')) !== (path === '/' ? '' : path)) return;
+        const props = item.properties;
+        if (!props) return;
+        const directory = props.directory;
+        const size = !props.size ? undefined : Number(props.size);
         if (size !== undefined && (!Number.isSafeInteger(size) || size < 0)) throw failure('invalid_response');
-        const time = Date.parse(text('getlastmodified'));
+        const time = Date.parse(props.modified ?? '');
         if (seen.has(relative)) throw failure('invalid_response');
         seen.add(relative);
         result.push({
@@ -166,9 +154,9 @@ export async function openWebDav(config: SavedRemoteConnection, signal: AbortSig
           directory,
           size,
           modified: Number.isFinite(time) ? new Date(time).toISOString() : undefined,
-          revision: text('getetag').slice(0, 512) || undefined,
+          revision: props.etag?.slice(0, 512) || undefined,
         });
-      }
+      });
       return result;
     },
     async download(path) {

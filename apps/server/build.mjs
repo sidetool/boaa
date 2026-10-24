@@ -7,12 +7,22 @@ import { build } from 'esbuild';
 
 const serverRoot = path.dirname(fileURLToPath(import.meta.url));
 const outdir = path.join(serverRoot, 'dist');
+const serverRequire = createRequire(new URL('./package.json', import.meta.url));
+const xmlRequire = createRequire(serverRequire.resolve('saxes'));
+const xmlParserAliases = Object.fromEntries([
+  ['saxes', serverRequire.resolve('saxes')],
+  ...['xmlchars/xml/1.0/ed5', 'xmlchars/xml/1.1/ed2', 'xmlchars/xmlns/1.0/ed3'].map((id) => [
+    id,
+    xmlRequire.resolve(id),
+  ]),
+]);
 
 await rm(outdir, { force: true, recursive: true });
 
 await build({
   absWorkingDir: serverRoot,
   alias: {
+    ...xmlParserAliases,
     re2js: createRequire(new URL('../../packages/text-core/package.json', import.meta.url)).resolve('re2js'),
     '@boaa/text-core/spoken-text-filter': '../../packages/text-core/spoken-text-filter.ts',
     '@boaa/extension-contracts/source-identity': '../../packages/extension-contracts/source-identity.mjs',
@@ -97,4 +107,13 @@ await mkdir(path.join(outdir, 'licenses'), { recursive: true });
 await copyFile(
   path.join(serverRoot, '../../public/licenses/re2js-2.8.8.txt'),
   path.join(outdir, 'licenses/re2js-2.8.8.txt'),
+);
+
+await copyFile(
+  path.join(serverRoot, '../../public/licenses/saxes-6.0.0.txt'),
+  path.join(outdir, 'licenses', 'saxes-6.0.0.txt'),
+);
+await copyFile(
+  path.join(path.dirname(xmlRequire.resolve('xmlchars/package.json')), 'LICENSE'),
+  path.join(outdir, 'licenses', 'xmlchars-2.2.0.txt'),
 );

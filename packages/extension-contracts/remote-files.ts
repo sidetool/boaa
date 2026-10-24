@@ -39,7 +39,7 @@ export interface RemoteFilePage {
   nextCursor?: string;
 }
 export const REMOTE_FILE_MAX_BYTES = 512 * 1024 * 1024;
-export const REMOTE_FILE_MAX_ENTRIES = 5000;
+export const REMOTE_FILE_MAX_ENTRIES = 50_000;
 export const REMOTE_FILE_EXTENSIONS = /\.(txt|md|markdown|epub|pdf|zip|cbz|rar|cbr|7z|cb7)$/i;
 export function remoteFilePath(value: unknown): string {
   if (

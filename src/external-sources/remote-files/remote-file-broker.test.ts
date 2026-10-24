@@ -108,3 +108,18 @@ it('does not let an older catalog response erase a newly added connection', asyn
   expect(manager.sources()).toHaveLength(1);
   manager.dispose();
 });
+
+it('forwards explicit refresh only on the first page, retaining opaque snapshot cursors for later pages', async () => {
+  const calls: unknown[] = [];
+  const broker = new RemoteFileBroker(status, async (_id, _action, body) => {
+    calls.push(body);
+    return Response.json({ entries: [] });
+  });
+  const signal = new AbortController().signal;
+  await broker.list({ cacheMode: 'reload' }, signal);
+  await broker.list({ cacheMode: 'reload', cursor: 'snapshot:200:query' }, signal);
+  expect(calls[0]).toMatchObject({ reload: true });
+  expect(calls[1]).toMatchObject({ cursor: 'snapshot:200:query' });
+  expect(calls[1]).not.toHaveProperty('reload');
+  broker.dispose();
+});

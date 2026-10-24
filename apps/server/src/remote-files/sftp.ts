@@ -74,6 +74,10 @@ export async function openSftp(config: SavedRemoteConnection, signal: AbortSigna
   return {
     hostKey,
     close,
+    async check() {
+      const handle = await invoke<Buffer>((cb) => sftp.opendir(root, cb));
+      await invoke<void>((cb) => sftp.close(handle, (e) => cb(e, undefined)));
+    },
     async list(path) {
       const actual = await resolve(path);
       const handle = await invoke<Buffer>((cb) => sftp.opendir(actual, cb));

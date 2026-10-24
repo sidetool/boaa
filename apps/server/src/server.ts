@@ -282,7 +282,10 @@ export async function buildServer(
     path.join(config.dataDir, 'extension-credentials', createHash('sha256').update(config.defaultUserId).digest('hex')),
     masterKey,
   );
-  await registerRemoteFileRoutes(app, new RemoteFileService(extensionVault));
+  await registerRemoteFileRoutes(
+    app,
+    new RemoteFileService(extensionVault, undefined, path.join(config.dataDir, 'remote-file-listings')),
+  );
   const sourceNetwork = createSourceNetworkSettings(extensionVault, config.sourceOutboundProxy, createByeDpiProcess());
   await sourceNetwork.initialize();
   app.addHook('onClose', () => sourceNetwork.close());
