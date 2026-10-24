@@ -1,3 +1,5 @@
+import { ExtensionIcon } from './ExtensionIcon';
+import { mangaApkIconUrl } from '../../../packages/extension-contracts/apk-repository';
 import { RepositoryAddress } from './RepositoryAddress';
 import { useEffect, useRef, useState } from 'react';
 import { CompatibilityPreferencesPanel } from './CompatibilityPreferencesPanel';
@@ -163,9 +165,18 @@ export function ApkExtensionsPanel({
     // addRepository reads the latest manager through run; only a new address should trigger it.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [autoAddInitialRepository, ready, initialRepository]);
+  const iconFor = (pkg: string, icon?: string) => {
+    if (icon) return icon;
+    for (const repo of snapshot?.repositories ?? []) {
+      const entry = repo.entries.find((e) => e.pkg === pkg);
+      if (entry) return entry.iconUrl ?? (format === 'apk' ? mangaApkIconUrl(repo.url, pkg) : undefined);
+    }
+    return undefined;
+  };
   const repository = snapshot?.repositories.find((row) => row.url === selected);
   const rows = installedOnly
     ? (snapshot?.packages ?? []).map((pkg) => ({
+        iconUrl: iconFor(pkg.pkg, pkg.iconUrl),
         id: pkg.pkg,
         name: pkg.sources.map((s) => s.name).join(' · '),
         version: pkg.version,
@@ -177,6 +188,7 @@ export function ApkExtensionsPanel({
     : (repository?.entries ?? []).map((entry) => {
         const installed = snapshot?.packages.find((pkg) => pkg.pkg === entry.pkg);
         return {
+          iconUrl: entry.iconUrl ?? (format === 'apk' ? mangaApkIconUrl(repository!.url, entry.pkg) : undefined),
           id: entry.pkg,
           name: entry.name,
           version: entry.version,
@@ -473,8 +485,14 @@ export function ApkExtensionsPanel({
           <div className="installed-extension-list">
             {filtered.slice(currentPage * 20, currentPage * 20 + 20).map((row) => (
               <article className="extension-settings-card" key={row.id}>
-                <strong>{row.name}</strong>
-                <span className="muted">v{row.version}</span>
+                <div
+                  className="extension-package-title"
+                  style={{ display: 'flex', alignItems: 'center', gap: 12, minWidth: 0 }}
+                >
+                  <ExtensionIcon name={row.name} iconUrl={row.iconUrl} />
+                  <strong>{row.name}</strong>
+                </div>
+                <span className="muted extension-package-version">v{row.version}</span>
                 {row.unsupported && <p className="field-help">Mangayomi Dart · 실행기 미지원</p>}
                 <div className="installed-extension-actions">
                   {!installedOnly && !(reviewPackage === row.id && review) && (

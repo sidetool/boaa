@@ -24,6 +24,7 @@ import { InstalledSourcePreferences } from '../../features/extensions/InstalledS
 import { PortableSourceVault } from '../../features/extensions/PortableSourceVault';
 import { SourceExtensionManagerPanel } from '../../features/extensions/SourceExtensionManagerPanel';
 import type { PackageReview } from '../../extensions/packages/installed-extension-manager';
+import { repositoryIconUrl } from '../../extensions/packages/repository-contract';
 import { packageOperationMessage } from '../../extensions/packages/package-operation-error';
 import { useSelfHostCapability } from '../../features/auth/self-host-account-api';
 import { Notice } from '../components/prefs';
@@ -94,11 +95,30 @@ export function UiNextExtensionsPanel({
   const [operationLabel, setOperationLabel] = useState<string>();
   const [error, setError] = useState<string>();
   const [message, setMessage] = useState<string>();
+  const [icons, setIcons] = useState<Record<string, string>>({});
   const operation = useRef<AbortController>();
   const fileInput = useRef<HTMLInputElement>(null);
   const reviewFocus = useRef<HTMLElement>(null);
 
   useEffect(() => () => operation.current?.abort(), []);
+  useEffect(() => {
+    let active = true;
+    void manager
+      .listRepositories?.()
+      .then((repositories) => {
+        const next: Record<string, string> = {};
+        for (const repository of repositories)
+          for (const entry of repository.index?.packages ?? []) {
+            const url = repositoryIconUrl(entry.iconUrl, repository.url);
+            if (url) next[entry.id] = url;
+          }
+        if (active) setIcons(next);
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, [manager, snapshot.revision, tab, review]);
   useEffect(() => {
     if (updatesRequest) setTab('updates');
   }, [updatesRequest]);
@@ -152,7 +172,10 @@ export function UiNextExtensionsPanel({
   const reviewCard = review && (
     <section ref={reviewFocus} tabIndex={-1} className="un-ext-review" aria-label="확장 설치 확인">
       <header>
-        <ExtensionAvatar name={review.plan.package.manifest.extension.name} />
+        <ExtensionAvatar
+          name={review.plan.package.manifest.extension.name}
+          iconUrl={icons[review.plan.package.manifest.extension.id]}
+        />
         <div>
           <strong>{review.plan.package.manifest.extension.name}</strong>
           <small>
@@ -306,7 +329,7 @@ export function UiNextExtensionsPanel({
                   setConfirmRemove(undefined);
                 }}
               >
-                <ExtensionAvatar name={manifest.extension.name} />
+                <ExtensionAvatar name={manifest.extension.name} iconUrl={icons[manifest.extension.id]} />
                 <span>
                   <strong>{manifest.extension.name}</strong>
                   <small>

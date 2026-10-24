@@ -10,6 +10,7 @@ export interface ApkRepositoryRecord {
   updatedAt: number;
 }
 export interface ApkInstalledRecord {
+  iconUrl?: string;
   pkg: string;
   version: string;
   code: number;

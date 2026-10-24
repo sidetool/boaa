@@ -7,6 +7,7 @@ export interface RepositoryEntry {
   readonly sha256: string;
   readonly name?: string;
   readonly description?: string;
+  readonly iconUrl?: string;
 }
 export interface RepositoryIndex {
   readonly format: 'boaa.extension.repository';
@@ -73,7 +74,9 @@ export function validateRepositoryIndex(value: unknown, url: string): Repository
   for (const entry of value.packages) {
     if (
       !object(entry) ||
-      Object.keys(entry).some((key) => !['id', 'version', 'archive', 'sha256', 'name', 'description'].includes(key)) ||
+      Object.keys(entry).some(
+        (key) => !['id', 'version', 'archive', 'sha256', 'name', 'description', 'iconUrl'].includes(key),
+      ) ||
       typeof entry.id !== 'string' ||
       !/^[a-z0-9][a-z0-9._-]{1,254}$/.test(entry.id) ||
       ids.has(entry.id) ||
@@ -101,6 +104,21 @@ export function validateRepositoryIndex(value: unknown, url: string): Repository
     const archive = new URL(entry.archive, url);
     if (archive.origin !== origin || archive.username || archive.password || archive.hash)
       throw new Error('package_repository_origin_denied');
+    if (entry.iconUrl !== undefined && !repositoryIconUrl(entry.iconUrl, url))
+      throw new Error('package_repository_origin_denied');
   }
   return value as unknown as RepositoryIndex;
+}
+
+/** Repository artwork is inert HTTPS content from the already selected repository origin. */
+export function repositoryIconUrl(value: unknown, repository: string): string | undefined {
+  if (typeof value !== 'string' || !value.trim() || value.length > 2048) return undefined;
+  try {
+    const base = new URL(repositoryUrl(repository));
+    const icon = new URL(value, base);
+    if (icon.origin !== base.origin || icon.username || icon.password || icon.hash) return undefined;
+    return icon.href;
+  } catch {
+    return undefined;
+  }
 }

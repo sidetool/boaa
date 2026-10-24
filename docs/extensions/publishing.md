@@ -43,6 +43,11 @@ npx boaa-extension index release --url https://extensions.example/index.json --n
 사용한다. archive와 index는 같은 공개 디렉터리에 두며, 파일명에 공백 등이 있으면 URL 인코딩한다.
 기존 출력 파일을 덮어쓰지 않는다. 새 릴리스 디렉터리에서 작업한다.
 
+패키지 목록 항목에 선택적으로 `iconUrl`을 넣으면 저장소·설치 목록에서 실제 로고를 표시한다.
+index 기준 상대 주소 또는 같은 HTTPS origin의 주소를 사용하며, 사용자 정보·fragment는 허용하지 않는다.
+로고 변경에는 소스 패키지를 다시 빌드할 필요가 없다. 로고가 없거나 로드에 실패하면 이름의 첫 글자를 표시한다.
+Mangayomi 목록은 원본 `iconUrl`을 보존하며, APK 목록은 저장소의 `icon/<패키지 ID>.png`를 사용한다.
+
 생성된 디렉터리를 HTTPS 정적 호스팅에 게시할 수 있다. archive를 먼저 올리고 마지막에 index를 교체해
 아직 없는 파일을 목록이 가리키지 않게 한다. 예전 archive URL도 유지하면 롤백·감사에 도움이 된다.
 CLI는 파일 생성만 하며 원격 업로드나 운영 BOAA 설치는 수행하지 않는다.

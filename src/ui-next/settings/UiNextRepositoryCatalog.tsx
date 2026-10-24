@@ -8,6 +8,7 @@ import type {
 import { comparePackageVersions } from '../../extensions/packages/package-installer';
 import { packageOperationMessage } from '../../extensions/packages/package-operation-error';
 import type { RepositoryRecord } from '../../extensions/packages/repository-contract';
+import { repositoryIconUrl } from '../../extensions/packages/repository-contract';
 import { cx } from '../components/primitives';
 import { ExtensionAvatar } from './ExtensionAvatar';
 
@@ -323,7 +324,7 @@ export function UiNextRepositoryCatalog({
                   <article key={entry.id} className="un-ext-item">
                     <div className="un-ext-item-row is-static">
                       <span className="un-ext-item-main">
-                        <ExtensionAvatar name={name} />
+                        <ExtensionAvatar name={name} iconUrl={repositoryIconUrl(entry.iconUrl, record!.url)} />
                         <span>
                           <strong>{name}</strong>
                           {entry.description && <span className="un-ext-desc">{entry.description}</span>}

@@ -200,6 +200,14 @@
   color: hsl(var(--un-ext-hue) 80% 82%);
 }
 
+.un-ext-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  border-radius: inherit;
+  background: var(--un-surface);
+}
+
 .un-ext-kind-icon {
   background: var(--un-bg-3);
   color: var(--un-text-2);
@@ -1209,4 +1217,20 @@
 .un-network-now b {
   color: var(--un-text-2);
   font-weight: 600;
+}
+
+.un-ext .extension-settings-card > .extension-package-title {
+  display: flex;
+  align-items: center;
+  grid-column: 1;
+  gap: 12px;
+  min-width: 0;
+}
+.un-ext .extension-package-title > strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.un-ext .extension-package-version {
+  padding-left: 52px;
 }

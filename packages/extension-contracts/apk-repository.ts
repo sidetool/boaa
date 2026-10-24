@@ -7,6 +7,7 @@ export interface MangaApkSource {
   readonly baseUrl?: string;
 }
 export interface MangaApkEntry {
+  readonly iconUrl?: string;
   readonly pkg: string;
   readonly name: string;
   readonly apk: string;
@@ -120,4 +121,14 @@ export function parseMangaApkIndex(value: unknown): MangaApkIndex {
 export function mangaApkDownloadUrl(repository: string, entry: MangaApkEntry): string {
   parseMangaApkIndex([{ ...entry, nsfw: entry.nsfw ? 1 : 0 }]);
   return new URL(`apk/${entry.apk}`, mangaApkRepositoryUrl(repository)).href;
+}
+
+/** APK repositories publish package icons beside apk/, using the package identifier. */
+export function mangaApkIconUrl(repository: string, pkg: string): string | undefined {
+  if (!/^[a-zA-Z][\w]*(?:\.[a-zA-Z][\w]*)+$/.test(pkg)) return undefined;
+  try {
+    return new URL(`icon/${pkg}.png`, mangaApkRepositoryUrl(repository)).href;
+  } catch {
+    return undefined;
+  }
 }

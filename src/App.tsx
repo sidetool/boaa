@@ -238,7 +238,6 @@ import { TextServerSourceAccountBroker } from './external-sources/text-server/te
 import {
   TEXT_SERVER_EXTERNAL_SOURCE_ID,
   TEXT_SERVER_EXTERNAL_SOURCE_BROKER_ID,
-  textServerBuiltInExternalSource,
 } from './external-sources/text-server/text-server-external-source';
 import {
   SUWAYOMI_EXTERNAL_SOURCE_BROKER_ID,
@@ -610,9 +609,7 @@ export default function App() {
         [
           dropboxBuiltInExternalSource,
           googleDriveBuiltInExternalSource,
-          ...(localStatic || !allowSharedSourceIntegrations
-            ? []
-            : [suwayomiBuiltInExternalSource, textServerBuiltInExternalSource]),
+          ...(localStatic || !allowSharedSourceIntegrations ? [] : [suwayomiBuiltInExternalSource]),
         ],
         installedExtensions
           ? compositeSourceRegistry(extensionRuntime.trustedExtensions, installedExtensions)

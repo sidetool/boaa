@@ -189,7 +189,13 @@ export class MangayomiExtensionHost {
           preferenceEpoch: _preferenceEpoch,
           repository: _repository,
           ...record
-        }) => record,
+        }) => ({
+          ...record,
+          iconUrl:
+            _metadata.iconUrl ??
+            this.state.repositories.find((r) => r.url === _repository)?.entries.find((e) => e.id === _metadata.id)
+              ?.iconUrl,
+        }),
       ),
       repositories: this.state.repositories.map((repo) => ({
         ...repo,
@@ -204,6 +210,7 @@ export class MangayomiExtensionHost {
           sources: [{ id: entry.id, name: entry.name, lang: entry.lang }],
           excludedSources: 0,
           format: entry.format,
+          iconUrl: entry.iconUrl,
           appMinVerReq: entry.appMinVerReq,
           hasCloudflare: entry.hasCloudflare,
         })),

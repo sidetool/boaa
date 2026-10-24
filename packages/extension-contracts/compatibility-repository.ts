@@ -1,5 +1,7 @@
+import { extensionIconUrl } from './extension-icon.js';
 export type CompatibilityFormat = 'tachiyomi-apk' | 'mangayomi-js' | 'mangayomi-dart';
 export interface MangayomiEntry {
+  iconUrl?: string;
   id: string;
   name: string;
   lang: string;
@@ -79,6 +81,7 @@ export function parseMangayomiIndex(value: unknown): MangayomiEntry[] {
       throw new Error('compatibility_repository_invalid');
     return {
       id,
+      ...(extensionIconUrl(row.iconUrl, code.href) ? { iconUrl: extensionIconUrl(row.iconUrl, code.href) } : {}),
       name: row.name,
       lang: row.lang,
       version: row.version,
