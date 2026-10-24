@@ -300,6 +300,21 @@
   font-size: 13.5px;
 }
 
+/* The refresh notice keeps its spinner beside the first line when a long message wraps. */
+.un-source-status.is-refresh {
+  flex-wrap: nowrap;
+  align-items: flex-start;
+}
+
+.un-source-status.is-refresh svg {
+  flex: none;
+  margin-top: 2px;
+}
+
+.un-source-status.is-refresh span {
+  min-width: 0;
+}
+
 .un-source-error {
   display: flex;
   flex-wrap: wrap;

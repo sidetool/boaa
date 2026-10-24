@@ -1,3 +1,4 @@
+import { RemoteFileRequestError } from '../../external-sources/remote-files/remote-file-broker';
 import { novel, singlePageComicFile } from './source-controller-test-fixtures';
 import 'fake-indexeddb/auto';
 import { materializeDocumentSeriesArchive } from '@boaa/document-series-core';
@@ -4464,3 +4465,81 @@ it.each(['item-account', 'item-generation', 'subscription-account', 'subscriptio
     }
   },
 );
+
+describe('file list refresh lifetime', () => {
+  it.each(['close', 'search'])(
+    'starts refresh before a slow library read and cannot restart after %s',
+    async (navigation) => {
+      let release!: () => void;
+      const lookup = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      let held = false;
+      const h = await createHarness({
+        downloadedContent: 'synthetic file',
+        waitForReadingHistory: () => (held ? lookup : Promise.resolve()),
+      });
+      const cached = vi.mocked(h.state.saveCachePage).mock.calls.at(-1)![0];
+      vi.mocked(h.state.getCachePage).mockResolvedValue(cached);
+      const list = vi.mocked(h.registry.listExternalSource);
+      let reject!: (error: Error) => void;
+      let listSignal: AbortSignal | undefined;
+      list.mockImplementationOnce((_source, _context, _input, signal) => {
+        listSignal = signal;
+        return new Promise((_resolve, rejectRequest) => {
+          reject = rejectRequest;
+        });
+      });
+      const before = list.mock.calls.length;
+      const notifications = h.notify.mock.calls.length;
+      let pending!: Promise<void>;
+      try {
+        held = true;
+        await act(async () => {
+          pending = h.controller.refresh();
+        });
+        expect(list).toHaveBeenCalledTimes(before + 1);
+        expect(h.controller.catalogLoading).toBe(true);
+        expect(h.controller.items).toHaveLength(cached.items.length);
+        if (navigation === 'close') await act(async () => h.controller.close());
+        else {
+          await act(async () => h.controller.setQuery('new query'));
+          await act(async () => h.controller.search());
+        }
+        expect(listSignal?.aborted).toBe(true);
+        const afterNavigation = list.mock.calls.length;
+        await act(async () => {
+          reject(new Error('connection failed after cancellation'));
+          release();
+          await pending;
+        });
+        expect(list).toHaveBeenCalledTimes(afterNavigation);
+        expect(h.controller.listError).toBeUndefined();
+        expect(h.notify).toHaveBeenCalledTimes(notifications);
+        if (navigation === 'search') expect(h.controller.query).toBe('new query');
+      } finally {
+        release();
+        await act(async () => h.renderer.unmount());
+      }
+    },
+  );
+
+  it.each(['busy', 'host_key_changed'])(
+    'preserves specific remote error and respects cache authority for %s',
+    async (code) => {
+      const h = await createHarness({ downloadedContent: 'synthetic file' });
+      const cached = vi.mocked(h.state.saveCachePage).mock.calls.at(-1)![0];
+      vi.mocked(h.state.getCachePage).mockResolvedValue(cached);
+      const error = new RemoteFileRequestError(code, code === 'busy' ? 429 : 502);
+      vi.mocked(h.registry.listExternalSource).mockRejectedValueOnce(error);
+      try {
+        await act(async () => h.controller.refresh());
+        expect(h.controller.listError?.message).toContain(error.message);
+        expect(h.controller.stale).toBe(code === 'busy');
+        expect(h.controller.items).toHaveLength(code === 'busy' ? cached.items.length : 0);
+      } finally {
+        await act(async () => h.renderer.unmount());
+      }
+    },
+  );
+});

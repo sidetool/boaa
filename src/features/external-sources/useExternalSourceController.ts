@@ -716,7 +716,9 @@ export function useExternalSourceController(options: UseExternalSourceController
 
   const refresh = useCallback(async () => {
     if (!activeSourceId) return;
-    await refreshLocalProjection();
+    // Start the cancellable list request before any unrelated library read can delay it.
+    // Read the projection afterwards so subscription reconciliation cannot be overwritten
+    // by an older library snapshot taken while this request was still running.
     await loadPage(
       {
         parentRef: currentParentRef,
@@ -725,10 +727,11 @@ export function useExternalSourceController(options: UseExternalSourceController
         filters: filterChanges(browse?.filters, filterValues),
       },
       false,
-      undefined,
+      activeSourceId,
       true,
       true,
     );
+    await refreshLocalProjection();
   }, [activeSourceId, browse, currentParentRef, filterValues, loadPage, query, refreshLocalProjection]);
 
   const show = useCallback(

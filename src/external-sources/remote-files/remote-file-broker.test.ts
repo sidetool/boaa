@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest';
-import { RemoteFileBroker, type RemoteFileFetch } from './remote-file-broker';
+import { RemoteFileBroker, RemoteFileRequestError, type RemoteFileFetch } from './remote-file-broker';
 import { RemoteFileManager } from './remote-file-manager';
 import { remoteFileBuiltInSource, remoteFileSourceId } from './remote-file-source';
 const status = {
@@ -121,5 +121,38 @@ it('forwards explicit refresh only on the first page, retaining opaque snapshot 
   expect(calls[0]).toMatchObject({ reload: true });
   expect(calls[1]).toMatchObject({ cursor: 'snapshot:200:query' });
   expect(calls[1]).not.toHaveProperty('reload');
+  broker.dispose();
+});
+
+it.each(['response', 'throw'])(
+  'keeps cancelled list requests silent even when the adapter returns a generic %s',
+  async (mode) => {
+    const abort = new AbortController();
+    const broker = new RemoteFileBroker(status, async () => {
+      abort.abort();
+      if (mode === 'throw') throw new Error('fetch failed');
+      return Response.json({ error: 'remote_files_unavailable' }, { status: 502 });
+    });
+    await expect(broker.list({}, abort.signal)).rejects.toMatchObject({ name: 'AbortError' });
+    expect(broker.status().state).toBe('connected');
+    broker.dispose();
+  },
+);
+
+it('retains typed busy failures and only uses locally defined error messages', async () => {
+  const broker = new RemoteFileBroker(status, async () =>
+    Response.json({ error: 'remote_files_busy' }, { status: 429 }),
+  );
+  await expect(broker.list({}, new AbortController().signal)).rejects.toMatchObject({
+    name: 'RemoteFileRequestError',
+    code: 'busy',
+    status: 429,
+    transient: true,
+    message: '다른 파일 요청을 처리하고 있어요. 잠시 후 다시 시도해 주세요.',
+  });
+  expect(new RemoteFileRequestError('host_key_changed', 502).transient).toBe(false);
+  expect(new RemoteFileRequestError('untrusted upstream message', 502).message).toBe(
+    '파일 서버 요청을 완료하지 못했어요.',
+  );
   broker.dispose();
 });

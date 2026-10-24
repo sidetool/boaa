@@ -596,6 +596,33 @@ describe('catalog items and loading', () => {
     click(button(mount(), '더 보기'));
     expect(hub.commands.loadMore).toHaveBeenCalledExactlyOnceWith();
   });
+
+  it.each([false, true])('reports a cached-list refresh above the rows and blocks repeats (stale=%s)', (stale) => {
+    hub.activeSource = { ...c.sources[0], kind: 'cloud_file' };
+    hub.folders = [file({ kind: 'folder', title: '폴더', navigationRef: 'folder-ref' })];
+    setItems([file()]);
+    patch({ catalogLoading: true, stale, nextCursor: 'next', listError: { message: '실패', retry: vi.fn() } });
+    const root = mount();
+    expect(root.findByProps({ 'aria-busy': true }).props.className).toContain('un-source');
+    const refresh = button(root, '목록 새로 고치는 중');
+    expect([refresh.props.disabled, refresh.findByType('svg').props.className]).toEqual([
+      true,
+      expect.stringContaining('un-spin'),
+    ]);
+    const items = root.findByProps({ className: 'un-source-items' });
+    const status = items.findByProps({ role: 'status' });
+    expect(items.children.indexOf(status)).toBeLessThan(items.children.indexOf(items.findByProps({ role: 'alert' })));
+    expect(text(status)).toBe(
+      stale ? '저장된 목록을 보여 주는 중이에요. 최신 목록을 확인하고 있어요.' : '파일 목록을 새로 고치는 중이에요.',
+    );
+    expect(button(root, '다시 불러오기').props.disabled).toBe(true);
+    expect(button(root, '더 보기').props.disabled).toBe(true);
+    const event = { preventDefault: vi.fn() };
+    act(() => root.findByProps({ role: 'search' }).props.onSubmit(event));
+    expect(event.preventDefault).toHaveBeenCalledOnce();
+    expect(hub.submitSearch).not.toHaveBeenCalled();
+    expect(button(root, '폴더').props.disabled).toBe(false);
+  });
 });
 
 describe('work hero and title editing', () => {

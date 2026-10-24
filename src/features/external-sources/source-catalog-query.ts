@@ -13,6 +13,7 @@ import type { UseExternalSourceControllerOptions } from './external-source-contr
 import type { useSourceSubscriptionRefresh } from './use-source-subscription-refresh';
 import { sourceCachePolicy, transientSourceFailure } from '../../external-sources/cache-policy';
 import { storedSourcePage, saveSourceCache, cachePageId } from '../../external-sources/cached-page';
+import { RemoteFileRequestError } from '../../external-sources/remote-files/remote-file-broker';
 import { TextServerRequestError } from '../../external-sources/text-server/text-server-errors';
 import { packageOperationMessage } from '../../extensions/packages/package-operation-error';
 import { completeSeriesCatalog } from './complete-series-catalog';
@@ -308,6 +309,7 @@ export async function runSourceCatalogQuery(request: SourceCatalogRequest): Prom
     cached ??= await port.state.getCachePage(id).catch(() => undefined);
     if (
       !transientSourceFailure(error) ||
+      (error instanceof RemoteFileRequestError && !error.transient) ||
       (cached &&
         Date.parse(cached.fetchedAt) +
           sourceCachePolicy(
@@ -321,7 +323,7 @@ export async function runSourceCatalogQuery(request: SourceCatalogRequest): Prom
     if (!connectionIsCurrent()) return undefined;
     const failureMessage =
       packageOperationMessage(error) ??
-      (error instanceof TextServerRequestError
+      (error instanceof TextServerRequestError || error instanceof RemoteFileRequestError
         ? error.message
         : '외부 저장소 목록을 불러오지 못했습니다. 연결 상태를 확인하고 다시 시도해 주세요.');
     const resetCursor =
@@ -356,7 +358,7 @@ export async function runSourceCatalogQuery(request: SourceCatalogRequest): Prom
       setNextCursor(cached.nextCursor);
       setStale(true);
       port.notify(
-        error instanceof TextServerRequestError
+        error instanceof TextServerRequestError || error instanceof RemoteFileRequestError
           ? `${error.message} 마지막으로 받아 둔 목록을 표시합니다.`
           : '외부 저장소를 새로고치지 못해 마지막 목록을 표시합니다.',
         'warning',

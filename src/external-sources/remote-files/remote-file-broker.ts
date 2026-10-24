@@ -46,6 +46,18 @@ export const remoteFileErrors: Record<string, string> = {
   unavailable: '서버에 연결하지 못했어요. 주소·인증 정보·TLS 인증서를 확인해 주세요.',
   upstream: '파일 서버가 요청을 처리하지 못했어요.',
 };
+/** Only fixed, local messages are safe to display in the shared source screen. */
+export class RemoteFileRequestError extends Error {
+  readonly transient: boolean;
+  constructor(
+    readonly code: string,
+    readonly status: number,
+  ) {
+    super(remoteFileErrors[code] ?? '파일 서버 요청을 완료하지 못했어요.');
+    this.name = 'RemoteFileRequestError';
+    this.transient = ['busy', 'timeout', 'unavailable', 'upstream'].includes(code);
+  }
+}
 export class RemoteFileBroker implements ExternalSourceBroker {
   private saved: RemoteFileConnectionStatus;
   private readonly lifetime = new AbortController();
@@ -72,20 +84,25 @@ export class RemoteFileBroker implements ExternalSourceBroker {
   }
   private async request(action: Parameters<RemoteFileFetch>[1], body?: unknown, signal?: AbortSignal) {
     if (!this.fetcher) throw new Error('BOAA 서버에 연결한 뒤 사용할 수 있어요.');
-    const response = await this.fetcher(
-      this.saved.id,
-      action,
-      body,
-      this.signal(signal, action === 'download', action === 'list'),
-    );
-    if (!response.ok) {
-      const value = await response.json().catch(() => ({}));
-      throw new Error(
-        remoteFileErrors[String(value.error).replace(/^remote_files_/, '')] ?? '파일 서버 요청을 완료하지 못했어요.',
-      );
+    const requestSignal = this.signal(signal, action === 'download', action === 'list');
+    try {
+      const response = await this.fetcher(this.saved.id, action, body, requestSignal);
+      requestSignal.throwIfAborted();
+      if (!response.ok) {
+        const value = await response.json().catch(() => ({}));
+        requestSignal.throwIfAborted();
+        throw new RemoteFileRequestError(String(value.error).replace(/^remote_files_/, ''), response.status);
+      }
+      return response;
+    } catch (error) {
+      // A fetch adapter may turn cancellation into a generic HTTP/network error.
+      // The caller's navigation lifetime still takes precedence over that response.
+      if (signal?.aborted || this.lifetime.signal.aborted) throw new DOMException('Request cancelled', 'AbortError');
+      if (requestSignal.aborted) throw new RemoteFileRequestError('timeout', 504);
+      throw error;
     }
-    return response;
   }
+
   async initialize() {
     if (!this.fetcher) return;
     try {

@@ -746,6 +746,7 @@ function WorkHero({ model, props }: { model: Model; props: SourceHubScreenProps 
 
 function SourceHead({ model }: { model: Model }) {
   const { controller, activeSource, commands } = model;
+  const listBusy = sourceListBusy(controller);
   const nested = controller.breadcrumbs.length > 1;
   return (
     <header className="un-source-head">
@@ -778,11 +779,11 @@ function SourceHead({ model }: { model: Model }) {
           <button
             type="button"
             className="un-icon-btn"
-            aria-label="새로고침"
-            disabled={controller.loading || controller.blockingBusy}
+            aria-label={listBusy ? '목록 새로 고치는 중' : '새로고침'}
+            disabled={listBusy || controller.blockingBusy}
             onClick={commands.refresh}
           >
-            <RefreshCw size={20} className={controller.loading ? 'un-spin' : undefined} />
+            <RefreshCw size={20} className={listBusy ? 'un-spin' : undefined} />
           </button>
         )}
         <button
@@ -799,6 +800,11 @@ function SourceHead({ model }: { model: Model }) {
   );
 }
 
+/** A cached list being revalidated reports catalogLoading, not loading; both mean a list request is in flight. */
+function sourceListBusy(controller: ExternalSourceController) {
+  return controller.loading || Boolean(controller.catalogLoading);
+}
+
 export default function UiNextSourceHubScreen(props: SourceHubScreenProps) {
   const model = useSourceHubModel(props);
   const [filtersOpen, setFiltersOpen] = useState(false);
@@ -808,17 +814,14 @@ export default function UiNextSourceHubScreen(props: SourceHubScreenProps) {
   if (!model.seriesNovel && (!activeSource || !model.connected)) return null;
 
   const catalog = activeSource?.kind === 'catalog';
+  const listBusy = sourceListBusy(controller);
   const browse = controller.browse;
   const selectedItems = contentItems.filter((item) => item.selected);
   const showBatch =
     (controller.selectedBatchActive && controller.importBusy) || (model.selectedCount > 0 && !controller.importBusy);
 
   return (
-    <div
-      ref={model.scrollRef}
-      className={cx('un-source', model.hasWorkHero && 'is-work')}
-      aria-busy={controller.loading}
-    >
+    <div ref={model.scrollRef} className={cx('un-source', model.hasWorkHero && 'is-work')} aria-busy={listBusy}>
       {!model.hasWorkHero && <SourceHead model={model} />}
       <SourceDownloadRecovery controller={controller} />
       {model.hasWorkHero && <WorkHero model={model} props={props} />}
@@ -981,7 +984,11 @@ export default function UiNextSourceHubScreen(props: SourceHubScreenProps) {
       ) : (
         <section className="un-source-items" aria-label={controller.detail ? '회차' : catalog ? '작품' : '파일'}>
           <div className="un-source-toolbar">
-            <form className="un-inline-search un-source-search" role="search" onSubmit={model.submitSearch}>
+            <form
+              className="un-inline-search un-source-search"
+              role="search"
+              onSubmit={(event) => (listBusy ? event.preventDefault() : model.submitSearch(event))}
+            >
               <Search size={18} aria-hidden="true" />
               <input
                 type="search"
@@ -1016,6 +1023,20 @@ export default function UiNextSourceHubScreen(props: SourceHubScreenProps) {
             )}
           </div>
 
+          {/* Shown above the rows: a long list would otherwise push it out of sight. */}
+          {listBusy && controller.items.length > 0 && (
+            <p className="un-source-status is-refresh" role="status" aria-live="polite">
+              <LoaderCircle size={15} className="un-spin" />
+              <span>
+                {controller.stale
+                  ? '저장된 목록을 보여 주는 중이에요. 최신 목록을 확인하고 있어요.'
+                  : catalog
+                    ? '목록을 불러오는 중이에요.'
+                    : '파일 목록을 새로 고치는 중이에요.'}
+              </span>
+            </p>
+          )}
+
           {controller.listError && (
             <div className="un-source-error" role="alert">
               <AlertTriangle size={18} aria-hidden="true" />
@@ -1026,7 +1047,7 @@ export default function UiNextSourceHubScreen(props: SourceHubScreenProps) {
               <button
                 type="button"
                 className="un-btn is-ghost is-sm"
-                disabled={controller.loading || controller.blockingBusy}
+                disabled={listBusy || controller.blockingBusy}
                 onClick={commands.retryList}
               >
                 <RefreshCw size={15} />
@@ -1035,7 +1056,7 @@ export default function UiNextSourceHubScreen(props: SourceHubScreenProps) {
             </div>
           )}
 
-          {controller.loading && controller.items.length === 0 ? (
+          {listBusy && controller.items.length === 0 ? (
             catalog ? (
               <div className="un-grid is-grid" role="status" aria-label="목록을 불러오고 있어요">
                 {Array.from({ length: 12 }, (_, i) => (
@@ -1094,21 +1115,15 @@ export default function UiNextSourceHubScreen(props: SourceHubScreenProps) {
             </div>
           ) : null}
 
-          {controller.loading && controller.items.length > 0 && (
-            <p className="un-source-status" role="status" aria-live="polite">
-              <LoaderCircle size={15} className="un-spin" />
-              목록을 불러오는 중
-            </p>
-          )}
           {controller.nextCursor && (
             <div className="un-source-more">
               <button
                 type="button"
                 className="un-btn is-ghost"
-                disabled={controller.loading || controller.blockingBusy}
+                disabled={listBusy || controller.blockingBusy}
                 onClick={commands.loadMore}
               >
-                {controller.loading && <LoaderCircle size={15} className="un-spin" />}더 보기
+                {listBusy && <LoaderCircle size={15} className="un-spin" />}더 보기
               </button>
             </div>
           )}
