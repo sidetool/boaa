@@ -281,7 +281,8 @@
   z-index: 140;
   display: flex;
   background: rgb(0 0 0 / 55%);
-  animation: un-fade-in 0.2s;
+  /* Fade the backdrop, not the sheet: underlying controls must not shine through while it slides in. */
+  animation: un-backdrop-in 0.2s;
 }
 
 .un-layer.is-auto {
@@ -427,6 +428,12 @@
 .un-action small {
   color: var(--un-text-3);
   font-size: 14px;
+}
+
+@keyframes un-backdrop-in {
+  from {
+    background-color: transparent;
+  }
 }
 
 @keyframes un-fade-in {
