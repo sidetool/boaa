@@ -433,6 +433,128 @@ async function createDocumentHarness(serialCount = 3, chapters: Chapter[] = []) 
   };
 }
 
+describe('plain file download task feedback', () => {
+  function gate() {
+    let release!: () => void;
+    const promise = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    return { promise, release };
+  }
+
+  it('identifies the queued file before lookup, then reports transfer and real import progress', async () => {
+    const lookup = gate();
+    const download = gate();
+    const saving = gate();
+    let held = false;
+    const h = await createHarness({
+      downloadedContent: 'synthetic changed file',
+      waitForReadingHistory: () => (held ? lookup.promise : Promise.resolve()),
+      downloadGate: download.promise,
+    });
+    const original = h.importFile.getMockImplementation()!;
+    h.importFile.mockImplementation((request, onProgress) => {
+      const job = original(request, onProgress);
+      onProgress({
+        jobId: 'file',
+        status: 'writing',
+        bytesRead: request.file.size,
+        totalBytes: request.file.size,
+        chaptersDetected: 1,
+        paragraphsWritten: 1,
+        progressUnit: 'paragraphs',
+        completedUnits: 1,
+        totalUnits: 4,
+      });
+      return { ...job, promise: saving.promise.then(() => job.promise) };
+    });
+    let pending!: Promise<void>;
+    try {
+      held = true;
+      await act(async () => {
+        pending = h.controller.importItem(h.controller.items[0]!);
+      });
+      expect(h.controller.tasks).toEqual([
+        expect.objectContaining({ phase: 'queued', externalItemKey: 'fixture.source::fixture-account::work-1' }),
+      ]);
+      expect(h.registry.downloadExternalSource).not.toHaveBeenCalled();
+      await act(async () => lookup.release());
+      expect(h.controller.tasks[0]).toMatchObject({ phase: 'downloading', percent: undefined });
+      await act(async () => h.controller.importItem(h.controller.items[0]!));
+      expect(h.registry.downloadExternalSource).toHaveBeenCalledTimes(1);
+      await act(async () => download.release());
+      expect(h.controller.tasks[0]).toMatchObject({ phase: 'saving', percent: 25 });
+      await act(async () => {
+        saving.release();
+        await pending;
+      });
+      expect(h.controller.importBusy).toBe(false);
+      expect(h.controller.tasks).toEqual([]);
+      expect(h.controller.items[0]!.importState).toBe('imported');
+    } finally {
+      lookup.release();
+      download.release();
+      saving.release();
+      await act(async () => {
+        await pending;
+        h.renderer.unmount();
+      });
+    }
+  });
+
+  it('retains the failed file for retry and removes that failure after a successful retry', async () => {
+    const h = await createHarness({ downloadedContent: 'synthetic retry file' });
+    try {
+      vi.mocked(h.registry.downloadExternalSource).mockRejectedValueOnce(new Error('fixture transfer failed'));
+      await act(async () => h.controller.importItem(h.controller.items[0]!));
+      expect(h.controller.tasks).toEqual([
+        expect.objectContaining({
+          phase: 'failed',
+          error: 'fixture transfer failed',
+          externalItemKey: 'fixture.source::fixture-account::work-1',
+        }),
+      ]);
+      expect(h.controller.importBusy).toBe(false);
+      await act(async () => h.controller.importItem(h.controller.items[0]!));
+      expect(h.controller.tasks).toEqual([]);
+      expect(h.controller.items[0]!.importState).toBe('imported');
+    } finally {
+      await act(async () => h.renderer.unmount());
+    }
+  });
+
+  it('cancels a queued file without starting its download after lookup settles', async () => {
+    const lookup = gate();
+    let held = false;
+    const h = await createHarness({
+      downloadedContent: 'synthetic cancel file',
+      waitForReadingHistory: () => (held ? lookup.promise : Promise.resolve()),
+    });
+    let pending!: Promise<void>;
+    try {
+      held = true;
+      await act(async () => {
+        pending = h.controller.importItem(h.controller.items[0]!);
+      });
+      await act(async () => h.controller.cancel());
+      expect(h.controller.tasks[0]!.phase).toBe('cancelling');
+      await act(async () => {
+        lookup.release();
+        await pending;
+      });
+      expect(h.registry.downloadExternalSource).not.toHaveBeenCalled();
+      expect(h.controller.tasks[0]).toMatchObject({ phase: 'failed', error: '가져오기를 취소했습니다.' });
+      expect(h.controller.importBusy).toBe(false);
+    } finally {
+      lookup.release();
+      await act(async () => {
+        await pending;
+        h.renderer.unmount();
+      });
+    }
+  });
+});
+
 describe('text serial download task parity', () => {
   beforeEach(() => {
     // Isolate automatic download policy from the separate library-mode one-episode warmup.

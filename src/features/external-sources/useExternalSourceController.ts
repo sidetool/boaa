@@ -2512,6 +2512,41 @@ export function useExternalSourceController(options: UseExternalSourceController
         return;
       }
       setImportBusy(true);
+      const batchId = `external-files-${crypto.randomUUID()}`;
+      const itemKeys = new Set(importable.map((item) => externalItemKeyId(item.key)));
+      setTasks((current) => [
+        ...current.filter((task) => !task.externalItemKey || !itemKeys.has(task.externalItemKey)),
+        ...importable.map((item, index): ImportTaskView => ({
+          id: `${batchId}-${index}`,
+          batchId,
+          source: 'external_source',
+          title: item.title,
+          fileName: item.title,
+          externalItemKey: externalItemKeyId(item.key),
+          phase: 'queued',
+          current: index + 1,
+          total: importable.length,
+        })),
+      ]);
+      const updateTask = (index: number, patch: Partial<ImportTaskView>) => {
+        if (!mountedRef.current) return;
+        setTasks((current) =>
+          current.map((task) =>
+            task.id === `${batchId}-${index}`
+              ? {
+                  ...task,
+                  percent: undefined,
+                  measurement: undefined,
+                  activity: undefined,
+                  finalizing: undefined,
+                  ...patch,
+                }
+              : task,
+          ),
+        );
+      };
+      const abort = new AbortController();
+      downloadAbortRef.current = abort;
       let completed = 0;
       let failed = 0;
       let linkedExisting = 0;
@@ -2526,8 +2561,8 @@ export function useExternalSourceController(options: UseExternalSourceController
         const knownLinks = new Map(links.map((link) => [externalItemKeyId(link.source), link]));
         for (const [index, item] of importable.entries()) {
           if (!mountedRef.current) break;
-          const abort = new AbortController();
-          downloadAbortRef.current = abort;
+          abort.signal.throwIfAborted();
+          updateTask(index, { phase: 'downloading' });
           let stagedLinks: readonly ExternalSourceLink[] = [];
           let previousLinks: readonly ExternalSourceLink[] = [];
           let contentApplied = false;
@@ -2562,6 +2597,7 @@ export function useExternalSourceController(options: UseExternalSourceController
               fileName: item.title,
               phase: 'verifying',
             });
+            updateTask(index, { phase: 'verifying' });
             const sourceHash =
               normalizedHash(
                 await hashBlobInChunks(downloaded.file, {
@@ -2600,6 +2636,7 @@ export function useExternalSourceController(options: UseExternalSourceController
                 fileName: item.title,
                 phase: 'importing',
               });
+              updateTask(index, { phase: 'preparing' });
               const localBookId =
                 existingLink?.localBookId ??
                 target?.id ??
@@ -2638,6 +2675,7 @@ export function useExternalSourceController(options: UseExternalSourceController
                 },
                 (detail) => {
                   if (!mountedRef.current) return;
+                  updateTask(index, projectImportProgress(detail));
                   setProgress({
                     current: index + 1,
                     total: importable.length,
@@ -2686,8 +2724,17 @@ export function useExternalSourceController(options: UseExternalSourceController
               await saveExternalSourceLinks(optionsRef.current.state, [link]);
             }
             knownLinks.set(externalItemKeyId(item.key), link);
+            updateTask(index, { phase: 'complete' });
           } catch (error) {
             importRef.current = undefined;
+            updateTask(index, {
+              phase: 'failed',
+              error: isAbort(error)
+                ? '가져오기를 취소했습니다.'
+                : error instanceof Error
+                  ? error.message
+                  : '파일을 가져오지 못했습니다.',
+            });
             if (isAbort(error)) {
               if (
                 !contentApplied &&
@@ -2746,6 +2793,24 @@ export function useExternalSourceController(options: UseExternalSourceController
             cancelled || failed > 0 || linkRepairPending > 0 ? 'warning' : 'success',
           );
       } catch (error) {
+        if (mountedRef.current)
+          setTasks((current) =>
+            current.map((task) =>
+              task.batchId === batchId && task.phase !== 'complete' && task.phase !== 'failed'
+                ? {
+                    ...task,
+                    phase: 'failed',
+                    percent: undefined,
+                    measurement: undefined,
+                    error: isAbort(error)
+                      ? '가져오기를 취소했습니다.'
+                      : error instanceof Error
+                        ? error.message
+                        : '라이브러리를 확인하지 못했습니다.',
+                  }
+                : task,
+            ),
+          );
         optionsRef.current.notify(
           error instanceof Error ? error.message : '라이브러리를 확인하지 못했습니다. 다시 시도해 주세요.',
           'warning',
@@ -2754,6 +2819,21 @@ export function useExternalSourceController(options: UseExternalSourceController
         downloadAbortRef.current = undefined;
         importRef.current = undefined;
         if (mountedRef.current) {
+          setTasks((current) =>
+            current.flatMap((task) => {
+              if (task.batchId !== batchId || task.phase === 'failed') return [task];
+              if (task.phase === 'complete') return [];
+              return [
+                {
+                  ...task,
+                  phase: 'failed' as const,
+                  percent: undefined,
+                  measurement: undefined,
+                  error: '가져오기를 취소했습니다.',
+                },
+              ];
+            }),
+          );
           setImportBusy(false);
           setProgress(undefined);
         }

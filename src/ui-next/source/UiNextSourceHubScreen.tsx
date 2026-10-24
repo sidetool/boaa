@@ -1,7 +1,6 @@
 import {
   AlertTriangle,
   BookCheck,
-  BookOpen,
   BookX,
   Check,
   ChevronLeft,
@@ -9,7 +8,6 @@ import {
   Download,
   FilePenLine,
   FilePlus2,
-  FileText,
   Folder,
   ListChecks,
   BellPlus,
@@ -43,15 +41,10 @@ import {
   canSelectItem,
   importStateLabel,
   itemDescription,
-  itemStateLabel,
   releaseReadingStateLabel,
   updatedLabel,
 } from '../../features/external-sources/source-hub-item-model';
-import {
-  releaseDownloadAction,
-  sourceHubItemActions,
-  type SourceHubAction,
-} from '../../features/external-sources/source-hub-item-actions';
+import { releaseDownloadAction, sourceHubItemActions } from '../../features/external-sources/source-hub-item-actions';
 import { SourceDownloadRecovery } from '../../features/external-sources/SourceDownloadRecovery';
 import { SourceFilterControl } from '../../features/external-sources/SourceFilterControl';
 import { SourceStreamReader } from '../../features/external-sources/SourceStreamReader';
@@ -60,6 +53,7 @@ import { Pager } from '../chapters/Pager';
 import { Synopsis } from '../chapters/Synopsis';
 import { DetailTags } from '../chapters/DetailTags';
 import { SourceWorkTools as SourceWorkManagement } from './SourceWorkTools';
+import { SourceFileRow } from './SourceFileRow';
 import { useSourceHubModel } from '../../features/external-sources/useSourceHubModel';
 import { sourceEpisodeNumber } from '../../features/external-sources/source-primary-read';
 import { useSourceReleaseList } from '../../features/external-sources/useSourceReleaseList';
@@ -69,7 +63,7 @@ import {
   importTaskStageLabel,
   type ImportTaskView,
 } from '../../features/import/import-task-projection';
-import { formatBytes, formatCount } from '../../utils/format';
+import { formatCount } from '../../utils/format';
 import { ActionList, cx, Progress, Segmented, Sheet, type ActionEntry } from '../components/primitives';
 import { RemoteCover, WorkCover } from '../library/WorkTile';
 import '../chapters/chapters.css';
@@ -476,7 +470,8 @@ function ReleaseList({ model }: { model: Model }) {
 function SourceItem({ item, model }: { item: ExternalSourceItemView; model: Model }) {
   const { controller, activeSource } = model;
   const libraryAddEnabled = Boolean(activeSource?.supportsSubscriptions);
-  const actions = sourceHubItemActions(item, controller, undefined, libraryAddEnabled);
+  const task = model.taskByItemKey.get(externalItemKeyId(item.key));
+  const actions = sourceHubItemActions(item, controller, task, libraryAddEnabled);
   const browsable = item.kind === 'work' && Boolean(item.navigationRef);
   const titleRef = useRef<HTMLDivElement>(null);
   const near = useNearOnce(titleRef);
@@ -530,80 +525,7 @@ function SourceItem({ item, model }: { item: ExternalSourceItemView; model: Mode
       </div>
     );
 
-  const selectable = canSelectItem(item);
-  const supported = selectable || item.importState === 'imported';
-  const primary: SourceHubAction | undefined = actions.canRead
-    ? actions.read
-    : item.importState === 'imported' || !selectable
-      ? undefined
-      : actions.import;
-  return (
-    <div className={cx('un-source-file', item.selected && 'is-selected')}>
-      {selectable ? (
-        <label className="un-release-check">
-          <input
-            type="checkbox"
-            checked={item.selected}
-            disabled={controller.busy}
-            aria-label={`${item.title} 선택`}
-            onChange={actions.toggleSelection}
-          />
-          <span aria-hidden="true">{item.selected && <Check size={14} strokeWidth={3} />}</span>
-        </label>
-      ) : (
-        <span className="un-release-check" aria-hidden="true" />
-      )}
-      <span className="un-source-file-icon" aria-hidden="true">
-        {item.thumbnailUrl ? <img src={item.thumbnailUrl} alt="" loading="lazy" /> : <FileText size={20} />}
-      </span>
-      <span className="un-source-file-text">
-        <b title={item.title}>{item.title}</b>
-        <small>
-          {[
-            itemDescription(item),
-            item.formatHint,
-            item.byteLength !== undefined ? formatBytes(item.byteLength) : undefined,
-            updatedLabel(item.updatedAt),
-          ]
-            .filter(Boolean)
-            .join(' · ')}
-        </small>
-        {item.localBookTitle && <small>서재: {item.localBookTitle}</small>}
-        <span className={cx('un-release-state', `is-${supported ? item.importState : 'unsupported'}`)}>
-          {item.importState === 'imported' && <Check size={12} />}
-          {supported ? itemStateLabel(item) : '지원하지 않음'}
-        </span>
-      </span>
-      {primary && (
-        <button
-          type="button"
-          className={cx('un-btn is-sm un-source-file-action', actions.canRead ? 'is-ghost' : 'is-primary')}
-          disabled={primary.disabled}
-          onClick={() => void primary.run()}
-        >
-          {actions.canRead ? (
-            <BookOpen size={15} />
-          ) : item.importState === 'update_available' ? (
-            <RefreshCw size={15} />
-          ) : (
-            <Download size={15} />
-          )}
-          <span>{actions.canRead ? '열기' : item.importState === 'update_available' ? '업데이트' : '가져오기'}</span>
-        </button>
-      )}
-      {controller.canRemoveItems && (
-        <button
-          type="button"
-          className="un-icon-btn is-sm"
-          disabled={controller.busy}
-          aria-label={`${item.title} 선택 목록에서 제거`}
-          onClick={() => void actions.remove()}
-        >
-          <X size={16} />
-        </button>
-      )}
-    </div>
-  );
+  return <SourceFileRow item={item} controller={controller} actions={actions} task={task} />;
 }
 
 function WorkHero({ model, props }: { model: Model; props: SourceHubScreenProps }) {
@@ -1199,7 +1121,7 @@ export default function UiNextSourceHubScreen(props: SourceHubScreenProps) {
             <>
               <span className="un-source-batch-label">
                 <LoaderCircle size={17} className="un-spin" />
-                <b>선택 회차 다운로드 중</b>
+                <b>{model.releaseList || catalog ? '선택 회차 다운로드 중' : '선택 파일 가져오는 중'}</b>
                 {controller.progress && (
                   <small>
                     {contentItems.some((item) => item.collection?.seriesProfile?.kind === 'document_series') &&

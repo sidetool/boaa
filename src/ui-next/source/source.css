@@ -542,6 +542,79 @@
   flex: none;
 }
 
+/* Import activity lives on the row it belongs to: a stage word, a bar, and a ring that cancels. */
+.un-source-file-text .un-release-state.is-active {
+  min-width: 0;
+  max-width: 100%;
+  color: var(--un-accent-2);
+}
+
+.un-source-file-text .un-release-state.is-queued {
+  color: var(--un-text-2);
+}
+
+.un-source-file-detail {
+  overflow: hidden;
+  min-width: 0;
+  color: var(--un-text-3);
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  text-overflow: ellipsis;
+}
+
+.un-source-file-progress {
+  max-width: 240px;
+  height: 3px;
+  margin-top: 3px;
+}
+
+.un-source-file-progress.is-indeterminate > span {
+  width: 35%;
+  animation: un-source-indeterminate 1.3s var(--un-ease) infinite;
+}
+
+@keyframes un-source-indeterminate {
+  from {
+    transform: translateX(-100%);
+  }
+
+  to {
+    transform: translateX(290%);
+  }
+}
+
+.un-source-file-text .un-source-file-error {
+  display: -webkit-box;
+  color: var(--un-text-2);
+  white-space: normal;
+  overflow-wrap: anywhere;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.un-source-file-ring {
+  position: relative;
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+}
+
+.un-source-file-ring::before {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background: conic-gradient(var(--un-accent) var(--un-ring, 0%), rgb(255 255 255 / 15%) 0);
+  content: '';
+  -webkit-mask: radial-gradient(closest-side, transparent 70%, #000 72%);
+  mask: radial-gradient(closest-side, transparent 70%, #000 72%);
+}
+
+.un-source-file-ring.is-indeterminate::before {
+  animation: un-spin 0.9s linear infinite;
+}
+
 .un-source-file-skeleton .un-source-file > i,
 .un-source-file-skeleton .un-source-file span i {
   display: block;
@@ -698,7 +771,7 @@
     background: var(--un-bg-3);
   }
 
-  .un-source-file-action span {
+  .un-source-file-action-label {
     position: absolute;
     overflow: hidden;
     width: 1px;
@@ -812,6 +885,16 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .un-source-file-progress.is-indeterminate > span {
+    width: 100%;
+    opacity: 0.45;
+    animation: none;
+  }
+
+  .un-source-file-ring.is-indeterminate::before {
+    animation: none;
+  }
+
   .un-source-file-skeleton i,
   .un-release-skeleton-row i,
   .un-detail-kicker-wait,

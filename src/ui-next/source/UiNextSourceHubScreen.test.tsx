@@ -542,6 +542,18 @@ describe('catalog items and loading', () => {
     expect(form.findByType('input').props.placeholder).toBe('파일 검색');
   });
 
+  it('hands each file row its own import task', () => {
+    hub.activeSource = { ...c.sources[0], kind: 'cloud_file' };
+    const busy = file();
+    const idle = file({ key: { ...busy.key, remoteId: 'idle' }, title: '다른 파일' });
+    setItems([busy, idle]);
+    hub.taskByItemKey.set(externalItemKeyId(busy.key), task('downloading'));
+    const root = mount();
+    expect(root.findAllByProps({ 'aria-busy': true, className: 'un-source-file is-active' })).toHaveLength(1);
+    expect(button(root, `${busy.title} 가져오기 중단`)).toBeDefined();
+    expect(button(root, '가져오기')).toBeDefined();
+  });
+
   it('keeps file action names while marking unsupported files distinctly', () => {
     hub.activeSource = { ...c.sources[0], kind: 'cloud_file' };
     const available = file({ title: '가나다 아주 긴 파일 이름 예시 문서 제01권.txt' });
