@@ -256,3 +256,59 @@ it('ignores delayed hydration and queued startup edits from a replaced repositor
     act(() => renderer.unmount());
   }
 });
+
+it.each(['success', 'failure'])(
+  'ignores an old repository save finishing with %s after account replacement',
+  async (outcome) => {
+    let finish!: () => void;
+    let fail!: (error: Error) => void;
+    const pending = new Promise<void>((resolve, reject) => {
+      finish = resolve;
+      fail = reject;
+    });
+    const first = { saveSettings: vi.fn(() => pending) };
+    const second = { saveSettings: vi.fn(async () => undefined) };
+    const callbacks = { onSaved: vi.fn(), onSaveError: vi.fn(), notify: vi.fn() };
+    let controller!: ReaderSettingsController;
+    function Harness({ repository }: { repository: typeof first }) {
+      controller = useReaderSettingsDraft({
+        ...callbacks,
+        repository,
+        initialSettings: defaultSettings,
+        initialSettingsLoaded: false,
+      });
+      return null;
+    }
+    let renderer!: ReactTestRenderer;
+    await act(async () => {
+      renderer = create(<Harness repository={first} />);
+    });
+    try {
+      await act(async () => controller.setPersistedSettings(defaultSettings));
+      let writing!: Promise<void>;
+      await act(async () => {
+        controller.updateSettings({ fontSize: 28, ttsSpeed: 1.5 });
+        writing = controller.flush();
+      });
+      await act(async () => renderer.update(<Harness repository={second} />));
+      const accountSettings = { ...defaultSettings, fontSize: 19 };
+      await act(async () => controller.setPersistedSettings(accountSettings));
+      const committedBefore = controller.persistedSettings;
+      callbacks.onSaved.mockClear();
+      await act(async () => {
+        if (outcome === 'success') finish();
+        else fail(new Error('old account save failed'));
+        await writing;
+      });
+      expect(controller.persistedSettings).toEqual(committedBefore);
+      expect(controller.settings).toEqual(accountSettings);
+      expect(controller.saveError).toBe(false);
+      expect(callbacks.onSaved).not.toHaveBeenCalled();
+      expect(callbacks.onSaveError).not.toHaveBeenCalled();
+      expect(second.saveSettings).not.toHaveBeenCalled();
+    } finally {
+      finish();
+      await act(async () => renderer.unmount());
+    }
+  },
+);

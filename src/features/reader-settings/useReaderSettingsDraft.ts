@@ -59,6 +59,8 @@ export function useReaderSettingsDraft(options: ReaderSettingsDraftOptions) {
         delayMs: options.debounceMs ?? 320,
         write: (settings) => options.repository.saveSettings(settings),
         onCommitted: (settings) => {
+          // The previous account may finish a queued write after its repository was replaced.
+          if (optionsRef.current.repository !== options.repository) return;
           const sharedChanged = !sharedReaderSettingsEqual(persistedRef.current, settings);
           persistedRef.current = settings;
           if (mountedRef.current) {
@@ -73,10 +75,12 @@ export function useReaderSettingsDraft(options: ReaderSettingsDraftOptions) {
             });
         },
         onError: (error) => {
+          if (optionsRef.current.repository !== options.repository) return;
           if (mountedRef.current) setSaveError(true);
           void Promise.resolve(optionsRef.current.onSaveError(error)).catch(() => undefined);
         },
         onStatusChange: (status) => {
+          if (optionsRef.current.repository !== options.repository) return;
           if (mountedRef.current) setSaveStatus(status);
         },
       }),
