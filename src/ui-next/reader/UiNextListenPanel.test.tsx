@@ -4,6 +4,10 @@ import ProviderSettingsPanel from '../../features/providers/ProviderSettingsPane
 import TTSAddonPanel, { type TTSAddonPanelProps } from '../../features/tts/TTSAddonPanel';
 import { DEFAULT_TTS_PLAYBACK_SETTINGS } from '../../providers/tts-playback-settings';
 import UiNextListenPanel from './UiNextListenPanel';
+import { usePlainTTS } from '../../features/tts/usePlainTTS';
+import { useTTSExecutionController } from '../../features/tts/useTTSExecutionController';
+import { buildPlainTTSBatch } from '../../providers/plain-tts';
+import type { Paragraph } from '../../domain/types';
 
 // Who may open 서버 관리: the server must expose management and the account must hold manageServer.
 const access = vi.hoisted(() => ({ managed: false, manageServer: true }));
@@ -141,6 +145,7 @@ describe('UiNextListenPanel playback', () => {
       paused: true,
       retryAudio,
       retryAudioAvailable: true,
+      hostedBusy: true,
       playbackSettings: { ...DEFAULT_TTS_PLAYBACK_SETTINGS, voiceSource: 'server' },
       plainVoices: { available: true, defaultVoiceId: 'voice', voices: [{ id: 'voice', label: 'Voice', lang: 'ko' }] },
     });
@@ -161,6 +166,145 @@ describe('UiNextListenPanel playback', () => {
     expect(button(renderer!.root, '음성 다시 만드는 중').props.disabled).toBe(true);
     act(() => renderer!.update(<UiNextListenPanel {...props} retryAudioAvailable={false} />));
     expect(button(renderer!.root, '현재 음성 다시 생성').props.disabled).toBe(true);
+  });
+  it('allows regenerating a paused real hosted playback while its operation is still busy', async () => {
+    const catalog = {
+      available: true,
+      revision: 'v1',
+      defaultVoiceId: 'voice',
+      voices: [{ id: 'voice', label: 'Voice', lang: 'ko' }],
+    };
+    let completeSynthesis!: (blob: Blob) => void;
+    const synthesize = vi.fn(
+      () =>
+        new Promise<Blob>((resolve) => {
+          completeSynthesis = resolve;
+        }),
+    );
+    type PlainInput = Parameters<typeof usePlainTTS>[0];
+    const client = {
+      listPlainTTSVoices: async () => catalog,
+      synthesizePlainTTS: synthesize,
+    } as unknown as PlainInput['client'];
+    let completeAudio: ((played: boolean) => void) | undefined;
+    const audio = {
+      get hasActivePlayback() {
+        return Boolean(completeAudio);
+      },
+      playBlob: vi.fn(
+        (_blob: Blob) =>
+          new Promise<boolean>((resolve) => {
+            completeAudio = resolve;
+          }),
+      ),
+      stop: vi.fn(() => {
+        completeAudio?.(false);
+        completeAudio = undefined;
+      }),
+      pause: vi.fn(),
+      resume: vi.fn(async () => true),
+    };
+    const systemTTS = { stop: vi.fn(), pause: vi.fn(), resume: vi.fn() } as unknown as PlainInput['systemTTS'];
+    const owner = {};
+    const settings = { ...DEFAULT_TTS_PLAYBACK_SETTINGS, voiceSource: 'server' as const, mode: 'plain' as const };
+    const paragraph = {
+      id: 'p1',
+      index: 1,
+      chapterId: 'chapter',
+      novelId: 'book',
+      text: '현재 문단입니다.',
+    } as Paragraph;
+    const playable = buildPlainTTSBatch({
+      paragraphs: [paragraph, { ...paragraph, id: 'p2', index: 2, text: '다음 문단입니다.' }],
+      rate: 1,
+    })!;
+    let controller!: ReturnType<typeof useTTSExecutionController>;
+    let plain!: ReturnType<typeof usePlainTTS>;
+    const pending: Promise<boolean>[] = [];
+    const onError = vi.fn();
+    function Harness() {
+      controller = useTTSExecutionController({
+        systemTTS,
+        audioSession: audio,
+        sessionOwner: owner,
+        bookId: 'book',
+        chapterId: 'chapter',
+      });
+      plain = usePlainTTS({
+        client,
+        owner,
+        enabled: true,
+        settings,
+        contentRevision: 'r1',
+        chapterId: 'chapter',
+        rules: [],
+        controller,
+        systemTTS,
+        onError,
+      });
+      return (
+        <UiNextListenPanel
+          {...fixture({
+            playbackSettings: settings,
+            plainVoices: catalog,
+            playing: controller.playing,
+            paused: controller.paused,
+            hostedBusy: controller.hostedBusy,
+            paragraphIndex: controller.index ?? 0,
+            pause: controller.pause,
+            retryAudioAvailable: Boolean(plain.ready && plain.retryTarget() && !controller.playbackWaiting),
+            retryAudio: () => {
+              if (controller.playbackWaiting) return;
+              controller.stopAll({ preserveSleepTimer: true });
+              const session = controller.beginSession('book', 'chapter', 0)!;
+              pending.push(plain.play(playable, paragraph, session, undefined, { prepared: () => {} }));
+            },
+          })}
+        />
+      );
+    }
+    await act(async () => {
+      renderer = create(<Harness />);
+    });
+    await act(async () => {
+      const session = controller.beginSession('book', 'chapter', 0)!;
+      pending.push(plain.play(playable, paragraph, session));
+    });
+    expect(onError.mock.calls).toEqual([]);
+    expect(plain.ready).toBe(true);
+    expect(controller.playbackWaiting).toBe(true);
+    expect(button(renderer!.root, '현재 음성 다시 생성').props.disabled).toBe(true);
+    await act(async () => {
+      completeSynthesis(new Blob(['original audio']));
+    });
+    expect(audio.playBlob).toHaveBeenCalledOnce();
+    expect(controller.hostedBusy).toBe(true);
+    expect(controller.playbackWaiting).toBe(false);
+    expect(button(renderer!.root, '현재 음성 다시 생성').props.disabled).toBeFalsy();
+    click(button(renderer!.root, '일시정지'));
+    expect(controller.paused).toBe(true);
+    expect(controller.hostedBusy).toBe(true);
+    await act(async () => {
+      click(button(renderer!.root, '현재 음성 다시 생성'));
+    });
+    expect(synthesize).toHaveBeenCalledTimes(2);
+    expect(synthesize).toHaveBeenLastCalledWith(
+      'chapter',
+      expect.objectContaining({ regenerate: true }),
+      expect.any(AbortSignal),
+    );
+    expect(button(renderer!.root, '현재 음성 다시 생성').props.disabled).toBe(true);
+    const replacement = new Blob(['replacement audio']);
+    await act(async () => {
+      completeSynthesis(replacement);
+    });
+    expect(audio.playBlob.mock.calls[1][0]).toBe(replacement);
+    expect(controller.paused).toBe(false);
+    expect(button(renderer!.root, '현재 음성 다시 생성').props.disabled).toBeFalsy();
+    await act(async () => {
+      controller.stopAll();
+      await Promise.all(pending);
+    });
   });
   it.each([
     [false, false, '재생', 'start'],

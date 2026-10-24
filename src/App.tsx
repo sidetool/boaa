@@ -4757,13 +4757,14 @@ export default function App() {
 
   const retryPlainAudio = () => {
     const target = plainTTS.retryTarget();
+    // hostedBusy includes playing/paused audio; only preparation blocks regeneration.
     if (
       !plainServerSelected ||
       !plainTTS.ready ||
       !target ||
       ttsIndex === undefined ||
       retryAudioToken.current ||
-      hostedTTSBusy
+      ttsExecutionController.playbackWaiting
     )
       return;
     const token = {};
@@ -5890,7 +5891,12 @@ export default function App() {
                 jump={jumpTTS}
                 start={startTTS}
                 retryAudio={plainServerSelected ? retryPlainAudio : undefined}
-                retryAudioAvailable={Boolean(plainTTS.ready && ttsIndex !== undefined && plainTTS.retryTarget())}
+                retryAudioAvailable={Boolean(
+                  plainTTS.ready &&
+                  ttsIndex !== undefined &&
+                  plainTTS.retryTarget() &&
+                  !ttsExecutionController.playbackWaiting,
+                )}
                 retryAudioBusy={retryAudioBusy}
                 resume={resumeTTS}
                 pause={pauseTTS}
