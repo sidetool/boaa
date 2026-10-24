@@ -527,6 +527,43 @@ describe('catalog items and loading', () => {
     expect(status.findAllByProps({ className: 'un-skeleton' }).length).toBeGreaterThan(0);
   });
 
+  it('shows file-shaped rows while loading an empty file source', () => {
+    hub.activeSource = { ...c.sources[0], kind: 'cloud_file' };
+    patch({ loading: true });
+    const status = mount().findByProps({ role: 'status', 'aria-label': '목록을 불러오고 있어요' });
+    expect(status.props.className).toContain('un-source-file-skeleton');
+    expect(status.findAllByProps({ className: 'un-skeleton' })).toHaveLength(0);
+  });
+
+  it('builds the file search from the always-loaded inline search primitive', () => {
+    hub.activeSource = { ...c.sources[0], kind: 'cloud_file' };
+    const form = mount().findByProps({ role: 'search' });
+    expect(form.props.className.split(' ')).toEqual(['un-inline-search', 'un-source-search']);
+    expect(form.findByType('input').props.placeholder).toBe('파일 검색');
+  });
+
+  it('keeps file action names while marking unsupported files distinctly', () => {
+    hub.activeSource = { ...c.sources[0], kind: 'cloud_file' };
+    const available = file({ title: '가나다 아주 긴 파일 이름 예시 문서 제01권.txt' });
+    const unsupported = file({
+      key: { ...available.key, remoteId: 'unsupported' },
+      title: '알 수 없는 형식.bin',
+      importability: 'unsupported',
+    });
+    setItems([available, unsupported]);
+    const root = mount();
+    const action = button(root, '가져오기');
+    expect(action.props.className.split(' ')).toContain('un-source-file-action');
+    const states = root.findAll(
+      (node) => typeof node.props.className === 'string' && node.props.className.startsWith('un-release-state '),
+    );
+    expect(states.map((node) => node.props.className)).toEqual([
+      'un-release-state is-available',
+      'un-release-state is-unsupported',
+    ]);
+    expect(text(states[1])).toBe('지원하지 않음');
+  });
+
   it.each([false, true])('explains an empty page with a search cursor=%s', (hasCursor) => {
     patch({ query: hasCursor ? '없는 작품' : '', nextCursor: hasCursor ? 'next' : undefined });
     const root = mount();

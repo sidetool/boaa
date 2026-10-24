@@ -531,6 +531,7 @@ function SourceItem({ item, model }: { item: ExternalSourceItemView; model: Mode
     );
 
   const selectable = canSelectItem(item);
+  const supported = selectable || item.importState === 'imported';
   const primary: SourceHubAction | undefined = actions.canRead
     ? actions.read
     : item.importState === 'imported' || !selectable
@@ -568,15 +569,15 @@ function SourceItem({ item, model }: { item: ExternalSourceItemView; model: Mode
             .join(' · ')}
         </small>
         {item.localBookTitle && <small>서재: {item.localBookTitle}</small>}
-      </span>
-      <span className={cx('un-release-state', `is-${item.importState}`)}>
-        {item.importState === 'imported' && <Check size={12} />}
-        {selectable || item.importState === 'imported' ? itemStateLabel(item) : '지원하지 않음'}
+        <span className={cx('un-release-state', `is-${supported ? item.importState : 'unsupported'}`)}>
+          {item.importState === 'imported' && <Check size={12} />}
+          {supported ? itemStateLabel(item) : '지원하지 않음'}
+        </span>
       </span>
       {primary && (
         <button
           type="button"
-          className={cx('un-btn is-sm', actions.canRead ? 'is-ghost' : 'is-primary')}
+          className={cx('un-btn is-sm un-source-file-action', actions.canRead ? 'is-ghost' : 'is-primary')}
           disabled={primary.disabled}
           onClick={() => void primary.run()}
         >
@@ -587,7 +588,7 @@ function SourceItem({ item, model }: { item: ExternalSourceItemView; model: Mode
           ) : (
             <Download size={15} />
           )}
-          {actions.canRead ? '열기' : item.importState === 'update_available' ? '업데이트' : '가져오기'}
+          <span>{actions.canRead ? '열기' : item.importState === 'update_available' ? '업데이트' : '가져오기'}</span>
         </button>
       )}
       {controller.canRemoveItems && (
@@ -1058,7 +1059,7 @@ export default function UiNextSourceHubScreen(props: SourceHubScreenProps) {
       ) : (
         <section className="un-source-items" aria-label={controller.detail ? '회차' : catalog ? '작품' : '파일'}>
           <div className="un-source-toolbar">
-            <form className="un-discover-search un-source-search" role="search" onSubmit={model.submitSearch}>
+            <form className="un-inline-search un-source-search" role="search" onSubmit={model.submitSearch}>
               <Search size={18} aria-hidden="true" />
               <input
                 type="search"
@@ -1113,15 +1114,33 @@ export default function UiNextSourceHubScreen(props: SourceHubScreenProps) {
           )}
 
           {controller.loading && controller.items.length === 0 ? (
-            <div className="un-grid is-grid" role="status" aria-label="목록을 불러오고 있어요">
-              {Array.from({ length: 12 }, (_, i) => (
-                <span key={i} className="un-skeleton" aria-hidden="true">
-                  <span />
-                  <i />
-                  <i />
-                </span>
-              ))}
-            </div>
+            catalog ? (
+              <div className="un-grid is-grid" role="status" aria-label="목록을 불러오고 있어요">
+                {Array.from({ length: 12 }, (_, i) => (
+                  <span key={i} className="un-skeleton" aria-hidden="true">
+                    <span />
+                    <i />
+                    <i />
+                  </span>
+                ))}
+              </div>
+            ) : (
+              <div
+                className="un-source-list is-rows un-source-file-skeleton"
+                role="status"
+                aria-label="목록을 불러오고 있어요"
+              >
+                {Array.from({ length: 8 }, (_, i) => (
+                  <span key={i} className="un-source-file" aria-hidden="true">
+                    <i />
+                    <span>
+                      <i />
+                      <i />
+                    </span>
+                  </span>
+                ))}
+              </div>
+            )
           ) : controller.items.length === 0 && !controller.listError ? (
             <div className="un-empty is-quiet">
               <b>
@@ -1160,7 +1179,7 @@ export default function UiNextSourceHubScreen(props: SourceHubScreenProps) {
             </p>
           )}
           {controller.nextCursor && (
-            <div className="un-discover-more">
+            <div className="un-source-more">
               <button
                 type="button"
                 className="un-btn is-ghost"

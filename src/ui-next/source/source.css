@@ -190,11 +190,18 @@
   background: var(--un-bg-2);
 }
 
+.un-source-folders button {
+  padding-block: 8px;
+}
+
 .un-source-folders button span {
+  display: -webkit-box;
   overflow: hidden;
   flex: 1;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
 }
 
 .un-source-folders button svg {
@@ -214,25 +221,71 @@
   padding: 8px var(--un-pad) 4px;
 }
 
+/* The pill comes from library.css (always loaded with this screen), never from a screen visited earlier. */
 .un-source-search {
   flex: 1 1 260px;
   max-width: 480px;
 }
 
+.un-source-search input {
+  flex: 1;
+  width: 100%;
+  min-width: 0;
+}
+
 .un-release-page-select {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
+  min-height: 40px;
   color: var(--un-text-2);
   font-size: 14px;
   font-weight: 600;
   cursor: pointer;
 }
 
+/* Drawn like the row checkboxes so the native control never shows through. */
 .un-release-page-select input {
-  width: 18px;
-  height: 18px;
-  accent-color: var(--un-accent);
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  margin: 0;
+  border: 2px solid var(--un-line-2);
+  border-radius: 6px;
+  background: none;
+  cursor: pointer;
+  appearance: none;
+  transition:
+    background 0.15s,
+    border-color 0.15s;
+}
+
+.un-release-page-select input:checked {
+  border-color: var(--un-accent);
+  background: var(--un-accent)
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='3.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M20 6 9 17l-5-5'/%3E%3C/svg%3E")
+    center / 14px no-repeat;
+}
+
+/* A partly selected chapter page draws a dash instead of a check. */
+.un-release-page-select input:indeterminate {
+  border-color: var(--un-accent);
+  background: var(--un-accent)
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='3.5' stroke-linecap='round'%3E%3Cpath d='M6 12h12'/%3E%3C/svg%3E")
+    center / 14px no-repeat;
+}
+
+.un-release-page-select input:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+.un-source-more {
+  display: flex;
+  justify-content: center;
+  padding: 16px var(--un-pad) 0;
 }
 
 .un-source-status {
@@ -426,7 +479,7 @@
   align-items: center;
   gap: 10px;
   min-height: 72px;
-  padding: 8px 4px;
+  padding: 10px 8px 10px 0;
   border-bottom: 1px solid var(--un-line);
 }
 
@@ -439,8 +492,8 @@
   flex: none;
   place-items: center;
   overflow: hidden;
-  width: 40px;
-  height: 52px;
+  width: 36px;
+  height: 46px;
   border-radius: 6px;
   background: var(--un-bg-2);
   color: var(--un-text-3);
@@ -460,12 +513,16 @@
   min-width: 0;
 }
 
+/* File names are often long and only differ near the end, so they get two lines before clipping. */
 .un-source-file-text b {
+  display: -webkit-box;
   overflow: hidden;
   font-size: 15px;
   font-weight: 600;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
 }
 
 .un-source-file-text small {
@@ -474,6 +531,51 @@
   font-size: 12.5px;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* The import button already says a file can be added; only other states need a word. */
+.un-source-file-text .un-release-state.is-available {
+  display: none;
+}
+
+.un-source-file-action {
+  flex: none;
+}
+
+.un-source-file-skeleton .un-source-file > i,
+.un-source-file-skeleton .un-source-file span i {
+  display: block;
+  border-radius: 6px;
+  background: linear-gradient(100deg, var(--un-bg-1) 30%, var(--un-bg-2) 50%, var(--un-bg-1) 70%);
+  background-size: 300% 100%;
+  animation: un-shimmer 1.4s linear infinite;
+}
+
+.un-source-file-skeleton .un-source-file > i {
+  flex: none;
+  width: 36px;
+  height: 46px;
+  margin-left: 46px;
+}
+
+.un-source-file-skeleton .un-source-file > span {
+  display: grid;
+  flex: 1;
+  gap: 8px;
+}
+
+.un-source-file-skeleton .un-source-file span i {
+  width: min(64%, 360px);
+  height: 14px;
+}
+
+.un-source-file-skeleton .un-source-file span i + i {
+  width: min(36%, 180px);
+  height: 11px;
+}
+
+.un-source-file-skeleton .un-source-file:nth-child(n + 4) {
+  opacity: 0.6;
 }
 
 .un-source-work {
@@ -561,8 +663,59 @@
     display: inline-flex;
   }
 
-  .un-source-file .un-release-state {
+  .un-source-file {
+    gap: 8px;
+    padding-right: 0;
+  }
+
+  .un-source-file-icon {
+    width: 32px;
+    height: 40px;
+  }
+
+  .un-source-file-skeleton .un-source-file > i {
+    width: 32px;
+    height: 40px;
+    margin-left: 44px;
+  }
+
+  .un-source-file-text .un-release-state {
+    display: inline-flex;
+  }
+
+  /* A labelled button per row would squeeze the name, so the row keeps just its icon. */
+  .un-source-file .un-btn.un-source-file-action {
+    position: relative;
+    width: 40px;
+    height: 40px;
+    padding: 0;
+    border-radius: 50%;
+    background: var(--un-bg-2);
+    color: var(--un-text);
+  }
+
+  .un-source-file .un-btn.un-source-file-action:hover {
+    background: var(--un-bg-3);
+  }
+
+  .un-source-file-action span {
+    position: absolute;
+    overflow: hidden;
+    width: 1px;
+    height: 1px;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+}
+
+@media (max-width: 359px) {
+  .un-source-file-icon,
+  .un-source-file-skeleton .un-source-file > i {
     display: none;
+  }
+
+  .un-source-file-skeleton .un-source-file > span {
+    margin-left: 44px;
   }
 }
 
@@ -659,6 +812,7 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .un-source-file-skeleton i,
   .un-release-skeleton-row i,
   .un-detail-kicker-wait,
   .un-detail-action-wait {
