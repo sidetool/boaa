@@ -27,14 +27,16 @@ function NextHomeWorkspace({
   const discoveryRows = useHomeDiscovery(props);
   const pluginRows = usePluginHome();
   useEffect(() => {
-    if (!pluginRows?.sections.length) return;
+    // Plugin metadata can arrive before the account's saved reader preferences.
+    // Do not persist home defaults while those preferences are still loading.
+    if (props.bootstrap.status !== 'ready' || !pluginRows?.sections.length) return;
     const next = appendPluginHomeRows(settings.homeRows, pluginRows.sections);
     if (JSON.stringify(next) === JSON.stringify(settings.homeRows)) return;
     updateSettings((previous) => {
       const homeRows = appendPluginHomeRows(previous.homeRows, pluginRows.sections);
       return JSON.stringify(homeRows) === JSON.stringify(previous.homeRows) ? previous : { ...previous, homeRows };
     });
-  }, [pluginRows?.sections, settings.homeRows, updateSettings]);
+  }, [props.bootstrap.status, pluginRows?.sections, settings.homeRows, updateSettings]);
   const sourceContinuity = useMemo(
     () =>
       homeSourceContinuity({

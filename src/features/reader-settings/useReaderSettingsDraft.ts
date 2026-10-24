@@ -17,6 +17,8 @@ import { SerializedSettingsSaveWriter, type SettingsSaveStatus } from './setting
 interface ReaderSettingsDraftOptions {
   readonly repository: Pick<ReaderRepository, 'saveSettings'>;
   readonly initialSettings: ReaderSettings;
+  /** False when initialSettings is only a placeholder pending the repository bootstrap. */
+  readonly initialSettingsLoaded?: boolean;
   readonly debounceMs?: number;
   readonly onSaved: () => Promise<unknown> | unknown;
   readonly onSaveError: (error: unknown) => Promise<void> | void;
@@ -40,6 +42,14 @@ export function useReaderSettingsDraft(options: ReaderSettingsDraftOptions) {
   const mountedRef = useRef(false);
   const editGeneration = useRef(0);
   const refreshGeneration = useRef(0);
+  const hydration = useMemo(
+    () => ({
+      repository: options.repository,
+      loaded: options.initialSettingsLoaded !== false,
+      edits: [] as ReaderSettingsDraftAction[],
+    }),
+    [options.repository, options.initialSettingsLoaded],
+  );
   const optionsRef = useRef(options);
   optionsRef.current = options;
 
@@ -83,20 +93,40 @@ export function useReaderSettingsDraft(options: ReaderSettingsDraftOptions) {
 
   const updateDraft = useCallback(
     (action: ReaderSettingsDraftAction) => {
-      editGeneration.current++;
+      if (hydration.repository !== optionsRef.current.repository) return;
       const next = typeof action === 'function' ? action(draftRef.current) : { ...draftRef.current, ...action };
+      if (hydration.loaded && readerSettingsEqual(next, draftRef.current)) return;
+      editGeneration.current++;
       draftRef.current = next;
       setDraftState(next);
       setSaveError(false);
-      writer.schedule(next);
+      if (hydration.loaded) writer.schedule(next);
+      else hydration.edits.push(action);
     },
-    [writer],
+    [writer, hydration],
   );
 
   const setPersistedSettings = useCallback<Dispatch<SetStateAction<ReaderSettings>>>(
     (action) => {
+      if (hydration.repository !== optionsRef.current.repository) return;
       const previous = persistedRef.current;
       const next = resolveSettingsAction(action, previous);
+      if (!hydration.loaded) {
+        hydration.loaded = true;
+        // Replay only edits made during startup on the authoritative snapshot. Never
+        // persist untouched placeholder fields (including the entire default TTS object).
+        const rebased = hydration.edits.reduce<ReaderSettings>(
+          (current, edit) => (typeof edit === 'function' ? edit(current) : { ...current, ...edit }),
+          next,
+        );
+        hydration.edits = [];
+        persistedRef.current = next;
+        draftRef.current = rebased;
+        setPersistedState(next);
+        setDraftState(rebased);
+        if (!readerSettingsEqual(rebased, next)) writer.schedule(rebased);
+        return;
+      }
       const hasLocalDraft = writer.hasUncommitted() || !readerSettingsEqual(draftRef.current, previous);
       persistedRef.current = next;
       setPersistedState(next);
@@ -105,7 +135,7 @@ export function useReaderSettingsDraft(options: ReaderSettingsDraftOptions) {
         setDraftState(next);
       }
     },
-    [writer],
+    [writer, hydration],
   );
 
   const currentWriter = useRef(writer);
@@ -136,9 +166,11 @@ export function useReaderSettingsDraft(options: ReaderSettingsDraftOptions) {
   }, [writer]);
   const retrySave = useCallback(() => {
     setSaveError(false);
-    writer.schedule(draftRef.current);
-    void writer.flush();
-  }, [writer]);
+    if (hydration.loaded) {
+      writer.schedule(draftRef.current);
+      void writer.flush();
+    }
+  }, [writer, hydration]);
   const toggleNightTheme = useCallback(
     () =>
       updateDraft({

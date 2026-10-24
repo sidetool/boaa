@@ -781,6 +781,7 @@ export default function App() {
   const readerSettingsController = useReaderSettingsDraft({
     repository: readerRepository,
     initialSettings: defaultSettings,
+    initialSettingsLoaded: false,
     onSaved: () => readerMutationCommittedRef.current('settings'),
     onSaveError: async (error) => {
       if (!(await readerPersistenceErrorRef.current(error))) {

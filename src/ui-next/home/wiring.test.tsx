@@ -30,6 +30,7 @@ it('supplies full data before library filtering and persists configuration throu
   const fullCollection = { ...p.model.collection, visibleBooks: [] };
   const props = {
     homeSettings: { settings: defaultSettings, updateSettings },
+    bootstrap: { status: 'ready', retry: () => undefined },
     state: {
       selectedNovel: novel({ lastReadChapterIndex: 3 }),
       chapters: [{ id: 'ch3', index: 3, title: '제3화 장면 3' }],

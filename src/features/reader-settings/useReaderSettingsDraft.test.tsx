@@ -77,3 +77,182 @@ it('ignores an older refresh after a newer edit has already finished saving', as
   expect(controller.isDirty).toBe(false);
   act(() => renderer.unmount());
 });
+
+it('waits for authoritative startup settings before saving automatic home edits', async () => {
+  const saved = {
+    ...defaultSettings,
+    ttsSpeed: 1.2,
+    ttsPlayback: {
+      ...defaultSettings.ttsPlayback,
+      voiceSource: 'server' as const,
+      serverVoiceId: 'fixture:voice',
+      plainChunking: 'batch' as const,
+      rate: 1.2,
+      chapterEndBehavior: 'continue' as const,
+    },
+  };
+  const repository = { saveSettings: vi.fn(async () => undefined) };
+  let controller!: ReaderSettingsController;
+  const options = {
+    repository,
+    initialSettings: defaultSettings,
+    initialSettingsLoaded: false,
+    onSaved: vi.fn(),
+    onSaveError: vi.fn(),
+    notify: vi.fn(),
+  };
+  function Harness() {
+    controller = useReaderSettingsDraft(options);
+    return null;
+  }
+  let renderer!: ReactTestRenderer;
+  act(() => {
+    renderer = create(<Harness />);
+  });
+  try {
+    await act(async () => {
+      controller.updateSettings((previous) => ({
+        ...previous,
+        homeRows: [{ id: 'unread', kind: 'unread', visible: false }],
+      }));
+      await controller.flush();
+    });
+    expect(repository.saveSettings).not.toHaveBeenCalled();
+    await act(async () => {
+      controller.setPersistedSettings(saved);
+      await controller.flush();
+    });
+    expect(repository.saveSettings).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        ttsSpeed: 1.2,
+        ttsPlayback: saved.ttsPlayback,
+        homeRows: [{ id: 'unread', kind: 'unread', visible: false }],
+      }),
+    );
+    expect(controller.settings.ttsPlayback).toEqual(saved.ttsPlayback);
+    expect(controller.isDirty).toBe(false);
+  } finally {
+    act(() => renderer.unmount());
+  }
+});
+
+it('never flushes placeholders if bootstrap fails or the app closes before settings load', async () => {
+  let controller!: ReaderSettingsController;
+  const saveSettings = vi.fn(async () => undefined);
+  const options = {
+    repository: { saveSettings },
+    initialSettings: defaultSettings,
+    initialSettingsLoaded: false,
+    onSaved: vi.fn(),
+    onSaveError: vi.fn(),
+    notify: vi.fn(),
+  };
+  function Harness() {
+    controller = useReaderSettingsDraft(options);
+    return null;
+  }
+  let renderer!: ReactTestRenderer;
+  act(() => {
+    renderer = create(<Harness />);
+  });
+  await act(async () => {
+    controller.updateSettings({ recentSearches: ['fixture'] });
+    controller.retrySave();
+    controller.closePanel();
+    await controller.flush();
+  });
+  await act(async () => renderer.unmount());
+  expect(saveSettings).not.toHaveBeenCalled();
+});
+
+it('rebases an explicit default-valued startup edit without resetting the other saved TTS fields', async () => {
+  let controller!: ReaderSettingsController;
+  const saveSettings = vi.fn(async () => undefined);
+  const options = {
+    repository: { saveSettings },
+    initialSettings: defaultSettings,
+    initialSettingsLoaded: false,
+    onSaved: vi.fn(),
+    onSaveError: vi.fn(),
+    notify: vi.fn(),
+  };
+  const saved = {
+    ...defaultSettings,
+    ttsSpeed: 1.2,
+    ttsPlayback: {
+      ...defaultSettings.ttsPlayback,
+      rate: 1.2,
+      voiceSource: 'server' as const,
+      serverVoiceId: 'fixture:voice',
+      plainChunking: 'batch' as const,
+    },
+  };
+  function Harness() {
+    controller = useReaderSettingsDraft(options);
+    return null;
+  }
+  let renderer!: ReactTestRenderer;
+  act(() => {
+    renderer = create(<Harness />);
+  });
+  try {
+    await act(async () => {
+      controller.updateSettings((previous) => ({
+        ...previous,
+        ttsSpeed: 1,
+        ttsPlayback: { ...previous.ttsPlayback, rate: 1 },
+      }));
+      controller.setPersistedSettings(saved);
+      await controller.flush();
+    });
+    expect(saveSettings).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        ttsSpeed: 1,
+        ttsPlayback: { ...saved.ttsPlayback, rate: 1 },
+      }),
+    );
+    await act(async () => {
+      controller.updateSettings((previous) => previous);
+      await controller.flush();
+    });
+    expect(saveSettings).toHaveBeenCalledTimes(1);
+  } finally {
+    act(() => renderer.unmount());
+  }
+});
+
+it('ignores delayed hydration and queued startup edits from a replaced repository', async () => {
+  let controller!: ReaderSettingsController;
+  const first = { saveSettings: vi.fn(async () => undefined) };
+  const second = { saveSettings: vi.fn(async () => undefined) };
+  const callbacks = { onSaved: vi.fn(), onSaveError: vi.fn(), notify: vi.fn() };
+  function Harness({ repository }: { repository: typeof first }) {
+    controller = useReaderSettingsDraft({
+      ...callbacks,
+      repository,
+      initialSettings: defaultSettings,
+      initialSettingsLoaded: false,
+    });
+    return null;
+  }
+  let renderer!: ReactTestRenderer;
+  act(() => {
+    renderer = create(<Harness repository={first} />);
+  });
+  try {
+    const oldCommit = controller.setPersistedSettings;
+    await act(async () => controller.updateSettings({ recentSearches: ['old account'] }));
+    await act(async () => renderer.update(<Harness repository={second} />));
+    await act(async () => oldCommit({ ...defaultSettings, ttsSpeed: 1.8 }));
+    await act(async () => {
+      controller.setPersistedSettings({ ...defaultSettings, ttsSpeed: 1.3 });
+      await controller.flush();
+    });
+    expect(controller.settings.ttsSpeed).toBe(1.3);
+    expect(controller.settings.recentSearches).toBeUndefined();
+    expect(first.saveSettings).not.toHaveBeenCalled();
+    expect(second.saveSettings).not.toHaveBeenCalled();
+  } finally {
+    act(() => renderer.unmount());
+  }
+});
