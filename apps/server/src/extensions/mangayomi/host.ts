@@ -192,9 +192,8 @@ export class MangayomiExtensionHost {
         }) => ({
           ...record,
           iconUrl:
-            _metadata.iconUrl ??
             this.state.repositories.find((r) => r.url === _repository)?.entries.find((e) => e.id === _metadata.id)
-              ?.iconUrl,
+              ?.iconUrl ?? _metadata.iconUrl,
         }),
       ),
       repositories: this.state.repositories.map((repo) => ({

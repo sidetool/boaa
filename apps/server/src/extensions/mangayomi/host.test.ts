@@ -625,3 +625,30 @@ it('imports original JS files without a repository, preserves multi-source choic
   await expect(host.inspectFile(Buffer.from('process.exit()'), 'bad.js', 0, signal)).rejects.toThrow();
   await app.close();
 });
+
+it('refreshes installed artwork from its repository without reinstalling source code', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'boaa-source-artwork-'));
+  roots.push(root);
+  let iconUrl = 'https://repo.example/old-logo.png';
+  const transport: typeof compatibilityHttp = async (input) => ({
+    bytes: Buffer.from(input.url.endsWith('.json') ? JSON.stringify([{ ...fixtureRow, iconUrl }]) : fixtureSource),
+    statusCode: 200,
+    headers: {},
+    contentType: 'text/plain',
+    url: input.url,
+  });
+  const vault = new EncryptedSourceCredentialVault(join(root, 'vault'), Buffer.alloc(32, 3));
+  const host = await MangayomiExtensionHost.open(join(root, 'host'), vault, transport);
+  hosts.push(host);
+  const repo = 'https://repo.example/index.json',
+    signal = AbortSignal.timeout(15000);
+  await host.refreshRepository(repo, signal);
+  const entry = host.snapshot().repositories[0].entries[0];
+  const review = await host.inspect(repo, entry.pkg, entry.code, signal);
+  await host.install(review.id, review.revision, signal);
+  const before = host.snapshot().packages[0];
+  expect(before.iconUrl).toBe(iconUrl);
+  iconUrl = 'https://repo.example/actual-logo.png';
+  await host.refreshRepository(repo, signal);
+  expect(host.snapshot().packages[0]).toEqual({ ...before, iconUrl });
+});
