@@ -82,6 +82,8 @@ export default defineConfig({
     plugins: () => [webComponentEvidence()],
   },
   test: {
-    exclude: [...configDefaults.exclude, 'handoff/**', '.tmp/**', 'scripts/public-release-sync.test.mjs'],
+    // Other .test.mjs files use node:test (including browser/build checks) and have their own runners.
+    include: ['**/*.{test,spec}.{ts,tsx}', 'scripts/performance/*.test.mjs'],
+    exclude: [...configDefaults.exclude, 'handoff/**', '.tmp/**'],
   },
 });

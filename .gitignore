@@ -70,6 +70,7 @@ fixtures/generated/
 
 # Private corpora, generated evidence and internal review material
 AGENTS.md
+!/AGENTS.md
 artifacts/
 handoff/
 test_novel/

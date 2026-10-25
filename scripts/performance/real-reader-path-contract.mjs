@@ -35,7 +35,7 @@ const CHECKS = [
   {
     id: 'active-import-host',
     file: 'src/features/import/ImportFeatureHost.tsx',
-    patterns: ["lazy(() => import('./ImportDialog'))", '<ImportDialog controller={controller}'],
+    patterns: ["lazy(() => import('../../ui-next/import/UiNextImportSheet'))", '<ImportDialog controller={controller}'],
   },
   {
     id: 'active-import-controller',
@@ -44,7 +44,7 @@ const CHECKS = [
       'runImportBatch(',
       'importService: optionsRef.current.importService',
       'cancellationRef.current.cancel()',
-      'onImportCommitted(outcome.lastImportedNovel ?? openExisting)',
+      'onImportCommitted(novel)',
     ],
   },
   {
@@ -54,17 +54,18 @@ const CHECKS = [
   },
   {
     id: 'active-import-dialog',
-    file: 'src/features/import/ImportDialog.tsx',
-    patterns: [
-      'controller.selectFiles(files)',
-      'controller.startPendingImport()',
-      '<ImportProgressPanel controller={controller}',
-    ],
+    file: 'src/ui-next/import/UiNextImportSheet.tsx',
+    patterns: ['controller.selectFiles(chosen)', 'controller.startPendingImport()', '<Running controller={controller}'],
   },
   {
     id: 'active-app-reader-route',
     file: 'src/App.tsx',
-    patterns: ["lazy(() => import('./features/reader/ReaderScreen'))", '<ReaderScreen'],
+    patterns: ["from './app/composition/ReaderFeatureHost'", '<ReaderFeatureHost'],
+  },
+  {
+    id: 'active-reader-host',
+    file: 'src/app/composition/ReaderFeatureHost.tsx',
+    patterns: ["lazy(() => import('../../features/reader/ReaderScreen'))", '<ReaderScreen'],
   },
   {
     id: 'active-reader-screen',
@@ -88,7 +89,7 @@ const CHECKS = [
   },
   {
     id: 'bounded-search-policy',
-    file: 'src/reader/search-policy.ts',
+    file: 'packages/reader-core/search-policy.ts',
     patterns: ['READER_CHAPTER_SEARCH_LIMIT = 200', 'READER_BOOK_SEARCH_LIMIT = 300'],
   },
   {

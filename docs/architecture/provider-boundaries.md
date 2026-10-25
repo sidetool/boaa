@@ -1,5 +1,22 @@
 # Provider Boundaries
 
+## 일반 서버 TTS 재생·캐시 계약
+
+2026-10-25 코드 대조. 아래 일반 낭독 계약은 뒤의 화자별 합성·native 경로와 구분한다.
+
+- 묶음 크기는 200–2000자, 기본 700자이며 최대 16문단을 사용한다. 본문·회차·계정 검증을 거친 같은 합성 조건만 재사용한다.
+- 일반 서버 합성 속도는 1배다. 재생 배속·음량 변경은 같은 오디오에 적용하며 다시 합성하지 않는다. 화면의 문단 위치는 길이 비율 추정이며 정확한 오디오 타임스탬프가 아니다.
+- 읽기 세션의 메모리 캐시는 기본 8개/32MiB다. 같은 진행 중 요청은 공유하고 재생 취소는 대기자를 분리한다. 계정·runtime·본문 수명 종료 시 요청과 캐시를 정리한다.
+- 재생기의 명시적 새로고침은 원래 묶음 시작에서 `regenerate: true`로 요청한다. 해당 항목의 브라우저·서버 메모리·영구 캐시를 교체하고 제공자 비용이 새로 발생할 수 있다. 늦은 이전 준비 결과는 새 음성을 덮지 않는다.
+- 실패 후 재시작 위치는 추정 표시 문단이 아니라 실제 묶음 시작이다. 본문의 문단을 얻지 못하면 회차 완료로 건너뛰지 않는다.
+- Gemini Vertex는 선택한 candidate의 오디오 part를 합치고 정상 완료·오디오 형식을 확인한다. 형식 검증과 정상 완료 표시는 원문을 의미적으로 모두 발화했다는 보장은 아니다.
+
+실행 코드는 `src/features/tts/usePlainTTS.ts`, `src/providers/plain-tts*.ts`,
+`src/providers/browser-audio-session.ts`, `apps/server/src/routes/ai/plain-tts-routes.ts`와
+`apps/server/src/providers/`에 있다. 회귀 검증은 해당 모듈의 행동 테스트를 따른다.
+
+## AI·화자별 합성과 플랫폼 경계
+
 S8 voice casting boundary - 2026-07-13: importance scoring, conservative trait resolution, pool allocation and
 collision solving are deterministic provider-neutral code in `src/providers/voice-casting/`; they do not call an LLM
 or TTS service. An optional future trait micro-pass receives only bounded ambiguous evidence through the existing LLM

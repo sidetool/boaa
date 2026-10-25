@@ -87,6 +87,7 @@ Windows 앱은 서버 없이 **이 PC의 서재**를 만들고, 이미 운영 �
 | ----------- | ------------------------------------------------------------------------------------------------------------------------------------ |
 | 설치와 운영 | [Docker Compose 안내](docs/operations/docker-compose-guide-ko.md) · [배포 상세 (영문)](docs/operations/docker-compose-deployment.md) |
 | 외부 접속   | [Nginx Proxy Manager · WireGuard](docs/operations/nginx-proxy-manager-wireguard.md)                                                  |
+| 계정·권한   | [관리자 초대와 계정 분리](docs/operations/accounts.md)                                                                                |
 | 앱 빌드     | [Windows · Android 빌드](docs/platforms/native-build-guide-ko.md) · [데스크톱 구조](docs/platforms/desktop.md)                       |
 | 확장 만들기 | [소스 확장 개발](docs/extensions/source-development.md) · [SDK 레퍼런스](docs/extensions/sdk-v1-reference.md)                        |
 | 구조        | [문서 목차](docs/README.md)                                                                                                          |
@@ -94,6 +95,7 @@ Windows 앱은 서버 없이 **이 PC의 서재**를 만들고, 이미 운영 �
 ## 개발
 
 Node.js와 pnpm 버전은 [`package.json`](package.json)의 `engines`, `packageManager`를 따릅니다.
+작업 시작점은 [AGENTS.md](AGENTS.md), 검사 선택은 [검증 가이드](docs/maintenance/testing.md)를 참고하세요.
 
 ```bash
 corepack pnpm install --frozen-lockfile
@@ -107,7 +109,7 @@ corepack pnpm lint         # 코드 검사
 
 ## 알아 두기
 
-- 한 사람(또는 믿을 수 있는 가족)이 쓰는 개인 서재입니다. 여러 사용자의 권한 분리는 아직 없습니다.
+- 개인·가족용 서버이며 관리자가 회원을 초대할 수 있습니다. 회원별 서재·기록·소스 로그인을 분리하고, 서버 관리와 확장 설치는 관리자만 할 수 있습니다.
 - 확장 소스와 외부 AI·TTS는 해당 서비스와 계정 설정에 따라 쓸 수 있는 범위가 달라집니다.
 - Android 앱은 개발 중이며 공식 설치 파일은 아직 없습니다.
 - 사용 전 [면책 안내](DISCLAIMER.md)를 확인해 주세요.

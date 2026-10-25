@@ -1,6 +1,8 @@
 # BOAA 문서
 
-이 디렉터리는 제품 실행·빌드·유지보수 문서를 제공합니다. 현재 안내는 아래 색인을 따릅니다.
+이 디렉터리는 제품 실행·빌드·유지보수 문서를 제공합니다. 작업은 [AGENTS.md](../AGENTS.md)와
+[현재 아키텍처](architecture/current-architecture.md)에서 시작합니다. 실제 동작은 대상 배포의 소스·설정·계약을 기준으로 확인하고,
+관련 행동 테스트로 검증합니다. 오래된 계획·검토 결과나 다른 제품의 안내를 현행 요구사항으로 적용하지 않습니다.
 
 ## 설치와 운영
 
@@ -10,11 +12,16 @@
 - [WireGuard + Nginx Proxy Manager + Suwayomi 배포](operations/nginx-proxy-manager-wireguard.md)
 - [Hosted provider admission과 비용 경계](operations/hosted-provider-admission.md)
 - [텍스트 소스 서버 설치·연결·회차 사용](operations/external-text-sources.md)
+- [서버 계정·초대·권한](operations/accounts.md)
+- [WebDAV·SFTP 파일 소스](remote-file-sources.md)
+- [작품 번역](text-translation.md)
+- [서버 릴리스·업데이트·복구](../deploy/release-management.md)
 
 ## 데스크톱과 Android
 
 - [현재 데스크톱 구조·작업 범위](platforms/desktop.md) — 데스크톱 작업은 이 문서에서 시작합니다.
 - [Windows·Android 네이티브 빌드 가이드](platforms/native-build-guide-ko.md)
+- [서버 없는 정적 웹 구조](architecture/local-static-web.md) · [운영 안내](../apps/web/README.md)
 
 ## 아키텍처
 
@@ -31,17 +38,18 @@
 - [확장 패키지 형식](extensions/boaapatch-format.md)
 - [Source SDK v1 빠른 참조](extensions/sdk-v1-reference.md)
 - [Mangayomi JavaScript 지원 범위와 검사](extensions/mangayomi-compatibility.md)
+- [확장 릴리스 절차](extensions/publishing.md): CLI·게시자 서명·저장소 목록 계약
 - [외부 작품 소스와 Source Hub](architecture/external-library-sources.md)
 - [AI/TTS provider 경계](architecture/provider-boundaries.md)
 - [AI/TTS job·cache·보안](architecture/ai-tts-provider-job-cache-security.md)
 
-구현 사실과 문서가 다르면 현재 소스와 테스트를 우선하고, 같은 변경에서 해당 공개 문서도 함께 고칩니다.
+## 유지보수
 
-- [공개 확장 릴리스 절차](extensions/publishing.md): 독립 CLI·게시자 서명·저장소 목록 생성과 검증
+- [2026-10-25 유지보수 감사](maintenance/2026-10-25-maintainability-audit.md): 운영 기준 코드의 구조·요청·중복·검증 개선 후보
+- [검증 가이드](maintenance/testing.md): 변경 범위에 맞는 테스트 실행과 유지 기준
+- [문서 관리 기준과 정리 내역](maintenance/documentation-policy.md): 문서 우선순위, 삭제·통합 범위와 남은 확인 사항
 
-## 구현 계획
-
-- [관리자 초대 방식의 다중 계정](plans/multi-account.md) — 구현 범위, 계정별 분리, 검증 결과·한계와 운영 이전 절차. 아직 운영 서버에는 배포하지 않았습니다.
+감사 문서는 해당 기준본의 기록입니다. 실제 수정 여부는 후속 변경과 현재 코드에서 확인합니다.
 
 ## 공개 문서 작성 기준
 
@@ -50,6 +58,9 @@
 가상 이름과 `example.com` 또는 `.invalid` 도메인을 사용합니다. 외부 코드의 저작권·라이선스·출처 표시는 유지하고,
 실제 외부 소스를 검증한 기록을 합성 테스트 결과인 것처럼 바꾸지 않습니다.
 
-## 릴리스
+## 과거 릴리스 기록
 
-- [Windows 0.1.1-beta.1 안내](releases/0.1.1-beta.1.md)
+아래 문서는 해당 버전의 변경·호환성·검증 기록입니다. 현재 배포 상태나 최신 구현의 안내로 사용하지 않습니다.
+
+- [Windows 0.1.1-beta.1](releases/0.1.1-beta.1.md)
+- [서버·웹 0.1.1-beta.4](releases/0.1.1-beta.4.md)

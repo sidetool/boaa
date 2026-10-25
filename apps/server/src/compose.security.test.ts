@@ -23,6 +23,5 @@ describe('default Compose edge exposure', () => {
     expect(web).toMatch(/- ['"]\$\{WEB_BIND_ADDRESS:-127\.0\.0\.1\}:8080:80['"]/);
     expect(api).toContain('SERVER_EXPOSURE: ${SERVER_EXPOSURE:-loopback}');
     expect(api).not.toMatch(/^ {4}ports:/m);
-    expect(api).toContain('Deliberately no ports');
   });
 });

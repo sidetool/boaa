@@ -12,32 +12,7 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  changes:
-    runs-on: ubuntu-24.04
-    outputs:
-      code: ${{ steps.scope.outputs.code }}
-      web: ${{ steps.scope.outputs.web }}
-      settings: ${{ steps.scope.outputs.settings }}
-      reader: ${{ steps.scope.outputs.reader }}
-      discovery: ${{ steps.scope.outputs.discovery }}
-      extensions: ${{ steps.scope.outputs.extensions }}
-      native: ${{ steps.scope.outputs.native }}
-      deploy: ${{ steps.scope.outputs.deploy }}
-      text: ${{ steps.scope.outputs.text }}
-      apk: ${{ steps.scope.outputs.apk }}
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
-      - name: Select checks for changed areas
-        id: scope
-        env:
-          QUALITY_BASE: ${{ github.event.pull_request.base.sha }}
-        run: node scripts/ci/quality-scope.mjs
-
   browser-web:
-    needs: changes
-    if: needs.changes.outputs.web == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -66,26 +41,19 @@ jobs:
         run: node scripts/reader-ui-smoke.mjs --selection-controls-only --mobile --no-screenshots
         env:
           READER_UI_BROWSER_CHANNEL: chromium
-        if: needs.changes.outputs.reader == 'true'
       - name: Verify paginated blind reading
         run: node scripts/performance/auto-scroll-smoke.mjs --paginated
         env:
           READER_UI_BROWSER_CHANNEL: chromium
-        if: needs.changes.outputs.reader == 'true'
       - run: pnpm check:reader-stability
         env:
           READER_UI_BROWSER_CHANNEL: chromium
-        if: needs.changes.outputs.reader == 'true'
       - name: Verify PDF worker lifecycle and persisted reading position
         run: node scripts/performance/pdf-session-smoke.mjs --dist apps/web/dist
-        if: needs.changes.outputs.reader == 'true'
       - name: Verify first TXT, EPUB and comic imports in fresh profiles
         run: node scripts/performance/import-first-use-smoke.mjs --dist apps/web/dist
-        if: needs.changes.outputs.web == 'true'
 
   hosted-source:
-    needs: changes
-    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -111,17 +79,14 @@ jobs:
           pnpm check:cycles
           pnpm check:bundle-inventory
           pnpm typecheck
-        env:
-          FORMAT_BASE_REF: ${{ github.event.pull_request.base.sha }}
       - name: Unit and integration tests (de-duplicated)
         run: |
-          node --test scripts/ci/quality-scope.test.mjs scripts/ci/script-references.test.mjs
+          node --test scripts/ci/script-references.test.mjs
           node scripts/ci/quality-tests.mjs
           pnpm test:extension-runtime
           pnpm test:extension-sdk
           pnpm test:extension-cli
       - name: APK source cache tests
-        if: needs.changes.outputs.apk == 'true' || needs.changes.outputs.extensions == 'true'
         run: node --test services/apk-worker/catalog.test.mjs services/apk-worker/source-cover-cache.test.mjs services/apk-worker/shared-task.test.mjs
       - name: Verify production server and web bundles
         run: |
@@ -134,19 +99,14 @@ jobs:
         run: |
           npm ci --ignore-scripts --no-audit --no-fund
           npm test
-        if: needs.changes.outputs.text == 'true'
       - name: Install browser for synthetic Mangayomi App gate
         run: pnpm exec playwright-core install --with-deps chromium
-        if: needs.changes.outputs.extensions == 'true'
       - name: Verify synthetic Mangayomi install through comic reader
         run: pnpm check:extension-mangayomi-app
         env:
           READER_UI_BROWSER_CHANNEL: chromium
-        if: needs.changes.outputs.extensions == 'true'
 
   hosted-compose:
-    needs: changes
-    if: needs.changes.outputs.deploy == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -180,8 +140,6 @@ jobs:
         run: pnpm check:hosted:e2e -- --public --project-name boaa-ci-${{ github.run_id }}-${{ github.run_attempt }}
 
   windows-native-source:
-    needs: changes
-    if: needs.changes.outputs.native == 'true'
     runs-on: windows-latest
     timeout-minutes: 30
     steps:
@@ -204,8 +162,6 @@ jobs:
       - run: pnpm check:mobile-readiness
 
   browser-server-management:
-    needs: changes
-    if: needs.changes.outputs.deploy == 'true' || needs.changes.outputs.settings == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:

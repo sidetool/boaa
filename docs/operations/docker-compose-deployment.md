@@ -1,11 +1,8 @@
 # Docker Compose deployment
 
-MinIO uses a digest-pinned `ghcr.io/sidetool/boaa-minio` image built from official source. Upstream image downloads are unavailable. This fixed storage dependency is separate from app updates; see [`deploy/minio/README.md`](../../deploy/minio/README.md) for source access and build details.
-PR #40 CI repeatedly failed while pulling the same release from Docker Hub, before import tests started.
-The release version, S3 endpoint and volume layout are unchanged; only the registry address changed.
+MinIO uses a digest-pinned `ghcr.io/sidetool/boaa-minio` image built from official source. This fixed storage dependency is separate from app updates; see [`deploy/minio/README.md`](../../deploy/minio/README.md) for source access and build details.
 
-Status: current
-Last verified: 2026-08-30
+Account and update guidance checked against source on 2026-10-25.
 
 This is the operational reference for the self-host web/API/worker stack. The default deployment is intentionally
 loopback-only. Public exposure requires the fail-closed override and a separate TLS-terminating reverse proxy.
@@ -13,23 +10,14 @@ loopback-only. Public exposure requires the fail-closed override and a separate 
 For a Korean step-by-step first deployment, read [BOAA Docker Compose 배포 가이드](docker-compose-guide-ko.md)
 before this technical reference.
 
-## Comic append storage compatibility (2026-08-31)
+## Update compatibility
 
-The chapter-original checkpoint adds migration `0042_comic_source_parts.sql`. It only permits the `source_part`
-asset kind; it does not convert or delete existing books. TXT/EPUB/PDF and ordinary first imports are unchanged.
-The first comic chapter addition keeps the old CBZ as a legacy part and activates a small manifest. Later additions
-write only changed chapter originals and pages, not another whole-book CBZ. Full backups include the manifest and
-parts; an explicit source download still produces a portable ordinary CBZ.
-
-Before deploying this checkpoint, keep a complete pre-upgrade backup and update Web/API/worker together. Mixed
-API/worker versions are not supported. Once a book has been appended in the new format, an older application does
-not support its new source for append/export/Cloud Vault restore. Reverting the container image alone is therefore
-not a complete data rollback: use the pre-upgrade backup, or export an ordinary CBZ using the new version first.
-Do not remove volumes or rewrite shipped migrations as a rollback procedure.
-
-Local verification uses the real worker, PostgreSQL and the S3 SDK against a loopback object-storage fixture.
-It is not a production MinIO or physical-mobile test. Existing-book opening, cover/read-state preservation and
-append timing should still be checked after deployment. This local checkpoint itself does not deploy the server.
+Keep web, API and worker on the same release. Read `deploy/release-policy.json` and
+[release management](../../deploy/release-management.md) for supported updates and rollback.
+The single-account to multi-account transition crosses schema epoch 1 → 2 and requires the documented offline migration.
+Changing the application image alone does not roll back migrated data. Preserve matching database, file and key backups.
+Current comic source preservation and append behavior are described in
+[document formats](../architecture/document-formats-and-fixed-layout-viewer.md).
 
 ## Supported Linux baseline
 
@@ -162,7 +150,7 @@ collector. This is application defense in depth, not a substitute for host firew
 can reach sensitive private networks.
 
 The browser profile and cookies remain in the private `metadata-collector-data` volume. They are not Cloud Vault data
-and are not included in ordinary device sync. Current self-host scope is one owner account and one collector profile.
+and are not included in ordinary device sync. The shared collector login is administrator-only; its profile is not exposed to member accounts.
 `Login complete` enables the platform but is not proof that its session or adult verification succeeded; live-account
 search still needs operator verification. Use the extension's session-delete action before transferring or retiring a
 server.
@@ -232,8 +220,9 @@ database and object-storage credentials from those same required values unless e
 are supplied. A web UI and `/api` served from the same host are accepted as same-origin without a CORS entry. Set
 `CORS_ALLOWED_ORIGINS` only for an actual cross-origin browser client. Keep
 `WEB_BIND_ADDRESS=127.0.0.1` when the TLS reverse proxy runs on the same host. Open the first browser, then read the `setupCode` in the `owner_setup_code` event from
-`docker compose logs api` to create the single owner username/password. Later devices use that account and
-receive a 30-day `HttpOnly; Secure; SameSite=Strict` session cookie, so the recovery token is not copied into each browser.
+`docker compose logs api` to create the initial administrator username/password. Administrators can then invite members;
+libraries, reading state and source logins are account-scoped. See [account operations](accounts.md).
+Each account receives a 30-day `HttpOnly; Secure; SameSite=Strict` session cookie, so the recovery token is not copied into each browser.
 Create the owner account before exposing a new DNS name beyond loopback or the private WireGuard boundary.
 
 The first `/api/auth/status` request issues a process-local code, including on loopback. It is logged once,
