@@ -3,6 +3,7 @@ import type { Novel } from '../../domain/types';
 import type { ReaderRuntime } from '../../repositories/reader-runtime';
 import {
   ImportCommittedRefreshError,
+  retryCommittedImportRefresh,
   type ImportController,
   type ImportProgress,
 } from '../../services/import/import-service';
@@ -86,13 +87,7 @@ export function useServerAttachController({
           runVersionRef.current !== runVersion
         )
           throw error;
-        try {
-          const result = await error.retry();
-          error.acknowledge();
-          return result;
-        } catch {
-          throw error;
-        }
+        return retryCommittedImportRefresh(error);
       });
       if (!mountedRef.current || runVersionRef.current !== runVersion) return;
       const state = await onAttached(novel);

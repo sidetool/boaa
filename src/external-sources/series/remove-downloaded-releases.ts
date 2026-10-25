@@ -1,6 +1,6 @@
 import type { Novel } from '../../domain/types';
 import type { BookAssetRepository } from '../../repositories/book-asset-repository';
-import { ImportCommittedRefreshError, type ImportService } from '../../services/import/import-service';
+import { retryCommittedImportRefresh, type ImportService } from '../../services/import/import-service';
 import { hashBlobInChunks } from '../../services/import/chunked-file-reader';
 
 /** Keep the book identity/links; availability is projected from the committed chapters. */
@@ -19,16 +19,6 @@ export async function removeDownloadedReleases(options: {
     throw new Error('작품이 변경되어 정리를 중단했습니다. 삭제 대상을 다시 확인해 주세요.');
   const ids = new Set(options.sectionIds);
   if (!ids.size) throw new Error('삭제할 회차를 선택해 주세요.');
-  const recoverCommitted = async (error: unknown) => {
-    if (!(error instanceof ImportCommittedRefreshError)) throw error;
-    try {
-      const result = await error.retry();
-      error.acknowledge();
-      return result;
-    } catch {
-      throw error;
-    }
-  };
   let imported: Novel;
   if (novel.format === 'image_archive') {
     if (!options.importService.supportsIncrementalImageSeriesAppend)
@@ -47,7 +37,7 @@ export async function removeDownloadedReleases(options: {
           },
           () => {},
         )
-        .promise.catch(recoverCommitted)
+        .promise.catch(retryCommittedImportRefresh)
     ).novel;
   } else if (novel.format === 'txt') {
     if (!options.importService.supportsExpectedBase)
@@ -84,7 +74,7 @@ export async function removeDownloadedReleases(options: {
           },
           () => {},
         )
-        .promise.catch(recoverCommitted)
+        .promise.catch(retryCommittedImportRefresh)
     ).novel;
   } else {
     throw new Error('이 작품은 소스 회차 삭제를 지원하지 않습니다.');

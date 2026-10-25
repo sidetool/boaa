@@ -4,7 +4,11 @@ import { bytesToHex } from '@noble/hashes/utils.js';
 import type { Novel } from '../domain/types';
 import type { BookAssetRepository, ExportedBookCover, ExportedBookSource } from '../repositories/book-asset-repository';
 import type { ReaderRepository } from '../repositories/reader-repository';
-import { ImportCommittedRefreshError, type ImportService } from '../services/import/import-service';
+import {
+  ImportCommittedRefreshError,
+  retryCommittedImportRefresh,
+  type ImportService,
+} from '../services/import/import-service';
 import type {
   CloudVaultBookV1,
   CloudVaultContentObjectV1,
@@ -376,13 +380,7 @@ export class CloudVaultContentTransferService {
             .promise.catch(async (error: unknown) => {
               if (!(error instanceof ImportCommittedRefreshError)) throw error;
               recoveredCommit = true;
-              try {
-                const result = await error.retry();
-                error.acknowledge();
-                return result;
-              } catch {
-                throw error;
-              }
+              return retryCommittedImportRefresh(error);
             });
           if (imported.novel.normalizedTextHash !== book.identity.normalizedTextHash) {
             // A recovered manifest may describe a newer replacement of the committed book.

@@ -85,6 +85,18 @@ export class ImportCommittedRefreshError extends Error {
   }
 }
 
+/** Retry metadata once while preserving confirmed-commit semantics if recovery fails. */
+export async function retryCommittedImportRefresh(error: unknown): Promise<ImportResult> {
+  if (!(error instanceof ImportCommittedRefreshError)) throw error;
+  try {
+    const result = await error.retry();
+    error.acknowledge();
+    return result;
+  } catch {
+    throw error;
+  }
+}
+
 export interface ImportController {
   jobId: string;
   promise: Promise<ImportResult>;

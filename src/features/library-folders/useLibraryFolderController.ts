@@ -4,6 +4,7 @@ import { sha256 } from '../../domain/hash';
 import type { ToastTone } from '../../shared/ui/ToastHost';
 import {
   ImportCommittedRefreshError,
+  retryCommittedImportRefresh,
   type ImportProgress,
   type ImportService,
 } from '../../services/import/import-service';
@@ -347,13 +348,7 @@ export function useLibraryFolderController(options: UseLibraryFolderControllerOp
                   ),
                 ])
                 .catch(() => undefined);
-              try {
-                const recovered = await error.retry();
-                error.acknowledge();
-                return recovered;
-              } catch {
-                throw error;
-              }
+              return retryCommittedImportRefresh(error);
             });
             activeImportRef.current = undefined;
             const novel = (await optionsRef.current.getNovel(result.novel.id).catch(() => undefined)) ?? result.novel;
