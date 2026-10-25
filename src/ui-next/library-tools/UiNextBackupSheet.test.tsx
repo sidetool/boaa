@@ -1,7 +1,19 @@
+import type { ReactNode } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it, vi } from 'vitest';
-import BackupPanel from './BackupPanel';
-import type { BackupFeatureController } from './useBackupController';
+import UiNextBackupSheet from './UiNextBackupSheet';
+import type { BackupFeatureController } from '../../features/backup/useBackupController';
+
+vi.mock('../components/primitives', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../components/primitives')>()),
+  Sheet: ({ children, footer, title }: { children: ReactNode; footer?: ReactNode; title: string }) => (
+    <section role="dialog" aria-modal="true" aria-label={title}>
+      <h2>{title}</h2>
+      {children}
+      {footer}
+    </section>
+  ),
+}));
 
 function controller(overrides: Partial<BackupFeatureController> = {}): BackupFeatureController {
   return {
@@ -38,28 +50,28 @@ function controller(overrides: Partial<BackupFeatureController> = {}): BackupFea
   };
 }
 
-describe('BackupPanel', () => {
+describe('UiNextBackupSheet', () => {
   it('renders export, validated restore and per-book conflict controls', () => {
-    const markup = renderToStaticMarkup(<BackupPanel controller={controller()} />);
+    const markup = renderToStaticMarkup(<UiNextBackupSheet controller={controller()} />);
 
-    expect(markup).toContain('백업 및 복원');
-    expect(markup).toContain('전체 백업 만들기');
-    expect(markup).toContain('백업 파일 선택');
+    expect(markup).toContain('백업과 복원');
+    expect(markup).toContain('백업 만들기');
+    expect(markup).toContain('파일 고르기');
     expect(markup).toContain('백업 소설');
-    expect(markup).toContain('복사본으로 추가');
-    expect(markup).toContain('검사한 백업 복원');
+    expect(markup).toContain('하나 더 추가');
+    expect(markup).toContain('확인한 백업 복원하기');
   });
 
   it('shows an explicit unsupported state instead of inactive controls', () => {
-    const markup = renderToStaticMarkup(<BackupPanel controller={controller({ available: false })} />);
-    expect(markup).toContain('현재 실행 환경에서 전체 백업을 사용할 수 없습니다.');
-    expect(markup).not.toContain('백업 파일 선택');
+    const markup = renderToStaticMarkup(<UiNextBackupSheet controller={controller({ available: false })} />);
+    expect(markup).toContain('여기서는 전체 백업을 쓸 수 없어요');
+    expect(markup).not.toContain('파일 고르기');
   });
 });
 
 it('shows the operation and measured bytes inline without a progress details action', () => {
   const markup = renderToStaticMarkup(
-    <BackupPanel
+    <UiNextBackupSheet
       controller={controller({
         busy: true,
         operation: 'inspect',
@@ -68,7 +80,7 @@ it('shows the operation and measured bytes inline without a progress details act
     />,
   );
   expect(markup).toContain('50%');
-  expect(markup).toContain('백업 확인');
+  expect(markup).toContain('파일 확인 중');
   expect(markup).toContain('업로드 중');
   expect(markup).toContain('1 KB / 2 KB');
   expect(markup).not.toContain('상세 보기');

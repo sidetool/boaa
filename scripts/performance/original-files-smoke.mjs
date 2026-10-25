@@ -9,14 +9,16 @@ const root = fileURLToPath(new URL('../../', import.meta.url));
 const source = `
 import React,{useState} from 'react';
 import {createRoot} from 'react-dom/client';
-import {OriginalFilesDialog} from '${root}src/features/library/OriginalFilesDialog.tsx';
+import {UiNextOriginalFilesSheet} from '${root}src/ui-next/library-tools/UiNextOriginalFilesSheet.tsx';
+import '${root}src/ui-next/styles/tokens.css';
+import '${root}src/ui-next/styles/kit.css';
 import {RemoteBookAssetRepository} from '${root}src/repositories/remote-book-asset-repository.ts';
 import {RemoteApiClient} from '${root}src/services/remote/remote-api-client.ts';
 ${[...readFileSync(root + 'src/main.tsx', 'utf8').matchAll(/import '\.\/styles\/([^']+)';/g)].map((m) => `import '${root}src/styles/${m[1]}';`).join('\n')}
 const repository=new RemoteBookAssetRepository(new RemoteApiClient('/api',{getAuthToken:()=> 'fixture'}));
 function Fixture(){const [open,setOpen]=useState(true);return React.createElement(React.Fragment,null,
 React.createElement('button',{onClick:()=>setOpen(true)},'원본 다운로드'),
-open&&React.createElement(OriginalFilesDialog,{book:{id:'book',title:'긴 제목의 EPUB 합본'},repository,onClose:()=>setOpen(false),onLegacyExport:()=>{throw Error('unexpected legacy export')}}));}
+open&&React.createElement(UiNextOriginalFilesSheet,{book:{id:'book',title:'긴 제목의 EPUB 합본'},repository,onClose:()=>setOpen(false),onLegacyExport:()=>{throw Error('unexpected legacy export')}}));}
 createRoot(document.getElementById('root')).render(React.createElement(Fixture));`;
 const { output } = await build({
   root,
@@ -86,16 +88,16 @@ await new Promise((done) => server.listen(0, '127.0.0.1', done));
 let browser;
 try {
   browser = await chromium.launch({ headless: true, executablePath: process.env.READER_UI_BROWSER_EXECUTABLE });
-  const page = await browser.newPage({ acceptDownloads: true });
+  const page = await browser.newPage({ acceptDownloads: true, reducedMotion: 'reduce' });
   const errors = [];
   page.on('pageerror', (error) => errors.push(error.message));
   for (const width of [320, 390, 1366]) {
     await page.setViewportSize({ width, height: 844 });
     await page.goto(`http://127.0.0.1:${server.address().port}`);
-    const button = page.getByRole('button', { name: '2권.epub 다운로드', exact: true });
+    const button = page.getByRole('button', { name: '2권.epub 받기', exact: true });
     await button.waitFor();
-    assert.equal(await page.locator('.original-files-list li').count(), 30);
-    const bounds = await page.locator('.original-files-dialog').evaluate((node) => {
+    assert.equal(await page.locator('.un-shelf-list li').count(), 30);
+    const bounds = await page.locator('[role="dialog"]').evaluate((node) => {
       const b = node.getBoundingClientRect();
       return {
         left: b.left,
@@ -107,6 +109,7 @@ try {
     });
     assert(
       bounds.left >= 0 && bounds.right <= width && bounds.top >= 0 && bounds.bottom <= 845 && bounds.overflow <= 1,
+      `dialog outside ${width}px viewport: ${JSON.stringify(bounds)}`,
     );
     const downloaded = page.waitForEvent('download');
     await button.click();
@@ -116,7 +119,7 @@ try {
     assert.deepEqual(readFileSync(await download.path()), payload);
     assert.equal(requestedFile, '/api/books/book/original-files/part-0/download');
     await page.getByRole('button', { name: '더 보기', exact: true }).click();
-    assert.equal(await page.locator('.original-files-list li').count(), 35);
+    assert.equal(await page.locator('.un-shelf-list li').count(), 35);
     await page.keyboard.press('Escape');
     await page.getByRole('dialog').waitFor({ state: 'hidden' });
     assert.equal(errors.length, 0, errors.join('\n'));

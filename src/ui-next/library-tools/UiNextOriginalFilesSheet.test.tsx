@@ -2,9 +2,19 @@ import type { ReactNode } from 'react';
 import { act, create, type ReactTestRenderer } from 'react-test-renderer';
 import { afterEach, expect, it, vi } from 'vitest';
 import type { BookAssetRepository } from '../../repositories/book-asset-repository';
-import { OriginalFilesDialog } from './OriginalFilesDialog';
+import { UiNextOriginalFilesSheet } from './UiNextOriginalFilesSheet';
 
-vi.mock('../../shared/ui/Dialog', () => ({ Dialog: ({ children }: { children: ReactNode }) => <div>{children}</div> }));
+vi.mock('../components/primitives', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../components/primitives')>()),
+  Sheet: ({ children, footer, title }: { children: ReactNode; footer?: ReactNode; title: string }) => (
+    <section role="dialog" aria-modal="true" aria-label={title}>
+      <h2>{title}</h2>
+      {children}
+      {footer}
+    </section>
+  ),
+}));
+
 const book = { id: 'book-1', title: '합본' };
 const file = {
   id: 'part-2',
@@ -22,7 +32,7 @@ afterEach(() => {
 async function render(repository: Partial<BookAssetRepository>, onLegacyExport = vi.fn()) {
   await act(async () => {
     renderer = create(
-      <OriginalFilesDialog
+      <UiNextOriginalFilesSheet
         book={book}
         repository={repository as BookAssetRepository}
         onClose={() => undefined}
@@ -42,15 +52,15 @@ it('shows large originals and requests a native browser download without reading
     exportSource: vi.fn(),
   };
   const view = await render(repository);
-  expect(JSON.stringify(view.toJSON())).toContain('2.00 GB');
+  expect(JSON.stringify(view.toJSON())).toContain('2,048 MB');
   await act(async () => {
-    view.root.findByProps({ 'aria-label': '2권.epub 다운로드' }).props.onClick();
+    view.root.findByProps({ 'aria-label': '2권.epub 받기' }).props.onClick();
   });
   expect(repository.createOriginalFileDownload).toHaveBeenCalledWith(book.id, file.id);
   expect(repository.exportSource).not.toHaveBeenCalled();
   expect(link.href).toBe('/api/original-downloads/short-lived');
   expect(link.click).toHaveBeenCalledOnce();
-  expect(JSON.stringify(view.toJSON())).toContain('다운로드를 요청했습니다.');
+  expect(JSON.stringify(view.toJSON())).toContain('받기를 요청했어요.');
 });
 
 it('keeps the dialog usable after list and ticket failures', async () => {
@@ -59,15 +69,15 @@ it('keeps the dialog usable after list and ticket failures', async () => {
     createOriginalFileDownload: vi.fn().mockRejectedValue(new Error('offline')),
   };
   const view = await render(repository);
-  expect(JSON.stringify(view.toJSON())).toContain('원본 목록을 불러오지 못했습니다.');
+  expect(JSON.stringify(view.toJSON())).toContain('원본 목록을 불러오지 못했어요.');
   await act(async () => {
     view.root.findAllByType('button')[0]!.props.onClick();
   });
   await act(async () => {
-    view.root.findByProps({ 'aria-label': '2권.epub 다운로드' }).props.onClick();
+    view.root.findByProps({ 'aria-label': '2권.epub 받기' }).props.onClick();
   });
-  expect(JSON.stringify(view.toJSON())).toContain('다운로드를 시작하지 못했습니다.');
-  expect(view.root.findByProps({ 'aria-label': '2권.epub 다운로드' }).props.disabled).toBe(false);
+  expect(JSON.stringify(view.toJSON())).toContain('받기를 시작하지 못했어요.');
+  expect(view.root.findByProps({ 'aria-label': '2권.epub 받기' }).props.disabled).toBe(false);
 });
 
 it('does not start a delayed download after the dialog closes', async () => {
@@ -82,7 +92,7 @@ it('does not start a delayed download after the dialog closes', async () => {
       }),
   });
   await act(async () => {
-    view.root.findByProps({ 'aria-label': '2권.epub 다운로드' }).props.onClick();
+    view.root.findByProps({ 'aria-label': '2권.epub 받기' }).props.onClick();
   });
   act(() => view.unmount());
   renderer = undefined;

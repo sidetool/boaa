@@ -1,7 +1,14 @@
+import type { ReactNode } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it, vi } from 'vitest';
-import ChapterStructurePanel from './ChapterStructurePanel';
-import type { ChapterStructureController } from './useChapterStructureController';
+import UiNextChapterStructure from './UiNextChapterStructure';
+import type { ChapterStructureController } from '../../features/chapter-structure/useChapterStructureController';
+
+vi.mock('react-dom', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('react-dom')>()),
+  createPortal: (children: ReactNode) => children,
+}));
+vi.stubGlobal('document', { body: {} });
 
 function controller(overrides: Partial<ChapterStructureController> = {}): ChapterStructureController {
   const chapters = [
@@ -59,21 +66,21 @@ function controller(overrides: Partial<ChapterStructureController> = {}): Chapte
   };
 }
 
-describe('ChapterStructurePanel', () => {
+describe('UiNextChapterStructure', () => {
   it('renders visual boundary controls and keeps infrequent commands folded', () => {
-    const markup = renderToStaticMarkup(<ChapterStructurePanel controller={controller()} />);
-    expect(markup).toContain('화 구조 편집');
-    expect(markup).toContain('경계 제거');
-    expect(markup).toContain('새 화가 시작되는 줄을 선택하세요.');
+    const markup = renderToStaticMarkup(<UiNextChapterStructure controller={controller()} />);
+    expect(markup).toContain('회차 나누기 편집');
+    expect(markup).toContain('1화와 2화 합치기');
+    expect(markup).toContain('새 회차가 시작되는 줄을 골라요.');
     expect(markup).toContain('2화 새로운 시작');
-    expect(markup).toContain('직접 수정');
+    expect(markup).toContain('직접 고치기');
     expect(markup).toContain('다시 나눈 결과 보기');
   });
 
   it('renders impact and apply controls for a prepared preview', () => {
     const base = controller();
     const markup = renderToStaticMarkup(
-      <ChapterStructurePanel
+      <UiNextChapterStructure
         controller={controller({
           preview: {
             draftId: 'draft_1',
@@ -96,8 +103,8 @@ describe('ChapterStructurePanel', () => {
         })}
       />,
     );
-    expect(markup).toContain('변경 결과');
+    expect(markup).toContain('바꾼 뒤');
     expect(markup).toContain('변경 제목');
-    expect(markup).toContain('변경 적용');
+    expect(markup).toContain('바꾸기');
   });
 });

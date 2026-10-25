@@ -1,15 +1,17 @@
 import type { ReactNode } from 'react';
 import { act, create, type ReactTestRenderer } from 'react-test-renderer';
 import { expect, it, vi } from 'vitest';
-import { DiscoveryEditor } from './DiscoveryEditor';
-import { newTab } from './discovery-config';
+import { DiscoveryEditSheet } from './DiscoveryEditSheet';
+import { newTab } from '../../features/discovery/discovery-config';
 
-vi.mock('../../shared/ui/ModalDrawer', () => ({
-  ModalDrawer: ({ children, footer }: { children: ReactNode; footer: ReactNode }) => (
-    <div>
+vi.mock('../components/primitives', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../components/primitives')>()),
+  Sheet: ({ children, footer, title }: { children: ReactNode; footer?: ReactNode; title: string }) => (
+    <section role="dialog" aria-modal="true" aria-label={title}>
+      <h2>{title}</h2>
       {children}
       {footer}
-    </div>
+    </section>
   ),
 }));
 
@@ -27,7 +29,7 @@ it('keeps the draft and original base on failed asynchronous saves, then closes 
   const close = vi.fn();
   let renderer!: ReactTestRenderer;
   await act(async () => {
-    renderer = create(<DiscoveryEditor config={config} sources={[]} save={save} close={close} />);
+    renderer = create(<DiscoveryEditSheet config={config} sources={[]} save={save} close={close} />);
   });
   const button = () =>
     renderer.root.findAllByType('button').find((node) => ['저장', '저장 중…'].includes(node.props.children))!;
@@ -41,7 +43,8 @@ it('keeps the draft and original base on failed asynchronous saves, then closes 
     reject(new Error('연결 실패'));
     await pending;
   });
-  expect(renderer.root.findByProps({ role: 'alert' }).children).toEqual(['연결 실패']);
+  expect(JSON.stringify(renderer.toJSON())).toContain('연결 실패');
+  expect(renderer.root.findByProps({ role: 'alert' })).toBeDefined();
   expect(close).not.toHaveBeenCalled();
   await act(async () => {
     pending = button().props.onClick();

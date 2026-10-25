@@ -140,6 +140,17 @@ central directory를 먼저 검증한 뒤 page entry 하나씩 signature/hash �
 정리한다. 이미지 ZIP/CBZ의 각 페이지는 원본 byte hash와
 archive 내부 경로를 유지한다.
 
+원격 PDF 세션은 열 때 받은 원본 hash를 quoted ETag/If-Range로 고정한다. 부분 읽기가 전체 응답으로
+바뀌거나 ETag가 일치하지 않으면 body를 끝까지 받기 전에 중단하고 작품 재열기를 안내한다.
+검증 헤더를 제공하지 않는 구 서버/프록시도 같은 방식으로 실패하며, IndexedDB의 고정 Blob 읽기는 유지한다.
+원본 export도 metadata와 body가 같은 버전인지 확인한다. 썸네일의 render 취소와 object URL 정리는
+`DocumentThumbnailPreview.tsx`의 각 mounted component가 소유한다.
+
+서버 위치 저장의 `expectedContentRevisionId`는 선택적이다. 제공되면 책 row를 잠근 transaction에서
+활성 본문과 비교하고, 불일치 시 `409 content_revision_conflict`로 위치·섹션 읽음 상태·event를 모두
+변경하지 않는다. 필드 없는 이전 클라이언트는 기존 경로를 사용한다. PDF 페이지 주석 조회는 선택적
+`pageIndex`로 제한하지만 전체 주석 목록과 재배치 후 전체 갱신의 의미는 유지한다.
+
 ## 고정 레이아웃 UX
 
 Desktop/넓은 화면에서는 제목, 페이지 목록, 현재 페이지 입력, 단일/연속 보기, 확대/축소, 페이지/너비

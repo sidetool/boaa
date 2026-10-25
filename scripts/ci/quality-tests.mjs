@@ -72,7 +72,6 @@ const extraFilters = [
   'apps/server/src/routes/backups.test.ts',
   'apps/server/src/services/backup-staging.test.ts',
   'apps/server/src/routes/books/original-file-routes.test.ts',
-  'src/features/library/OriginalFilesDialog.test.tsx',
   'src/repositories/original-file-download.test.ts',
   'src/features/fixed-document/ComicPageFlow.test.ts',
   'src/features/fixed-document/archive-page-loader.test.ts',
@@ -106,6 +105,15 @@ const extraFilters = [
   'apps/server/src/routes/text-source-gateway.test.ts',
   'apps/server/src/services/import-expected-base.integration.test.ts',
   'apps/server/src/services/book-revision/reader-state-restore.integration.test.ts',
+  'apps/server/src/services/hosted-bulk-write.integration.test.ts',
+  'apps/server/src/routes/books/document-annotation-routes.test.ts',
+  'apps/server/src/routes/books/request-contracts.test.ts',
+  'src/features/external-sources/purged-source-library.test.ts',
+  'src/features/import/import-controller.test.ts',
+  'src/repositories/remote-document-annotation-repository.test.ts',
+  'src/repositories/remote-shelf-order.test.ts',
+  'src/services/remote/remote-reading-position.test.ts',
+  'src/storage/library-management-store.test.ts',
 ];
 const { scripts } = JSON.parse(readFileSync(new URL('../../package.json', import.meta.url), 'utf8'));
 const filters = new Set(extraFilters);

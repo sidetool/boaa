@@ -1,7 +1,7 @@
 # Import와 Parser
 
 Status: current
-Last verified: 2026-08-01
+Parser baseline: 2026-08-01; import lifecycle/hash update: 2026-10-25
 
 PDF와 이미지 ZIP/CBZ를 포함한 전체 형식 매트릭스와 fixed-layout 경계는
 [문서 형식과 고정 레이아웃 뷰어](document-formats-and-fixed-layout-viewer.md)를 따른다. 이 문서의 아래 내용은
@@ -36,6 +36,20 @@ BrowserImportService
 ```
 
 The parser and IndexedDB write now run in Web Workers for browser import flows. The preview worker reads the selected file and returns chapter split metadata without saving, so users can switch split modes before starting the real import. The import worker reads the `File` in bounded chunks, reports byte-level reading progress, and checks cancellation at chunk boundaries before parsing. IndexedDB save writes chapter/page data in page batches and reports persisted paragraph progress. Cancel requests are delivered to the worker, and imports cancelled during reading or page writes are rolled back so partial chapter/page rows do not remain in the local library; replacement imports restore the previous local content snapshot. This removes parser/storage work from the React UI path. Parsing is still a whole-file worker-buffered import, but the worker releases the raw input `ArrayBuffer` after hashing/decoding and before import-ready normalization/splitting, the import-ready path releases the decoded raw string after normalization, no longer hands storage a full `ParsedNovel.paragraphs` array, stores chapter body ranges instead of keeping every chapter body string, counts paragraphs from source ranges, and consumes long chapters as range-based paragraph iterables while page batches are written. Chapter heading collection scans lines from the normalized string instead of building a full `text.split('\n')` line array.
+
+### 중복 검사와 가져오기 완료 상태
+
+중복 검사는 SHA256의 tagged/bare 표기를 정규화한다. 같은 원본도 인코딩이나 화 분할을 다르게
+적용하려면 사용자가 명시적으로 교체할 수 있고, 복사·건너뛰기도 유지한다. 준비 단계의 원본 hash는
+정확히 같은 `File` 객체와 선택 수명 안에서만 재사용한다. 빈 서재에서는 중복 검사만을 위한 파일 읽기를
+생략하며 실제 저장 단계의 바이트 검증은 유지한다. 서버 TXT parser는 조립한 원본의 검증된 hash를
+재사용하고, EPUB은 내부 materialization의 중복 본문 hash만 줄인다. 변경 가능한 공개 EPUB 입력은
+기존처럼 다시 계산한다.
+
+일반 가져오기 batch는 import service가 저장 결과를 반환한 시점에 저장 완료를 집계한다. 이후
+저장본 조회나 완료 callback이 실패하면 가져오기 실패와 구분해 표시하고 조회만 다시 시도한다.
+파싱 결과로 저장본 조회를 대신하지 않으므로 기존 사용자 metadata와 읽기 상태를 덮어쓰지 않는다.
+import service가 아직 결과를 반환하기 전의 실패까지 저장 여부를 확정한다는 뜻은 아니다.
 
 ## Encoding
 

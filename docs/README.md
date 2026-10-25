@@ -45,7 +45,7 @@
 
 ## 유지보수
 
-- [2026-10-25 유지보수 감사](maintenance/2026-10-25-maintainability-audit.md): 운영 기준 구조·동작 문제, EPUB/TXT 속도 개선 후보와 구현 전 회귀 검증 조건
+- [2026-10-25 유지보수 감사](maintenance/2026-10-25-maintainability-audit.md): 운영 기준 문제, 후속 리팩토링 적용 범위·검증과 남은 개선 후보
 - [검증 가이드](maintenance/testing.md): 변경 범위에 맞는 테스트 실행과 유지 기준
 - [문서 관리 기준과 정리 내역](maintenance/documentation-policy.md): 문서 우선순위, 삭제·통합 범위와 남은 확인 사항
 
