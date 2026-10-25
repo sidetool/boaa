@@ -58,6 +58,7 @@ export function useDiscoverySection({
   useEffect(() => {
     if (!near || unsupported || source?.connection.state !== 'connected') return;
     let active = true;
+    const abort = new AbortController();
     const force = previous.current.refresh !== refresh || previous.current.retry !== retry;
     previous.current = { refresh, retry };
     setLoading(true);
@@ -74,11 +75,12 @@ export function useDiscoverySection({
           section.sourceId,
           { parentRef: section.parentRef, browseMode: section.mode },
           force,
+          abort.signal,
         );
         if (JSON.stringify(schema.browse?.filters ?? []) !== section.filterSignature)
           throw new Error('소스의 분류가 변경되었습니다. 전체 보기에서 분류를 다시 저장해 주세요.');
       }
-      return session.list(section.sourceId, latest.current.input, force);
+      return session.list(section.sourceId, latest.current.input, force, abort.signal);
     };
     void fetchPage()
       .then((result) => {
@@ -109,6 +111,7 @@ export function useDiscoverySection({
       });
     return () => {
       active = false;
+      abort.abort();
     };
   }, [
     near,

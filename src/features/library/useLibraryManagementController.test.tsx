@@ -29,6 +29,7 @@ async function harness(input: {
   assets?: BookAssetRepository;
   getNovel?: () => Promise<Novel | undefined>;
   patchMetadata?: LibraryCatalogRepository['patchMetadata'];
+  listShelfCatalog?: LibraryCatalogRepository['listShelfCatalog'];
   listShelves?: LibraryCatalogRepository['listShelves'];
   reorderShelves?: LibraryCatalogRepository['reorderShelves'];
 }) {
@@ -38,6 +39,7 @@ async function harness(input: {
   const notify = vi.fn();
   const refreshNovels = vi.fn(async () => undefined);
   const catalog = {
+    listShelfCatalog: input.listShelfCatalog,
     listShelves: input.listShelves ?? vi.fn(async () => []),
     listShelfMemberships: vi.fn(async () => []),
     reorderShelves: input.reorderShelves ?? vi.fn(async () => []),
@@ -499,4 +501,66 @@ it.each([false, true])('reports one atomic reorder outcome (failure=%s) through 
   expect(listShelves).toHaveBeenCalledTimes(fail ? 0 : 1);
   if (fail) expect(mounted.controller.error).toBe('atomic reorder failed');
   await act(async () => mounted.renderer.unmount());
+});
+
+it('uses a combined refresh and refuses a late pre-mutation shelf response', async () => {
+  let finish!: (value: { shelves: Shelf[]; memberships: [] }) => void;
+  const listShelfCatalog = vi
+    .fn()
+    .mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    )
+    .mockResolvedValue({ shelves: [{ id: 'fresh', name: 'Fresh' } as Shelf], memberships: [] });
+  const mounted = await harness({ current: novel(), listShelfCatalog });
+  try {
+    expect(listShelfCatalog).toHaveBeenCalledOnce();
+    expect(mounted.catalog.listShelves).not.toHaveBeenCalled();
+    expect(mounted.catalog.listShelfMemberships).not.toHaveBeenCalled();
+    await act(async () => mounted.controller.refresh());
+    expect(mounted.controller.shelves[0].id).toBe('fresh');
+    await act(async () => finish({ shelves: [], memberships: [] }));
+    expect(mounted.controller.shelves[0].id).toBe('fresh');
+  } finally {
+    act(() => mounted.renderer.unmount());
+  }
+});
+
+it('ignores a previous account catalog response after switching repositories', async () => {
+  let finish!: (value: { shelves: Shelf[]; memberships: [] }) => void;
+  const oldCatalog = {
+    listShelfCatalog: () =>
+      new Promise((resolve) => {
+        finish = resolve;
+      }),
+  } as unknown as LibraryCatalogRepository;
+  const newCatalog = {
+    listShelfCatalog: async () => ({ shelves: [{ id: 'new-account' }], memberships: [] }),
+  } as unknown as LibraryCatalogRepository;
+  let controller!: LibraryManagementController;
+  function Probe({ catalog }: { catalog: LibraryCatalogRepository }) {
+    controller = useLibraryManagementController({
+      catalog,
+      getNovel: async () => undefined,
+      refreshNovels: async () => {},
+      refreshAfterMutation: async () => {},
+      notify: () => {},
+      confirm: () => true,
+    });
+    return null;
+  }
+  let root!: ReactTestRenderer;
+  await act(async () => {
+    root = create(<Probe catalog={oldCatalog} />);
+  });
+  try {
+    await act(async () => root.update(<Probe catalog={newCatalog} />));
+    await act(async () => finish({ shelves: [{ id: 'old-account' } as Shelf], memberships: [] }));
+    expect(controller.shelves.map((shelf) => shelf.id)).toEqual(['new-account']);
+    expect(controller.shelvesReady).toBe(true);
+  } finally {
+    act(() => root.unmount());
+  }
 });

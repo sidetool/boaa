@@ -1,10 +1,5 @@
-import { readBrandStorage, writeBrandStorage } from '@boaa/extension-contracts/brand-compat';
 import { randomUuid } from '../../utils/random-uuid';
-import {
-  normalizeDiscoveryConfig,
-  type DiscoveryConfig,
-  type DiscoveryTab,
-} from '../../integration-settings/discovery-settings';
+import { type DiscoveryConfig, type DiscoveryTab } from '../../integration-settings/discovery-settings';
 export type { DiscoveryConfig, DiscoveryTab, DiscoverySection } from '../../integration-settings/discovery-settings';
 
 export const newTab = (title = '새 탭'): DiscoveryTab => ({
@@ -20,19 +15,6 @@ export const emptyConfig = (): DiscoveryConfig => ({
 });
 export function configKey(scope: string) {
   return `boaa.discovery.v1:${scope}`;
-}
-export function readStoredConfig(scope: string): DiscoveryConfig | undefined {
-  try {
-    return normalizeDiscoveryConfig(JSON.parse(readBrandStorage(localStorage, configKey(scope)) ?? 'null'));
-  } catch {
-    return;
-  }
-}
-export function readConfig(scope: string): DiscoveryConfig {
-  return readStoredConfig(scope) ?? emptyConfig();
-}
-export function writeConfig(scope: string, config: DiscoveryConfig) {
-  writeBrandStorage(localStorage, configKey(scope), JSON.stringify(config));
 }
 export function move<T>(items: readonly T[], index: number, offset: number): T[] {
   const next = [...items];

@@ -311,3 +311,53 @@ it('does not replay another account scope when draining an interrupted purge', a
   expect(pendingSourceStreamPreferences('host:first-user')).toEqual([]);
   expect(await state.listAssociationPurgeIntents()).toEqual([]);
 });
+
+it('offers ordered read-only snapshots without triggering reconciliation writes', async () => {
+  const { readSourceLibrary } = await import('./source-library-snapshot');
+  const state = new ExternalSourceLocalStateStore();
+  await seedHistory(state);
+  const order: string[] = [];
+  const readLinks = state.listLinks.bind(state);
+  vi.spyOn(state, 'listLinks').mockImplementation(async () => {
+    order.push('links');
+    return readLinks();
+  });
+  const snapshot = await readSourceLibrary({
+    state,
+    waitForReadingHistory: async () => {
+      order.push('history');
+    },
+    listNovels: async (options) => {
+      expect(options).toEqual({ includeTrash: true });
+      order.push('catalog');
+      return [];
+    },
+  });
+  expect(order).toEqual(['history', 'links', 'catalog']);
+  expect(snapshot.links).toEqual([link]);
+  expect(await state.listSubscriptions()).toEqual([work]);
+  expect(await state.listLinks()).toEqual([link]);
+});
+
+it('lets a fresh refresh recover new imports while an older catalog read is stalled', async () => {
+  const state = new ExternalSourceLocalStateStore();
+  await seedHistory(state);
+  let reject!: (error: Error) => void;
+  const firstRead = vi.fn(
+    () =>
+      new Promise<ReturnType<typeof testNovel>[]>((_resolve, no) => {
+        reject = no;
+      }),
+  );
+  const secondRead = vi.fn(async () => [testNovel({ id: 'book' })]);
+  const first = loadSourceLibrary({ state, listNovels: firstRead });
+  await vi.waitFor(() => expect(firstRead).toHaveBeenCalledOnce());
+  const second = loadSourceLibrary({ state, listNovels: secondRead });
+  expect((await second).links).toEqual([link]);
+  const failed = expect(first).rejects.toThrow('offline');
+  reject(new Error('offline'));
+  await failed;
+  expect((await second).links).toEqual([link]);
+  expect(secondRead).toHaveBeenCalledOnce();
+  expect(await state.listSubscriptions()).toEqual([work]);
+});

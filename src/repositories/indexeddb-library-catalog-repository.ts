@@ -43,6 +43,11 @@ export class IndexedDbLibraryCatalogRepository implements LibraryCatalogReposito
     return emptyNovelTrash();
   }
 
+  async listShelfCatalog() {
+    const [shelves, memberships] = await Promise.all([this.listShelves(), this.listShelfMemberships()]);
+    return { shelves, memberships };
+  }
+
   listShelves() {
     return listLibraryShelves();
   }

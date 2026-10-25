@@ -140,5 +140,5 @@ it('retains first-page items after a later-page failure and retries the requeste
   expect(state.items.map((item) => item.title)).toEqual(['first', 'second']);
   expect(state.error).toBe('');
   expect(state.more).toBe(true);
-  expect(session.list).toHaveBeenLastCalledWith(section.sourceId, { cursor: 'next' }, true);
+  expect(session.list).toHaveBeenLastCalledWith(section.sourceId, { cursor: 'next' }, true, expect.any(AbortSignal));
 });

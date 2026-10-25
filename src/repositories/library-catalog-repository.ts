@@ -53,6 +53,7 @@ export interface LibraryCatalogRepository {
   restore(bookId: string, expectedRevision?: number): Promise<CatalogMutationReceipt>;
   purge(bookId: string, expectedRevision?: number): Promise<void>;
   emptyTrash(): Promise<number>;
+  listShelfCatalog?(): Promise<{ shelves: Shelf[]; memberships: ShelfMembership[] }>;
   listShelves(): Promise<Shelf[]>;
   listShelfMemberships(): Promise<ShelfMembership[]>;
   createShelf(input: { readonly name: string; readonly color?: string }): Promise<ShelfMutationReceipt>;

@@ -345,6 +345,7 @@ export function useExternalSourceController(options: UseExternalSourceController
     activateQueue,
     clearActiveQueue,
   } = useSourceDownloadRecovery({
+    initializeRecovery: false,
     state: options.state,
     settingsScope: options.settingsScope,
     assets: options.assets,
@@ -466,8 +467,19 @@ export function useExternalSourceController(options: UseExternalSourceController
   useEffect(() => {
     let current = true;
     const generation = ++libraryLoadGeneration.current;
-    void sourceLibraryLoad(loadSourceLibrary(optionsRef.current))
-      .then(({ links, novels, subscriptions, preferences }) => {
+    const loadOptions = optionsRef.current;
+    void sourceLibraryLoad(loadSourceLibrary(loadOptions))
+      .then((snapshot) => {
+        const { links, novels, subscriptions, preferences } = snapshot;
+        if (
+          current &&
+          mountedRef.current &&
+          loadOptions.state === optionsRef.current.state &&
+          loadOptions.settingsScope === optionsRef.current.settingsScope
+        )
+          void refreshRecovery(true, generation === libraryLoadGeneration.current ? snapshot : undefined).catch(
+            () => undefined,
+          );
         if (!current || !mountedRef.current || generation !== libraryLoadGeneration.current) return;
         setSubscriptions(subscriptions);
         setReleasePreferences(preferences);
@@ -483,7 +495,7 @@ export function useExternalSourceController(options: UseExternalSourceController
     return () => {
       current = false;
     };
-  }, [options.extensionRevision, options.libraryRevision]);
+  }, [options.extensionRevision, options.libraryRevision, options.state, options.settingsScope, refreshRecovery]);
 
   useEffect(() => {
     if (sources.length === 0) {
@@ -508,10 +520,17 @@ export function useExternalSourceController(options: UseExternalSourceController
 
   const refreshLocalProjection = useCallback(async () => {
     const generation = ++libraryLoadGeneration.current;
+    const loadOptions = optionsRef.current;
+    const current = () =>
+      mountedRef.current &&
+      generation === libraryLoadGeneration.current &&
+      loadOptions.state === optionsRef.current.state &&
+      loadOptions.settingsScope === optionsRef.current.settingsScope;
     if (!libraryLoaded.current) setLibraryBootstrap({ status: 'loading' });
     try {
-      const next = await sourceLibraryLoad(loadSourceLibrary(optionsRef.current));
-      if (!mountedRef.current || generation !== libraryLoadGeneration.current) return;
+      const next = await sourceLibraryLoad(loadSourceLibrary(loadOptions));
+      if (!current()) return;
+      void refreshRecovery(true, next).catch(() => undefined);
       setLinks(next.links);
       setNovels(next.novels);
       setSubscriptions(next.subscriptions);
@@ -519,7 +538,7 @@ export function useExternalSourceController(options: UseExternalSourceController
       libraryLoaded.current = true;
       setLibraryBootstrap({ status: 'ready' });
     } catch (error) {
-      if (!mountedRef.current || generation !== libraryLoadGeneration.current) return;
+      if (!current()) return;
       if (!libraryLoaded.current)
         setLibraryBootstrap({ status: 'failed', message: '소스 작품을 불러오지 못했습니다. 다시 시도해 주세요.' });
       optionsRef.current.notify(
@@ -527,7 +546,7 @@ export function useExternalSourceController(options: UseExternalSourceController
         'warning',
       );
     }
-  }, []);
+  }, [refreshRecovery]);
 
   const streamProgress = useSourceStreamProgress({
     current: () => optionsRef.current,

@@ -167,6 +167,9 @@ export function useLibraryManagementController(
   const [error, setError] = useState<string>();
   const [lastBatchReceipt, setLastBatchReceipt] = useState<BatchLibraryReceipt>();
   const busyRef = useRef(false);
+  const catalogRef = useRef(input.catalog);
+  catalogRef.current = input.catalog;
+  const refreshGeneration = useRef(0);
   const latestBooksRef = useRef(new Map<string, Novel>());
 
   useEffect(() => {
@@ -182,11 +185,17 @@ export function useLibraryManagementController(
 
   const refresh = useCallback(async () => {
     if (!input.catalog) return;
+    const catalog = input.catalog;
+    const generation = ++refreshGeneration.current;
+    const current = () => catalogRef.current === catalog && generation === refreshGeneration.current;
     try {
-      const [nextShelves, nextMemberships] = await Promise.all([
-        input.catalog.listShelves(),
-        input.catalog.listShelfMemberships(),
-      ]);
+      const { shelves: nextShelves, memberships: nextMemberships } = catalog.listShelfCatalog
+        ? await catalog.listShelfCatalog()
+        : await Promise.all([catalog.listShelves(), catalog.listShelfMemberships()]).then(([shelves, memberships]) => ({
+            shelves,
+            memberships,
+          }));
+      if (!current()) return;
       setShelves(nextShelves);
       setMemberships(nextMemberships);
       setActiveShelfIdState((current) =>
@@ -194,9 +203,9 @@ export function useLibraryManagementController(
       );
       setError(undefined);
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : '책장 정보를 불러오지 못했습니다.');
+      if (current()) setError(cause instanceof Error ? cause.message : '책장 정보를 불러오지 못했습니다.');
     } finally {
-      setLoadedCatalog(input.catalog);
+      if (current()) setLoadedCatalog(catalog);
     }
   }, [input.catalog]);
 

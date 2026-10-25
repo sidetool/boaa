@@ -13,12 +13,17 @@ import { completeSeriesCatalog } from './complete-series-catalog';
 import { filterAndSortReleases } from './source-release-list-model';
 import { externalItemSectionId, externalReleaseRevisionChanged } from './serial-work-projection';
 import { isSerialSourceItem, serialCollectionKey, type SerialSourceItem } from './source-serial-item';
-import { loadSourceLibrary, type SourceLibrarySnapshotPort } from './source-library-snapshot';
+import {
+  loadSourceLibrary,
+  type SourceLibrarySnapshot,
+  type SourceLibrarySnapshotPort,
+} from './source-library-snapshot';
 import type { ExternalSourceItemView } from './external-source-controller-contract';
 
 interface SourceDownloadRecoveryPort extends SourceLibrarySnapshotPort {
   readonly registry: Pick<ExternalSourceRegistryPort, 'getExternalSourceStatus' | 'listExternalSource'>;
   readonly hostContext: TrustedExternalSourceHostContext;
+  readonly initializeRecovery?: boolean;
   listChapters(bookId: string): Promise<Chapter[]>;
   notify(message: string, tone?: ToastTone): void;
   isMounted(): boolean;
@@ -51,72 +56,98 @@ export function useSourceDownloadRecovery(port: SourceDownloadRecoveryPort) {
   const [recoverableDownloads, setRecoverableDownloads] = useState<readonly SourceDownloadQueue[]>([]);
   const recoveryBusyRef = useRef(false);
 
-  const reconcileDownloadQueue = useCallback(async (queue: SourceDownloadQueue) => {
-    const snapshot = await loadSourceLibrary(portRef.current);
-    const linksByKey = new Map(
-      snapshot.links.filter((link) => !link.pendingImport).map((link) => [externalItemKeyId(link.source), link]),
-    );
-    const bookIds = new Set(
-      queue.items
-        .map((item) => linksByKey.get(externalItemKeyId(item.key))?.localBookId)
-        .filter((id): id is string => Boolean(id)),
-    );
-    const sections = new Map(
-      await Promise.all(
-        [...bookIds].map(
-          async (id) =>
-            [
-              id,
-              new Set(
-                (await portRef.current.listChapters(id)).map((chapter) => chapter.documentSectionId ?? chapter.id),
-              ),
-            ] as const,
+  const recoveryGeneration = useRef(0);
+  const reconcileDownloadQueue = useCallback(
+    async (
+      queue: SourceDownloadQueue,
+      port: SourceDownloadRecoveryPort = portRef.current,
+      snapshot?: SourceLibrarySnapshot,
+      chapterReads = new Map<string, Promise<Set<string>>>(),
+      isCurrent: () => boolean = () => true,
+    ) => {
+      const current = () =>
+        isCurrent() && portRef.current.state === port.state && portRef.current.settingsScope === port.settingsScope;
+      const library = snapshot ?? (await loadSourceLibrary(port));
+      const linksByKey = new Map(
+        library.links.filter((link) => !link.pendingImport).map((link) => [externalItemKeyId(link.source), link]),
+      );
+      const bookIds = new Set(
+        queue.items
+          .map((item) => linksByKey.get(externalItemKeyId(item.key))?.localBookId)
+          .filter((id): id is string => Boolean(id)),
+      );
+      const sections = new Map(
+        await Promise.all(
+          [...bookIds].map(async (id) => {
+            let chapters = chapterReads.get(id);
+            if (!chapters) {
+              chapters = port
+                .listChapters(id)
+                .then((rows) => new Set(rows.map((chapter) => chapter.documentSectionId ?? chapter.id)));
+              chapterReads.set(id, chapters);
+            }
+            return [id, await chapters] as const;
+          }),
         ),
-      ),
-    );
-    const remaining = queue.items.filter((item) => {
-      const link = linksByKey.get(externalItemKeyId(item.key));
-      return (
-        !link ||
-        !snapshot.novels.some((book) => book.id === link.localBookId && !book.deletedAt) ||
-        !sections.get(link.localBookId)?.has(item.sectionId) ||
-        (item.remoteRevision !== undefined &&
-          externalReleaseRevisionChanged(
-            { key: item.key, remoteRevision: item.remoteRevision },
-            link.importedRemoteRevision,
-          ))
       );
-    });
-    const next = { ...queue, items: remaining, updatedAt: currentIso() };
-    if (portRef.current.state.pruneDownloadQueue) {
-      const kept = new Set(remaining.map((item) => externalItemKeyId(item.key)));
-      return (
-        (await portRef.current.state.pruneDownloadQueue(
-          queue.id,
-          queue.items.filter((item) => !kept.has(externalItemKeyId(item.key))),
-        )) ?? { ...next, items: [] }
-      );
-    }
-    if (!remaining.length) await portRef.current.state.deleteDownloadQueue?.(queue.id);
-    return next;
-  }, []);
+      const activeBooks = new Set(library.novels.filter((book) => !book.deletedAt).map((book) => book.id));
+      const remaining = queue.items.filter((item) => {
+        const link = linksByKey.get(externalItemKeyId(item.key));
+        return (
+          !link ||
+          !activeBooks.has(link.localBookId) ||
+          !sections.get(link.localBookId)?.has(item.sectionId) ||
+          (item.remoteRevision !== undefined &&
+            externalReleaseRevisionChanged(
+              { key: item.key, remoteRevision: item.remoteRevision },
+              link.importedRemoteRevision,
+            ))
+        );
+      });
+      if (!current()) return queue;
+      const next = { ...queue, items: remaining, updatedAt: currentIso() };
+      if (port.state.pruneDownloadQueue) {
+        const kept = new Set(remaining.map((item) => externalItemKeyId(item.key)));
+        return (
+          (await port.state.pruneDownloadQueue(
+            queue.id,
+            queue.items.filter((item) => !kept.has(externalItemKeyId(item.key))),
+          )) ?? { ...next, items: [] }
+        );
+      }
+      if (!remaining.length) await port.state.deleteDownloadQueue?.(queue.id);
+      return next;
+    },
+    [],
+  );
 
   const refreshRecovery = useCallback(
-    async (reconcile = false) => {
-      const queues = (await portRef.current.state.listDownloadQueues?.()) ?? [];
+    async (reconcile = false, snapshot?: SourceLibrarySnapshot) => {
+      const port = portRef.current;
+      const generation = ++recoveryGeneration.current;
+      const current = () =>
+        portRef.current.state === port.state &&
+        portRef.current.settingsScope === port.settingsScope &&
+        generation === recoveryGeneration.current;
+      const queues = ((await port.state.listDownloadQueues?.()) ?? []).filter(
+        (queue) => queue.id !== activeQueueIdRef.current,
+      );
+      const library = reconcile && queues.length ? (snapshot ?? (await loadSourceLibrary(port))) : undefined;
+      const chapters = new Map<string, Promise<Set<string>>>();
       const pending: SourceDownloadQueue[] = [];
       for (const queue of queues) {
+        if (!current()) return;
         if (queue.id === activeQueueIdRef.current) continue;
-        const current = reconcile ? await reconcileDownloadQueue(queue) : queue;
-        if (current.items.length) pending.push(current);
+        const next = reconcile ? await reconcileDownloadQueue(queue, port, library, chapters, current) : queue;
+        if (next.items.length) pending.push(next);
       }
-      if (portRef.current.isMounted()) setRecoverableDownloads(pending);
+      if (current() && port.isMounted()) setRecoverableDownloads(pending);
     },
     [reconcileDownloadQueue],
   );
   useEffect(() => {
-    void refreshRecovery(true).catch(() => undefined);
-  }, [refreshRecovery]);
+    if (port.initializeRecovery !== false) void refreshRecovery(true).catch(() => undefined);
+  }, [refreshRecovery, port.state, port.settingsScope, port.initializeRecovery]);
 
   const persistDownloadIntent = useCallback(async (selected: readonly ExternalSourceItemView[]) => {
     const serial = selected.filter((item): item is SerialSourceItem => isSerialSourceItem(item));

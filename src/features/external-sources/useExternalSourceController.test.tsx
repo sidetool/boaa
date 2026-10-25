@@ -3797,6 +3797,44 @@ describe('stream-only library works', () => {
     }
   });
 
+  it('recovers persisted download queues from the successful retry snapshot after bootstrap fails', async () => {
+    await resetExternalSourceLocalStateForTests();
+    const state = new ExternalSourceLocalStateStore();
+    const queue = {
+      id: sourceDownloadQueueId(ITEM_KEY, 'manga:1'),
+      kind: 'downloadQueue' as const,
+      connectorId: SOURCE_ID,
+      accountConnectionId: ITEM_KEY.accountConnectionId,
+      collectionRemoteId: 'manga:1',
+      title: 'Pending work',
+      updatedAt: new Date().toISOString(),
+      items: [{ key: ITEM_KEY, title: '1', sectionId: 'work-1', remoteRevision: 'remote-r2' }],
+    };
+    await state.saveDownloadQueue(queue);
+    let unavailable = true;
+    const libraryBooks = vi.fn(async () => {
+      if (unavailable) throw new Error('offline');
+      return [];
+    });
+    const h = await createHarness({ downloadedContent: '', sourceState: state, libraryBooks });
+    try {
+      expect(h.controller.libraryBootstrap?.status).toBe('failed');
+      expect(h.controller.recoverableDownloads).toEqual([]);
+      unavailable = false;
+      libraryBooks.mockClear();
+      await act(async () => h.controller.retryLibrary?.());
+      await act(async () => {
+        await vi.waitFor(() => expect(h.controller.recoverableDownloads).toEqual([queue]));
+      });
+      expect(h.controller.libraryBootstrap?.status).toBe('ready');
+      expect(libraryBooks).toHaveBeenCalledOnce();
+      expect(await state.listDownloadQueues()).toEqual([queue]);
+    } finally {
+      await act(async () => h.renderer.unmount());
+      await resetExternalSourceLocalStateForTests();
+    }
+  });
+
   it('ignores an older source snapshot that finishes after a successful retry', async () => {
     const h = await make();
     let resolveOld!: (works: ExternalSourceSubscriptionRecord[]) => void;

@@ -42,6 +42,7 @@ export function useDiscoveryPages(
   useEffect(() => {
     if (!enabled) return;
     let active = true;
+    const abort = new AbortController();
     const force = previous.current.refresh !== refresh || previous.current.retry !== retry;
     previous.current = { refresh, retry };
     setBusy(true);
@@ -51,7 +52,12 @@ export function useDiscoveryPages(
       if (!active) return;
       if (restored && !pages.length) setResult({ key, pages: [restored] });
       if (filterSignature) {
-        const schema = await session.schema(source, { parentRef: input.parentRef, browseMode: 'popular' }, force);
+        const schema = await session.schema(
+          source,
+          { parentRef: input.parentRef, browseMode: 'popular' },
+          force,
+          abort.signal,
+        );
         if (JSON.stringify(schema.browse?.filters ?? []) !== filterSignature)
           throw new Error('소스의 필터가 변경되었습니다. 탐색 편집에서 목록을 다시 설정해 주세요.');
         if (!active) return;
@@ -65,6 +71,7 @@ export function useDiscoveryPages(
           source,
           { ...input, cursor },
           force || (i > 0 && loaded[0]?.cache?.fetchedAt !== pages[0]?.cache?.fetchedAt),
+          abort.signal,
         );
         if (!active) return;
         if (page.browse && input.browseMode && !page.browse.availableModes.includes(input.browseMode))
@@ -84,6 +91,7 @@ export function useDiscoveryPages(
       });
     return () => {
       active = false;
+      abort.abort();
     };
     // Input is represented by the session key; depth is the user's requested page count.
     // eslint-disable-next-line react-hooks/exhaustive-deps

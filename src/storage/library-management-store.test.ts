@@ -82,3 +82,16 @@ describe('library management store', () => {
     );
   });
 });
+
+it('exposes the same shelf and membership data through the combined local catalog read', async () => {
+  const { IndexedDbLibraryCatalogRepository } = await import('../repositories/indexeddb-library-catalog-repository');
+  await resetReaderDbForTests();
+  const repository = new IndexedDbLibraryCatalogRepository();
+  const bookId = await book();
+  const { shelf } = await repository.createShelf({ name: 'Combined' });
+  await repository.setShelfMembership(shelf.id, bookId, true);
+  const snapshot = await repository.listShelfCatalog();
+  expect(snapshot.shelves).toEqual(await repository.listShelves());
+  expect(snapshot.memberships).toEqual(await repository.listShelfMemberships());
+  expect(snapshot.memberships).toHaveLength(1);
+});

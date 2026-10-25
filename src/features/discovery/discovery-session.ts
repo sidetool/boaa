@@ -15,16 +15,26 @@ import type {
   TrustedExternalSourceHostContext,
 } from '../../external-sources/contracts';
 
+interface ListRequest {
+  readonly source: string;
+  readonly abort: AbortController;
+  readonly promise: Promise<ExternalItemPage>;
+  readonly task: () => Promise<ExternalItemPage>;
+  readonly resolve: (page: ExternalItemPage) => void;
+  readonly reject: (reason: unknown) => void;
+  consumers: number;
+}
+
 /** One session, shared by the home and its source sections. Bounded memory and IndexedDB results; no polling. */
 export class DiscoverySession {
   readonly railPositions = new Map<string, number>();
   readonly scrollPositions = new Map<string, { id?: string; offset: number; top: number }>();
   private cache = new Map<string, { page: ExternalItemPage; time: number; bytes: number }>();
   private restoring = new Map<string, Promise<ExternalItemPage | undefined>>();
-  private sourceTails = new Map<string, Promise<void>>();
-  private pending = new Map<string, Promise<ExternalItemPage>>();
+  private activeSources = new Set<string>();
+  private pending = new Map<string, ListRequest>();
   private running = 0;
-  private queue: Array<() => void> = [];
+  private queue: ListRequest[] = [];
   private readonly storage: ExternalSourceLocalStateStore;
   private lifetime = new AbortController();
   constructor(
@@ -66,7 +76,8 @@ export class DiscoverySession {
     }
     return cached;
   }
-  async schema(source: string, input: ExternalSourceListInput, refresh = false) {
+  async schema(source: string, input: ExternalSourceListInput, refresh = false, signal?: AbortSignal) {
+    signal?.throwIfAborted();
     const key = `schema:${this.key(source, input)}`;
     let saved = this.cache.get(key);
     if (!saved && typeof indexedDB !== 'undefined') {
@@ -77,6 +88,7 @@ export class DiscoverySession {
       }
     }
     this.lifetime.signal.throwIfAborted();
+    signal?.throwIfAborted();
     if (key !== `schema:${this.key(source, input)}`) throw new Error('package_generation_changed');
     if (saved && saved.time + 7 * 86400_000 <= Date.now()) {
       this.cache.delete(key);
@@ -84,7 +96,7 @@ export class DiscoverySession {
     }
     if (!refresh && saved && saved.time + 6 * 3600_000 > Date.now()) return saved.page;
     try {
-      const page = await this.list(source, input, refresh);
+      const page = await this.list(source, input, refresh, signal);
       if (key !== `schema:${this.key(source, input)}`) throw new Error('package_generation_changed');
       const schema = { items: [], browse: page.browse, cache: page.cache };
       this.remember(key, schema);
@@ -100,6 +112,7 @@ export class DiscoverySession {
       }
       return schema;
     } catch (error) {
+      signal?.throwIfAborted();
       if (!refresh && saved && transientSourceFailure(error)) return saved.page;
       throw error;
     }
@@ -151,7 +164,14 @@ export class DiscoverySession {
       this.cache.delete(oldest);
     }
   }
-  async list(source: string, input: ExternalSourceListInput, refresh = false): Promise<ExternalItemPage> {
+  async list(
+    source: string,
+    input: ExternalSourceListInput,
+    refresh = false,
+    consumerSignal?: AbortSignal,
+  ): Promise<ExternalItemPage> {
+    const consumer = AbortSignal.any([this.lifetime.signal, ...(consumerSignal ? [consumerSignal] : [])]);
+    consumer.throwIfAborted();
     const key = this.key(source, input);
     const cached = this.peek(source, input);
     const ttl = sourceCachePolicy(
@@ -160,62 +180,111 @@ export class DiscoverySession {
       this.scope.startsWith('hosted-account:') ? this.scope : undefined,
     ).fresh;
     if (!refresh && cached && !cached.page.cache?.stale && Date.now() - cached.time < ttl) return cached.page;
-    const pending = this.pending.get(key);
-    if (pending) return pending;
-    const request = this.serial(source, async () => {
-      this.lifetime.signal.throwIfAborted();
-      const status = this.registry.getExternalSourceStatus(source as ExtensionContributionId, this.context);
-      if (status.state !== 'connected') throw new Error('소스 연결을 확인해 주세요.');
-      const signal = AbortSignal.any([this.lifetime.signal, AbortSignal.timeout(30_000)]);
-      const received = await this.registry.listExternalSource(
-        source as ExtensionContributionId,
-        this.context,
-        {
-          ...input,
-          accountConnectionId: status.accountConnectionId,
-          ...(refresh ? { cacheMode: 'reload' as const } : {}),
+    let entry = this.pending.get(key);
+    if (!entry) {
+      const abort = new AbortController();
+      let resolve!: ListRequest['resolve'];
+      let reject!: ListRequest['reject'];
+      const promise = new Promise<ExternalItemPage>((yes, no) => {
+        resolve = yes;
+        reject = no;
+      });
+      entry = {
+        source,
+        abort,
+        promise,
+        resolve,
+        reject,
+        consumers: 0,
+        task: async () => {
+          const signal = AbortSignal.any([this.lifetime.signal, abort.signal, AbortSignal.timeout(30_000)]);
+          signal.throwIfAborted();
+          if (key !== this.key(source, input)) throw new Error('소스 연결이 변경되었습니다. 다시 열어 주세요.');
+          const status = this.registry.getExternalSourceStatus(source as ExtensionContributionId, this.context);
+          if (status.state !== 'connected') throw new Error('소스 연결을 확인해 주세요.');
+          const received = await this.registry.listExternalSource(
+            source as ExtensionContributionId,
+            this.context,
+            {
+              ...input,
+              accountConnectionId: status.accountConnectionId,
+              ...(refresh ? { cacheMode: 'reload' as const } : {}),
+            },
+            signal,
+          );
+          signal.throwIfAborted();
+          if (key !== this.key(source, input)) throw new Error('소스 연결이 변경되었습니다. 다시 열어 주세요.');
+          const page = { ...received, cache: { ...received.cache, fetchedAt: sourcePageTime(received) } };
+          this.remember(key, page);
+          if (typeof indexedDB !== 'undefined')
+            void this.storage
+              .saveCachePage(storedSourcePage(key, source, input, page, this.scope))
+              .catch(() => undefined);
+          return page;
         },
-        signal,
+      };
+      this.pending.set(key, entry);
+      this.queue.push(entry);
+      const request = entry;
+      void promise.then(
+        () => this.forget(key, request),
+        () => this.forget(key, request),
       );
-      signal.throwIfAborted();
-      if (key !== this.key(source, input)) throw new Error('소스 연결이 변경되었습니다. 다시 열어 주세요.');
-      const page = { ...received, cache: { ...received.cache, fetchedAt: sourcePageTime(received) } };
-      this.remember(key, page);
-      if (typeof indexedDB !== 'undefined')
-        void this.storage.saveCachePage(storedSourcePage(key, source, input, page, this.scope)).catch(() => undefined);
-      return page;
-    });
-    this.pending.set(key, request);
-    try {
-      return await request;
-    } finally {
-      this.pending.delete(key);
     }
-  }
-  private async serial<T>(source: string, task: () => Promise<T>): Promise<T> {
-    const previous = this.sourceTails.get(source);
-    let unlock!: () => void;
-    const tail = new Promise<void>((resolve) => {
-      unlock = resolve;
+    const request = entry;
+    request.consumers++;
+    const result = new Promise<ExternalItemPage>((resolve, reject) => {
+      let settled = false;
+      const finish = (complete: () => void) => {
+        if (settled) return;
+        settled = true;
+        consumer.removeEventListener('abort', cancel);
+        request.consumers--;
+        complete();
+      };
+      const cancel = () =>
+        finish(() => {
+          reject(consumer.reason);
+          if (!request.consumers) {
+            request.abort.abort(consumer.reason);
+            this.forget(key, request);
+            const index = this.queue.indexOf(request);
+            if (index >= 0) {
+              this.queue.splice(index, 1);
+              request.reject(consumer.reason);
+            }
+          }
+        });
+      consumer.addEventListener('abort', cancel, { once: true });
+      void request.promise.then(
+        (page) => finish(() => resolve(page)),
+        (error) => finish(() => reject(error)),
+      );
+      if (consumer.aborted) cancel();
     });
-    this.sourceTails.set(source, tail);
-    try {
-      if (previous) await previous;
-      return await this.run(task);
-    } finally {
-      unlock();
-      if (this.sourceTails.get(source) === tail) this.sourceTails.delete(source);
-    }
+    this.pump();
+    return result;
   }
-  private async run<T>(task: () => Promise<T>): Promise<T> {
-    if (this.running >= 2) await new Promise<void>((resolve) => this.queue.push(resolve));
-    else this.running++;
-    try {
-      return await task();
-    } finally {
-      const next = this.queue.shift();
-      if (next) next();
-      else this.running--;
+  private forget(key: string, request: ListRequest) {
+    if (this.pending.get(key) === request) this.pending.delete(key);
+  }
+  private pump() {
+    while (this.running < 2) {
+      const index = this.queue.findIndex((request) => !this.activeSources.has(request.source));
+      if (index < 0) return;
+      const request = this.queue.splice(index, 1)[0]!;
+      this.running++;
+      this.activeSources.add(request.source);
+      // An aborting consumer may leave immediately, but a loader that ignores abort
+      // keeps both its source and global permit until its actual promise settles.
+      void request
+        .task()
+        .then(request.resolve, request.reject)
+        .finally(() => {
+          this.running--;
+          this.activeSources.delete(request.source);
+          this.pump();
+        });
     }
   }
   private coverRunning = 0;

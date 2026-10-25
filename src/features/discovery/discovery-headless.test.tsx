@@ -134,7 +134,7 @@ it('preserves cached rail items until the refresh action accepts the candidate, 
   expect(state.candidate).toBeUndefined();
   expect(list).toHaveBeenCalledTimes(1);
   await act(async () => state.refreshSection?.());
-  expect(list).toHaveBeenLastCalledWith('example.source', state.input, true);
+  expect(list).toHaveBeenLastCalledWith('example.source', state.input, true, expect.any(AbortSignal));
   expect(state.itemOpenArgs({ ...item('work'), navigationRef: 'detail' })).toEqual([
     'example.source',
     { parentRef: 'detail' },

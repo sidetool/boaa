@@ -163,3 +163,82 @@ it('shares disk hydration and refuses to replace a newer list response with its 
     session.dispose();
   }
 });
+
+it('cancels only the departing consumer of a shared list', async () => {
+  const { session, list } = fixture();
+  let finish!: (page: { items: [] }) => void;
+  list.mockImplementation(
+    () =>
+      new Promise((resolve) => {
+        finish = resolve;
+      }),
+  );
+  const abort = new AbortController();
+  const first = session.list('a', {}, false, abort.signal);
+  const second = session.list('a', {});
+  const cancelled = expect(first).rejects.toMatchObject({ name: 'AbortError' });
+  abort.abort();
+  await cancelled;
+  expect((list.mock.calls[0][3] as AbortSignal).aborted).toBe(false);
+  finish({ items: [] });
+  await second;
+  expect(list).toHaveBeenCalledOnce();
+  session.dispose();
+});
+
+it('removes abandoned queued searches and retains permits for loaders ignoring abort', async () => {
+  const { session, list } = fixture();
+  const finish: Array<() => void> = [];
+  list.mockImplementation(
+    () =>
+      new Promise((resolve) => {
+        finish.push(() => resolve({ items: [] }));
+      }),
+  );
+  const firstAbort = new AbortController();
+  const queuedAbort = new AbortController();
+  const first = session.list('a', { query: 'old' }, false, firstAbort.signal);
+  const other = session.list('b', {});
+  const queued = session.list('a', { query: 'discarded' }, false, queuedAbort.signal);
+  const next = session.list('a', { query: 'new' });
+  const queuedCancelled = expect(queued).rejects.toMatchObject({ name: 'AbortError' });
+  queuedAbort.abort();
+  await queuedCancelled;
+  const firstCancelled = expect(first).rejects.toMatchObject({ name: 'AbortError' });
+  firstAbort.abort();
+  await firstCancelled;
+  expect((list.mock.calls[0][3] as AbortSignal).aborted).toBe(true);
+  expect(list).toHaveBeenCalledTimes(2);
+  finish[0]();
+  await vi.waitFor(() => expect(list).toHaveBeenCalledTimes(3));
+  expect(list.mock.calls[2][2]).toMatchObject({ query: 'new' });
+  expect(session.peek('a', { query: 'old' })).toBeUndefined();
+  finish[1]();
+  finish[2]();
+  await Promise.all([other, next]);
+  session.dispose();
+});
+
+it('keeps a replacement request shared when the abandoned same-key request settles', async () => {
+  const { session, list } = fixture();
+  const finish: Array<() => void> = [];
+  list.mockImplementation(
+    () =>
+      new Promise((resolve) => {
+        finish.push(() => resolve({ items: [] }));
+      }),
+  );
+  const abort = new AbortController();
+  const first = session.list('a', {}, false, abort.signal);
+  const cancelled = expect(first).rejects.toMatchObject({ name: 'AbortError' });
+  abort.abort();
+  await cancelled;
+  const replacement = session.list('a', {});
+  finish[0]();
+  await vi.waitFor(() => expect(list).toHaveBeenCalledTimes(2));
+  const shared = session.list('a', {});
+  finish[1]();
+  await Promise.all([replacement, shared]);
+  expect(list).toHaveBeenCalledTimes(2);
+  session.dispose();
+});

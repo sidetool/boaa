@@ -63,6 +63,11 @@ export class RemoteLibraryCatalogRepository implements LibraryCatalogRepository 
     return (await this.client.emptyTrash()).purged;
   }
 
+  async listShelfCatalog() {
+    const result = await this.client.listShelves();
+    return { shelves: result.shelves.map(shelf), memberships: result.memberships.map(membership) };
+  }
+
   async listShelves() {
     return (await this.client.listShelves()).shelves.map(shelf);
   }
