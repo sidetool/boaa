@@ -45,6 +45,10 @@ async function pkg(signed = false, value = manifest()) {
 async function providerFixture() {
   const calls: string[] = [];
   let pending = false;
+  let acknowledgeJobPoll!: () => void;
+  const jobPolled = new Promise<void>((resolve) => {
+    acknowledgeJobPoll = resolve;
+  });
   const id = '12345678-1234-1234-1234-123456789abc';
   const server = createServer(async (request, response) => {
     const chunks = [];
@@ -58,12 +62,16 @@ async function providerFixture() {
     } else if (request.url?.endsWith('/manifest'))
       response.end(JSON.stringify({ id, kind: 'novel', chapterUrl: url, text: raw.toString('utf8') }));
     else if (request.url?.endsWith('/close')) response.end('{}');
-    else response.end(JSON.stringify({ id, kind: 'novel', state: pending ? 'queued' : 'ready' }));
+    else {
+      if (request.url === `/v1/jobs/${id}`) acknowledgeJobPoll();
+      response.end(JSON.stringify({ id, kind: 'novel', state: pending ? 'queued' : 'ready' }));
+    }
   });
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
   const address = server.address() as { port: number };
   return {
     calls,
+    jobPolled,
     setPending: () => {
       pending = true;
     },
@@ -336,7 +344,11 @@ describe('optional installed content services', () => {
       const abort = new AbortController();
       const pending = service.resolve({ ...scope, signal: abort.signal });
       const rejected = expect(pending).rejects.toThrow('cancelled');
-      for (let n = 0; n < 1000 && f.calls.filter((route) => route === '/v1/jobs').length < 2; n++) await delay(10);
+      // A state poll proves the client knows the job ID. An incoming POST alone
+      // can precede its response, when cancellation cannot identify a job to close.
+      // The unchanged test deadline bounds this fixture-owned barrier.
+      await f.jobPolled;
+      expect(f.calls.filter((route) => route === '/v1/jobs')).toHaveLength(2);
       abort.abort();
       await rejected;
       expect(f.calls.filter((route) => route.endsWith('/close'))).toHaveLength(2);

@@ -166,6 +166,74 @@
 - 수정 후 웹 전체 타입 검사와 변경한 두 코드 파일의 ESLint·Prettier 및 `git diff --check`를 통과했다.
   추가 전체 Quality·운영 업로드 성능·브라우저/네이티브 E2E는 실행하지 않았고 운영 배포는 하지 않았다.
 
+### 운영 반영 전 실환경 검증
+
+운영/CI와 같은 Node 22 계열(`v22.23.2`, 로컬 캐시 이미지의 실행 파일)로 검증했다.
+웹·서버 타입 검사, hosted 웹 production build, 서버 bundle과 production build 검사를 통과했다.
+기존 큰 chunk·브라우저 외부화 경고는 남아 있으며, 경고를 없애기 위한 빌드 옵션 변경은 하지 않았다.
+
+- **실제 브라우저 13개 항목 통과:** 배포용 웹 산출물, 격리 PostgreSQL/Redis와 실제 API를 사용했다.
+  UI에서 TXT·EPUB를 올려 본문을 읽고, 기존 2회차 작품에 2회차를 추가해 같은 ID의 4회차 본문을
+  확인했다. job 완료 후 manifest에만 503을 주어 완료 기록과 조회 전용 복구를 확인했다.
+  새로고침·Chromium/API 인스턴스 재시작·같은 브라우저의 계정 전환 후에도 원래 계정에서 복구됐다.
+  최종 4작품/5revision/5job, 업로드 시작·청크·완료 각 5회였으며 복구 중 중복 쓰기는 없었다.
+  브라우저 미처리 오류는 0개다. 이 검사는 실제 worker 함수를 직접 호출해 큐 실행과 구별했다.
+- **배포용 프로세스 5개 항목 통과:** 별도 격리 환경에서 `dist/index.js`, `dist/worker.js`를
+  Node 22 자식 프로세스로 실행했다. worker 실행 전 실제 HTTP 업로드가 queued인 것을 확인한 뒤,
+  실제 BullMQ worker의 완료와 manifest·문단 본문, DB/큐/객체 저장소/worker readiness를 확인했다.
+  두 프로세스를 실제 종료·재시작해 같은 인증 session과 본문이 유지됐고 1작품/1revision/1job이었다.
+- **깨끗한 설치와 SFTP 통과:** 원본 정책의 frozen install 실패를 재현하고 선택적 native build
+  두 항목을 명시적으로 꺼 해결했다. 설치 차단 해결 기록과 [검증 안내](testing.md)를 따른다.
+
+**같은 Node 22의 전체 Quality는 실패했다.** 선택한 532파일 중 526통과/6실패,
+테스트 3,804통과/8실패/3건너뜀이다. 런타임 8파일은 각각 1 worker, 나머지 524파일은
+2 workers로 실행했다. 시간 제한과 선택 집합은 완화하지 않았다.
+
+| 실패 파일                                                       | 전체 실행에서 확인한 실패                       |
+| --------------------------------------------------------------- | ----------------------------------------------- |
+| `apps/server/src/extensions/mangayomi/host.test.ts`             | 호출 15초 제한 1건, 테스트 5초 제한 2건         |
+| `src/services/import/comic-source.test.ts`                      | 대형 manifest append 검증 5초 제한, 실제 7.18초 |
+| `scripts/extensions/content-service.integration.test.ts`        | 취소 후 close 2회를 기대했으나 1회              |
+| `apps/server/src/routes/plugin-connections.integration.test.ts` | 통합 시나리오 30초 제한                         |
+| `scripts/extensions/development.test.ts`                        | fixture preview 5초 제한                        |
+| `src/extensions/ui/store-kv.test.ts`                            | 128개 초과 cursor 순회 5초 제한                 |
+
+대형 manifest의 같은 fixture와 7개 assertions를 유지한 계측 사본을 1 worker로
+Node 22/24에서 각각 한 번 실행하면 567ms/647ms로 통과했다. 런큐 대기는 0.10ms/0.81ms,
+GC는 38.9ms/35.2ms였다. Node 버전이나 평상시 assertion 비용만으로 전체 실행의 지연을
+설명할 근거는 없다. 단독 통과를 전체 통과로 대체하지 않는다.
+전체 로그는 `/tmp/boaa-predeploy-quality-node22.log`, 고정 비교는
+`/tmp/boaa-timing-diagnosis-mtu0917f/matched-summary.json`에 있다.
+
+RAM 부족 여부도 별도로 확인했다. 실행 구간의 sysstat 표본(22:30/22:40)은 사용 가능 RAM
+약 4.9/5.7GiB, swap-in 0.15/0.22 pages/s, swap-out 0.11/0 pages/s였다.
+스왑 4GiB는 거의 찼지만 활발한 swap thrashing 근거는 없고, 실행 주체인 `paseo.service`의
+cgroup memory.events는 high/max/oom/oom_kill 모두 0이며 memory.max는 무제한이다.
+측정 시점의 memory pressure avg10/60/300도 0이었다. 표본 사이의 짧은 메모리 압박을
+배제하지는 못하지만 RAM 부족을 시간 초과의 원인으로 확정할 근거는 없다.
+
+연결 취소 실패는 별도 합성 HTTP 실험으로 경쟁 조건을 확인했다. 서버가 POST를 받았지만
+ID 응답을 보내기 전에 취소하면 close는 0회, 클라이언트의 ID 수신을 증명하는 상태 GET 이후
+취소하면 close는 1회였다. 기존 테스트는 POST 도착만 기다리면서 이미 ID를 받은 작업의
+정리를 기대했다. fixture의 상태 GET을 기다리도록 기존 테스트만 고쳤고 소유권·publisher·
+본문·close 횟수 assertion과 제한 시간을 유지했다. 수정 후 해당 파일 12개가 모두 통과했다.
+ID 수신 전 취소에서 원격 작업의 생성 여부를 알 수 없고 직접 닫지 못하는 기존 한계는 남는다.
+이 수정으로 모든 취소 시점의 원격 정리를 보장한다고 해석하면 안 된다.
+
+30초 제한에 걸렸던 plugin connections 검사는 수정 없이 Node 22/1 worker에서 1회 실행해
+4.58초에 통과했다. 이 결과 역시 전체 실행에서의 지연 원인 규명은 아니다.
+나머지 host/development/store-kv 3파일도 Node 22/1 worker에서 기본 제한으로 한 번 실행해
+26개가 모두 통과했다. host의 앞선 실패 3건은 2,597/567/1,486ms, cursor 검사는 3,046ms,
+development 파일은 414ms였다. 실제 사용 흐름과 분리 검증은 통과했지만 **전체 Quality의
+시간 초과 원인은 미확정이며 운영 반영 가능 판정은 보류한다.** 수정 후 전체 실행을 다시
+통과했다고 주장하지 않는다. 후속 확인은 실패 당시와 비교 가능한 실행 중 자원·단계 계측이
+필요하며, 제한 시간 확대나 통과할 때까지 재실행으로 대신하지 않는다.
+
+실험은 생성한 계정·파일·DB만 사용했고 소유한 브라우저/API/worker 프로세스, 컨테이너와 데이터는
+정리했다. 브라우저 근거는 `/tmp/boaa-preproduction-browser-hiuksu/evidence/`, 실제 프로세스 근거는
+`/tmp/boaa-packaged-process-Ak4Y9y/evidence/`에 있다. 임시 파일은 장기 보존이나 CI 자동 실행을
+보장하지 않는다. 운영 배포·외부 push, 운영 파일의 업로드 시간 측정, Windows/Android 검증은 하지 않았다.
+
 ## 최초 감사에서 발견한 항목
 
 P1은 데이터 일관성·사용자 동작에 직접 영향이 있는 항목, P2는 반복 비용·유지보수 부담이다.
@@ -579,7 +647,7 @@ DB를 사용하지 않았다. 새 테스트 파일은 추가하지 않았고 실
 - A1/A2/A5는 합성 client/registry로 각각 버전 불일치 허용, 호출 수 2회, 이전 검색 대기를 확인했다.
   전체 965개 Vitest 파일을 실행해 모두 통과했다고 주장하지 않는다.
 
-## 남겨 둔 실패와 검증 한계
+## 기존 검증의 실패와 한계
 
 - `src/test/legacy-hash-import-guard.test.ts`는 이번 변경 전부터 실패한다.
   허용 목록에 없는 7개 source/import 경로가 추가됐고 기존 `event-contract-translation`의 직접 import는
