@@ -103,6 +103,51 @@ async function addComic(n: number) {
 }
 
 describe('downloaded release removal through the real storage pipeline', () => {
+  it.each(['missing', 'unavailable', 'unavailable-without-revision'] as const)(
+    'distinguishes an absent book from a failed lookup after committed removal (%s)',
+    async (lookup) => {
+      await addComic(1);
+      const before = (await reader.getNovel('comic'))!;
+      const getNovel = vi.fn<IndexedDbReaderRepository['getNovel']>().mockResolvedValueOnce(before);
+      if (lookup === 'missing') getNovel.mockResolvedValueOnce(undefined);
+      else getNovel.mockRejectedValueOnce(new Error('offline'));
+      const cleanupRemovedDownloads = vi.fn(async () => {});
+      const importFile = vi.fn<ImportService['importFile']>((input, onProgress) => {
+        const task = importService.importFile(input, onProgress);
+        return {
+          ...task,
+          promise: task.promise.then(async (result) => {
+            // Browser imports return parsed metadata; hosted imports return the stored revision.
+            if (lookup === 'unavailable-without-revision') {
+              expect(result.novel.activeContentRevisionId).toBeUndefined();
+              return result;
+            }
+            return { novel: (await reader.getNovel('comic'))! };
+          }),
+        };
+      });
+      const operation = removeDownloadedReleases({
+        bookId: 'comic',
+        sectionIds: ['chapter:1'],
+        assets: { cleanupRemovedDownloads } as unknown as IndexedDbBookAssetRepository,
+        importService: { ...importService, importFile },
+        getNovel,
+      });
+      if (lookup !== 'unavailable') {
+        await expect(operation).rejects.toThrow('삭제 후 작품 상태를 확인하지 못했습니다.');
+        expect(cleanupRemovedDownloads).not.toHaveBeenCalled();
+      } else {
+        const stored = await operation;
+        expect(stored.id).toBe('comic');
+        expect(stored.activeContentRevisionId).not.toBe(before.activeContentRevisionId);
+        expect(cleanupRemovedDownloads).toHaveBeenCalledWith('comic', stored.activeContentRevisionId);
+      }
+      // Every case already committed the removal; none retries the write.
+      expect(await reader.listChapters('comic')).toEqual([]);
+      expect(getNovel).toHaveBeenCalledTimes(2);
+      expect(importFile).toHaveBeenCalledOnce();
+    },
+  );
   it.each([false, true])(
     'does not repeat committed removal while refreshing metadata (read recovers: %s)',
     async (recovers) => {

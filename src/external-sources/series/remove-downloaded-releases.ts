@@ -80,7 +80,10 @@ export async function removeDownloadedReleases(options: {
     throw new Error('이 작품은 소스 회차 삭제를 지원하지 않습니다.');
   }
   if (imported.id !== novel.id) throw new Error('삭제 후 작품 식별자가 일치하지 않습니다.');
-  const updated = (await options.getNovel(novel.id).catch(() => undefined)) ?? imported;
+  // A missing book is authoritative. Only a failed read may use a known stored revision.
+  const updated = await options
+    .getNovel(novel.id)
+    .catch(() => (imported.activeContentRevisionId ? imported : undefined));
   if (!updated || updated.deletedAt) throw new Error('삭제 후 작품 상태를 확인하지 못했습니다.');
   if (updated.activeContentRevisionId)
     await options.assets.cleanupRemovedDownloads?.(novel.id, updated.activeContentRevisionId);
