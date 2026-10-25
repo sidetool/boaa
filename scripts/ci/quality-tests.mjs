@@ -1,8 +1,10 @@
 import { readFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
+import { relative, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-// Keep local suites usable independently; CI runs their union in one Vitest process.
-// Vitest de-duplicates files even when a directory and a file filter overlap.
+// Keep local suites usable independently. Discover their union once so overlapping
+// directory/file filters cannot duplicate tests across the execution phases.
 const suites = [
   'test:deploy',
   'test:extensions-sources',
@@ -126,11 +128,57 @@ for (const suite of suites) {
     filters.add(token);
   }
 }
-const listOnly = process.argv.includes('--list');
-const result = spawnSync(
-  process.execPath,
-  ['node_modules/vitest/vitest.mjs', ...(listOnly ? ['list', '--filesOnly'] : ['run']), ...filters, '--maxWorkers=2'],
-  { stdio: 'inherit' },
-);
-if (result.error) throw result.error;
-process.exitCode = result.status ?? 1;
+const vitest = 'node_modules/vitest/vitest.mjs';
+
+export function qualityTestPhases(files, root = process.cwd()) {
+  const isolated = [];
+  const parallel = [];
+  for (const file of [...new Set(files)].sort()) {
+    const path = relative(root, file).replaceAll('\\', '/');
+    // These integration tests repeatedly start fresh Node/QuickJS processes.
+    // Run each file without competing transform/test workers or retained realms
+    // from another file. Guest, network and test deadlines remain unchanged.
+    if (path.startsWith('apps/server/src/extensions/mangayomi/')) isolated.push({ files: [file], maxWorkers: 1 });
+    else parallel.push(file);
+  }
+  return [...isolated, ...(parallel.length ? [{ files: parallel, maxWorkers: 2 }] : [])];
+}
+
+export function runQualityTests({ listOnly = false, spawn = spawnSync, log = console.log } = {}) {
+  if (listOnly) {
+    const result = spawn(process.execPath, [vitest, 'list', '--filesOnly', ...filters, '--maxWorkers=2'], {
+      stdio: 'inherit',
+    });
+    if (result.error) throw result.error;
+    return result.status ?? 1;
+  }
+  // --filesOnly resolves file filters without loading test modules or starting helpers.
+  const discovery = spawn(process.execPath, [vitest, 'list', '--filesOnly', ...filters, '--json'], {
+    encoding: 'utf8',
+    maxBuffer: 8 * 1024 * 1024,
+    stdio: ['ignore', 'pipe', 'inherit'],
+  });
+  if (discovery.error) throw discovery.error;
+  if (discovery.status !== 0) return discovery.status ?? 1;
+  const collected = JSON.parse(discovery.stdout);
+  if (
+    !Array.isArray(collected) ||
+    !collected.length ||
+    collected.some((entry) => typeof entry.file !== 'string' || entry.projectName)
+  )
+    throw new Error('Expected a non-empty single-project Quality file list');
+  const phases = qualityTestPhases(collected.map((entry) => entry.file));
+  let failed = false;
+  for (const [index, phase] of phases.entries()) {
+    log(`Quality phase ${index + 1}/${phases.length}: ${phase.files.length} file(s), ${phase.maxWorkers} worker(s)`);
+    const result = spawn(process.execPath, [vitest, 'run', ...phase.files, `--maxWorkers=${phase.maxWorkers}`], {
+      stdio: 'inherit',
+    });
+    if (result.error) throw result.error;
+    if (result.status !== 0) failed = true;
+  }
+  return failed ? 1 : 0;
+}
+
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url))
+  process.exitCode = runQualityTests({ listOnly: process.argv.includes('--list') });

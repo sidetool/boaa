@@ -60,8 +60,9 @@ describe('synthetic Mangayomi JS contract', () => {
     expect(output.changes).toEqual({ missing: 'default' });
   });
 
-  it('accepts only the optional not-implemented signal and still rejects real source errors', async () => {
-    for (const method of ['getSourcePreferences', 'getHeaders']) {
+  it.each(['getSourcePreferences', 'getHeaders'])(
+    'accepts the optional not-implemented signal for %s and rejects real source errors',
+    async (method) => {
       const source = `class DefaultExtension extends MProvider {
         ${method}(){throw new Error('${method} not implemented');}
         async getPageList(){return ['https://site.example/page.png'];}
@@ -77,8 +78,8 @@ describe('synthetic Mangayomi JS contract', () => {
           signal: signal(),
         }),
       ).rejects.toThrow();
-    }
-  });
+    },
+  );
 
   it('matches synchronous AES-CBC page response decoding', async () => {
     const iv = '0123456789abcdef';

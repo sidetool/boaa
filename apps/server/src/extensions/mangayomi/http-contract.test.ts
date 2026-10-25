@@ -152,17 +152,22 @@ it('also bounds DNS resolution and never starts a connection after timeout', asy
   expect(received).toHaveLength(0);
 });
 
-it('rejects malformed options and caps host budgets without changing TLS or network grants', async () => {
+it('caps host budgets without changing TLS or network grants', async () => {
   expect(compatibilityHttpPolicy({ timeout: 1e10, maxRedirects: 999 })).toEqual({
     timeoutMs: 90000,
     maxRedirects: 4,
     followRedirects: true,
   });
-  for (const options of [{ timeout: -1 }, { timeout: Infinity }, { followRedirects: 'yes' }, { maxRedirects: 0.5 }]) {
-    await expect(invoke(`new Client(${JSON.stringify(options)}).get('${origin}/end')`)).rejects.toThrow();
-  }
   expect(received).toEqual([]);
   await expect(compatibilityHttp({ url: origin, options: { timeout: 1 } }, AbortSignal.timeout(3000))).rejects.toThrow(
     'source_address_denied',
   );
 });
+
+it.each([{ timeout: -1 }, { timeout: Infinity }, { followRedirects: 'yes' }, { maxRedirects: 0.5 }])(
+  'rejects malformed Client options %j without sending a request',
+  async (options) => {
+    await expect(invoke(`new Client(${JSON.stringify(options)}).get('${origin}/end')`)).rejects.toThrow();
+    expect(received).toEqual([]);
+  },
+);

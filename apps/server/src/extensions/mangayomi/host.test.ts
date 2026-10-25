@@ -566,7 +566,7 @@ it('preserves encrypted options across restart and imports original-script pages
   expect(await readdir(vaultPath)).toHaveLength(0);
 });
 
-it('imports original JS files without a repository, preserves multi-source choice and review cancellation', async () => {
+async function localFileHost() {
   const root = await mkdtemp(join(tmpdir(), 'boaa-file-import-'));
   roots.push(root);
   const host = await MangayomiExtensionHost.open(
@@ -577,20 +577,47 @@ it('imports original JS files without a repository, preserves multi-source choic
     },
   );
   hosts.push(host);
-  const source = Buffer.from(
-    `const mangayomiSources=${JSON.stringify([
-      { ...fixtureRow, name: 'First' },
-      { ...fixtureRow, name: 'Second', lang: 'en' },
-    ])};` + fixtureSource,
+  return host;
+}
+
+const localFileSource = Buffer.from(
+  `const mangayomiSources=${JSON.stringify([
+    { ...fixtureRow, name: 'First' },
+    { ...fixtureRow, name: 'Second', lang: 'en' },
+  ])};` + fixtureSource,
+);
+
+// Each inspection starts its own helper/WASM realm. Independent malformed-input
+// cases get independent test lifetimes rather than accumulating one 5s deadline.
+it.each([-1, 0.5, 2])('rejects original JS source index %s without installing it', async (index) => {
+  const host = await localFileHost();
+  await expect(host.inspectFile(localFileSource, 'extension.js', index, new AbortController().signal)).rejects.toThrow(
+    'compatibility_file_invalid',
   );
-  const signal = new AbortController().signal;
-  for (const index of [-1, 0.5, 2])
-    await expect(host.inspectFile(source, 'extension.js', index, signal)).rejects.toThrow('compatibility_file_invalid');
+});
+
+it('rejects duplicate languages in original JS source metadata', async () => {
+  const host = await localFileHost();
   const malformed = Buffer.from(
     `const mangayomiSources=${JSON.stringify([{ ...fixtureRow, lang: undefined, langs: ['en', 'en'] }])};` +
       fixtureSource,
   );
-  await expect(host.inspectFile(malformed, 'extension.js', 0, signal)).rejects.toThrow('compatibility_file_invalid');
+  await expect(host.inspectFile(malformed, 'extension.js', 0, new AbortController().signal)).rejects.toThrow(
+    'compatibility_file_invalid',
+  );
+});
+
+it('rejects original JS that tries to access the host process', async () => {
+  const host = await localFileHost();
+  await expect(
+    host.inspectFile(Buffer.from('process.exit()'), 'bad.js', 0, new AbortController().signal),
+  ).rejects.toThrow();
+});
+
+it('imports original JS files without a repository, preserves multi-source choice and review cancellation', async () => {
+  const host = await localFileHost();
+  const source = localFileSource;
+  const signal = new AbortController().signal;
   const review = await host.inspectFile(source, 'extension.js', 1, signal);
   expect(review.fileSources).toHaveLength(2);
   await host.install(review.id, review.revision, signal);
@@ -622,7 +649,6 @@ it('imports original JS files without a repository, preserves multi-source choic
   const cancelled = await host.inspectFile(source, 'extension.js', 0, signal);
   host.discard(cancelled.id);
   await expect(host.install(cancelled.id, cancelled.revision, signal)).rejects.toThrow('apk_review_expired');
-  await expect(host.inspectFile(Buffer.from('process.exit()'), 'bad.js', 0, signal)).rejects.toThrow();
   await app.close();
 });
 
