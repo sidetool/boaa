@@ -3,7 +3,9 @@ import { act, create, type ReactTestRenderer } from 'react-test-renderer';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { integrityHash } from '@boaa/text-core/hash';
 import type { Chapter, Novel } from '../../domain/types';
-import type { ImportService } from '../../services/import/import-service';
+import { ImportCommittedRefreshError, type ImportService } from '../../services/import/import-service';
+import type { StoredUploadSessionEntry } from '../../services/import/server-upload-import-service';
+import { useImportUploadSessions, type ImportUploadSessionLifecycle } from './useImportUploadSessions';
 import { testChapter, testNovel } from '../book-workspace/book-workspace-test-fixtures';
 import { readLocalSeriesManifest } from './local-series-import';
 import { useImportController, type ImportFeatureController } from './useImportController';
@@ -50,6 +52,7 @@ function existingBook(id: string, format: 'image_archive' | 'txt') {
 async function harness(
   input: {
     novels?: Novel[];
+    importService?: ImportService;
     listNovels?: () => Promise<Novel[]>;
     listChapters?: (id: string) => Promise<Chapter[]>;
     getNovel?: (id: string) => Promise<Novel | undefined>;
@@ -63,9 +66,10 @@ async function harness(
     cancel: vi.fn(),
     promise: Promise.resolve({ novel: testNovel({ title: 'New Title' }) }),
   }));
+  const importService = input.importService ?? { importFile, supportsIncrementalImageSeriesAppend: true };
   function Harness() {
     controller = useImportController({
-      importService: { importFile, supportsIncrementalImageSeriesAppend: true },
+      importService,
       getNovel: input.getNovel ?? (async () => undefined),
       listNovels: input.listNovels ?? (async () => input.novels ?? []),
       listChapters: input.listChapters ?? (async () => []),
@@ -95,6 +99,194 @@ async function waitForState(check: () => boolean) {
 }
 
 afterEach(() => vi.unstubAllGlobals());
+
+const completedSession: StoredUploadSessionEntry = {
+  key: 'completed',
+  uploadId: 'upload',
+  fileName: 'saved.cbz',
+  sizeBytes: 1,
+  lastModified: 1,
+  encoding: 'auto',
+  chunkBytes: 1,
+  totalChunks: 1,
+  createdAt: '2026-07-10T00:00:00.000Z',
+  updatedAt: '2026-07-10T00:00:00.000Z',
+  expiresAt: '',
+  completion: { bookId: 'saved', jobId: 'job', completedAt: '2026-07-10T00:00:00.000Z' },
+};
+
+describe('completed upload recovery', () => {
+  it.each(['refresh', 'forget'] as const)(
+    'blocks new selection and direct imports after reload until explicit %s',
+    async (action) => {
+      let sessions = [completedSession];
+      const stored = testNovel({ id: 'saved', favorite: true });
+      const onImportCommitted = vi.fn(async () => undefined);
+      const service = {
+        importFile: vi.fn(),
+        listStoredUploadSessions: () => sessions,
+        forgetStoredUploadSession: vi.fn(async () => {
+          sessions = [];
+        }),
+        retryStoredUploadSession: vi.fn(async () => {
+          sessions = [];
+          return { novel: stored };
+        }),
+      };
+      const view = await harness({ importService: service, onImportCommitted });
+      const file = new File(['text'], 'new.txt');
+      await act(async () => view.controller.selectFiles([file]));
+      expect(view.controller.pendingFiles).toEqual([]);
+      expect(view.controller.uploadSessions).toEqual([completedSession]);
+      await act(async () => view.controller.importFiles([file]));
+      expect(service.importFile).not.toHaveBeenCalled();
+      if (action === 'refresh') {
+        await act(async () => view.controller.retryUploadSession?.('completed'));
+        expect(onImportCommitted).toHaveBeenCalledExactlyOnceWith(stored);
+      } else {
+        await act(async () => view.controller.forgetUploadSession('completed'));
+        expect(onImportCommitted).not.toHaveBeenCalled();
+      }
+      expect(service.importFile).not.toHaveBeenCalled();
+      expect(view.controller.uploadSessions).toEqual([]);
+      await act(async () => view.controller.selectFiles([file]));
+      await waitForState(() => !view.controller.duplicateBusy);
+      expect(view.controller.pendingFiles).toEqual([file]);
+      await act(async () => view.renderer.unmount());
+    },
+  );
+
+  it.each(['recover', 'unmount', 'account'] as const)(
+    'serializes receipt retries and fences late %s results',
+    async (mode) => {
+      const gate = deferred<{ novel: Novel }>();
+      const recovered = vi.fn(async () => undefined);
+      const notify = vi.fn();
+      const service = {
+        importFile: vi.fn(),
+        listStoredUploadSessions: () => [completedSession],
+        forgetStoredUploadSession: vi.fn(),
+        retryStoredUploadSession: vi.fn(() => gate.promise),
+      };
+      let lifecycle!: ImportUploadSessionLifecycle;
+      function Harness({ currentService = service }: { currentService?: ImportService }) {
+        lifecycle = useImportUploadSessions(currentService, notify, recovered);
+        return null;
+      }
+      let renderer!: ReactTestRenderer;
+      await act(async () => {
+        renderer = create(<Harness />);
+      });
+      let first!: Promise<void>;
+      await act(async () => {
+        first = lifecycle.retry('completed');
+        void lifecycle.retry('completed');
+      });
+      expect(service.retryStoredUploadSession).toHaveBeenCalledOnce();
+      expect(lifecycle.retryingKeys).toEqual(['completed']);
+      if (mode === 'unmount') await act(async () => renderer.unmount());
+      let nextRetry: Promise<void> | undefined;
+      const nextGate = deferred<{ novel: Novel }>();
+      if (mode === 'account') {
+        const nextService = { ...service, retryStoredUploadSession: vi.fn(() => nextGate.promise) };
+        await act(async () => renderer.update(<Harness currentService={nextService} />));
+        expect(lifecycle.sessions).toEqual([]);
+        expect(lifecycle.retryingKeys).toEqual([]);
+        await act(async () => {
+          nextRetry = lifecycle.retry('completed');
+        });
+        expect(nextService.retryStoredUploadSession).toHaveBeenCalledOnce();
+      }
+      const stored = testNovel({ id: 'saved' });
+      await act(async () => {
+        gate.resolve({ novel: stored });
+        await first;
+      });
+      if (mode === 'recover') expect(recovered).toHaveBeenCalledExactlyOnceWith(stored);
+      else {
+        expect(recovered).not.toHaveBeenCalled();
+        expect(notify).not.toHaveBeenCalled();
+      }
+      if (mode === 'account' && nextRetry) {
+        expect(lifecycle.retryingKeys).toEqual(['completed']);
+        await act(async () => {
+          nextGate.resolve({ novel: stored });
+          await nextRetry;
+        });
+        expect(recovered).toHaveBeenCalledExactlyOnceWith(stored);
+        expect(lifecycle.retryingKeys).toEqual([]);
+      }
+      if (mode !== 'unmount') await act(async () => renderer.unmount());
+    },
+  );
+
+  it('does not add a stale recovery warning after same-mount service replacement', async () => {
+    vi.stubGlobal('window', globalThis);
+    const callback = deferred<void>();
+    const stored = testNovel({ id: 'saved' });
+    const onImportCommitted = vi.fn(() => callback.promise);
+    const notify = vi.fn();
+    const firstService = {
+      importFile: vi.fn(),
+      listStoredUploadSessions: () => [completedSession],
+      forgetStoredUploadSession: vi.fn(),
+      retryStoredUploadSession: vi.fn(async () => ({ novel: stored })),
+    };
+    const nextService = { ...firstService, listStoredUploadSessions: () => [] };
+    let controller!: ImportFeatureController;
+    function Harness({ service }: { service: ImportService }) {
+      controller = useImportController({
+        importService: service,
+        getNovel: async () => stored,
+        listNovels: async () => [],
+        listChapters: async () => [],
+        onImportCommitted,
+        notify,
+      });
+      return null;
+    }
+    let renderer!: ReactTestRenderer;
+    await act(async () => {
+      renderer = create(<Harness service={firstService} />);
+    });
+    let retry!: Promise<void>;
+    await act(async () => {
+      retry = controller.retryUploadSession!('completed');
+    });
+    expect(onImportCommitted).toHaveBeenCalledExactlyOnceWith(stored);
+    await act(async () => renderer.update(<Harness service={nextService} />));
+    await act(async () => {
+      callback.reject(new Error('old account callback failed'));
+      await retry;
+    });
+    expect(controller.refreshPendingBooks).toEqual([]);
+    expect(controller.uploadSessions).toEqual([]);
+    expect(notify).not.toHaveBeenCalled();
+    await act(async () => renderer.unmount());
+  });
+
+  it('retries a first manifest failure using its canonical read without a second upload', async () => {
+    const stored = testNovel({ id: 'saved' });
+    const retry = vi.fn(async () => ({ novel: stored }));
+    const acknowledge = vi.fn();
+    const error = new ImportCommittedRefreshError('saved', retry, acknowledge);
+    const importFile = vi.fn(() => ({ jobId: 'done', cancel: vi.fn(), promise: Promise.reject(error) }));
+    const onImportCommitted = vi.fn(async () => undefined);
+    const view = await harness({ importService: { importFile }, onImportCommitted });
+    await act(async () => view.controller.selectFiles([new File(['text'], 'book.txt')]));
+    await waitForState(() => !view.controller.duplicateBusy);
+    await act(async () => view.controller.startPendingImport());
+    expect(view.controller.batch).toMatchObject({ completed: 1, failed: 0 });
+    expect(onImportCommitted).not.toHaveBeenCalled();
+    await act(async () => view.controller.retryPendingRefresh?.());
+    expect(retry).toHaveBeenCalledOnce();
+    expect(acknowledge).toHaveBeenCalledOnce();
+    expect(onImportCommitted).toHaveBeenCalledExactlyOnceWith(stored);
+    expect(importFile).toHaveBeenCalledOnce();
+    expect(view.controller.refreshPendingBooks).toEqual([]);
+    await act(async () => view.renderer.unmount());
+  });
+});
 
 describe('import preparation generations', () => {
   it('passes only the latest selected File digest and keeps replacement encoding/split choices', async () => {

@@ -2,7 +2,12 @@ import { randomUuid } from '../../utils/random-uuid';
 import type { ExtensionContributionId } from '@boaa/extension-contracts';
 import type { Novel } from '../../domain/types';
 import type { BookAssetRepository } from '../../repositories/book-asset-repository';
-import type { ImportExpectedBase, ImportProgress, ImportService } from '../../services/import/import-service';
+import {
+  ImportCommittedRefreshError,
+  type ImportExpectedBase,
+  type ImportProgress,
+  type ImportService,
+} from '../../services/import/import-service';
 import { hashBlobInChunks } from '../../services/import/chunked-file-reader';
 import type { ExternalSourceRegistryPort } from '../app-external-source-registry';
 import {
@@ -424,7 +429,16 @@ async function runDocumentSeries(
           options.signal.addEventListener('abort', cancel, { once: true });
           if (options.signal.aborted) cancel();
           try {
-            novel = (await task.promise).novel;
+            novel = (
+              await task.promise.catch(async (error: unknown) => {
+                if (error instanceof ImportCommittedRefreshError) {
+                  bookId = error.bookId;
+                  activated = true;
+                  staged = await checkpointImportedExternalSourceLinks(options.state, staged, { id: bookId });
+                }
+                throw error;
+              })
+            ).novel;
             bookId = novel.id;
             activated = true;
             staged = await checkpointImportedExternalSourceLinks(options.state, staged, novel);
@@ -455,6 +469,7 @@ async function runDocumentSeries(
           novel = current;
           try {
             await finalizeExternalSourceLinks(options.state, staged, current);
+            if (error instanceof ImportCommittedRefreshError) error.acknowledge();
           } catch {
             committed += batch.length;
             options.onProgress({

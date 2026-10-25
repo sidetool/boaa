@@ -1,7 +1,7 @@
 import { act, create, type ReactTestRenderer } from 'react-test-renderer';
 import { describe, expect, it, vi } from 'vitest';
 import type { Novel } from '../../domain/types';
-import type { ImportController } from '../../services/import/import-service';
+import { ImportCommittedRefreshError, type ImportController } from '../../services/import/import-service';
 import { useServerAttachController, type ServerAttachControllerInput } from './useServerAttachController';
 
 function novel(): Novel {
@@ -22,6 +22,45 @@ function novel(): Novel {
 }
 
 describe('server attach controller', () => {
+  it.each([false, true])('reports committed storage without reattaching (metadata recovers: %s)', async (recovers) => {
+    vi.stubGlobal('window', { setTimeout: vi.fn(), clearTimeout: vi.fn() });
+    const retry = vi.fn(async () => {
+      if (!recovers) throw new Error('offline');
+      return { novel: novel() };
+    });
+    const acknowledge = vi.fn();
+    const attachNovel = vi.fn(() => ({
+      jobId: 'job',
+      cancel: vi.fn(),
+      promise: Promise.reject(new ImportCommittedRefreshError('book-a', retry, acknowledge)),
+    }));
+    const onAttached = vi.fn(async () => undefined);
+    const notify = vi.fn();
+    let controller!: ReturnType<typeof useServerAttachController>;
+    function Harness() {
+      controller = useServerAttachController({
+        service: { attachNovel } as unknown as ServerAttachControllerInput['service'],
+        novel: novel(),
+        onAttached,
+        notify,
+      });
+      return null;
+    }
+    let renderer!: ReactTestRenderer;
+    await act(async () => {
+      renderer = create(<Harness />);
+    });
+    await act(async () => {
+      await controller.upload();
+    });
+    expect(attachNovel).toHaveBeenCalledOnce();
+    expect(retry).toHaveBeenCalledOnce();
+    expect(onAttached).toHaveBeenCalledTimes(recovers ? 1 : 0);
+    expect(acknowledge).toHaveBeenCalledTimes(recovers ? 1 : 0);
+    if (!recovers) expect(notify).toHaveBeenCalledWith(expect.stringContaining('서버에 저장됐지만'), 'warning');
+    await act(async () => renderer.unmount());
+    vi.unstubAllGlobals();
+  });
   it('does not run completion callbacks after unmount', async () => {
     let resolveAttach!: () => void;
     const promise = new Promise<void>((resolve) => {

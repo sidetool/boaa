@@ -1,9 +1,21 @@
 import { describe, expect, it } from 'vitest';
-import { ArchiveImportError } from '../../services/import/import-service';
+import { ArchiveImportError, ImportCommittedRefreshError } from '../../services/import/import-service';
 import { RemoteApiError } from '../../services/remote/remote-api-contracts';
 import { importFailureMessage } from './import-failure-message';
 
 describe('importFailureMessage', () => {
+  it('explains confirmed storage without suggesting another upload', () => {
+    const error = new ImportCommittedRefreshError(
+      'saved',
+      async () => {
+        throw new Error('unused');
+      },
+      () => undefined,
+    );
+    expect(importFailureMessage('saved.txt', error)).toBe(error.message);
+    expect(error.message).toContain('다시 업로드하지 않고');
+  });
+
   it('explains bearer authentication failures', () => {
     expect(importFailureMessage('book.epub', new RemoteApiError('{"error":"unauthorized"}', 401))).toContain(
       'Bearer token',

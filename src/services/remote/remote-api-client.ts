@@ -878,8 +878,8 @@ export class RemoteApiClient {
     return this.request(`/books/${encodeURIComponent(bookId)}/chapter-structure/review`);
   }
 
-  getBookManifest(bookId: string, sourceRevision?: string): Promise<RemoteBookManifestResponse> {
-    return this.bookTransport.getBookManifest(bookId, sourceRevision);
+  getBookManifest(bookId: string, sourceRevision?: string, signal?: AbortSignal): Promise<RemoteBookManifestResponse> {
+    return this.bookTransport.getBookManifest(bookId, sourceRevision, signal);
   }
 
   listChapters(bookId: string, sourceRevision?: string): Promise<RemoteChapterListResponse> {

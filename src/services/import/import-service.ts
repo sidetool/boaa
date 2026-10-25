@@ -71,6 +71,20 @@ export interface ImportResult {
   novel: Novel;
 }
 
+/** Storage is confirmed. Only canonical metadata retrieval/presentation failed.
+ * Retrying must never upload bytes or repeat the storage mutation. */
+export class ImportCommittedRefreshError extends Error {
+  constructor(
+    readonly bookId: string,
+    readonly retry: () => Promise<ImportResult>,
+    readonly acknowledge: () => void,
+    readonly cause?: unknown,
+  ) {
+    super('파일은 서버에 저장됐지만 완료 정보를 불러오지 못했습니다. 다시 업로드하지 않고 목록을 새로고쳐 주세요.');
+    this.name = 'ImportCommittedRefreshError';
+  }
+}
+
 export interface ImportController {
   jobId: string;
   promise: Promise<ImportResult>;

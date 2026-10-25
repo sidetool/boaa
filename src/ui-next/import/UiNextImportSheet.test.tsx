@@ -166,8 +166,37 @@ describe('UiNextImportSheet', () => {
     expect(markup).toContain('파일을 읽는 중입니다.');
     expect(markup).toContain('role="progressbar"');
     expect(markup).toContain('aria-valuenow="50"');
-    expect(markup).toContain('멈춘 서버 업로드');
+    expect(markup).toContain('서버 가져오기 기록');
     expect(markup).toContain('중단본.txt');
+  });
+
+  it('offers metadata-only recovery for a completed upload retained after reload', () => {
+    const markup = renderToStaticMarkup(
+      <UiNextImportSheet
+        controller={controller({
+          retryUploadSession: vi.fn(),
+          uploadSessionRetryingKeys: ['saved'],
+          uploadSessions: [
+            {
+              key: 'saved',
+              uploadId: 'upload',
+              fileName: 'saved.cbz',
+              sizeBytes: 1,
+              lastModified: 1,
+              encoding: 'auto',
+              chunkBytes: 1,
+              totalChunks: 1,
+              createdAt: '2026-07-10T00:00:00.000Z',
+              updatedAt: '2026-07-10T00:00:00.000Z',
+              expiresAt: '',
+              completion: { bookId: 'book', jobId: 'job', completedAt: '2026-07-10T00:00:00.000Z' },
+            },
+          ],
+        })}
+      />,
+    );
+    expect(markup).toContain('저장 완료 · 정보 갱신 필요');
+    expect(markup).toMatch(/<button[^>]*disabled=""[^>]*>저장 정보 다시 갱신<\/button>/);
   });
 
   it('shows server activity without presenting uploaded bytes as completed import progress', () => {

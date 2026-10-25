@@ -1,5 +1,5 @@
 import 'fake-indexeddb/auto';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { BlobWriter, Uint8ArrayReader, ZipWriter } from '@zip.js/zip.js';
 import {
   buildDocumentSeriesArchive,
@@ -14,6 +14,7 @@ import { IndexedDbBookAssetRepository } from '../repositories/indexeddb-book-ass
 import { runBrowserFixedDocumentImportPipeline } from '../services/import/browser-import-pipeline';
 import { buildSeriesImageArchive } from '../services/import/series-image-archive';
 import type { ImportFileInput, ImportService } from '../services/import/import-service';
+import { ImportCommittedRefreshError } from '../services/import/import-service';
 import { getActiveComicAssetMetadata } from '../storage/book-asset-store';
 import { openReaderDb, resetReaderDbForTests } from '../storage/db';
 
@@ -102,6 +103,47 @@ async function addComic(n: number) {
 }
 
 describe('downloaded release removal through the real storage pipeline', () => {
+  it.each([false, true])(
+    'does not repeat committed removal while refreshing metadata (read recovers: %s)',
+    async (recovers) => {
+      await addComic(1);
+      const before = (await reader.getNovel('comic'))!;
+      const acknowledge = vi.fn();
+      let committedError!: ImportCommittedRefreshError;
+      const importFile = vi.fn<ImportService['importFile']>((input, onProgress) => {
+        const task = importService.importFile(input, onProgress);
+        return {
+          ...task,
+          promise: task.promise.then((result) => {
+            committedError = new ImportCommittedRefreshError(
+              'comic',
+              async () => {
+                if (!recovers) throw new Error('offline');
+                return result;
+              },
+              acknowledge,
+            );
+            throw committedError;
+          }),
+        };
+      });
+      const cleanupRemovedDownloads = vi.fn(async () => {});
+      const operation = removeDownloadedReleases({
+        bookId: 'comic',
+        sectionIds: ['chapter:1'],
+        expectedContentRevisionId: before.activeContentRevisionId,
+        assets: { cleanupRemovedDownloads } as unknown as IndexedDbBookAssetRepository,
+        importService: { ...importService, importFile },
+        getNovel: (id) => reader.getNovel(id),
+      });
+      if (recovers) expect((await operation).id).toBe('comic');
+      else await expect(operation).rejects.toBeInstanceOf(ImportCommittedRefreshError);
+      expect(importFile).toHaveBeenCalledOnce();
+      expect(await reader.listChapters('comic')).toEqual([]);
+      expect(cleanupRemovedDownloads).toHaveBeenCalledTimes(recovers ? 1 : 0);
+      expect(acknowledge).toHaveBeenCalledTimes(recovers ? 1 : 0);
+    },
+  );
   it('removes selected TXT bytes, preserves remaining anchors, allows an empty book and re-download', async () => {
     const sources = await txtSources();
     await importService.importFile(

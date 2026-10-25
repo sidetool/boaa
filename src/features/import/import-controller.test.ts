@@ -1,6 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { Novel } from '../../domain/types';
-import type { ImportProgress, ImportResult, ImportService } from '../../services/import/import-service';
+import {
+  ImportCommittedRefreshError,
+  type ImportProgress,
+  type ImportResult,
+  type ImportService,
+} from '../../services/import/import-service';
 import { ImportRunCancellation, runImportBatch } from './import-controller';
 import { completedImportNotice, isSupportedImportFile, selectSupportedImportFiles } from './import-notice-policy';
 
@@ -165,6 +170,65 @@ describe('runImportBatch', () => {
         tone: 'warning',
         message: expect.stringContaining('다시 가져올 필요는 없습니다'),
       });
+    },
+  );
+
+  it.each(['refresh', 'cancel', 'reporter'] as const)(
+    'retains a confirmed server commit after first manifest %s failure',
+    async (mode) => {
+      const cancellation = new ImportRunCancellation();
+      const error = new ImportCommittedRefreshError(
+        'stored-id',
+        vi.fn(),
+        vi.fn(),
+        new DOMException('read aborted', 'AbortError'),
+      );
+      const onFileCommitted = vi.fn();
+      const onFileFailed = vi.fn();
+      const onFileRefreshFailed = vi.fn(() => {
+        if (mode === 'reporter') throw new Error('report failed');
+      });
+      const getNovel = vi.fn();
+      const outcome = await runImportBatch(
+        {
+          files: [{ file: file('saved.txt') }],
+          skipped: 0,
+          encoding: 'auto',
+          chapterSplitMode: 'auto',
+          getNovel,
+          importService: {
+            importFile: () => ({
+              jobId: 'done',
+              cancel: vi.fn(),
+              promise: Promise.resolve().then(() => {
+                if (mode === 'cancel') cancellation.cancel();
+                throw error;
+              }),
+            }),
+          },
+        },
+        cancellation,
+        {
+          onBatchChange: vi.fn(),
+          onProgress: vi.fn(),
+          onFileCommitted,
+          onFileFailed,
+          onFileRefreshFailed,
+          onCancelled: vi.fn(),
+        },
+      );
+      expect(outcome).toMatchObject({
+        completed: 1,
+        failed: 0,
+        refreshFailed: mode === 'cancel' ? 0 : 1,
+        aborted: mode === 'cancel',
+        lastImportedNovel: undefined,
+      });
+      expect(onFileCommitted).not.toHaveBeenCalled();
+      expect(onFileFailed).not.toHaveBeenCalled();
+      expect(getNovel).not.toHaveBeenCalled();
+      if (mode === 'cancel') expect(onFileRefreshFailed).not.toHaveBeenCalled();
+      else expect(onFileRefreshFailed).toHaveBeenCalledWith(expect.anything(), 'stored-id', error);
     },
   );
 

@@ -4,7 +4,7 @@ import { bytesToHex } from '@noble/hashes/utils.js';
 import type { Novel } from '../domain/types';
 import type { BookAssetRepository, ExportedBookCover, ExportedBookSource } from '../repositories/book-asset-repository';
 import type { ReaderRepository } from '../repositories/reader-repository';
-import type { ImportService } from '../services/import/import-service';
+import { ImportCommittedRefreshError, type ImportService } from '../services/import/import-service';
 import type {
   CloudVaultBookV1,
   CloudVaultContentObjectV1,
@@ -358,21 +358,36 @@ export class CloudVaultContentTransferService {
             type: book.sourceObject.contentType,
             lastModified: Date.now(),
           });
-          const imported = await this.importer.importFile(
-            {
-              file,
-              encoding: book.sourceObject.encoding ?? 'auto',
-              chapterSplitMode: 'auto',
-              clientBookId: localNovel?.id,
-              expectedNormalizedTextHash:
-                this.importer.supportsExpectedNormalizedTextHash === true
-                  ? book.identity.normalizedTextHash
-                  : undefined,
-            },
-            () => undefined,
-          ).promise;
+          let recoveredCommit = false;
+          const imported = await this.importer
+            .importFile(
+              {
+                file,
+                encoding: book.sourceObject.encoding ?? 'auto',
+                chapterSplitMode: 'auto',
+                clientBookId: localNovel?.id,
+                expectedNormalizedTextHash:
+                  this.importer.supportsExpectedNormalizedTextHash === true
+                    ? book.identity.normalizedTextHash
+                    : undefined,
+              },
+              () => undefined,
+            )
+            .promise.catch(async (error: unknown) => {
+              if (!(error instanceof ImportCommittedRefreshError)) throw error;
+              recoveredCommit = true;
+              try {
+                const result = await error.retry();
+                error.acknowledge();
+                return result;
+              } catch {
+                throw error;
+              }
+            });
           if (imported.novel.normalizedTextHash !== book.identity.normalizedTextHash) {
-            if (!localNovel) await this.repository.deleteNovel(imported.novel.id).catch(() => undefined);
+            // A recovered manifest may describe a newer replacement of the committed book.
+            if (!localNovel && !recoveredCommit)
+              await this.repository.deleteNovel(imported.novel.id).catch(() => undefined);
             throw new Error('복원한 원본의 본문 식별자가 Vault 기록과 다릅니다.');
           }
           if (localNovel) novelByHash.delete(localNovel.normalizedTextHash);

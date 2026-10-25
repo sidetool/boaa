@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { DOCUMENT_SERIES_CONTENT_TYPE, readDocumentSeriesArchive } from '@boaa/document-series-core';
 import { integrityHash } from '@boaa/text-core/hash';
 import type { Novel } from '../../domain/types';
+import { ImportCommittedRefreshError } from '../../services/import/import-service';
 import type {
   ImportFileInput,
   ImportProgress,
@@ -212,6 +213,31 @@ function fixture(confirmedBookId?: string) {
 }
 
 describe('TXT series import coordinator', () => {
+  it.each([false, true])(
+    'preserves the canonical committed ID after metadata failure (read recovers: %s)',
+    async (recovers) => {
+      const h = fixture('canonical-book');
+      const acknowledge = vi.fn();
+      const error = new ImportCommittedRefreshError('canonical-book', vi.fn(), acknowledge);
+      h.hooks.afterImport = async () => {
+        if (!recovers) h.getNovel.mockRejectedValue(new Error('offline'));
+        throw error;
+      };
+      const run = h.run([item(1)], { importService: { ...h.importService, mayChangeBookId: true } });
+      if (recovers) await run;
+      else await expect(run).rejects.toBe(error);
+      const [link] = await h.state.listLinks();
+      expect(h.importFile).toHaveBeenCalledOnce();
+      if (recovers) {
+        expect(link).toMatchObject({ localBookId: 'canonical-book', pendingImport: undefined });
+        expect(acknowledge).toHaveBeenCalledOnce();
+      } else {
+        expect(link?.pendingImport).toMatchObject({ resolvedLocalBookId: 'canonical-book' });
+        expect(acknowledge).not.toHaveBeenCalled();
+        expect(h.onCommitted).not.toHaveBeenCalled();
+      }
+    },
+  );
   it.each([false, true])(
     'starts hosted download without waiting for the base read and cleans late receipts (base failure: %s)',
     async (failBase) => {

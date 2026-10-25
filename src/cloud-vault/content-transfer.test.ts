@@ -4,6 +4,7 @@ import type { Novel } from '../domain/types';
 import type { BookAssetRepository } from '../repositories/book-asset-repository';
 import type { ReaderRepository } from '../repositories/reader-repository';
 import type { ImportFileInput, ImportService } from '../services/import/import-service';
+import { ImportCommittedRefreshError } from '../services/import/import-service';
 import {
   CloudVaultContentTransferService,
   cloudVaultContentObjectKey,
@@ -119,6 +120,50 @@ function reportDefaults(report: CloudVaultContentTransferReport) {
 }
 
 describe('Cloud Vault content transfer', () => {
+  it.each(['recovered', 'offline', 'replaced'] as const)(
+    'does not repeat or delete a committed restore when metadata is %s',
+    async (outcome) => {
+      const blob = new Blob(['restored source']);
+      const contentHash = `sha256:${await sha256(await blob.arrayBuffer())}`;
+      const objectKey = cloudVaultContentObjectKey(contentHash);
+      const remoteBook = {
+        ...book(novel()),
+        sourceObject: {
+          kind: 'source' as const,
+          objectKey,
+          contentHash,
+          byteLength: blob.size,
+          contentType: 'text/plain',
+          fileName: 'restored.txt',
+        },
+      };
+      const store = provider();
+      store.objects.set(objectKey, blob);
+      const retry = vi.fn(async () => {
+        if (outcome === 'offline') throw new Error('offline');
+        return { novel: novel({ id: 'committed-book', hash: outcome === 'replaced' ? 'newer-hash' : undefined }) };
+      });
+      const acknowledge = vi.fn();
+      const importFile = vi.fn(() => ({
+        jobId: 'job',
+        cancel: vi.fn(),
+        promise: Promise.reject(new ImportCommittedRefreshError('committed-book', retry, acknowledge)),
+      }));
+      const deleteNovel = vi.fn();
+      const service = new CloudVaultContentTransferService(
+        { listNovels: async () => [], deleteNovel } as unknown as ReaderRepository,
+        { getActiveCover: async () => undefined } as unknown as BookAssetRepository,
+        { importFile },
+      );
+      const result = await service.restoreMissingContent(snapshot(remoteBook), store);
+      expect(importFile).toHaveBeenCalledOnce();
+      expect(retry).toHaveBeenCalledOnce();
+      expect(deleteNovel).not.toHaveBeenCalled();
+      expect(result.restoredSourceFiles).toBe(outcome === 'recovered' ? 1 : 0);
+      expect(result.contentFailures).toHaveLength(outcome === 'recovered' ? 0 : 1);
+      expect(acknowledge).toHaveBeenCalledTimes(outcome === 'offline' ? 0 : 1);
+    },
+  );
   it('uploads an original once and records only its content-addressed descriptor in the encrypted snapshot', async () => {
     const localNovel = novel();
     const blob = new Blob(['원본 본문'], { type: 'text/plain' });

@@ -1,6 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { Chapter, ChapterSplitMode, EncodingMode, Novel } from '../../domain/types';
-import type { ImportProgress, ImportService } from '../../services/import/import-service';
+import {
+  ImportCommittedRefreshError,
+  type ImportProgress,
+  type ImportService,
+} from '../../services/import/import-service';
 import type { PlatformDocumentIo } from '../../platform/document-io';
 import type { StoredUploadSessionEntry } from '../../services/import/server-upload-import-service';
 import type { ToastTone } from '../../shared/ui/ToastHost';
@@ -171,12 +175,16 @@ export interface ImportFeatureController {
   setSeriesTargetNovel(targetNovelId?: string): Promise<void>;
   setArchivePassword(password: string): void;
   forgetUploadSession(key: string): Promise<void>;
+  retryUploadSession?(key: string): Promise<void>;
+  uploadSessionRetryingKeys?: readonly string[];
 }
 
 export function useImportController(options: UseImportControllerOptions): ImportFeatureController {
   const optionsRef = useRef(options);
   optionsRef.current = options;
-  const [refreshPendingBooks, setRefreshPendingBooks] = useState<Array<{ id: string; fileName: string }>>([]);
+  const [refreshPendingBooks, setRefreshPendingBooks] = useState<
+    Array<{ id: string; fileName: string; committedError?: ImportCommittedRefreshError }>
+  >([]);
   const [isOpen, setIsOpen] = useState(false);
   const [pendingFiles, setPendingFiles] = useState<File[]>([]);
   const [duplicateBusy, setDuplicateBusy] = useState(false);
@@ -204,6 +212,8 @@ export function useImportController(options: UseImportControllerOptions): Import
   const resetTimerRef = useRef<number>();
   const duplicateInspectionRef = useRef<Promise<void>>();
   const explicitSeriesTargetRef = useRef<Novel>();
+  const seriesCommittedTargetIdRef = useRef<string>();
+  const unresolvedSeriesTargetRef = useRef<string>();
   const seriesBuildAbortRef = useRef<AbortController>();
   const seriesAnalysisGenerationRef = useRef(0);
   const preparedDraftRef = useRef<PreparedImportDraft>();
@@ -225,11 +235,47 @@ export function useImportController(options: UseImportControllerOptions): Import
     cancel: cancelPreview,
     clear: clearPreview,
   } = useImportPreview(options.previewFactory);
+  const hydrateSeriesTarget = useCallback((novel: Novel) => {
+    if (seriesCommittedTargetIdRef.current !== novel.id) return;
+    explicitSeriesTargetRef.current = novel;
+    unresolvedSeriesTargetRef.current = undefined;
+    setSeriesTargetNovelId(novel.id);
+    const update = (plan: LocalSeriesImportPlan | undefined) => (plan ? { ...plan, targetNovel: novel } : plan);
+    if (preparedDraftRef.current)
+      preparedDraftRef.current = {
+        ...preparedDraftRef.current,
+        seriesPlan: update(preparedDraftRef.current.seriesPlan),
+      };
+    setSeriesPlan(update);
+  }, []);
   const {
     sessions: uploadSessions,
     refresh: refreshUploadSessions,
-    forget: forgetUploadSession,
-  } = useImportUploadSessions(options.importService, options.notify);
+    hasCompleted: hasCompletedUploadSessions,
+    forget: forgetStoredUploadSession,
+    retry: retryUploadSession,
+    retryingKeys: uploadSessionRetryingKeys,
+  } = useImportUploadSessions(options.importService, options.notify, async (novel) => {
+    if (!mountedRef.current) return;
+    const generation = runGenerationRef.current;
+    const runtime = optionsRef.current;
+    const isCurrent = () =>
+      mountedRef.current &&
+      generation === runGenerationRef.current &&
+      runtime.importService === optionsRef.current.importService;
+    hydrateSeriesTarget(novel);
+    try {
+      await runtime.onImportCommitted(novel);
+      if (isCurrent()) setRefreshPendingBooks((current) => current.filter((book) => book.id !== novel.id));
+    } catch (error) {
+      if (isCurrent())
+        setRefreshPendingBooks((current) => [
+          ...current.filter((book) => book.id !== novel.id),
+          { id: novel.id, fileName: novel.sourceFileName },
+        ]);
+      throw error;
+    }
+  });
 
   const invalidatePreparation = useCallback(() => {
     seriesAnalysisGenerationRef.current += 1;
@@ -237,6 +283,8 @@ export function useImportController(options: UseImportControllerOptions): Import
   }, []);
 
   const clearDraft = useCallback(() => {
+    if (unresolvedSeriesTargetRef.current) return;
+    seriesCommittedTargetIdRef.current = undefined;
     invalidatePreparation();
     duplicatePolicyOverridesRef.current.clear();
     setDuplicateBusy(false);
@@ -253,6 +301,30 @@ export function useImportController(options: UseImportControllerOptions): Import
     setTasks([]);
   }, [clearPreview, invalidatePreparation]);
 
+  const forgetUploadSession = useCallback(
+    async (key: string) => {
+      const bookId = uploadSessions.find((session) => session.key === key)?.completion?.bookId;
+      const service = optionsRef.current.importService;
+      const generation = runGenerationRef.current;
+      if (
+        !(await forgetStoredUploadSession(key)) ||
+        !mountedRef.current ||
+        generation !== runGenerationRef.current ||
+        service !== optionsRef.current.importService ||
+        !bookId
+      )
+        return;
+      setRefreshPendingBooks((current) => current.filter((book) => book.id !== bookId));
+      if (unresolvedSeriesTargetRef.current === bookId) {
+        unresolvedSeriesTargetRef.current = undefined;
+        explicitSeriesTargetRef.current = undefined;
+        setSeriesTargetNovelId(undefined);
+        clearDraft();
+      }
+    },
+    [clearDraft, forgetStoredUploadSession, uploadSessions],
+  );
+
   useEffect(() => {
     const cancellation = cancellationRef.current;
     mountedRef.current = true;
@@ -267,7 +339,11 @@ export function useImportController(options: UseImportControllerOptions): Import
   }, []);
 
   const open = useCallback(() => {
-    if (busyRef.current || tasksRef.current.some((task) => task.phase === 'failed')) {
+    if (
+      unresolvedSeriesTargetRef.current ||
+      busyRef.current ||
+      tasksRef.current.some((task) => task.phase === 'failed')
+    ) {
       setIsOpen(true);
       refreshUploadSessions();
       return;
@@ -282,6 +358,11 @@ export function useImportController(options: UseImportControllerOptions): Import
   const openChapterAppend = useCallback(
     (novel: Novel) => {
       if (busyRef.current) return;
+      if (unresolvedSeriesTargetRef.current) {
+        setIsOpen(true);
+        optionsRef.current.notify('저장된 회차 정보를 먼저 갱신해 주세요.', 'warning');
+        return;
+      }
       clearDraft();
       explicitSeriesTargetRef.current = novel;
       setSeriesTargetNovelId(novel.id);
@@ -298,7 +379,7 @@ export function useImportController(options: UseImportControllerOptions): Import
       optionsRef.current.notify('가져오기는 계속됩니다.');
       return;
     }
-    if (tasksRef.current.some((task) => task.phase === 'failed')) {
+    if (unresolvedSeriesTargetRef.current || tasksRef.current.some((task) => task.phase === 'failed')) {
       setIsOpen(false);
       return;
     }
@@ -322,6 +403,15 @@ export function useImportController(options: UseImportControllerOptions): Import
         optionsRef.current.notify('가져오기가 진행 중입니다.', 'warning');
         return;
       }
+      if (unresolvedSeriesTargetRef.current || hasCompletedUploadSessions()) {
+        setIsOpen(true);
+        refreshUploadSessions();
+        optionsRef.current.notify(
+          '이미 저장된 작품 정보를 먼저 갱신하거나 서버 가져오기 기록을 지워 주세요. 다시 업로드할 필요는 없습니다.',
+          'warning',
+        );
+        return;
+      }
       const { supportedFiles, notice } = selectSupportedImportFiles(files);
       if (notice) optionsRef.current.notify(notice.message, notice.tone);
       if (supportedFiles.length === 0) return;
@@ -338,7 +428,7 @@ export function useImportController(options: UseImportControllerOptions): Import
       setIsOpen(true);
       refreshUploadSessions();
     },
-    [clearDraft, refreshUploadSessions],
+    [clearDraft, hasCompletedUploadSessions, refreshUploadSessions],
   );
 
   useEffect(() => {
@@ -483,6 +573,19 @@ export function useImportController(options: UseImportControllerOptions): Import
   const importFiles = useCallback(
     async (files: readonly File[]) => {
       if (busyRef.current) return;
+      if (hasCompletedUploadSessions() || (unresolvedSeriesTargetRef.current && !queuedSeriesPlanRef.current)) {
+        setIsOpen(true);
+        refreshUploadSessions();
+        lastImportFailedRef.current = true;
+        queuedResolutionRef.current = undefined;
+        queuedSeriesPlanRef.current = undefined;
+        queuedDocumentSeriesPlanRef.current = undefined;
+        optionsRef.current.notify(
+          '이미 저장된 작품 정보를 먼저 갱신하거나 서버 가져오기 기록을 지워 주세요. 다시 업로드할 필요는 없습니다.',
+          'warning',
+        );
+        return;
+      }
       const { supportedFiles, skipped: unsupportedSkipped, notice } = selectSupportedImportFiles(files);
       if (notice) optionsRef.current.notify(notice.message, notice.tone);
       if (supportedFiles.length === 0) return;
@@ -762,12 +865,16 @@ export function useImportController(options: UseImportControllerOptions): Import
               );
             }
           },
-          onFileRefreshFailed: (file, bookId) => {
+          onFileRefreshFailed: (file, bookId, error) => {
             if (!mountedRef.current || runGenerationRef.current !== generation || cancellationRef.current.isRequested)
               return;
             setRefreshPendingBooks((current) => [
               ...current.filter((book) => book.id !== bookId),
-              { id: bookId, fileName: file.name },
+              {
+                id: bookId,
+                fileName: file.name,
+                committedError: error instanceof ImportCommittedRefreshError ? error : undefined,
+              },
             ]);
             const taskId = taskIdByFile.get(file);
             setTasks((current) => current.filter((task) => task.id !== taskId));
@@ -824,19 +931,37 @@ export function useImportController(options: UseImportControllerOptions): Import
               {
                 ...batchInput,
                 plan: queuedSeriesPlan,
+                targetBookId: seriesCommittedTargetIdRef.current,
                 signal: abort.signal,
                 replan: (novel) => planLocalSeriesForRuntime(queuedSeriesPlan.inspection, novel, optionsRef.current),
-                onCommitted: (novel, releaseId) => {
+                onCommitted: (bookId, releaseId, novel, refreshError) => {
                   if (!mountedRef.current || runGenerationRef.current !== generation) return;
                   // Retain the target and completed releases even if the next request
                   // fails, so retry cannot accidentally create another Library book.
-                  explicitSeriesTargetRef.current = novel;
-                  setSeriesTargetNovelId(novel.id);
+                  seriesCommittedTargetIdRef.current = bookId;
+                  if (novel) {
+                    explicitSeriesTargetRef.current = novel;
+                    unresolvedSeriesTargetRef.current = undefined;
+                  } else {
+                    unresolvedSeriesTargetRef.current = bookId;
+                    // Cancellation suppresses publication, but must leave a way to
+                    // recover metadata for the release that already committed.
+                    const release = queuedSeriesPlan.releases.find((entry) => entry.id === releaseId);
+                    setRefreshPendingBooks((current) => [
+                      ...current.filter((book) => book.id !== bookId),
+                      {
+                        id: bookId,
+                        fileName: release?.originalName ?? bookId,
+                        committedError: refreshError instanceof ImportCommittedRefreshError ? refreshError : undefined,
+                      },
+                    ]);
+                  }
+                  setSeriesTargetNovelId(bookId);
                   const updatePlan = (current: LocalSeriesImportPlan | undefined): LocalSeriesImportPlan | undefined =>
                     current
                       ? {
                           ...current,
-                          targetNovel: novel,
+                          targetNovel: novel ?? (current.targetNovel?.id === bookId ? current.targetNovel : undefined),
                           releases: current.releases.map((release) =>
                             release.id === releaseId ? { ...release, disposition: 'duplicate' as const } : release,
                           ),
@@ -969,7 +1094,7 @@ export function useImportController(options: UseImportControllerOptions): Import
         }
       }
     },
-    [archivePassword, chapterSplitMode, encoding, refreshUploadSessions, selectFiles],
+    [archivePassword, chapterSplitMode, encoding, hasCompletedUploadSessions, refreshUploadSessions, selectFiles],
   );
 
   const startPendingImport = useCallback(async () => {
@@ -1073,7 +1198,13 @@ export function useImportController(options: UseImportControllerOptions): Import
 
   const setSeriesTargetNovel = useCallback(
     async (targetNovelId?: string) => {
-      if ((!seriesInspection && !documentSeriesInspection) || seriesBusy || explicitSeriesTargetRef.current) return;
+      if (
+        (!seriesInspection && !documentSeriesInspection) ||
+        seriesBusy ||
+        explicitSeriesTargetRef.current ||
+        unresolvedSeriesTargetRef.current
+      )
+        return;
       const candidates = seriesInspection?.candidateNovels ?? documentSeriesInspection?.candidateNovels ?? [];
       const target = candidates.find((novel) => novel.id === targetNovelId);
       const generation = ++seriesAnalysisGenerationRef.current;
@@ -1139,13 +1270,19 @@ export function useImportController(options: UseImportControllerOptions): Import
     const isCurrent = () =>
       mountedRef.current &&
       generation === runGenerationRef.current &&
-      retryGeneration === refreshRetryGenerationRef.current;
+      retryGeneration === refreshRetryGenerationRef.current &&
+      runtime.importService === optionsRef.current.importService;
     try {
       for (const book of refreshPendingBooks) {
         try {
-          const novel = await runtime.getNovel(book.id);
+          const novel = book.committedError
+            ? (await book.committedError.retry()).novel
+            : await runtime.getNovel(book.id);
           if (!isCurrent()) return;
           if (!novel) throw new Error('저장한 작품을 아직 조회할 수 없습니다.');
+          hydrateSeriesTarget(novel);
+          book.committedError?.acknowledge();
+          refreshUploadSessions();
           await runtime.onImportCommitted(novel);
           if (!isCurrent()) return;
           setRefreshPendingBooks((current) => current.filter((candidate) => candidate !== book));
@@ -1157,7 +1294,7 @@ export function useImportController(options: UseImportControllerOptions): Import
     } finally {
       refreshRetryBusyRef.current = false;
     }
-  }, [refreshPendingBooks]);
+  }, [hydrateSeriesTarget, refreshPendingBooks, refreshUploadSessions]);
 
   const busy = queueBusy || (progress !== undefined && progress.status !== 'ready' && progress.status !== 'failed');
   const libraryDrop = useImportDropTarget({
@@ -1180,7 +1317,7 @@ export function useImportController(options: UseImportControllerOptions): Import
     documentSeriesInspection,
     documentSeriesPlan,
     seriesTargetNovelId,
-    seriesTargetLocked: Boolean(explicitSeriesTargetRef.current),
+    seriesTargetLocked: Boolean(explicitSeriesTargetRef.current || unresolvedSeriesTargetRef.current),
     appendTargetTitle: explicitSeriesTargetRef.current?.title,
     seriesError,
     encoding,
@@ -1210,5 +1347,7 @@ export function useImportController(options: UseImportControllerOptions): Import
     setSeriesTargetNovel,
     setArchivePassword,
     forgetUploadSession,
+    retryUploadSession,
+    uploadSessionRetryingKeys,
   };
 }

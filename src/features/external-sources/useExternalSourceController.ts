@@ -74,7 +74,11 @@ import {
   type ExternalSourceDefaultFolder,
   type ExternalSourceSubscriptionRecord,
 } from '../../external-sources/local-state';
-import type { ImportController, ImportProgress } from '../../services/import/import-service';
+import {
+  ImportCommittedRefreshError,
+  type ImportController,
+  type ImportProgress,
+} from '../../services/import/import-service';
 import { hashBlobInChunks } from '../../services/import/chunked-file-reader';
 import type { SuwayomiSeriesChapterInput } from '../../external-sources/suwayomi/suwayomi-series-cbz';
 import {
@@ -2250,6 +2254,7 @@ export function useExternalSourceController(options: UseExternalSourceController
                 detail: progressDetail,
               });
             };
+            const importState = optionsRef.current.state;
             const controller = preparedImport
               ? optionsRef.current.importService.importPrepared!(preparedImport, onImportProgress)
               : optionsRef.current.importService.importFile(
@@ -2272,7 +2277,17 @@ export function useExternalSourceController(options: UseExternalSourceController
                 );
             importRef.current = controller;
             if (abort.signal.aborted) controller.cancel();
-            const result = await controller.promise;
+            const result = await controller.promise.catch(async (error: unknown) => {
+              if (error instanceof ImportCommittedRefreshError) {
+                contentApplied = true;
+                changedCount += preparedChanged ? 1 : downloadedChapters.length;
+                // Persist the canonical identity, leaving source/revision validation to reconciliation.
+                stagedLinks = await checkpointImportedExternalSourceLinks(importState, stagedLinks, {
+                  id: error.bookId,
+                });
+              }
+              throw error;
+            });
             importRef.current = undefined;
             contentApplied = true;
             changedCount += preparedChanged ? 1 : downloadedChapters.length;
@@ -2688,6 +2703,7 @@ export function useExternalSourceController(options: UseExternalSourceController
               await acquireExternalSourcePendingLinks(optionsRef.current.state, [stagedLink]);
               stagedLinks = [stagedLink];
 
+              const importState = optionsRef.current.state;
               const controller = optionsRef.current.importService.importFile(
                 {
                   file: downloaded.file,
@@ -2711,7 +2727,15 @@ export function useExternalSourceController(options: UseExternalSourceController
                 },
               );
               importRef.current = controller;
-              const result = await controller.promise;
+              const result = await controller.promise.catch(async (error: unknown) => {
+                if (error instanceof ImportCommittedRefreshError) {
+                  contentApplied = true;
+                  stagedLinks = await checkpointImportedExternalSourceLinks(importState, stagedLinks, {
+                    id: error.bookId,
+                  });
+                }
+                throw error;
+              });
               importRef.current = undefined;
               contentApplied = true;
               stagedLinks = await checkpointImportedExternalSourceLinks(

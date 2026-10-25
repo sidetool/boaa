@@ -46,10 +46,24 @@ The parser and IndexedDB write now run in Web Workers for browser import flows. 
 재사용하고, EPUB은 내부 materialization의 중복 본문 hash만 줄인다. 변경 가능한 공개 EPUB 입력은
 기존처럼 다시 계산한다.
 
-일반 가져오기 batch는 import service가 저장 결과를 반환한 시점에 저장 완료를 집계한다. 이후
-저장본 조회나 완료 callback이 실패하면 가져오기 실패와 구분해 표시하고 조회만 다시 시도한다.
-파싱 결과로 저장본 조회를 대신하지 않으므로 기존 사용자 metadata와 읽기 상태를 덮어쓰지 않는다.
-import service가 아직 결과를 반환하기 전의 실패까지 저장 여부를 확정한다는 뜻은 아니다.
+일반 가져오기 batch는 import service의 정상 결과 또는 `ImportCommittedRefreshError`로 저장 완료를
+집계한다. 서버 job의 `done`과 canonical book ID를 확인하면 최초 manifest 조회보다 먼저 완료 기록을
+남긴다. 이후 조회·완료 callback 실패와 취소는 재업로드 실패로 집계하지 않는다. 정상 결과는 완전한
+`Novel`을 유지하며 파싱 결과나 임시 객체로 저장본을 대신하지 않는다.
+
+서버 업로드 재개/완료 기록은 서버·계정 scope로 분리한다. 완료 기록은 미완료 업로드의 7일 만료와
+별도로 보존하고, 앱 재시작 후에도 파일 없이 manifest만 다시 조회한다. 완료 기록을 지워도 서버에
+저장된 책은 취소·삭제하지 않는다. 이전 공용 키는 인증된 upload 조회로 소유권을 확인한 뒤에만
+이관한다. localStorage를 사용할 수 없으면 현재 실행의 메모리에서만 복구할 수 있다.
+최초 완료 manifest 조회와 재시도는 기존 import 상태 요청과 같은 응답 제한·취소를 적용하며,
+공통 JSON/Blob 전송의 timeout 정책은 바꾸지 않는다.
+
+시리즈는 metadata가 없더라도 실제 저장된 book ID와 완료 회차를 유지하고, canonical 정보를
+갱신하기 전에는 다음 append를 준비하지 않는다. 완료 기록이 남아 있으면 가져오기 화면에서 먼저
+정보 갱신 또는 명시적 기록 삭제를 요청한다. 소스 다운로드는 pending 연결을 보존해 후속 정합화가
+실제 revision/회차를 확인하게 하고, 폴더 동기화는 canonical ID와 입력 hash를 보존한다.
+백업 복원과 회차 삭제의 오류 복구도 조회만 재시도하며 뒤늦게 바뀐 내용을 임의 삭제하지 않는다.
+서버 `done`을 관측하기 전에 연결이 끊긴 경우까지 저장을 확정한다는 뜻은 아니다.
 
 ## Encoding
 

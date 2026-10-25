@@ -8,6 +8,7 @@ import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
 import type { ExtensionContributionId, ExternalSourceContributionDescriptor } from '@boaa/extension-contracts';
 import { integrityHash } from '@boaa/text-core/hash';
 import { sha256 } from '../../domain/hash';
+import { ImportCommittedRefreshError } from '../../services/import/import-service';
 import type { BookAssetMetadata, Chapter, Novel } from '../../domain/types';
 import type {
   ExternalSourceBrowseState,
@@ -1163,6 +1164,51 @@ describe('useExternalSourceController remote updates', () => {
       expect(harness.openNovel).not.toHaveBeenCalled();
     } finally {
       await act(async () => harness.renderer.unmount());
+    }
+  });
+  it('preserves a prepared image-series commit for revision-aware reconciliation when metadata is unavailable', async () => {
+    let bookId = '';
+    const acknowledge = vi.fn();
+    const retry = vi.fn(async () => {
+      throw new Error('offline');
+    });
+    const port: import('../../services/import/hosted-image-import').HostedImageImportPort = {
+      download: vi.fn(async () => ({
+        artifactId: 'artifact',
+        sourceContentHash: `sha256:${'a'.repeat(64)}`,
+        byteLength: 100,
+      })),
+      assemble: vi.fn(async (input) => {
+        bookId = input.clientBookId!;
+        return { uploadId: 'prepared', sourceContentHash: `sha256:${'b'.repeat(64)}`, byteLength: 120 };
+      }),
+      discard: vi.fn(async () => {}),
+    };
+    const importPrepared = vi.fn<NonNullable<ImportService['importPrepared']>>(() => ({
+      jobId: 'job',
+      cancel: vi.fn(),
+      promise: Promise.reject(new ImportCommittedRefreshError(bookId, retry, acknowledge)),
+    }));
+    const h = await createHarness({
+      serial: true,
+      localBookMissing: true,
+      downloadedContent: '',
+      hostedImageImport: port,
+      importPrepared,
+      supportsExpectedSourceContentHash: true,
+      getNovel: async () => undefined,
+    });
+    try {
+      await act(async () => h.controller.importSelected());
+      expect(importPrepared).toHaveBeenCalledOnce();
+      expect(h.importFile).not.toHaveBeenCalled();
+      expect(h.currentLink.pendingImport).toBeDefined();
+      expect(h.currentLink.pendingImport?.importedRemoteRevision).toBe('remote-r2');
+      expect(h.currentLink.importedRemoteRevision).toBeUndefined();
+      expect(h.notify).toHaveBeenCalledWith(expect.stringContaining('연재 본문 적용은 완료'), 'warning');
+      expect(acknowledge).not.toHaveBeenCalled();
+    } finally {
+      await act(async () => h.renderer.unmount());
     }
   });
   it('restores catalog metadata without fetching again or rolling back a completed import', async () => {
@@ -2819,6 +2865,29 @@ describe('useExternalSourceController remote updates', () => {
     });
     expect(harness.currentLink.pendingImport).toBeUndefined();
     expect(harness.notify).toHaveBeenCalledWith(expect.stringContaining('기존 본문과 연결을 유지했습니다'), 'warning');
+    await act(async () => harness.renderer.unmount());
+  });
+
+  it('preserves the pending source intent when the server committed but its first manifest read failed', async () => {
+    const retry = vi.fn(async () => {
+      throw new Error('offline');
+    });
+    const acknowledge = vi.fn();
+    const harness = await createHarness({
+      downloadedContent: 'committed content awaiting metadata',
+      importError: new ImportCommittedRefreshError('book-1', retry, acknowledge),
+    });
+    await act(async () => {
+      await harness.controller.importSelected();
+    });
+    expect(harness.importFile).toHaveBeenCalledOnce();
+    expect(harness.currentLink).toMatchObject({
+      localBookId: 'book-1',
+      importedRemoteRevision: 'remote-r1',
+      pendingImport: { importedRemoteRevision: 'remote-r2' },
+    });
+    expect(harness.notify).toHaveBeenCalledWith(expect.stringContaining('본문 적용을 마쳤고'), 'warning');
+    expect(acknowledge).not.toHaveBeenCalled();
     await act(async () => harness.renderer.unmount());
   });
 

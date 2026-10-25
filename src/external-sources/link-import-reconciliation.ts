@@ -98,7 +98,7 @@ export function finalizedExternalSourceLinks(
   });
 }
 
-function acceptsImportedBook(link: ExternalSourceLink, novel: Novel): boolean {
+function acceptsImportedBook(link: ExternalSourceLink, novel: Pick<Novel, 'id'>): boolean {
   const pending = link.pendingImport;
   if (!pending || !novel.id) return false;
   if (pending.resolvedLocalBookId && pending.resolvedLocalBookId !== novel.id) return false;
@@ -109,7 +109,7 @@ function acceptsImportedBook(link: ExternalSourceLink, novel: Novel): boolean {
 export async function checkpointImportedExternalSourceLinks(
   state: ExternalSourceLocalState,
   staged: readonly ExternalSourceLink[],
-  novel: Novel,
+  novel: Pick<Novel, 'id'>,
 ): Promise<ExternalSourceLink[]> {
   if (staged.some((link) => !acceptsImportedBook(link, novel)))
     throw new Error('가져온 본문과 외부 소스 연결 식별자가 일치하지 않습니다.');

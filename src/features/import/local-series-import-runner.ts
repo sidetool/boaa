@@ -1,6 +1,6 @@
 import type { Novel } from '../../domain/types';
 import { hashBlobInChunks } from '../../services/import/chunked-file-reader';
-import type { ImportController } from '../../services/import/import-service';
+import { ImportCommittedRefreshError, type ImportController } from '../../services/import/import-service';
 import {
   type ImportBatchCallbacks,
   type ImportBatchOutcome,
@@ -14,9 +14,10 @@ import { buildLocalSeriesImportFile, type LocalSeriesImportPlan } from './local-
 export async function runLocalSeriesImport(
   input: Omit<RunImportBatchInput, 'files'> & {
     plan: LocalSeriesImportPlan;
+    targetBookId?: string;
     signal: AbortSignal;
     replan(novel: Novel): Promise<LocalSeriesImportPlan>;
-    onCommitted(novel: Novel, releaseId: string): void;
+    onCommitted(bookId: string, releaseId: string, novel?: Novel, refreshError?: unknown): void;
   },
   cancellation: ImportRunCancellation,
   callbacks: ImportBatchCallbacks,
@@ -41,9 +42,9 @@ export async function runLocalSeriesImport(
     try {
       input.signal.throwIfAborted();
       if (cancellation.isRequested) throw new DOMException('Cancelled', 'AbortError');
-      const target = outcome.lastImportedNovel ?? input.plan.targetNovel;
-      const currentTarget = target ? await input.getNovel(target.id) : undefined;
-      if (target && !currentTarget) throw new Error('기존 작품을 조회하지 못해 다음 회차를 추가하지 않았습니다.');
+      const targetBookId = outcome.lastImportedNovel?.id ?? input.targetBookId ?? input.plan.targetNovel?.id;
+      const currentTarget = targetBookId ? await input.getNovel(targetBookId) : undefined;
+      if (targetBookId && !currentTarget) throw new Error('기존 작품을 조회하지 못해 다음 회차를 추가하지 않았습니다.');
       const plan = currentTarget ? await input.replan(currentTarget) : input.plan;
       // Another completed attempt/device may already have supplied this release.
       if (plan.releases.find((entry) => entry.id === release.id)?.disposition !== 'add') {
@@ -93,11 +94,9 @@ export async function runLocalSeriesImport(
       } catch (error) {
         refreshError = error;
       }
-      // Retain identity/release bookkeeping even when refresh or cancellation
-      // races storage. This fallback is internal only; the next replan requires
-      // a fresh canonical read, and UI callbacks never receive parser metadata.
-      const retryTarget = storedNovel ?? (plan.targetNovel?.id === committedBookId ? plan.targetNovel : result.novel);
-      input.onCommitted(retryTarget, release.id);
+      // The committed identity is sufficient for retry bookkeeping. Only a
+      // canonical read may supply metadata to the owner or UI.
+      input.onCommitted(committedBookId, release.id, storedNovel, refreshError);
       if (storedNovel) {
         outcome.lastImportedNovel = storedNovel;
         canonicalRefreshed = true;
@@ -107,6 +106,11 @@ export async function runLocalSeriesImport(
       if (!storedNovel) throw refreshError ?? new Error('저장한 작품을 아직 조회할 수 없습니다.');
       await callbacks.onFileCommitted?.(release.file, storedNovel);
     } catch (error) {
+      if (error instanceof ImportCommittedRefreshError && !committedBookId) {
+        committedBookId = error.bookId;
+        outcome.completed += 1;
+        input.onCommitted(committedBookId, release.id, undefined, error);
+      }
       if (
         input.signal.aborted ||
         cancellation.isRequested ||

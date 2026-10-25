@@ -459,23 +459,42 @@ export function UiNextImportSheet({ controller }: { controller: ImportFeatureCon
         {picked && <SplitPreview controller={controller} />}
 
         {controller.uploadSessions.length > 0 && (
-          <PrefSection title="멈춘 서버 업로드" hint="같은 파일을 다시 고르면 이어서 올려요.">
+          <PrefSection
+            title="서버 가져오기 기록"
+            hint="저장된 작품은 정보만 다시 갱신하고, 멈춘 업로드는 같은 파일로 이어서 올려요."
+          >
             <PrefGroup>
               {controller.uploadSessions.map((session) => (
                 <Pref
                   key={session.key}
                   title={session.fileName}
-                  help={`${formatImportBytes(session.sizeBytes)} · ${session.encoding.toUpperCase()} · ${formatImportChapterSplitMode(session.chapterSplitMode)} · ${formatDateTime(session.updatedAt)}`}
+                  help={
+                    session.completion
+                      ? `저장 완료 · 정보 갱신 필요 · ${formatDateTime(session.completion.completedAt)}`
+                      : `${formatImportBytes(session.sizeBytes)} · ${session.encoding.toUpperCase()} · ${formatImportChapterSplitMode(session.chapterSplitMode)} · ${formatDateTime(session.updatedAt)}`
+                  }
                   control={
-                    <button
-                      type="button"
-                      className="un-icon-btn is-sm"
-                      aria-label={`${session.fileName} 업로드 기록 지우기`}
-                      disabled={controller.busy}
-                      onClick={() => void controller.forgetUploadSession(session.key)}
-                    >
-                      <Trash2 size={15} />
-                    </button>
+                    <>
+                      {session.completion && (
+                        <button
+                          type="button"
+                          className="un-btn is-ghost is-sm"
+                          disabled={controller.busy || controller.uploadSessionRetryingKeys?.includes(session.key)}
+                          onClick={() => void controller.retryUploadSession?.(session.key)}
+                        >
+                          저장 정보 다시 갱신
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        className="un-icon-btn is-sm"
+                        aria-label={`${session.fileName} 업로드 기록 지우기`}
+                        disabled={controller.busy || controller.uploadSessionRetryingKeys?.includes(session.key)}
+                        onClick={() => void controller.forgetUploadSession(session.key)}
+                      >
+                        <Trash2 size={15} />
+                      </button>
+                    </>
                   }
                 />
               ))}

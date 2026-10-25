@@ -1,3 +1,4 @@
+import { ImportCommittedRefreshError } from '../../services/import/import-service';
 import type { EncodingMode, ChapterSplitMode, Novel } from '../../domain/types';
 import type {
   ImportController,
@@ -177,6 +178,20 @@ export async function runImportBatch(
         callbacks.onFileRefreshFailed?.(file, result.novel.id, error);
       }
     } catch (error) {
+      if (error instanceof ImportCommittedRefreshError && !committed) {
+        completed += 1;
+        committed = true;
+        if (!cancellation.isRequested) {
+          refreshFailed += 1;
+          try {
+            callbacks.onFileRefreshFailed?.(file, error.bookId, error);
+          } catch {
+            // Reporting cannot undo the confirmed server commit.
+          }
+        }
+        // A following archive append must first establish its fresh base.
+        stopAfterFailure = importMode === 'append_local_archive';
+      }
       if (cancellation.isRequested || (!committed && isAbortError(error))) {
         aborted = true;
         callbacks.onCancelled(file);

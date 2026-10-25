@@ -1,6 +1,6 @@
 import type { Novel } from '../../domain/types';
 import type { BookAssetRepository } from '../../repositories/book-asset-repository';
-import type { ImportService } from '../../services/import/import-service';
+import { ImportCommittedRefreshError, type ImportService } from '../../services/import/import-service';
 import { hashBlobInChunks } from '../../services/import/chunked-file-reader';
 
 /** Keep the book identity/links; availability is projected from the committed chapters. */
@@ -19,21 +19,36 @@ export async function removeDownloadedReleases(options: {
     throw new Error('작품이 변경되어 정리를 중단했습니다. 삭제 대상을 다시 확인해 주세요.');
   const ids = new Set(options.sectionIds);
   if (!ids.size) throw new Error('삭제할 회차를 선택해 주세요.');
+  const recoverCommitted = async (error: unknown) => {
+    if (!(error instanceof ImportCommittedRefreshError)) throw error;
+    try {
+      const result = await error.retry();
+      error.acknowledge();
+      return result;
+    } catch {
+      throw error;
+    }
+  };
+  let imported: Novel;
   if (novel.format === 'image_archive') {
     if (!options.importService.supportsIncrementalImageSeriesAppend)
       throw new Error('이 환경은 만화 회차 삭제를 지원하지 않습니다.');
     const { buildComicRemovalDelta } = await import('@boaa/fixed-document-core/comic-source');
     const file = await buildComicRemovalDelta(novel.id, [...ids]);
-    await options.importService.importFile(
-      {
-        file,
-        encoding: 'auto',
-        clientBookId: novel.id,
-        importMode: 'append_image_series',
-        baseActiveContentRevisionId: novel.activeContentRevisionId,
-      },
-      () => {},
-    ).promise;
+    imported = (
+      await options.importService
+        .importFile(
+          {
+            file,
+            encoding: 'auto',
+            clientBookId: novel.id,
+            importMode: 'append_image_series',
+            baseActiveContentRevisionId: novel.activeContentRevisionId,
+          },
+          () => {},
+        )
+        .promise.catch(recoverCommitted)
+    ).novel;
   } else if (novel.format === 'txt') {
     if (!options.importService.supportsExpectedBase)
       throw new Error('이 환경은 안전한 텍스트 회차 삭제를 지원하지 않습니다.');
@@ -57,20 +72,25 @@ export async function removeDownloadedReleases(options: {
         .filter((value) => !ids.has(value.id))
         .map((value) => ({ ...value, blob: archive.sources.get(value.id)! })),
     });
-    await options.importService.importFile(
-      {
-        file,
-        encoding: 'utf-8',
-        chapterSplitMode: 'single',
-        clientBookId: novel.id,
-        expectedBase: { kind: 'revision', contentRevisionId: novel.activeContentRevisionId },
-      },
-      () => {},
-    ).promise;
+    imported = (
+      await options.importService
+        .importFile(
+          {
+            file,
+            encoding: 'utf-8',
+            chapterSplitMode: 'single',
+            clientBookId: novel.id,
+            expectedBase: { kind: 'revision', contentRevisionId: novel.activeContentRevisionId },
+          },
+          () => {},
+        )
+        .promise.catch(recoverCommitted)
+    ).novel;
   } else {
     throw new Error('이 작품은 소스 회차 삭제를 지원하지 않습니다.');
   }
-  const updated = await options.getNovel(novel.id);
+  if (imported.id !== novel.id) throw new Error('삭제 후 작품 식별자가 일치하지 않습니다.');
+  const updated = (await options.getNovel(novel.id).catch(() => undefined)) ?? imported;
   if (!updated || updated.deletedAt) throw new Error('삭제 후 작품 상태를 확인하지 못했습니다.');
   if (updated.activeContentRevisionId)
     await options.assets.cleanupRemovedDownloads?.(novel.id, updated.activeContentRevisionId);

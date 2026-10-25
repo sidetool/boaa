@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { ImportCommittedRefreshError } from '../services/import/import-service';
 import { RemoteApiClient, RemoteApiError, RemoteUploadStatus } from '../services/remote/remote-api-client';
 import {
   DEFAULT_SERVER_UPLOAD_CHUNK_BYTES,
@@ -1663,5 +1664,308 @@ describe('ServerUploadImportService', () => {
 
     expect(client.putUploadChunk.mock.calls.map((call) => call[1])).toEqual([0, 1, 1]);
     expect(client.completeUpload).not.toHaveBeenCalled();
+  });
+});
+
+describe('confirmed server import recovery', () => {
+  function clientFixture() {
+    return {
+      coverCacheScope: 'account-a',
+      initUpload: vi.fn(async () => ({ uploadId: 'upload_1' })),
+      getUpload: vi.fn(async () => uploadStatus([0, 1, 2], 6)),
+      putUploadChunk: vi.fn(),
+      completeUpload: vi.fn(async () => ({ jobId: 'job_1' })),
+      getImportJob: vi.fn(async () => ({ status: 'done', book_id: 'book_1' })),
+      getBookManifest: vi.fn(async () => importedBook()),
+      cancelUpload: vi.fn(async () => ({ ok: true })),
+    };
+  }
+
+  function memoryStore(): RemoteUploadSessionStore {
+    const records = new Map<string, StoredUploadSession>();
+    return {
+      read: (key) => records.get(key),
+      write: (key, value) => {
+        records.set(key, value);
+      },
+      remove: (key) => {
+        records.delete(key);
+      },
+      list: () => [...records].map(([key, value]) => ({ ...value, key, expiresAt: now })),
+    };
+  }
+
+  function browserStorage() {
+    const entries = new Map<string, string>();
+    const storage = {
+      get length() {
+        return entries.size;
+      },
+      key: (index: number) => [...entries.keys()][index] ?? null,
+      getItem: (key: string) => entries.get(key) ?? null,
+      setItem: (key: string, value: string) => {
+        entries.set(key, value);
+      },
+      removeItem: (key: string) => {
+        entries.delete(key);
+      },
+      clear: () => entries.clear(),
+    };
+    vi.stubGlobal('localStorage', storage);
+    return storage;
+  }
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  it('recovers a confirmed import by manifest only, including reselecting the same file', async () => {
+    const client = clientFixture();
+    client.getBookManifest.mockRejectedValueOnce(new Error('offline'));
+    const service = new ServerUploadImportService(client as unknown as RemoteApiClient, 2, 1, memoryStore());
+    const input = { file: makeFile(), encoding: 'utf-8' as const };
+    const failure = await service.importFile(input, vi.fn()).promise.catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(ImportCommittedRefreshError);
+    expect(failure).toMatchObject({ bookId: 'book_1' });
+    expect(service.listStoredUploadSessions()).toMatchObject([{ completion: { bookId: 'book_1', jobId: 'job_1' } }]);
+    await expect(service.importFile(input, vi.fn()).promise).resolves.toMatchObject({ novel: { id: 'book_1' } });
+    expect(client.initUpload).toHaveBeenCalledTimes(1);
+    expect(client.completeUpload).toHaveBeenCalledTimes(1);
+    expect(client.getImportJob).toHaveBeenCalledTimes(1);
+    expect(client.getBookManifest).toHaveBeenCalledTimes(2);
+    expect(client.cancelUpload).not.toHaveBeenCalled();
+    expect(service.listStoredUploadSessions()).toEqual([]);
+  });
+
+  it('persists prepared import completion across reload and expiry without consulting old jobs/uploads', async () => {
+    browserStorage();
+    const client = clientFixture();
+    client.getBookManifest.mockRejectedValueOnce(new Error('offline'));
+    const service = new ServerUploadImportService(client as unknown as RemoteApiClient);
+    await expect(
+      service.importPrepared({ uploadId: 'prepared_1', byteLength: 6, sourceContentHash }, vi.fn()).promise,
+    ).rejects.toBeInstanceOf(ImportCommittedRefreshError);
+    vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 30 * 24 * 60 * 60 * 1_000);
+    const reloaded = new ServerUploadImportService(client as unknown as RemoteApiClient);
+    const [receipt] = reloaded.listStoredUploadSessions();
+    expect(receipt.completion?.bookId).toBe('book_1');
+    await expect(reloaded.retryStoredUploadSession(receipt.key)).resolves.toMatchObject({ novel: { id: 'book_1' } });
+    expect(client.completeUpload).toHaveBeenCalledTimes(1);
+    expect(client.getImportJob).toHaveBeenCalledTimes(1);
+    expect(client.getUpload).not.toHaveBeenCalled();
+    expect(reloaded.listStoredUploadSessions()).toEqual([]);
+  });
+
+  it('keeps a completion receipt on manifest 404 and never falls back to a new upload', async () => {
+    const client = clientFixture();
+    client.getBookManifest.mockRejectedValue(new RemoteApiError('book unavailable', 404));
+    const service = new ServerUploadImportService(client as unknown as RemoteApiClient, 2, 1, memoryStore());
+    const input = { file: makeFile(), encoding: 'utf-8' as const };
+    await expect(service.importFile(input, vi.fn()).promise).rejects.toBeInstanceOf(ImportCommittedRefreshError);
+    await expect(service.importFile(input, vi.fn()).promise).rejects.toBeInstanceOf(ImportCommittedRefreshError);
+    expect(client.initUpload).toHaveBeenCalledTimes(1);
+    expect(client.completeUpload).toHaveBeenCalledTimes(1);
+    expect(service.listStoredUploadSessions()).toHaveLength(1);
+    await service.forgetStoredUploadSession(service.listStoredUploadSessions()[0].key);
+    expect(client.cancelUpload).not.toHaveBeenCalled();
+    expect(service.listStoredUploadSessions()).toEqual([]);
+  });
+
+  it.each(['cancel', 'timeout'] as const)(
+    'preserves committed storage when manifest retrieval ends by %s',
+    async (reason) => {
+      vi.useFakeTimers();
+      const client = clientFixture();
+      let requestSignal: AbortSignal | undefined;
+      client.getBookManifest.mockImplementation((...args: unknown[]) => {
+        requestSignal = args[2] as AbortSignal;
+        return new Promise(() => undefined);
+      });
+      const service = new ServerUploadImportService(
+        client as unknown as RemoteApiClient,
+        2,
+        1,
+        memoryStore(),
+        90_000,
+        30,
+      );
+      const controller = service.importPrepared({ uploadId: 'prepared_1', byteLength: 6, sourceContentHash }, vi.fn());
+      const failurePromise = controller.promise.catch((error: unknown) => error);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(client.getBookManifest).toHaveBeenCalledTimes(1);
+      if (reason === 'cancel') controller.cancel();
+      else await vi.advanceTimersByTimeAsync(31);
+      const failure = await failurePromise;
+      expect(failure).toBeInstanceOf(ImportCommittedRefreshError);
+      expect(requestSignal?.aborted).toBe(true);
+      expect(client.cancelUpload).not.toHaveBeenCalled();
+      expect(service.listStoredUploadSessions()).toHaveLength(1);
+      client.getBookManifest.mockResolvedValue(importedBook());
+      await expect((failure as ImportCommittedRefreshError).retry()).resolves.toMatchObject({
+        novel: { id: 'book_1' },
+      });
+      expect(client.completeUpload).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it('persists before a ready callback throws and can acknowledge an independent successful refresh', async () => {
+    const client = clientFixture();
+    const service = new ServerUploadImportService(client as unknown as RemoteApiClient, 2, 1, memoryStore());
+    const failure = await service
+      .importPrepared({ uploadId: 'prepared_1', byteLength: 6, sourceContentHash }, () => {
+        expect(service.listStoredUploadSessions()).toHaveLength(1);
+        throw new Error('presentation failed');
+      })
+      .promise.catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(ImportCommittedRefreshError);
+    expect(client.cancelUpload).not.toHaveBeenCalled();
+    (failure as ImportCommittedRefreshError).acknowledge();
+    expect(service.listStoredUploadSessions()).toEqual([]);
+  });
+
+  it('retains in-memory recovery when persistent receipt storage fails', async () => {
+    const client = clientFixture();
+    client.getBookManifest.mockRejectedValueOnce(new Error('offline'));
+    const store = memoryStore();
+    store.write = () => {
+      throw new Error('storage unavailable');
+    };
+    const service = new ServerUploadImportService(client as unknown as RemoteApiClient, 2, 1, store);
+    const failure = await service
+      .importPrepared({ uploadId: 'prepared_1', byteLength: 6, sourceContentHash }, vi.fn())
+      .promise.catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(ImportCommittedRefreshError);
+    expect(service.listStoredUploadSessions()).toHaveLength(1);
+    await expect((failure as ImportCommittedRefreshError).retry()).resolves.toMatchObject({ novel: { id: 'book_1' } });
+  });
+
+  it('isolates account receipts and blocks stale retry/acknowledge closures after an account change', async () => {
+    browserStorage();
+    const client = clientFixture();
+    client.getBookManifest.mockRejectedValueOnce(new Error('offline'));
+    const service = new ServerUploadImportService(client as unknown as RemoteApiClient);
+    const failure = (await service
+      .importPrepared({ uploadId: 'prepared_1', byteLength: 6, sourceContentHash }, vi.fn())
+      .promise.catch((error: unknown) => error)) as ImportCommittedRefreshError;
+    expect(service.listStoredUploadSessions()).toHaveLength(1);
+    client.coverCacheScope = 'account-a.child';
+    const otherAccount = new ServerUploadImportService(client as unknown as RemoteApiClient);
+    expect(service.listStoredUploadSessions()).toEqual([]);
+    expect(otherAccount.listStoredUploadSessions()).toEqual([]);
+    await expect(failure.retry()).rejects.toBeInstanceOf(ImportCommittedRefreshError);
+    failure.acknowledge();
+    expect(client.getBookManifest).toHaveBeenCalledTimes(1);
+    client.coverCacheScope = 'account-a';
+    expect(new ServerUploadImportService(client as unknown as RemoteApiClient).listStoredUploadSessions()).toHaveLength(
+      1,
+    );
+  });
+
+  it('rejects a manifest returned after the account changes and retains the original receipt', async () => {
+    browserStorage();
+    const client = clientFixture();
+    client.getBookManifest.mockImplementationOnce(async () => {
+      client.coverCacheScope = 'account-b';
+      return importedBook();
+    });
+    const service = new ServerUploadImportService(client as unknown as RemoteApiClient);
+    await expect(
+      service.importPrepared({ uploadId: 'prepared_1', byteLength: 6, sourceContentHash }, vi.fn()).promise,
+    ).rejects.toBeInstanceOf(ImportCommittedRefreshError);
+    client.coverCacheScope = 'account-a';
+    expect(service.listStoredUploadSessions()).toHaveLength(1);
+  });
+
+  it('consumes an owned legacy record so successful cleanup cannot resurrect its old job', async () => {
+    const storage = browserStorage();
+    const file = makeFile();
+    const key = [
+      file.name,
+      String(file.size),
+      String(file.lastModified),
+      'utf-8',
+      'auto',
+      '2',
+      '3',
+      sourceContentHash,
+      'replace_book',
+    ]
+      .map(encodeURIComponent)
+      .join('|');
+    const legacyKey = `boaa.remoteUploadSession.${key}`;
+    storage.setItem(
+      legacyKey,
+      JSON.stringify({
+        ...storedSession(),
+        lastModified: file.lastModified,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      }),
+    );
+    const client = clientFixture();
+    client.getUpload.mockResolvedValueOnce({ ...uploadStatus([0, 1, 2], 6), status: 'queued', importJobId: 'old_job' });
+    const service = new ServerUploadImportService(client as unknown as RemoteApiClient, 2);
+    const input = { file, encoding: 'utf-8' as const };
+    await service.importFile(input, vi.fn()).promise;
+    expect(client.getImportJob).toHaveBeenCalledWith('old_job', expect.any(AbortSignal));
+    expect(storage.getItem(legacyKey)).toBeNull();
+    expect(client.initUpload).not.toHaveBeenCalled();
+    await service.importFile(input, vi.fn()).promise;
+    expect(client.initUpload).toHaveBeenCalledTimes(1);
+    expect(client.completeUpload).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not consume another account's legacy upload when authenticated lookup rejects it", async () => {
+    const storage = browserStorage();
+    const file = makeFile();
+    const key = [
+      file.name,
+      String(file.size),
+      String(file.lastModified),
+      'utf-8',
+      'auto',
+      '2',
+      '3',
+      sourceContentHash,
+      'replace_book',
+    ]
+      .map(encodeURIComponent)
+      .join('|');
+    const legacyKey = `boaa.remoteUploadSession.${key}`;
+    storage.setItem(
+      legacyKey,
+      JSON.stringify({
+        ...storedSession('foreign_upload'),
+        lastModified: file.lastModified,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      }),
+    );
+    const client = clientFixture();
+    client.getUpload.mockRejectedValueOnce(new RemoteApiError('not found', 404));
+    const service = new ServerUploadImportService(client as unknown as RemoteApiClient, 2);
+    await service.importFile({ file, encoding: 'utf-8' }, vi.fn()).promise;
+    expect(storage.getItem(legacyKey)).not.toBeNull();
+    expect(client.initUpload).toHaveBeenCalledTimes(1);
+  });
+
+  it('an old recovery callback cannot erase a newer pending upload of the same file', async () => {
+    const store = memoryStore();
+    const client = clientFixture();
+    client.getBookManifest.mockRejectedValueOnce(new Error('offline'));
+    const service = new ServerUploadImportService(client as unknown as RemoteApiClient, 2, 1, store);
+    const failure = (await service
+      .importFile({ file: makeFile(), encoding: 'utf-8' }, vi.fn())
+      .promise.catch((error: unknown) => error)) as ImportCommittedRefreshError;
+    const [receipt] = service.listStoredUploadSessions();
+    // Another service/tab has recovered the old receipt and started a new upload.
+    const newer = storedSession('upload_new');
+    store.write(receipt.key, newer);
+    failure.acknowledge();
+    expect(store.read(receipt.key)?.uploadId).toBe('upload_new');
+    await expect(failure.retry()).resolves.toMatchObject({ novel: { id: 'book_1' } });
+    expect(store.read(receipt.key)?.uploadId).toBe('upload_new');
   });
 });

@@ -1,11 +1,21 @@
-import { describe, expect, it, vi } from 'vitest';
+import 'fake-indexeddb/auto';
+import { createElement } from 'react';
+import { act, create, type ReactTestRenderer } from 'react-test-renderer';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { LibraryFolderLocalStateStore, resetLibraryFolderLocalStateForTests } from '../../library-folders/local-state';
+import { ImportCommittedRefreshError } from '../../services/import/import-service';
 import {
   DEFAULT_LIBRARY_FOLDER_FILTER,
   type LibraryFolderSourceEntry,
   type LinkedLibraryFolder,
   type StoredLibraryFolderEntry,
 } from '../../library-folders/contracts';
-import { enrichScannedLibraryFolderEntries } from './useLibraryFolderController';
+import { enrichScannedLibraryFolderEntries, useLibraryFolderController } from './useLibraryFolderController';
+
+afterEach(async () => {
+  vi.unstubAllGlobals();
+  await resetLibraryFolderLocalStateForTests();
+});
 
 const folder: LinkedLibraryFolder = {
   id: 'folder-1',
@@ -44,6 +54,68 @@ function stored(overrides: Partial<StoredLibraryFolderEntry> = {}): StoredLibrar
 }
 
 describe('enrichScannedLibraryFolderEntries', () => {
+  it('keeps the canonical folder binding after a committed import so another scan does not reupload', async () => {
+    vi.stubGlobal('window', {
+      setTimeout: vi.fn(),
+      clearTimeout: vi.fn(),
+      setInterval: vi.fn(),
+      clearInterval: vi.fn(),
+    });
+    vi.stubGlobal('document', { addEventListener: vi.fn(), removeEventListener: vi.fn() });
+    const state = new LibraryFolderLocalStateStore('committed-folder-test');
+    await state.saveFolder({ ...folder, autoSync: false });
+    const retry = vi.fn(async () => {
+      throw new Error('offline');
+    });
+    const acknowledge = vi.fn();
+    const importFile = vi.fn(() => ({
+      jobId: 'job',
+      cancel: vi.fn(),
+      promise: Promise.reject(new ImportCommittedRefreshError('canonical-book', retry, acknowledge)),
+    }));
+    const notify = vi.fn();
+    let controller!: ReturnType<typeof useLibraryFolderController>;
+    function Harness() {
+      controller = useLibraryFolderController({
+        state,
+        notify,
+        importService: { importFile },
+        listNovels: async () => [],
+        getNovel: async () => undefined,
+        onLibraryChanged: async () => {},
+        io: {
+          available: true,
+          providerKind: 'android-saf',
+          pickFolder: async () => undefined,
+          scanFolder: async () => [source()],
+          readFile: async () => new File(['new'], 'book.txt', { lastModified: 0 }),
+          forgetFolder: async () => {},
+        },
+      });
+      return null;
+    }
+    let renderer!: ReactTestRenderer;
+    await act(async () => {
+      renderer = create(createElement(Harness));
+    });
+    await act(async () => {
+      await controller.selectFolder(folder.id);
+    });
+    await act(async () => {
+      await controller.importSelected();
+    });
+    expect((await state.listEntries(folder.id))[0]).toMatchObject({ bookId: 'canonical-book', status: 'linked' });
+    expect(controller.progress).toMatchObject({ completed: 1, failed: 0 });
+    expect(controller.candidates[0]).toMatchObject({ status: 'unchanged', selected: false });
+    await act(async () => {
+      await controller.importSelected();
+    });
+    expect(importFile).toHaveBeenCalledOnce();
+    expect(retry).toHaveBeenCalledOnce();
+    expect(acknowledge).not.toHaveBeenCalled();
+    expect(notify).toHaveBeenCalledWith(expect.stringContaining('목록 새로고침이 필요합니다'), 'warning');
+    await act(async () => renderer.unmount());
+  });
   it('hashes an existing same-metadata Android entry even when mtime is zero', async () => {
     const readFile = vi.fn(async () => new File(['new'], 'book.txt', { lastModified: 0 }));
 

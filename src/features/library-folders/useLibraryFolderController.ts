@@ -2,7 +2,11 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Novel } from '../../domain/types';
 import { sha256 } from '../../domain/hash';
 import type { ToastTone } from '../../shared/ui/ToastHost';
-import type { ImportProgress, ImportService } from '../../services/import/import-service';
+import {
+  ImportCommittedRefreshError,
+  type ImportProgress,
+  type ImportService,
+} from '../../services/import/import-service';
 import { hashBlobInChunks } from '../../services/import/chunked-file-reader';
 import {
   DEFAULT_LIBRARY_FOLDER_FILTER,
@@ -266,6 +270,7 @@ export function useLibraryFolderController(options: UseLibraryFolderControllerOp
       let completed = 0;
       let failed = 0;
       let linkedExisting = 0;
+      let refreshPending = 0;
       const knownNovels = await optionsRef.current.listNovels();
       const storedByKey = new Map(
         (await optionsRef.current.state.listEntries(folder.id)).map((entry) => [entry.sourceKey, entry]),
@@ -305,6 +310,7 @@ export function useLibraryFolderController(options: UseLibraryFolderControllerOp
               }
             }
 
+            const importState = optionsRef.current.state;
             const controller = optionsRef.current.importService.importFile(
               {
                 file,
@@ -326,9 +332,31 @@ export function useLibraryFolderController(options: UseLibraryFolderControllerOp
               },
             );
             activeImportRef.current = controller;
-            const result = await controller.promise;
+            const result = await controller.promise.catch(async (error: unknown) => {
+              if (!(error instanceof ImportCommittedRefreshError)) throw error;
+              // The canonical identity is known even when its metadata is unavailable.
+              // Keep the folder binding so a later scan does not upload these bytes again.
+              await importState
+                .saveEntries([
+                  importedEntry(
+                    folder,
+                    candidate,
+                    error.bookId,
+                    sourceHash ?? (await hashBlobInChunks(file)),
+                    storedByKey.get(candidate.sourceKey),
+                  ),
+                ])
+                .catch(() => undefined);
+              try {
+                const recovered = await error.retry();
+                error.acknowledge();
+                return recovered;
+              } catch {
+                throw error;
+              }
+            });
             activeImportRef.current = undefined;
-            const novel = (await optionsRef.current.getNovel(result.novel.id)) ?? result.novel;
+            const novel = (await optionsRef.current.getNovel(result.novel.id).catch(() => undefined)) ?? result.novel;
             knownNovels.push(novel);
             await optionsRef.current.state.saveEntries([
               importedEntry(
@@ -342,6 +370,11 @@ export function useLibraryFolderController(options: UseLibraryFolderControllerOp
             completed += 1;
           } catch (error) {
             activeImportRef.current = undefined;
+            if (error instanceof ImportCommittedRefreshError) {
+              completed += 1;
+              refreshPending += 1;
+              continue;
+            }
             if (!busyRef.current) break;
             failed += 1;
             const previous = storedByKey.get(candidate.sourceKey);
@@ -366,8 +399,9 @@ export function useLibraryFolderController(options: UseLibraryFolderControllerOp
         if (announce) {
           const importedCount = completed + linkedExisting;
           optionsRef.current.notify(
-            failed ? `${importedCount}권 처리 완료, ${failed}권 실패` : `${importedCount}권을 폴더와 연결했습니다.`,
-            failed ? 'warning' : 'success',
+            (failed ? `${importedCount}권 처리 완료, ${failed}권 실패` : `${importedCount}권을 폴더와 연결했습니다.`) +
+              (refreshPending ? ` ${refreshPending}권은 서버 저장을 마쳤으며 목록 새로고침이 필요합니다.` : ''),
+            failed || refreshPending ? 'warning' : 'success',
           );
         }
       } finally {

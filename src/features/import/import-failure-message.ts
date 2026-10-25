@@ -1,4 +1,4 @@
-import { ArchiveImportError } from '../../services/import/import-service';
+import { ArchiveImportError, ImportCommittedRefreshError } from '../../services/import/import-service';
 import { RemoteApiError } from '../../services/remote/remote-api-contracts';
 
 function remoteErrorDetail(message: string): string | undefined {
@@ -18,6 +18,7 @@ function remoteErrorDetail(message: string): string | undefined {
 }
 
 export function importFailureMessage(fileName: string, error: unknown): string {
+  if (error instanceof ImportCommittedRefreshError) return error.message;
   if (error instanceof ArchiveImportError) return error.message;
 
   if (error instanceof RemoteApiError) {

@@ -1,7 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { Novel } from '../../domain/types';
 import type { ReaderRuntime } from '../../repositories/reader-runtime';
-import type { ImportController, ImportProgress } from '../../services/import/import-service';
+import {
+  ImportCommittedRefreshError,
+  type ImportController,
+  type ImportProgress,
+} from '../../services/import/import-service';
 import type { SyncState } from '../../sync/types';
 import { clamp } from '../../utils/format';
 
@@ -75,7 +79,21 @@ export function useServerAttachController({
     const controller = service.attachNovel(novel, setProgress);
     controllerRef.current = controller;
     try {
-      await controller.promise;
+      await controller.promise.catch(async (error: unknown) => {
+        if (
+          !(error instanceof ImportCommittedRefreshError) ||
+          !mountedRef.current ||
+          runVersionRef.current !== runVersion
+        )
+          throw error;
+        try {
+          const result = await error.retry();
+          error.acknowledge();
+          return result;
+        } catch {
+          throw error;
+        }
+      });
       if (!mountedRef.current || runVersionRef.current !== runVersion) return;
       const state = await onAttached(novel);
       if (!mountedRef.current || runVersionRef.current !== runVersion || !state) return;
@@ -87,6 +105,11 @@ export function useServerAttachController({
       );
     } catch (error) {
       if (!mountedRef.current || runVersionRef.current !== runVersion) return;
+      if (error instanceof ImportCommittedRefreshError) {
+        setProgress((current) => (current ? { ...current, status: 'ready', message: error.message } : current));
+        notify(error.message, 'warning');
+        return;
+      }
       const aborted = isAbortError(error);
       setProgress((current) =>
         current

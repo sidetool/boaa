@@ -8,7 +8,14 @@ import {
   RemoteUploadStatus,
 } from '../remote/remote-api-client';
 import { hashBlobInChunks } from './chunked-file-reader';
-import { ImportController, ImportFileInput, ImportProgress, ImportResult, ImportService } from './import-service';
+import {
+  ImportCommittedRefreshError,
+  ImportController,
+  ImportFileInput,
+  ImportProgress,
+  ImportResult,
+  ImportService,
+} from './import-service';
 export const DEFAULT_SERVER_UPLOAD_CHUNK_BYTES = 2 * 1024 * 1024;
 export const DEFAULT_SERVER_UPLOAD_CONCURRENCY = 4;
 export const DEFAULT_SERVER_IMPORT_ACTIVITY_TIMEOUT_MS = 90_000;
@@ -59,6 +66,7 @@ export interface StoredUploadSession {
   sourceContentHash?: string;
   createdAt: string;
   updatedAt: string;
+  completion?: { bookId: string; jobId: string; completedAt: string };
 }
 
 export interface StoredUploadSessionEntry extends StoredUploadSession {
@@ -196,18 +204,48 @@ function uploadSessionExpiresAt(session: StoredUploadSession): string {
 }
 
 class BrowserRemoteUploadSessionStore implements RemoteUploadSessionStore {
+  private readonly prefix: string;
+
+  constructor(scope: string) {
+    this.prefix = `${UPLOAD_SESSION_PREFIX}${encodeURIComponent(scope)}|`;
+  }
+
   read(key: string): StoredUploadSession | undefined {
     try {
-      const raw = readBrandStorage(globalThis.localStorage, `${UPLOAD_SESSION_PREFIX}${key}`);
-      return raw ? (JSON.parse(raw) as StoredUploadSession) : undefined;
+      const raw = readBrandStorage(globalThis.localStorage, `${this.prefix}${key}`);
+      if (raw) return JSON.parse(raw) as StoredUploadSession;
+      // Legacy records may resume only through the authenticated upload status check.
+      // They cannot authorize a direct canonical lookup for a different account.
+      const legacy = readBrandStorage(globalThis.localStorage, `${UPLOAD_SESSION_PREFIX}${key}`);
+      if (!legacy) return undefined;
+      const session = JSON.parse(legacy) as StoredUploadSession;
+      delete session.completion;
+      return session;
     } catch {
       return undefined;
     }
   }
 
+  adoptLegacy(key: string, authenticatedUploadId: string): void {
+    try {
+      const legacyKey = `${UPLOAD_SESSION_PREFIX}${key}`;
+      const raw = readBrandStorage(globalThis.localStorage, legacyKey);
+      if (!raw) return;
+      const session = JSON.parse(raw) as StoredUploadSession;
+      if (session.uploadId !== authenticatedUploadId) return;
+      delete session.completion;
+      // Only called after getUpload authenticated ownership. Consume the old key
+      // so it cannot resurrect a completed/deleted job after scoped cleanup.
+      writeBrandStorage(globalThis.localStorage, `${this.prefix}${key}`, JSON.stringify(session));
+      removeBrandStorage(globalThis.localStorage, legacyKey);
+    } catch {
+      // Keep legacy metadata if migration cannot be persisted.
+    }
+  }
+
   write(key: string, session: StoredUploadSession): void {
     try {
-      writeBrandStorage(globalThis.localStorage, `${UPLOAD_SESSION_PREFIX}${key}`, JSON.stringify(session));
+      writeBrandStorage(globalThis.localStorage, `${this.prefix}${key}`, JSON.stringify(session));
     } catch {
       // Import can still proceed without persistent resume metadata.
     }
@@ -215,7 +253,7 @@ class BrowserRemoteUploadSessionStore implements RemoteUploadSessionStore {
 
   remove(key: string): void {
     try {
-      removeBrandStorage(globalThis.localStorage, `${UPLOAD_SESSION_PREFIX}${key}`);
+      removeBrandStorage(globalThis.localStorage, `${this.prefix}${key}`);
     } catch {
       // Ignore storage cleanup failures.
     }
@@ -228,14 +266,14 @@ class BrowserRemoteUploadSessionStore implements RemoteUploadSessionStore {
       const sessions: StoredUploadSessionEntry[] = [];
       for (let index = 0; index < storage.length; index += 1) {
         const storageKey = storage.key(index);
-        if (!storageKey?.startsWith(UPLOAD_SESSION_PREFIX)) continue;
+        if (!storageKey?.startsWith(this.prefix)) continue;
         const raw = readBrandStorage(storage, storageKey);
         if (!raw) continue;
         try {
           const session = JSON.parse(raw) as StoredUploadSession;
           sessions.push({
             ...session,
-            key: storageKey.slice(UPLOAD_SESSION_PREFIX.length),
+            key: storageKey.slice(this.prefix.length),
             expiresAt: uploadSessionExpiresAt(session),
           });
         } catch {
@@ -255,15 +293,22 @@ export class ServerUploadImportService implements ImportService {
   readonly supportsExpectedSourceContentHash = true;
   readonly supportsIncrementalImageSeriesAppend = true;
   readonly supportsLocalArchiveAppend = true;
+  private readonly completedSessions = new Map<string, StoredUploadSession>();
+  private readonly ownerScope: string;
+
   constructor(
     private readonly client: RemoteApiClient,
     private readonly chunkBytes = DEFAULT_SERVER_UPLOAD_CHUNK_BYTES,
     private readonly chunkRetries = DEFAULT_CHUNK_RETRIES,
-    private readonly uploadSessionStore: RemoteUploadSessionStore = new BrowserRemoteUploadSessionStore(),
+    private readonly uploadSessionStore: RemoteUploadSessionStore = new BrowserRemoteUploadSessionStore(
+      client.coverCacheScope,
+    ),
     private readonly importActivityTimeoutMs = DEFAULT_SERVER_IMPORT_ACTIVITY_TIMEOUT_MS,
     private readonly importResponseTimeoutMs = DEFAULT_SERVER_IMPORT_RESPONSE_TIMEOUT_MS,
     private readonly uploadConcurrency = DEFAULT_SERVER_UPLOAD_CONCURRENCY,
-  ) {}
+  ) {
+    this.ownerScope = client.coverCacheScope;
+  }
 
   importFile(input: ImportFileInput, onProgress: (progress: ImportProgress) => void): ImportController {
     const jobId = stableId('remote_import', `${input.file.name}:${input.file.size}:${Date.now()}`, 12);
@@ -278,10 +323,16 @@ export class ServerUploadImportService implements ImportService {
   }
 
   listStoredUploadSessions(): StoredUploadSessionEntry[] {
-    const sessions = this.uploadSessionStore.list?.() ?? [];
-    return sessions
+    if (this.client.coverCacheScope !== this.ownerScope) return [];
+    const sessions = new Map((this.uploadSessionStore.list?.() ?? []).map((session) => [session.key, session]));
+    for (const key of this.completedSessions.keys()) {
+      const session = this.readUploadSession(key);
+      if (session) sessions.set(key, { ...session, key, expiresAt: uploadSessionExpiresAt(session) });
+    }
+    return [...sessions.values()]
       .filter((session) => {
-        const fresh = this.isStoredSessionFresh(session);
+        // Completion receipts prevent duplicate writes even after upload/job cleanup.
+        const fresh = Boolean(session.completion) || this.isStoredSessionFresh(session);
         if (!fresh) this.uploadSessionStore.remove(session.key);
         return fresh;
       })
@@ -289,11 +340,114 @@ export class ServerUploadImportService implements ImportService {
   }
 
   async forgetStoredUploadSession(key: string): Promise<void> {
-    const session = this.uploadSessionStore.read(key);
-    if (session) {
+    this.assertOwnerScope();
+    const session = this.readUploadSession(key);
+    if (session && !session.completion) {
       await this.client.cancelUpload(session.uploadId).catch(() => undefined);
     }
+    this.assertOwnerScope();
+    this.completedSessions.delete(key);
     this.uploadSessionStore.remove(key);
+  }
+
+  async retryStoredUploadSession(key: string): Promise<ImportResult> {
+    this.assertOwnerScope();
+    const session = this.readUploadSession(key);
+    if (!session?.completion) throw new Error('저장 완료 기록을 찾을 수 없습니다.');
+    return this.refreshCompletedImport(key, session, new AbortController().signal);
+  }
+
+  private assertOwnerScope(): void {
+    if (this.client.coverCacheScope !== this.ownerScope) {
+      throw new Error('계정이 변경되었습니다. 원래 계정에서 가져오기 완료 정보를 새로고쳐 주세요.');
+    }
+  }
+
+  private readUploadSession(key: string): StoredUploadSession | undefined {
+    const persisted = this.uploadSessionStore.read(key);
+    const memory = this.completedSessions.get(key);
+    if (
+      persisted &&
+      memory &&
+      (persisted.uploadId !== memory.uploadId ||
+        (persisted.completion && persisted.completion.jobId !== memory.completion?.jobId))
+    ) {
+      this.completedSessions.delete(key);
+      return persisted;
+    }
+    return memory ?? persisted;
+  }
+
+  private rememberCompletion(key: string, session: StoredUploadSession): void {
+    // Retain the receipt in memory even when persistent browser storage is unavailable.
+    this.completedSessions.set(key, session);
+    try {
+      this.uploadSessionStore.write(key, session);
+    } catch {
+      // A storage failure must never turn a confirmed import into an upload failure.
+    }
+  }
+
+  private acknowledgeCompletion(key: string, session: StoredUploadSession): void {
+    if (this.client.coverCacheScope !== this.ownerScope) return;
+    const persisted = this.uploadSessionStore.read(key);
+    const memory = this.completedSessions.get(key);
+    if (persisted) {
+      const sameReceipt =
+        persisted.uploadId === session.uploadId && persisted.completion?.jobId === session.completion?.jobId;
+      const memoryOnlyReceipt = memory === session && !persisted.completion && persisted.uploadId === session.uploadId;
+      if (!sameReceipt && !memoryOnlyReceipt) return;
+    } else if (memory !== session) {
+      return;
+    }
+    this.uploadSessionStore.remove(key);
+    if (memory === session) this.completedSessions.delete(key);
+  }
+
+  private async refreshCompletedImport(
+    key: string,
+    session: StoredUploadSession,
+    signal: AbortSignal,
+    onReady: () => void = () => undefined,
+  ): Promise<ImportResult> {
+    const bookId = session.completion!.bookId;
+    try {
+      this.assertOwnerScope();
+      const manifest = await this.withResponseTimeout(
+        (requestSignal) => this.client.getBookManifest(bookId, undefined, requestSignal),
+        signal,
+      );
+      this.assertOwnerScope();
+      const importedNovel = mapServerBook(manifest.book);
+      const position = mapServerReadingPosition(manifest.readingPosition);
+      const result = {
+        novel: {
+          ...importedNovel,
+          ...(position
+            ? {
+                lastReadChapterId: position.chapterId,
+                lastReadParagraphId: position.paragraphId,
+                lastReadOffset: position.scrollTop,
+                lastReadProgress:
+                  importedNovel.lastReadChapterIndex === undefined
+                    ? position.chapterProgress
+                    : importedNovel.lastReadProgress,
+                lastReadAt: position.updatedAt,
+              }
+            : {}),
+        },
+      };
+      onReady();
+      this.acknowledgeCompletion(key, session);
+      return result;
+    } catch (error) {
+      throw new ImportCommittedRefreshError(
+        bookId,
+        () => this.refreshCompletedImport(key, session, new AbortController().signal),
+        () => this.acknowledgeCompletion(key, session),
+        error,
+      );
+    }
   }
 
   private async runImport(
@@ -306,6 +460,7 @@ export class ServerUploadImportService implements ImportService {
       { uploadId: string; sessionKey: string; status?: RemoteUploadStatus; importJobId?: string } | undefined;
     const totalChunks = Math.max(1, Math.ceil(input.file.size / this.chunkBytes));
     try {
+      this.assertOwnerScope();
       onProgress({
         jobId: localJobId,
         status: 'queued',
@@ -352,6 +507,9 @@ export class ServerUploadImportService implements ImportService {
               message: '재개 가능한 업로드를 위해 파일 무결성을 확인하고 있습니다.',
             }),
         }));
+      const sessionKey = uploadSessionKey(input, this.chunkBytes, totalChunks, sourceContentHash);
+      const completed = this.readUploadSession(sessionKey);
+      if (completed?.completion) return await this.refreshCompletedImport(sessionKey, completed, signal);
       uploadSession = await this.prepareUploadSession(
         localJobId,
         input,
@@ -383,11 +541,10 @@ export class ServerUploadImportService implements ImportService {
         message: '서버에서 책을 분석하고 있습니다.',
       });
 
-      const result = await this.awaitImport(localJobId, input.file.size, job.jobId, signal, onProgress, () =>
-        this.uploadSessionStore.remove(uploadSession!.sessionKey),
-      );
-      this.uploadSessionStore.remove(uploadSession.sessionKey);
-      return result;
+      return await this.awaitImport(localJobId, input.file.size, job.jobId, signal, onProgress, {
+        key: uploadSession.sessionKey,
+        session: this.makeUploadSession(input, uploadSession.uploadId, totalChunks, sourceContentHash),
+      });
     } catch (error) {
       if (isAbortError(error) && uploadSession) {
         await this.client.cancelUpload(uploadSession.uploadId).catch(() => undefined);
@@ -416,54 +573,42 @@ export class ServerUploadImportService implements ImportService {
     jobId: string,
     signal: AbortSignal,
     onProgress: (progress: ImportProgress) => void,
-    onTerminal: () => void = () => undefined,
+    receipt: { key: string; session: StoredUploadSession },
   ): Promise<ImportResult> {
     let lastActivityFingerprint: string | undefined;
     let lastActivityAt = Date.now();
     const startedAt = lastActivityAt;
     while (true) {
+      this.assertOwnerScope();
       if (signal.aborted) throw new DOMException('Import cancelled', 'AbortError');
       const requestStartedAt = Date.now();
       const remoteJob = await this.getImportJobWithResponseTimeout(jobId, signal);
       const serverProgress = importProgressFromJob(localJobId, fileSize, remoteJob);
+      if (remoteJob.status === 'done' && remoteJob.book_id) {
+        const completedAt = new Date().toISOString();
+        const session: StoredUploadSession = {
+          ...receipt.session,
+          updatedAt: completedAt,
+          completion: { bookId: remoteJob.book_id, jobId, completedAt },
+        };
+        // Record the commit before callbacks or cancellable metadata requests.
+        this.rememberCompletion(receipt.key, session);
+        return this.refreshCompletedImport(receipt.key, session, signal, () =>
+          onProgress({
+            ...serverProgress,
+            status: 'ready',
+            message: serverProgress.message || '서버 가져오기가 완료되었습니다.',
+          }),
+        );
+      }
       onProgress(serverProgress);
       if (remoteJob.status === 'cancelled' || remoteJob.stage === 'cancelled') {
-        onTerminal();
+        this.uploadSessionStore.remove(receipt.key);
         throw new ServerImportCancelledError();
       }
       if (remoteJob.status === 'failed') {
-        onTerminal();
+        this.uploadSessionStore.remove(receipt.key);
         throw new Error(remoteJob.error_message ?? '서버 가져오기에 실패했습니다.');
-      }
-      if (remoteJob.status === 'done' && remoteJob.book_id) {
-        const manifest = await this.client.getBookManifest(remoteJob.book_id);
-        const importedNovel = mapServerBook(manifest.book);
-        onProgress({
-          ...serverProgress,
-          status: 'ready',
-          message: serverProgress.message || '서버 가져오기가 완료되었습니다.',
-        });
-
-        return {
-          novel: {
-            ...importedNovel,
-            ...(() => {
-              const position = mapServerReadingPosition(manifest.readingPosition);
-              return position
-                ? {
-                    lastReadChapterId: position.chapterId,
-                    lastReadParagraphId: position.paragraphId,
-                    lastReadOffset: position.scrollTop,
-                    lastReadProgress:
-                      importedNovel.lastReadChapterIndex === undefined
-                        ? position.chapterProgress
-                        : importedNovel.lastReadProgress,
-                    lastReadAt: position.updatedAt,
-                  }
-                : {};
-            })(),
-          },
-        };
       }
       const activityFingerprint = importJobActivityFingerprint(remoteJob);
       const now = Date.now();
@@ -491,9 +636,28 @@ export class ServerUploadImportService implements ImportService {
     const controller = new AbortController();
     const promise = (async () => {
       try {
+        this.assertOwnerScope();
         controller.signal.throwIfAborted();
+        const key = `prepared|${source.uploadId}`;
+        const completed = this.readUploadSession(key);
+        if (completed?.completion) return await this.refreshCompletedImport(key, completed, controller.signal);
         const job = await this.client.completeUpload(source.uploadId, controller.signal);
-        return await this.awaitImport(jobId, source.byteLength, job.jobId, controller.signal, onProgress);
+        const now = new Date().toISOString();
+        return await this.awaitImport(jobId, source.byteLength, job.jobId, controller.signal, onProgress, {
+          key,
+          session: {
+            uploadId: source.uploadId,
+            fileName: '서버에서 가져온 파일',
+            sizeBytes: source.byteLength,
+            lastModified: 0,
+            encoding: 'auto',
+            chunkBytes: 0,
+            totalChunks: 0,
+            sourceContentHash: source.sourceContentHash,
+            createdAt: now,
+            updatedAt: now,
+          },
+        });
       } catch (error) {
         if (isAbortError(error)) await this.client.cancelUpload(source.uploadId).catch(() => undefined);
         throw error;
@@ -552,6 +716,9 @@ export class ServerUploadImportService implements ImportService {
       } else {
         try {
           const status = await this.client.getUpload(stored.uploadId, signal);
+          if (this.uploadSessionStore instanceof BrowserRemoteUploadSessionStore) {
+            this.uploadSessionStore.adoptLegacy(sessionKey, stored.uploadId);
+          }
           if (this.canResumeStoredUpload(input, totalChunks, sourceContentHash, stored, status)) {
             this.uploadSessionStore.write(sessionKey, { ...stored, updatedAt: new Date().toISOString() });
             onProgress({
@@ -621,9 +788,22 @@ export class ServerUploadImportService implements ImportService {
         throw new Error('연결된 서버가 이 회차 추가 방식을 지원하지 않습니다. 서버를 먼저 업데이트해 주세요.');
       }
     }
+    this.uploadSessionStore.write(
+      sessionKey,
+      this.makeUploadSession(input, upload.uploadId, totalChunks, sourceContentHash),
+    );
+    return { uploadId: upload.uploadId, sessionKey, status: verifiedStatus };
+  }
+
+  private makeUploadSession(
+    input: ImportFileInput,
+    uploadId: string,
+    totalChunks: number,
+    sourceContentHash: string,
+  ): StoredUploadSession {
     const now = new Date().toISOString();
-    this.uploadSessionStore.write(sessionKey, {
-      uploadId: upload.uploadId,
+    return {
+      uploadId,
       fileName: input.file.name,
       sizeBytes: input.file.size,
       lastModified: fileLastModified(input.file),
@@ -638,8 +818,7 @@ export class ServerUploadImportService implements ImportService {
       sourceContentHash,
       createdAt: now,
       updatedAt: now,
-    });
-    return { uploadId: upload.uploadId, sessionKey, status: verifiedStatus };
+    };
   }
 
   private canResumeStoredUpload(
@@ -698,11 +877,15 @@ export class ServerUploadImportService implements ImportService {
   }
 
   private getImportJobWithResponseTimeout(jobId: string, signal: AbortSignal): Promise<RemoteImportJob> {
+    return this.withResponseTimeout((requestSignal) => this.client.getImportJob(jobId, requestSignal), signal);
+  }
+
+  private withResponseTimeout<T>(request: (signal: AbortSignal) => Promise<T>, signal: AbortSignal): Promise<T> {
     if (signal.aborted) return Promise.reject(new DOMException('Import cancelled', 'AbortError'));
     const controller = new AbortController();
     const timeoutMs = Math.max(1, this.importResponseTimeoutMs);
 
-    return new Promise<RemoteImportJob>((resolve, reject) => {
+    return new Promise<T>((resolve, reject) => {
       let settled = false;
       const abortFromCaller = () => {
         controller.abort(signal.reason);
@@ -724,10 +907,12 @@ export class ServerUploadImportService implements ImportService {
         abortFromCaller();
         return;
       }
-      void this.client.getImportJob(jobId, controller.signal).then(
-        (job) => finish(() => resolve(job)),
-        (error) => finish(() => reject(signal.aborted ? new DOMException('Import cancelled', 'AbortError') : error)),
-      );
+      void Promise.resolve()
+        .then(() => request(controller.signal))
+        .then(
+          (job) => finish(() => resolve(job)),
+          (error) => finish(() => reject(signal.aborted ? new DOMException('Import cancelled', 'AbortError') : error)),
+        );
     });
   }
 
