@@ -1,6 +1,7 @@
 import { BlobWriter, Uint8ArrayReader, ZipWriter } from '@zip.js/zip.js';
 import { act, create, type ReactTestRenderer } from 'react-test-renderer';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { integrityHash } from '@boaa/text-core/hash';
 import type { Chapter, Novel } from '../../domain/types';
 import type { ImportService } from '../../services/import/import-service';
 import { testChapter, testNovel } from '../book-workspace/book-workspace-test-fixtures';
@@ -51,6 +52,8 @@ async function harness(
     novels?: Novel[];
     listNovels?: () => Promise<Novel[]>;
     listChapters?: (id: string) => Promise<Chapter[]>;
+    getNovel?: (id: string) => Promise<Novel | undefined>;
+    onImportCommitted?: (novel: Novel) => Promise<void>;
   } = {},
 ) {
   vi.stubGlobal('window', globalThis);
@@ -63,10 +66,10 @@ async function harness(
   function Harness() {
     controller = useImportController({
       importService: { importFile, supportsIncrementalImageSeriesAppend: true },
-      getNovel: async () => undefined,
+      getNovel: input.getNovel ?? (async () => undefined),
       listNovels: input.listNovels ?? (async () => input.novels ?? []),
       listChapters: input.listChapters ?? (async () => []),
-      onImportCommitted: async () => undefined,
+      onImportCommitted: input.onImportCommitted ?? (async () => undefined),
       notify: vi.fn(),
     });
     return null;
@@ -94,6 +97,120 @@ async function waitForState(check: () => boolean) {
 afterEach(() => vi.unstubAllGlobals());
 
 describe('import preparation generations', () => {
+  it('passes only the latest selected File digest and keeps replacement encoding/split choices', async () => {
+    const oldFile = new File(['old'], 'book.txt', { lastModified: 1 });
+    const newFile = new File(['new'], 'book.txt', { lastModified: 1 });
+    const existing = testNovel({ sourceFileName: 'book.txt', rawTextHash: integrityHash('new') });
+    const view = await harness({ novels: [existing], getNovel: async () => existing });
+    await act(async () => view.controller.selectFiles([oldFile]));
+    await waitForState(() => !view.controller.duplicateBusy);
+    await act(async () => view.controller.selectFiles([newFile]));
+    await waitForState(() => !view.controller.duplicateBusy);
+    expect(view.controller.duplicateConflicts[0]?.kind).toBe('same_source');
+    await act(async () => view.controller.setDuplicatePolicy(view.controller.duplicateConflicts[0].fileKey, 'replace'));
+    await act(async () => {
+      view.controller.setEncoding('utf-8');
+      view.controller.setChapterSplitMode('single');
+    });
+    await waitForState(() => !view.controller.duplicateBusy);
+    expect(view.controller.duplicateConflicts[0].policy).toBe('replace');
+    await act(async () => view.controller.startPendingImport());
+    expect(view.importFile).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        file: newFile,
+        expectedSourceContentHash: integrityHash('new'),
+        clientBookId: existing.id,
+        encoding: 'utf-8',
+        chapterSplitMode: 'single',
+      }),
+      expect.any(Function),
+    );
+    await act(async () => view.renderer.unmount());
+  });
+
+  it.each(['copy', 'skip', 'open_existing'] as const)('preserves the same-source %s choice', async (policy) => {
+    const file = new File(['body'], 'book.txt');
+    const existing = testNovel({ rawTextHash: integrityHash('body') });
+    const view = await harness({ novels: [existing], getNovel: async () => existing });
+    await act(async () => view.controller.selectFiles([file]));
+    await waitForState(() => !view.controller.duplicateBusy);
+    await act(async () => view.controller.setDuplicatePolicy(view.controller.duplicateConflicts[0].fileKey, policy));
+    await act(async () => view.controller.startPendingImport());
+    if (policy === 'copy') {
+      expect(view.importFile).toHaveBeenCalledOnce();
+      expect(view.importFile.mock.calls[0][0]).toMatchObject({
+        file,
+        expectedSourceContentHash: integrityHash('body'),
+        clientBookId: expect.stringMatching(/^book_copy_/),
+      });
+    } else expect(view.importFile).not.toHaveBeenCalled();
+    await act(async () => view.renderer.unmount());
+  });
+
+  it.each(['lookup', 'callback'] as const)(
+    'retries a saved book after %s failure without uploading again',
+    async (failure) => {
+      const stored = testNovel({
+        title: 'Canonical title',
+        activeContentRevisionId: 'stored-revision',
+        favorite: true,
+      });
+      const getNovel = vi.fn(async () => stored);
+      const onImportCommitted = vi.fn(async () => undefined);
+      if (failure === 'lookup') getNovel.mockRejectedValueOnce(new Error('temporary read failure'));
+      else onImportCommitted.mockRejectedValueOnce(new Error('temporary callback failure'));
+      const view = await harness({ getNovel, onImportCommitted });
+      await act(async () => view.controller.selectFiles([new File(['text'], 'book.txt')]));
+      await waitForState(() => !view.controller.duplicateBusy);
+      await act(async () => view.controller.startPendingImport());
+      expect(view.controller.batch).toMatchObject({ completed: 1, failed: 0 });
+      expect(view.controller.refreshPendingBooks).toHaveLength(1);
+      expect(view.controller.isOpen).toBe(true);
+      await act(async () => view.controller.retryPendingRefresh?.());
+      expect(view.importFile).toHaveBeenCalledOnce();
+      expect(onImportCommitted).toHaveBeenLastCalledWith(stored);
+      expect(view.controller.refreshPendingBooks).toEqual([]);
+      await act(async () => view.renderer.unmount());
+    },
+  );
+
+  it.each(['unmount', 'cancel', 'new_import'] as const)(
+    'serializes refresh retries and ignores a stale read after %s',
+    async (action) => {
+      const stored = testNovel({ title: 'Canonical title' });
+      const pending = deferred<Novel>();
+      const getNovel = vi
+        .fn(async () => stored)
+        .mockRejectedValueOnce(new Error('temporary failure'))
+        .mockImplementationOnce(() => pending.promise);
+      const onImportCommitted = vi.fn(async () => undefined);
+      const view = await harness({ getNovel, onImportCommitted });
+      await act(async () => view.controller.selectFiles([new File(['body'], 'book.txt')]));
+      await waitForState(() => !view.controller.duplicateBusy);
+      await act(async () => view.controller.startPendingImport());
+      let retry!: Promise<void>;
+      await act(async () => {
+        retry = view.controller.retryPendingRefresh!();
+        await view.controller.retryPendingRefresh!();
+      });
+      expect(getNovel).toHaveBeenCalledTimes(2);
+      if (action === 'unmount') await act(async () => view.renderer.unmount());
+      else if (action === 'cancel') await act(async () => view.controller.cancelImport());
+      else {
+        await act(async () => view.controller.selectFiles([new File(['body'], 'book.txt')]));
+        await waitForState(() => !view.controller.duplicateBusy);
+        await act(async () => view.controller.startPendingImport());
+        expect(view.controller.refreshPendingBooks).toEqual([]);
+      }
+      await act(async () => {
+        pending.resolve(stored);
+        await retry;
+      });
+      expect(onImportCommitted).toHaveBeenCalledTimes(action === 'new_import' ? 1 : 0);
+      if (action !== 'unmount') await act(async () => view.renderer.unmount());
+    },
+  );
+
   it.each(['image_archive', 'txt'] as const)(
     'ignores obsolete %s planning and a start awaiting the replaced selection',
     async (format) => {
@@ -124,6 +241,7 @@ describe('import preparation generations', () => {
       expect(view.importFile).toHaveBeenCalledOnce();
       expect(view.importFile.mock.calls[0]![0]).toMatchObject({
         clientBookId: undefined,
+        expectedSourceContentHash: undefined,
         file: expect.objectContaining({ name: format === 'txt' ? 'New Title.boaa.zip' : 'New Title.cbz' }),
       });
       await act(async () => view.renderer.unmount());

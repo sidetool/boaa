@@ -161,7 +161,7 @@ describe('useImportController local series analysis', () => {
     function Harness() {
       controller = useImportController({
         importService: { importFile, supportsIncrementalImageSeriesAppend: true },
-        getNovel: vi.fn(async () => undefined),
+        getNovel: vi.fn(async () => ({ ...importedNovel })),
         listNovels: vi.fn(async () => []),
         listChapters: vi.fn(async () => sectionChapters),
         onImportCommitted,
@@ -456,7 +456,7 @@ describe('useImportController background progress', () => {
     function Harness() {
       controller = useImportController({
         importService: { importFile },
-        getNovel: vi.fn(async () => undefined),
+        getNovel: vi.fn(async () => importedNovel),
         listNovels: vi.fn(async () => []),
         listChapters: vi.fn(async () => []),
         onImportCommitted,

@@ -26,6 +26,8 @@ export async function runLocalSeriesImport(
   const outcome: ImportBatchOutcome = { completed: 0, failed: 0, skipped: input.skipped, aborted: false };
   for (const [index, release] of additions.entries()) {
     let controller: ImportController | undefined;
+    let committedBookId: string | undefined;
+    let canonicalRefreshed = false;
     const report = () =>
       callbacks.onBatchChange({
         total: additions.length,
@@ -40,7 +42,9 @@ export async function runLocalSeriesImport(
       input.signal.throwIfAborted();
       if (cancellation.isRequested) throw new DOMException('Cancelled', 'AbortError');
       const target = outcome.lastImportedNovel ?? input.plan.targetNovel;
-      const plan = target ? await input.replan((await input.getNovel(target.id)) ?? target) : input.plan;
+      const currentTarget = target ? await input.getNovel(target.id) : undefined;
+      if (target && !currentTarget) throw new Error('기존 작품을 조회하지 못해 다음 회차를 추가하지 않았습니다.');
+      const plan = currentTarget ? await input.replan(currentTarget) : input.plan;
       // Another completed attempt/device may already have supplied this release.
       if (plan.releases.find((entry) => entry.id === release.id)?.disposition !== 'add') {
         outcome.skipped += 1;
@@ -80,18 +84,42 @@ export async function runLocalSeriesImport(
       );
       cancellation.bind(controller);
       const result = await controller.promise;
-      outcome.lastImportedNovel = (await input.getNovel(result.novel.id).catch(() => undefined)) ?? result.novel;
+      committedBookId = result.novel.id;
       outcome.completed += 1;
-      input.onCommitted(outcome.lastImportedNovel, release.id);
-      await callbacks.onFileCommitted?.(release.file, outcome.lastImportedNovel);
+      let storedNovel: Novel | undefined;
+      let refreshError: unknown;
+      try {
+        storedNovel = await input.getNovel(committedBookId);
+      } catch (error) {
+        refreshError = error;
+      }
+      // Retain identity/release bookkeeping even when refresh or cancellation
+      // races storage. This fallback is internal only; the next replan requires
+      // a fresh canonical read, and UI callbacks never receive parser metadata.
+      const retryTarget = storedNovel ?? (plan.targetNovel?.id === committedBookId ? plan.targetNovel : result.novel);
+      input.onCommitted(retryTarget, release.id);
+      if (storedNovel) {
+        outcome.lastImportedNovel = storedNovel;
+        canonicalRefreshed = true;
+      }
+      if (cancellation.isRequested) throw new DOMException('Cancelled', 'AbortError');
+      input.signal.throwIfAborted();
+      if (!storedNovel) throw refreshError ?? new Error('저장한 작품을 아직 조회할 수 없습니다.');
+      await callbacks.onFileCommitted?.(release.file, storedNovel);
     } catch (error) {
       if (
         input.signal.aborted ||
         cancellation.isRequested ||
-        (error instanceof DOMException && error.name === 'AbortError')
+        (!committedBookId && error instanceof DOMException && error.name === 'AbortError')
       ) {
         outcome.aborted = true;
         callbacks.onCancelled(release.file);
+      } else if (committedBookId) {
+        outcome.refreshFailed = (outcome.refreshFailed ?? 0) + 1;
+        callbacks.onFileRefreshFailed?.(release.file, committedBookId, error);
+        // The target/release has already been recorded; a UI callback failure must
+        // not discard the remaining selection or re-upload this committed release.
+        if (canonicalRefreshed) continue;
       } else {
         outcome.failed += 1;
         callbacks.onFileFailed(release.file, error);

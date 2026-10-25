@@ -762,7 +762,7 @@ function applyDuplicateImageRecovery(
 }
 
 export async function parseEpub(blob: Blob): Promise<EpubDocument> {
-  return parseEpubDocument(blob);
+  return (await parseEpubDocument(blob)).document;
 }
 
 async function parseEpubDocument(
@@ -776,7 +776,7 @@ async function parseEpubDocument(
       context: { normalizedTextHash: string; coverHref?: string; totalAssets: number },
     ) => Promise<void>;
   } = {},
-): Promise<EpubDocument> {
+): Promise<{ document: EpubDocument; normalizedTextHash: string }> {
   let reader: ZipReader<Blob> | undefined;
   try {
     reader = new ZipReader(new BlobReader(blob), { signal: options.signal });
@@ -837,7 +837,7 @@ async function parseEpubDocument(
         ...(options.deferResources ? { archiveIndex: entries.ordered.indexOf(record) } : {}),
       });
     }
-    return { ...metadata, coverHref, sections, resources };
+    return { document: { ...metadata, coverHref, sections, resources }, normalizedTextHash };
   } catch (error) {
     if (options.signal?.aborted) throw options.signal.reason;
     if (error instanceof EpubImportError) throw error;
@@ -876,7 +876,15 @@ export function materializeEpubImport(
   document: EpubDocument,
   options: MaterializeEpubImportOptions,
 ): ParsedNovelImport {
-  const normalizedTextHash = epubNormalizedTextHash(document.sections);
+  return materializeEpubDocument(document, options, epubNormalizedTextHash(document.sections));
+}
+
+// Only the uninterrupted internal parse/materialize path can reuse this hash.
+function materializeEpubDocument(
+  document: EpubDocument,
+  options: MaterializeEpubImportOptions,
+  normalizedTextHash: string,
+): ParsedNovelImport {
   const sourceHash =
     options.sourceContentHash ?? (options.sourceBytes ? integrityHash(options.sourceBytes) : undefined);
   if (!sourceHash) throw new Error('EPUB source hash is required');
@@ -1023,7 +1031,7 @@ export async function materializeStreamingEpubImport(
     onAsset?: (asset: ParsedNovelImportAsset, progress: { totalAssets: number }) => Promise<void>;
   },
 ): Promise<ParsedNovelImport> {
-  const document = await parseEpubDocument(blob, {
+  const { document, normalizedTextHash } = await parseEpubDocument(blob, {
     ...options,
     deferResources: true,
     onResource: options.onAsset
@@ -1053,7 +1061,7 @@ export async function materializeStreamingEpubImport(
         }
       : undefined,
   });
-  const parsed = materializeEpubImport(document, options);
+  const parsed = materializeEpubDocument(document, options, normalizedTextHash);
   const descriptors = parsed.embeddedAssets ?? [];
   if (options.onAsset) return { ...parsed, embeddedAssets: undefined };
   let consumed = false;

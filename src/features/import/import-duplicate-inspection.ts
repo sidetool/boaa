@@ -1,4 +1,4 @@
-import { sha256 } from '../../domain/hash';
+import { integrityHash, tagLegacySha256Hash } from '@boaa/text-core/hash';
 import type { Novel } from '../../domain/types';
 
 export const MAX_IMPORT_DUPLICATE_HASH_BYTES = 32 * 1024 * 1024;
@@ -21,16 +21,19 @@ export function importFileKey(file: File): string {
 export async function inspectImportDuplicates(
   files: readonly File[],
   novels: readonly Novel[],
+  sourceHashes?: Map<File, string>,
 ): Promise<ImportDuplicateConflict[]> {
   const conflicts: ImportDuplicateConflict[] = [];
+  if (novels.length === 0) return conflicts;
   for (const file of files) {
     const sameName = novels.find(
       (novel) => novel.sourceFileName?.trim().toLocaleLowerCase() === file.name.trim().toLocaleLowerCase(),
     );
     const sourceHash =
-      file.size <= MAX_IMPORT_DUPLICATE_HASH_BYTES ? await sha256(await file.arrayBuffer()) : undefined;
+      file.size <= MAX_IMPORT_DUPLICATE_HASH_BYTES ? integrityHash(await file.arrayBuffer()) : undefined;
+    if (sourceHash) sourceHashes?.set(file, sourceHash);
     const sameSource = sourceHash
-      ? novels.find((novel) => novel.rawTextHash.toLowerCase() === sourceHash.toLowerCase())
+      ? novels.find((novel) => tagLegacySha256Hash(novel.rawTextHash.toLowerCase()) === sourceHash)
       : undefined;
     const existingBook = sameSource ?? sameName;
     if (!existingBook) continue;

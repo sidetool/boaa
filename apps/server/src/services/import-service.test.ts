@@ -614,7 +614,7 @@ describe('server import service', () => {
     ]);
   });
 
-  it('applies the upload session chapter split mode during server import', async () => {
+  it.each(['absent', 'verified', 'mismatch'] as const)('keeps TXT split mode with %s hash', async (hashMode) => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), 'boaa-import-'));
     const text = [
       '제 1화 시작',
@@ -681,6 +681,10 @@ describe('server import service', () => {
                 size_bytes: String(Buffer.byteLength(text)),
                 content_type: 'text/plain',
                 encoding: 'utf-8',
+                source_content_hash:
+                  hashMode === 'absent'
+                    ? undefined
+                    : integrityHash(hashMode === 'verified' ? Buffer.from(text) : 'other bytes'),
                 chapter_split_mode: 'single',
                 total_chunks: 1,
                 client_book_id: null,
@@ -706,12 +710,19 @@ describe('server import service', () => {
 
     let uploadDirectoryRemoved: boolean | undefined;
     try {
-      await processImportJob(
+      const importing = processImportJob(
         pool as unknown as Parameters<typeof processImportJob>[0],
         { ...testConfig(), dataDir: tempDir },
         'job_single',
         'upload_single',
       );
+      if (hashMode === 'mismatch') {
+        await expect(importing).rejects.toThrow('Uploaded source bytes do not match sourceContentHash');
+        expect(libraryBookParams).toBeUndefined();
+        expect(objectParams).toBeUndefined();
+        return;
+      }
+      await importing;
       uploadDirectoryRemoved = await access(uploadDir).then(
         () => false,
         () => true,

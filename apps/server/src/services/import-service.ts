@@ -34,7 +34,7 @@ import {
   inspectStoredObject,
   putRawBookObject,
 } from './object-storage.js';
-import { parseNovelFileForImport } from '@boaa/text-core/parser';
+import { decodeNovelTextWithEncoding, parseDecodedNovelTextForImport } from '@boaa/text-core/parser';
 import { materializeStreamingEpubImport } from '@boaa/epub-core';
 import { hasDocumentSeriesManifest, materializeDocumentSeriesArchive } from '@boaa/document-series-core';
 import {
@@ -580,9 +580,13 @@ export async function processImportJob(
       });
     } else {
       parsed = rekeyParsedNovelImport(
-        await parseNovelFileForImport(canonicalFileName, await sourceBlob.arrayBuffer(), session.encoding, {
-          chapterSplitMode: session.chapter_split_mode ?? 'auto',
-        }),
+        await parseDecodedNovelTextForImport(
+          canonicalFileName,
+          decodeNovelTextWithEncoding(await sourceBlob.arrayBuffer(), session.encoding),
+          // Assembly verified these exact bytes; never substitute the client-provided hash.
+          sourceContentHash,
+          { chapterSplitMode: session.chapter_split_mode ?? 'auto' },
+        ),
         session.client_book_id,
       );
     }

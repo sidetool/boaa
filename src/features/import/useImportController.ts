@@ -122,11 +122,14 @@ interface PreparedImportDraft {
   readonly generation: number;
   readonly files: readonly File[];
   readonly conflicts: readonly ImportDuplicateConflict[];
+  readonly sourceHashes?: ReadonlyMap<File, string>;
   readonly seriesPlan?: LocalSeriesImportPlan;
   readonly documentSeriesPlan?: LocalDocumentSeriesPlan;
 }
 
 export interface ImportFeatureController {
+  refreshPendingBooks?: readonly { id: string; fileName: string }[];
+  retryPendingRefresh?(): Promise<void>;
   isOpen: boolean;
   busy: boolean;
   pendingFiles: readonly File[];
@@ -173,6 +176,7 @@ export interface ImportFeatureController {
 export function useImportController(options: UseImportControllerOptions): ImportFeatureController {
   const optionsRef = useRef(options);
   optionsRef.current = options;
+  const [refreshPendingBooks, setRefreshPendingBooks] = useState<Array<{ id: string; fileName: string }>>([]);
   const [isOpen, setIsOpen] = useState(false);
   const [pendingFiles, setPendingFiles] = useState<File[]>([]);
   const [duplicateBusy, setDuplicateBusy] = useState(false);
@@ -194,6 +198,8 @@ export function useImportController(options: UseImportControllerOptions): Import
   const busyRef = useRef(false);
   const mountedRef = useRef(true);
   const runGenerationRef = useRef(0);
+  const refreshRetryBusyRef = useRef(false);
+  const refreshRetryGenerationRef = useRef(0);
   const cancellationRef = useRef(new ImportRunCancellation());
   const resetTimerRef = useRef<number>();
   const duplicateInspectionRef = useRef<Promise<void>>();
@@ -201,11 +207,13 @@ export function useImportController(options: UseImportControllerOptions): Import
   const seriesBuildAbortRef = useRef<AbortController>();
   const seriesAnalysisGenerationRef = useRef(0);
   const preparedDraftRef = useRef<PreparedImportDraft>();
+  const duplicatePolicyOverridesRef = useRef(new Map<File, ImportDuplicatePolicy>());
   const queuedSeriesPlanRef = useRef<LocalSeriesImportPlan>();
   const queuedDocumentSeriesPlanRef = useRef<LocalDocumentSeriesPlan>();
   const queuedResolutionRef = useRef<{
     readonly policies: ReadonlyMap<string, ImportDuplicateConflict>;
     readonly openExisting?: Novel;
+    readonly sourceHashes?: ReadonlyMap<File, string>;
   }>();
   const lastImportFailedRef = useRef(false);
   const backgroundedRunRef = useRef(false);
@@ -230,6 +238,7 @@ export function useImportController(options: UseImportControllerOptions): Import
 
   const clearDraft = useCallback(() => {
     invalidatePreparation();
+    duplicatePolicyOverridesRef.current.clear();
     setDuplicateBusy(false);
     setDuplicateConflicts([]);
     setSeriesBusy(false);
@@ -352,8 +361,9 @@ export function useImportController(options: UseImportControllerOptions): Import
       const novels = await optionsRef.current.listNovels();
       let localSeriesError: string | undefined;
       let localDocumentSeriesError: string | undefined;
+      const sourceHashes = new Map<File, string>();
       const [conflicts, localSeries, localDocumentSeries] = await Promise.all([
-        inspectImportDuplicates(pendingFiles, novels),
+        inspectImportDuplicates(pendingFiles, novels, sourceHashes),
         inspectLocalSeriesImport(pendingFiles, novels, {
           password: archivePassword || undefined,
           targetNovel: explicitSeriesTargetRef.current,
@@ -374,8 +384,13 @@ export function useImportController(options: UseImportControllerOptions): Import
       if (generation !== seriesAnalysisGenerationRef.current) return;
       setSeriesError(localSeries || localDocumentSeries ? undefined : (localDocumentSeriesError ?? localSeriesError));
       if (!localSeries && !localDocumentSeries) {
-        preparedDraftRef.current = { generation, files: pendingFiles, conflicts };
-        setDuplicateConflicts(conflicts);
+        const resolvedConflicts = conflicts.map((conflict) => {
+          const file = pendingFiles.find((candidate) => importFileKey(candidate) === conflict.fileKey);
+          const policy = file && duplicatePolicyOverridesRef.current.get(file);
+          return policy ? { ...conflict, policy } : conflict;
+        });
+        preparedDraftRef.current = { generation, files: pendingFiles, conflicts: resolvedConflicts, sourceHashes };
+        setDuplicateConflicts(resolvedConflicts);
         setSeriesInspection(undefined);
         setSeriesPlan(undefined);
         setDocumentSeriesInspection(undefined);
@@ -505,8 +520,9 @@ export function useImportController(options: UseImportControllerOptions): Import
           selectFiles(supportedFiles);
           return;
         }
-        const conflicts = await inspectImportDuplicates(supportedFiles, novels);
-        resolution = { policies: new Map(conflicts.map((conflict) => [conflict.fileKey, conflict])) };
+        const sourceHashes = new Map<File, string>();
+        const conflicts = await inspectImportDuplicates(supportedFiles, novels, sourceHashes);
+        resolution = { policies: new Map(conflicts.map((conflict) => [conflict.fileKey, conflict])), sourceHashes };
       }
       const preparedFiles: Array<{
         file: File;
@@ -530,14 +546,25 @@ export function useImportController(options: UseImportControllerOptions): Import
             });
             continue;
           }
+          // Digests belong only to the inspected File objects in this selection.
+          const expectedSourceContentHash = resolution?.sourceHashes?.get(file);
           const conflict = resolution?.policies.get(importFileKey(file));
           if (!conflict || conflict.policy === 'new') {
-            preparedFiles.push({ file });
+            preparedFiles.push({ file, expectedSourceContentHash });
           } else if (conflict.policy === 'replace') {
-            preparedFiles.push({ file, clientBookId: conflict.existingBook.id, targetNovel: conflict.existingBook });
+            preparedFiles.push({
+              file,
+              expectedSourceContentHash,
+              clientBookId: conflict.existingBook.id,
+              targetNovel: conflict.existingBook,
+            });
           } else if (conflict.policy === 'copy') {
             const suffix = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-            preparedFiles.push({ file, clientBookId: `book_copy_${suffix.split('-').join('')}` });
+            preparedFiles.push({
+              file,
+              expectedSourceContentHash,
+              clientBookId: `book_copy_${suffix.split('-').join('')}`,
+            });
           } else {
             duplicateSkipped += 1;
             if (conflict.policy === 'open_existing') openExisting = conflict.existingBook;
@@ -721,14 +748,10 @@ export function useImportController(options: UseImportControllerOptions): Import
                   : candidate,
               ),
             );
-            await optionsRef.current.onImportCommitted(novel).catch((error) => {
-              optionsRef.current.notify(
-                error instanceof Error
-                  ? `작품은 저장했지만 목록을 새로고치지 못했습니다. ${error.message}`
-                  : '작품은 저장했지만 목록을 새로고치지 못했습니다.',
-                'warning',
-              );
-            });
+            await optionsRef.current.onImportCommitted(novel);
+            if (!mountedRef.current || runGenerationRef.current !== generation || cancellationRef.current.isRequested)
+              return;
+            setRefreshPendingBooks((current) => current.filter((book) => book.id !== novel.id));
             if (completed >= (task?.total ?? 1)) {
               setTasks((current) => current.filter((candidate) => candidate.id !== taskId));
             } else {
@@ -738,6 +761,16 @@ export function useImportController(options: UseImportControllerOptions): Import
                 ),
               );
             }
+          },
+          onFileRefreshFailed: (file, bookId) => {
+            if (!mountedRef.current || runGenerationRef.current !== generation || cancellationRef.current.isRequested)
+              return;
+            setRefreshPendingBooks((current) => [
+              ...current.filter((book) => book.id !== bookId),
+              { id: bookId, fileName: file.name },
+            ]);
+            const taskId = taskIdByFile.get(file);
+            setTasks((current) => current.filter((task) => task.id !== taskId));
           },
           onFileFailed: (file, error) => {
             if (runGenerationRef.current !== generation) return;
@@ -861,21 +894,24 @@ export function useImportController(options: UseImportControllerOptions): Import
         if (!mountedRef.current || runGenerationRef.current !== generation) return;
         if (!outcome.aborted && outcome.failed === 0) {
           setTasks((current) => current.filter((task) => task.batchId !== batchId));
-          if (!backgroundedRunRef.current && outcome.lastImportedNovel) {
-            await optionsRef.current.onOpenRequested?.(outcome.lastImportedNovel);
+          if (!outcome.refreshFailed && !backgroundedRunRef.current && outcome.lastImportedNovel) {
+            await optionsRef.current.onOpenRequested?.(outcome.lastImportedNovel).catch(() => {
+              if (!mountedRef.current || runGenerationRef.current !== generation) return;
+              optionsRef.current.notify('작품은 저장했지만 열지 못했습니다. 책장에서 다시 열어 주세요.', 'warning');
+            });
           }
         } else if (outcome.aborted) {
           setTasks((current) => current.filter((task) => task.batchId !== batchId));
         }
 
-        if (queuedMergePlan && !outcome.aborted && outcome.failed === 0) {
+        if (queuedMergePlan && !outcome.aborted && outcome.failed === 0 && !outcome.refreshFailed) {
           optionsRef.current.notify(
             queuedMergePlan.targetNovel
               ? `“${queuedMergePlan.targetNovel.title}”에 새 회차 ${queuedMergePlan.addCount}개를 추가했습니다.`
               : `“${queuedMergePlan.inspection.workTitle}”을(를) ${queuedMergePlan.addCount}개 회차로 추가했습니다.`,
             'success',
           );
-        } else if (queuedSeriesPlan && outcome.completed > 0) {
+        } else if (queuedSeriesPlan && outcome.completed > 0 && !outcome.refreshFailed) {
           optionsRef.current.notify(
             `${outcome.completed}개 회차를 저장했습니다. ${outcome.aborted ? '취소한' : '실패한'} 회차부터 다시 추가할 수 있습니다.`,
             'warning',
@@ -884,9 +920,12 @@ export function useImportController(options: UseImportControllerOptions): Import
           const completionNotice = completedImportNotice(outcome, supportedFiles);
           optionsRef.current.notify(completionNotice.message, completionNotice.tone);
         }
-        if (!outcome.aborted && outcome.failed === 0) setIsOpen(false);
-        lastImportFailedRef.current = outcome.failed > 0 || outcome.aborted;
-        resetDelay = outcome.failed > 0 || outcome.aborted ? 12_000 : supportedFiles.length > 1 ? 1400 : 400;
+        if (!outcome.aborted && outcome.failed === 0 && !outcome.refreshFailed) setIsOpen(false);
+        const seriesIncomplete = Boolean(
+          queuedSeriesPlan && outcome.completed + outcome.skipped - skipped < queuedSeriesPlan.addCount,
+        );
+        lastImportFailedRef.current = outcome.failed > 0 || outcome.aborted || seriesIncomplete;
+        resetDelay = lastImportFailedRef.current ? 12_000 : supportedFiles.length > 1 ? 1400 : 400;
       } catch (error) {
         if (mountedRef.current && runGenerationRef.current === generation) {
           lastImportFailedRef.current = true;
@@ -950,6 +989,7 @@ export function useImportController(options: UseImportControllerOptions): Import
     const policies = new Map(draft.conflicts.map((conflict) => [conflict.fileKey, conflict]));
     queuedResolutionRef.current = {
       policies,
+      sourceHashes: draft.sourceHashes,
       openExisting: draft.conflicts.find((conflict) => conflict.policy === 'open_existing')?.existingBook,
     };
     queuedSeriesPlanRef.current = draft.seriesPlan;
@@ -979,6 +1019,7 @@ export function useImportController(options: UseImportControllerOptions): Import
   }, [chapterSplitMode, encoding, pendingFiles, startPreview]);
 
   const cancelImport = useCallback(() => {
+    refreshRetryGenerationRef.current += 1;
     seriesBuildAbortRef.current?.abort();
     cancellationRef.current.cancel();
     setTasks((current) =>
@@ -1015,6 +1056,9 @@ export function useImportController(options: UseImportControllerOptions): Import
 
   const setDuplicatePolicy = useCallback((fileKey: string, policy: ImportDuplicatePolicy) => {
     if (preparedDraftRef.current) {
+      for (const file of preparedDraftRef.current.files) {
+        if (importFileKey(file) === fileKey) duplicatePolicyOverridesRef.current.set(file, policy);
+      }
       preparedDraftRef.current = {
         ...preparedDraftRef.current,
         conflicts: preparedDraftRef.current.conflicts.map((conflict) =>
@@ -1086,6 +1130,35 @@ export function useImportController(options: UseImportControllerOptions): Import
     [archivePassword, invalidatePreparation],
   );
 
+  const retryPendingRefresh = useCallback(async () => {
+    if (busyRef.current || refreshRetryBusyRef.current) return;
+    refreshRetryBusyRef.current = true;
+    const generation = runGenerationRef.current;
+    const retryGeneration = refreshRetryGenerationRef.current;
+    const runtime = optionsRef.current;
+    const isCurrent = () =>
+      mountedRef.current &&
+      generation === runGenerationRef.current &&
+      retryGeneration === refreshRetryGenerationRef.current;
+    try {
+      for (const book of refreshPendingBooks) {
+        try {
+          const novel = await runtime.getNovel(book.id);
+          if (!isCurrent()) return;
+          if (!novel) throw new Error('저장한 작품을 아직 조회할 수 없습니다.');
+          await runtime.onImportCommitted(novel);
+          if (!isCurrent()) return;
+          setRefreshPendingBooks((current) => current.filter((candidate) => candidate !== book));
+        } catch (error) {
+          if (!isCurrent()) return;
+          runtime.notify(error instanceof Error ? error.message : '목록을 새로고치지 못했습니다.', 'warning');
+        }
+      }
+    } finally {
+      refreshRetryBusyRef.current = false;
+    }
+  }, [refreshPendingBooks]);
+
   const busy = queueBusy || (progress !== undefined && progress.status !== 'ready' && progress.status !== 'failed');
   const libraryDrop = useImportDropTarget({
     busy,
@@ -1094,6 +1167,8 @@ export function useImportController(options: UseImportControllerOptions): Import
     notify: options.notify,
   });
   return {
+    refreshPendingBooks,
+    retryPendingRefresh,
     isOpen,
     busy,
     pendingFiles,

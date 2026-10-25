@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { integrityHash } from '@boaa/text-core/hash';
 import { BlobWriter, TextReader, Uint8ArrayReader, ZipWriter } from '@zip.js/zip.js';
 import {
   EpubImportError,
@@ -161,6 +162,20 @@ async function duplicateImageRecoveryFixture(options: { secondReference?: string
   return renameFixtureArchiveEntry(await writer.close(), 'OEBPS/image_9999.png', 'OEBPS/image_0000.png');
 }
 
+it('recomputes the body hash when callers edit a public parsed EPUB document', async () => {
+  const source = await epubFixture();
+  const document = await parseEpub(source);
+  const options = { fileName: 'book.epub', sourceBytes: new Uint8Array(await source.arrayBuffer()) };
+  const initial = materializeEpubImport(document, options);
+  (document.sections as Array<(typeof document.sections)[number]>)[0] = {
+    ...document.sections[0],
+    title: 'Edited chapter title',
+  };
+  const edited = materializeEpubImport(document, options);
+  expect(edited.novel.normalizedTextHash).not.toBe(initial.novel.normalizedTextHash);
+  expect(edited.novel.rawTextHash).toBe(initial.novel.rawTextHash);
+});
+
 describe('EPUB import engine', () => {
   it('keeps deterministic cover seeds inside the PostgreSQL signed integer range', () => {
     expect(stableEpubCoverSeed('sha256:00000000ffffffff')).toBe(2_147_483_647);
@@ -255,6 +270,14 @@ describe('EPUB import engine', () => {
       sourceBytes: new Uint8Array(await source.arrayBuffer()),
       now: '2026-09-01T00:00:00.000Z',
     });
+    const streamed = await materializeStreamingEpubImport(source, {
+      fileName: 'recovered.epub',
+      sourceContentHash: integrityHash(await source.arrayBuffer()),
+      now: '2026-09-01T00:00:00.000Z',
+      onAsset: async () => undefined,
+    });
+    expect(streamed.novel).toEqual(parsed.novel);
+    expect(streamed.chapters).toEqual(parsed.chapters);
     const imageAssets = parsed.embeddedAssets?.filter((asset) => asset.kind === 'epub_resource') ?? [];
     expect(parsed.novel.totalChapters).toBe(2);
     expect(imageAssets).toHaveLength(2);

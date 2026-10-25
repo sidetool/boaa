@@ -114,6 +114,99 @@ describe('runImportBatch', () => {
     );
   });
 
+  it.each(['lookup', 'missing', 'callback', 'reporter'] as const)(
+    'keeps committed success separate from %s refresh failures',
+    async (failure) => {
+      const stored = novel('saved', '사용자 제목');
+      stored.activeContentRevisionId = 'active-revision';
+      stored.favorite = true;
+      const onFileFailed = vi.fn();
+      const onFileRefreshFailed = vi.fn(() => {
+        if (failure === 'reporter') throw new Error('reporter failed');
+      });
+      const onFileCommitted = vi.fn(async () => {
+        if (failure === 'callback') throw new Error('callback failed');
+      });
+      const getNovel = vi.fn(async () => {
+        if (failure === 'lookup' || failure === 'reporter') throw new Error('lookup failed');
+        return failure === 'missing' ? undefined : stored;
+      });
+      const outcome = await runImportBatch(
+        {
+          files: [{ file: file('saved.txt') }],
+          skipped: 0,
+          encoding: 'auto',
+          chapterSplitMode: 'auto',
+          importService: {
+            importFile: () => ({ jobId: 'job', promise: Promise.resolve({ novel: novel('saved') }), cancel: vi.fn() }),
+          },
+          getNovel,
+        },
+        new ImportRunCancellation(),
+        {
+          onBatchChange: vi.fn(),
+          onProgress: vi.fn(),
+          onFileFailed,
+          onFileCommitted,
+          onFileRefreshFailed,
+          onCancelled: vi.fn(),
+        },
+      );
+      expect(outcome).toMatchObject({ completed: 1, failed: 0, refreshFailed: 1, aborted: false });
+      expect(getNovel).toHaveBeenCalledWith('saved');
+      expect(onFileFailed).not.toHaveBeenCalled();
+      expect(onFileRefreshFailed).toHaveBeenCalledOnce();
+      if (failure === 'callback') expect(onFileCommitted).toHaveBeenCalledWith(expect.anything(), stored);
+      else {
+        expect(onFileCommitted).not.toHaveBeenCalled();
+        expect(outcome.lastImportedNovel).toBeUndefined();
+      }
+      expect(completedImportNotice(outcome, [file('saved.txt')])).toMatchObject({
+        tone: 'warning',
+        message: expect.stringContaining('다시 가져올 필요는 없습니다'),
+      });
+    },
+  );
+
+  it.each(['import', 'refresh'] as const)('does not publish late %s results after cancellation', async (stage) => {
+    let resolve!: () => void;
+    const gate = new Promise<void>((done) => {
+      resolve = done;
+    });
+    const cancellation = new ImportRunCancellation();
+    const onFileCommitted = vi.fn();
+    const getNovel = vi.fn(async () => {
+      if (stage === 'refresh') await gate;
+      return novel('saved');
+    });
+    const running = runImportBatch(
+      {
+        files: [{ file: file('saved.txt') }],
+        skipped: 0,
+        encoding: 'auto',
+        chapterSplitMode: 'auto',
+        importService: {
+          importFile: () => ({
+            jobId: 'job',
+            promise: (async () => {
+              if (stage === 'import') await gate;
+              return { novel: novel('saved') };
+            })(),
+            cancel: vi.fn(),
+          }),
+        },
+        getNovel,
+      },
+      cancellation,
+      { onBatchChange: vi.fn(), onProgress: vi.fn(), onFileFailed: vi.fn(), onFileCommitted, onCancelled: vi.fn() },
+    );
+    await Promise.resolve();
+    cancellation.cancel();
+    resolve();
+    expect(await running).toMatchObject({ completed: 1, failed: 0, aborted: true, lastImportedNovel: undefined });
+    expect(onFileCommitted).not.toHaveBeenCalled();
+  });
+
   it('cancels the active controller and stops the remaining queue', async () => {
     let rejectImport: ((error: Error) => void) | undefined;
     const cancel = vi.fn(() => rejectImport?.(new DOMException('Aborted', 'AbortError')));

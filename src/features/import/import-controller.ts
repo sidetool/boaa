@@ -26,6 +26,7 @@ export interface ImportBatchOutcome {
   skipped: number;
   aborted: boolean;
   lastImportedNovel?: Novel;
+  refreshFailed?: number;
 }
 
 export interface ImportBatchCallbacks {
@@ -34,6 +35,7 @@ export interface ImportBatchCallbacks {
   onFileStarted?(file: File): void;
   onFileProgress?(file: File, progress: ImportProgress): void;
   onFileCommitted?(file: File, novel: Novel): void | Promise<void>;
+  onFileRefreshFailed?(file: File, bookId: string, error: unknown): void;
   onFileFailed(file: File, error: unknown): void;
   onCancelled(file?: File): void;
 }
@@ -89,6 +91,7 @@ export async function runImportBatch(
   let completed = 0;
   let failed = 0;
   let aborted = false;
+  let refreshFailed = 0;
   let lastImportedNovel: Novel | undefined;
 
   callbacks.onBatchChange({
@@ -119,8 +122,14 @@ export async function runImportBatch(
 
     let controller: ImportController | undefined;
     let stopAfterFailure = false;
+    let committed = false;
     try {
       callbacks.onFileStarted?.(file);
+      const currentBaseRevision =
+        importMode === 'append_local_archive' && clientBookId
+          ? ((await input.getNovel(clientBookId))?.activeContentRevisionId ?? baseActiveContentRevisionId)
+          : baseActiveContentRevisionId;
+      if (cancellation.isRequested) throw new DOMException('Cancelled', 'AbortError');
       controller = input.importService.importFile(
         {
           file,
@@ -128,32 +137,57 @@ export async function runImportBatch(
           chapterSplitMode: input.chapterSplitMode,
           clientBookId,
           importMode,
-          baseActiveContentRevisionId:
-            importMode === 'append_local_archive' && clientBookId
-              ? ((await input.getNovel(clientBookId))?.activeContentRevisionId ?? baseActiveContentRevisionId)
-              : baseActiveContentRevisionId,
+          baseActiveContentRevisionId: currentBaseRevision,
           expectedSourceContentHash,
           archivePassword: input.importService.supportsArchivePassword ? input.archivePassword : undefined,
         },
         (progress) => {
+          if (cancellation.isRequested) return;
           callbacks.onProgress(progress);
           callbacks.onFileProgress?.(file, progress);
         },
       );
       cancellation.bind(controller);
       const result = await controller.promise;
-      lastImportedNovel = (await input.getNovel(result.novel.id)) ?? result.novel;
+      // A resolved import confirms storage, independently of the following UI refresh.
       completed += 1;
-      await callbacks.onFileCommitted?.(file, lastImportedNovel);
-    } catch (error) {
-      if (cancellation.isRequested || isAbortError(error)) {
+      committed = true;
+      if (cancellation.isRequested) {
         aborted = true;
         callbacks.onCancelled(file);
         break;
       }
-      failed += 1;
-      callbacks.onFileFailed(file, error);
-      stopAfterFailure = importMode === 'append_local_archive';
+      try {
+        const storedNovel = await input.getNovel(result.novel.id);
+        if (cancellation.isRequested) {
+          aborted = true;
+          callbacks.onCancelled(file);
+          break;
+        }
+        if (!storedNovel) throw new Error('저장한 작품을 아직 조회할 수 없습니다.');
+        lastImportedNovel = storedNovel;
+        await callbacks.onFileCommitted?.(file, storedNovel);
+      } catch (error) {
+        if (cancellation.isRequested) {
+          aborted = true;
+          callbacks.onCancelled(file);
+          break;
+        }
+        refreshFailed += 1;
+        callbacks.onFileRefreshFailed?.(file, result.novel.id, error);
+      }
+    } catch (error) {
+      if (cancellation.isRequested || (!committed && isAbortError(error))) {
+        aborted = true;
+        callbacks.onCancelled(file);
+        break;
+      }
+      // A refresh-error reporter is also a callback, never a storage failure.
+      if (!committed) {
+        failed += 1;
+        callbacks.onFileFailed(file, error);
+        stopAfterFailure = importMode === 'append_local_archive';
+      }
     } finally {
       if (controller) cancellation.release(controller);
     }
@@ -169,5 +203,5 @@ export async function runImportBatch(
     if (stopAfterFailure) break;
   }
 
-  return { completed, failed, skipped: input.skipped, aborted, lastImportedNovel };
+  return { completed, failed, skipped: input.skipped, aborted, lastImportedNovel, refreshFailed };
 }

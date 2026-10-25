@@ -27,17 +27,35 @@ async function release(number: number) {
 }
 
 describe('local chapter sequence through the real browser storage boundary', () => {
-  it.each(['success', 'failure', 'cancel'] as const)(
+  it.each([
+    'success',
+    'failure',
+    'cancel',
+    'callback',
+    'late_commit_cancel',
+    'lookup_cancel',
+    'lookup_failure',
+    'lookup_missing',
+    'replan_missing',
+  ] as const)(
     'retains the target and completed chapter after %s and retries without duplication',
     async (mode) => {
       vi.stubGlobal('window', globalThis);
       let controller!: ImportFeatureController;
       let attempts = 0;
+      let refreshAttempts = 0;
+      let cancelLookup = true;
+      let failLookup = true;
+      let lookupCalls = 0;
+      const onImportCommitted = vi.fn(async () => {
+        if (mode === 'callback' && ++refreshAttempts <= 2)
+          throw new DOMException('temporary refresh error', 'AbortError');
+      });
       const requests: Parameters<ImportService['importFile']>[0][] = [];
       const importFile: ImportService['importFile'] = (input, onProgress) => {
         requests.push(input);
         attempts++;
-        const failing = attempts === 2 && mode !== 'success';
+        const failing = attempts === 2 && (mode === 'failure' || mode === 'cancel');
         return {
           jobId: `job-${attempts}`,
           cancel: vi.fn(),
@@ -49,7 +67,7 @@ describe('local chapter sequence through the real browser storage boundary', () 
               }
               throw new Error('fixture import failed');
             }
-            return runBrowserFixedDocumentImportPipeline({
+            const result = await runBrowserFixedDocumentImportPipeline({
               ...input,
               fileName: input.file.name,
               sourceBlob: input.file,
@@ -58,6 +76,8 @@ describe('local chapter sequence through the real browser storage boundary', () 
               jobId: `job-${attempts}`,
               onProgress,
             });
+            if (mode === 'late_commit_cancel' && attempts === 1) controller.cancelImport();
+            return result;
           })(),
         };
       };
@@ -65,10 +85,24 @@ describe('local chapter sequence through the real browser storage boundary', () 
         controller = useImportController({
           importService: { importFile, supportsIncrementalImageSeriesAppend: true },
           assets,
-          getNovel: (id) => reader.getNovel(id),
+          getNovel: async (id) => {
+            lookupCalls += 1;
+            if (mode === 'replan_missing' && attempts === 1 && lookupCalls === 2) return undefined;
+            if ((mode === 'lookup_failure' || mode === 'lookup_missing') && attempts === 1 && failLookup) {
+              failLookup = false;
+              if (mode === 'lookup_failure') throw new Error('temporary canonical lookup failure');
+              return undefined;
+            }
+            const novel = await reader.getNovel(id);
+            if (mode === 'lookup_cancel' && attempts === 1 && cancelLookup) {
+              cancelLookup = false;
+              controller.cancelImport();
+            }
+            return novel;
+          },
           listNovels: () => reader.listNovels(),
           listChapters: (id) => reader.listChapters(id),
-          onImportCommitted: async () => undefined,
+          onImportCommitted,
           notify: vi.fn(),
         });
         return null;
@@ -88,7 +122,15 @@ describe('local chapter sequence through the real browser storage boundary', () 
         await act(async () => controller.startPendingImport());
         const first = (await reader.listNovels())[0]!;
         expect(await reader.listNovels()).toHaveLength(1);
-        if (mode !== 'success') {
+        if (
+          mode === 'failure' ||
+          mode === 'cancel' ||
+          mode === 'late_commit_cancel' ||
+          mode === 'lookup_cancel' ||
+          mode === 'lookup_failure' ||
+          mode === 'lookup_missing' ||
+          mode === 'replan_missing'
+        ) {
           expect(await reader.listChapters(first.id)).toHaveLength(1);
           expect(controller.seriesPlan).toMatchObject({
             targetNovel: { id: first.id },
@@ -97,14 +139,48 @@ describe('local chapter sequence through the real browser storage boundary', () 
           });
           expect(controller.seriesTargetLocked).toBe(true);
           expect(controller.isOpen).toBe(true);
+          if (mode === 'replan_missing') {
+            expect(requests).toHaveLength(1);
+            expect(controller.batch).toMatchObject({ completed: 1, failed: 1 });
+          }
+          if (mode === 'lookup_failure' || mode === 'lookup_missing') {
+            expect(controller.batch).toMatchObject({ completed: 1, failed: 0 });
+            expect(controller.refreshPendingBooks).toHaveLength(1);
+            expect(onImportCommitted).not.toHaveBeenCalled();
+            await act(async () => controller.retryPendingRefresh?.());
+            expect(onImportCommitted).toHaveBeenCalledOnce();
+            expect(onImportCommitted).toHaveBeenCalledWith(
+              expect.objectContaining({ id: first.id, activeContentRevisionId: first.activeContentRevisionId }),
+            );
+            expect(requests).toHaveLength(1);
+          }
           await act(async () => controller.startPendingImport());
         }
         expect(await reader.listNovels()).toHaveLength(1);
         expect(await reader.listChapters(first.id)).toHaveLength(count);
-        expect(requests).toHaveLength(mode === 'success' ? count : 3);
+        expect(requests).toHaveLength(
+          mode === 'success' ||
+            mode === 'callback' ||
+            mode === 'late_commit_cancel' ||
+            mode === 'lookup_cancel' ||
+            mode === 'lookup_failure' ||
+            mode === 'lookup_missing' ||
+            mode === 'replan_missing'
+            ? count
+            : 3,
+        );
         expect(requests[1]).toMatchObject({ clientBookId: first.id, importMode: 'append_image_series' });
-        expect(requests[2]).toMatchObject({ clientBookId: first.id, importMode: 'append_image_series' });
+        if (requests[2])
+          expect(requests[2]).toMatchObject({ clientBookId: first.id, importMode: 'append_image_series' });
         for (const request of requests) expect((await readLocalSeriesManifest(request.file))?.chapters).toHaveLength(1);
+        if (mode === 'callback') {
+          expect(controller.batch).toMatchObject({ completed: count, failed: 0 });
+          expect(controller.refreshPendingBooks).toHaveLength(1);
+          await act(async () => controller.retryPendingRefresh?.());
+          expect(controller.refreshPendingBooks).toEqual([]);
+          expect(requests).toHaveLength(count);
+          await act(async () => controller.close());
+        }
         expect(controller.isOpen).toBe(false);
         expect(controller.seriesTargetLocked).toBe(false);
         const unrelated = new File(['다른 소설의 본문'], '다른 작품.txt');

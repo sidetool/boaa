@@ -279,6 +279,19 @@ export function UiNextImportSheet({ controller }: { controller: ImportFeatureCon
       }
     >
       <div className="un-import">
+        {Boolean(controller.refreshPendingBooks?.length) && (
+          <Notice tone="warning">
+            작품은 저장했지만 목록을 갱신하지 못했어요. 파일을 다시 가져올 필요는 없어요.
+            <button
+              type="button"
+              className="un-btn is-ghost"
+              disabled={controller.busy}
+              onClick={() => void controller.retryPendingRefresh?.()}
+            >
+              목록 갱신 다시 시도
+            </button>
+          </Notice>
+        )}
         {controller.appendTargetTitle && <Notice>‘{controller.appendTargetTitle}’에 차례로 더해요.</Notice>}
         <input
           ref={input}
@@ -386,6 +399,7 @@ export function UiNextImportSheet({ controller }: { controller: ImportFeatureCon
                       {conflict.kind === 'same_source' ? (
                         <>
                           <option value="open_existing">있는 책 열기</option>
+                          <option value="replace">현재 설정으로 다시 가져와 바꾸기</option>
                           <option value="skip">건너뛰기</option>
                           <option value="copy">따로 하나 더</option>
                         </>

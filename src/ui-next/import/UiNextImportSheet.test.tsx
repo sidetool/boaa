@@ -1,7 +1,20 @@
+import type { ReactNode } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it, vi } from 'vitest';
-import type { ImportFeatureController } from './useImportController';
-import { ImportDialog } from './ImportDialog';
+import type { ImportFeatureController } from '../../features/import/useImportController';
+import { testNovel } from '../../features/book-workspace/book-workspace-test-fixtures';
+import { UiNextImportSheet } from './UiNextImportSheet';
+
+vi.mock('../components/primitives', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../components/primitives')>()),
+  Sheet: ({ children, footer, title }: { children: ReactNode; footer?: ReactNode; title: string }) => (
+    <section role="dialog" aria-modal="true" aria-label={title}>
+      <h2>{title}</h2>
+      {children}
+      {footer}
+    </section>
+  ),
+}));
 
 function controller(overrides: Partial<ImportFeatureController> = {}): ImportFeatureController {
   return {
@@ -49,24 +62,61 @@ function controller(overrides: Partial<ImportFeatureController> = {}): ImportFea
   };
 }
 
-describe('ImportDialog', () => {
+describe('UiNextImportSheet', () => {
+  it('offers explicit reparse/replace alongside open, skip and copy for identical source bytes', () => {
+    const file = new File(['body'], 'book.txt');
+    const markup = renderToStaticMarkup(
+      <UiNextImportSheet
+        controller={controller({
+          pendingFiles: [file],
+          duplicateConflicts: [
+            {
+              fileKey: 'file',
+              fileName: file.name,
+              kind: 'same_source',
+              policy: 'open_existing',
+              existingBook: testNovel(),
+            },
+          ],
+        })}
+      />,
+    );
+    expect(markup).toContain('value="replace"');
+    expect(markup).toContain('현재 설정으로 다시 가져와 바꾸기');
+    for (const policy of ['open_existing', 'skip', 'copy']) expect(markup).toContain(`value="${policy}"`);
+  });
+
+  it('offers a list refresh after committed import without prompting another upload', () => {
+    const markup = renderToStaticMarkup(
+      <UiNextImportSheet
+        controller={controller({
+          refreshPendingBooks: [{ id: 'book', fileName: 'book.txt' }],
+          retryPendingRefresh: vi.fn(),
+        })}
+      />,
+    );
+    expect(markup).toContain('작품은 저장했지만 목록을 갱신하지 못했어요.');
+    expect(markup).toContain('파일을 다시 가져올 필요는 없어요.');
+    expect(markup).toContain('목록 갱신 다시 시도');
+  });
+
   it('preserves the import copy and accessible dialog/file controls', () => {
-    const markup = renderToStaticMarkup(<ImportDialog controller={controller()} />);
+    const markup = renderToStaticMarkup(<UiNextImportSheet controller={controller()} />);
 
     expect(markup).toContain('role="dialog"');
     expect(markup).toContain('aria-modal="true"');
     expect(markup).toContain('책 가져오기');
-    expect(markup).toContain('파일 선택 또는 끌어다 놓기');
+    expect(markup).toContain('파일 고르기');
     expect(markup).toContain(
       'accept=".txt,.md,.markdown,.epub,.pdf,.zip,.cbz,.rar,.cbr,.7z,.cb7,text/plain,application/epub+zip,application/pdf,application/zip,application/vnd.comicbook+zip,application/vnd.comicbook-rar,application/x-7z-compressed"',
     );
-    expect(markup).toContain('회차가 잘못 나뉘면 다른 방식을 선택하세요.');
-    expect(markup).toMatch(/<label class="field-label" for="[^"]+">텍스트 인코딩<\/label><select id="[^"]+"/);
-    expect(markup).toMatch(/<label class="field-label" for="[^"]+">텍스트 화 분리 방식<\/label><select id="[^"]+"/);
+    expect(markup).toContain('회차가 잘못 나뉘면 다른 방식을 골라 보세요.');
+    expect(markup).toMatch(/<label[^>]*>[\s\S]*글자 인코딩[\s\S]*<select/);
+    expect(markup).toMatch(/<label[^>]*>[\s\S]*화 나누기[\s\S]*<select/);
   });
 
   it('offers the extended encodings for text imports and keeps the selection', () => {
-    const markup = renderToStaticMarkup(<ImportDialog controller={controller({ encoding: 'shift_jis' })} />);
+    const markup = renderToStaticMarkup(<UiNextImportSheet controller={controller({ encoding: 'shift_jis' })} />);
     expect(markup).toContain('value="shift_jis" selected=""');
     expect(markup).toContain('UTF-16 BE');
     expect(markup).toContain('GB18030 / GBK');
@@ -77,7 +127,7 @@ describe('ImportDialog', () => {
   it('renders selected files, import progress, and resumable upload sessions', () => {
     const selectedFile = { name: '연재본.txt', size: 2048, lastModified: 1 } as File;
     const markup = renderToStaticMarkup(
-      <ImportDialog
+      <UiNextImportSheet
         controller={controller({
           busy: true,
           pendingFiles: [selectedFile],
@@ -116,13 +166,13 @@ describe('ImportDialog', () => {
     expect(markup).toContain('파일을 읽는 중입니다.');
     expect(markup).toContain('role="progressbar"');
     expect(markup).toContain('aria-valuenow="50"');
-    expect(markup).toContain('중단된 서버 업로드');
+    expect(markup).toContain('멈춘 서버 업로드');
     expect(markup).toContain('중단본.txt');
   });
 
   it('shows server activity without presenting uploaded bytes as completed import progress', () => {
     const markup = renderToStaticMarkup(
-      <ImportDialog
+      <UiNextImportSheet
         controller={controller({
           busy: true,
           progress: {
@@ -139,14 +189,13 @@ describe('ImportDialog', () => {
       />,
     );
     expect(markup).toContain('이미지 저장 45개');
-    expect(markup).toContain('is-indeterminate');
     expect(markup).not.toContain('aria-valuenow=');
     expect(markup).not.toContain('100%');
   });
 
   it('labels failed progress as a failure instead of an active import', () => {
     const markup = renderToStaticMarkup(
-      <ImportDialog
+      <UiNextImportSheet
         controller={controller({
           progress: {
             jobId: 'job-failed',
@@ -161,7 +210,7 @@ describe('ImportDialog', () => {
       />,
     );
 
-    expect(markup).toContain('가져오기 실패');
+    expect(markup).toContain('가져오지 못했어요');
     expect(markup).not.toContain('가져오는 중');
   });
 
@@ -199,7 +248,7 @@ describe('ImportDialog', () => {
       sourceFileNames: ['서른의 봄.zip'],
     };
     const markup = renderToStaticMarkup(
-      <ImportDialog
+      <UiNextImportSheet
         controller={controller({
           pendingFiles: [file],
           seriesInspection: inspection,
@@ -215,10 +264,10 @@ describe('ImportDialog', () => {
     );
 
     expect(markup).toContain('연재 작품으로 가져오기');
-    expect(markup).toContain('새 회차 1개');
-    expect(markup).toContain('중복 2개');
-    expect(markup).toContain('충돌 1개');
-    expect(markup).toContain('연재 작품 가져오기');
+    expect(markup).toContain('새 회차 1');
+    expect(markup).toContain('이미 있음 2');
+    expect(markup).toContain('충돌 1');
+    expect(markup).toContain('연재 작품으로 가져오기');
   });
 
   it('shows a TXT or EPUB chapter merge plan for a local Library work', () => {
@@ -244,7 +293,7 @@ describe('ImportDialog', () => {
       candidateNovels: [],
     };
     const markup = renderToStaticMarkup(
-      <ImportDialog
+      <UiNextImportSheet
         controller={controller({
           pendingFiles: [file],
           documentSeriesInspection: inspection,
@@ -260,9 +309,9 @@ describe('ImportDialog', () => {
       />,
     );
 
-    expect(markup).toContain('로컬 작품에 회차로 가져오기');
-    expect(markup).toContain('선택한 원본은 그대로 보존');
+    expect(markup).toContain('회차로 더하기');
+    expect(markup).toContain('원본은 그대로 두고 새 회차만 작품에 더해요.');
     expect(markup).toContain('제2화');
-    expect(markup).toContain('새 회차 1개');
+    expect(markup).toContain('새 회차 1');
   });
 });

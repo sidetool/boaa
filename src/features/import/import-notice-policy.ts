@@ -79,6 +79,12 @@ export function completedImportNotice(outcome: ImportBatchOutcome, files: readon
       tone: outcome.completed > 0 ? 'warning' : 'danger',
     };
   }
+  if (outcome.refreshFailed) {
+    return {
+      message: `${formatCount(outcome.completed)}권을 저장했습니다. 목록 갱신을 다시 시도해 주세요. 파일을 다시 가져올 필요는 없습니다.`,
+      tone: 'warning',
+    };
+  }
   return {
     message:
       files.length === 1
