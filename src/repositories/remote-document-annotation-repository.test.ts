@@ -14,11 +14,16 @@ describe('RemoteDocumentAnnotationRepository', () => {
       updatedAt: '2026-09-24T00:00:00.000Z',
     };
     const request = vi.fn(async (path: string, options?: RequestInit) => {
-      if (path === '/books/book_1/document-annotations' && !options) return { annotations: [bookmark] };
+      if (path.startsWith('/books/book_1/document-annotations') && !options) return { annotations: [bookmark] };
       return { ok: true };
     });
     const repository = new RemoteDocumentAnnotationRepository({ request } as unknown as RemoteApiClient);
     await expect(repository.listPage('book_1', 0)).resolves.toEqual([bookmark]);
+    expect(request).toHaveBeenCalledWith('/books/book_1/document-annotations?pageIndex=0');
+    await expect(repository.listPage('book_1', 1)).resolves.toEqual([]);
+    await expect(repository.list('book_1')).resolves.toEqual([bookmark]);
+    // A page read alone must register ownership for deletion, including older servers.
+    await repository.remove(bookmark.id);
     await repository.save(bookmark);
     await repository.remove(bookmark.id);
     expect(request).toHaveBeenCalledWith('/books/book_1/document-annotations/annotation_1', {

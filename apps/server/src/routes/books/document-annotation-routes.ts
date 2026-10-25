@@ -30,24 +30,35 @@ function mapRow(row: Record<string, unknown>): DocumentAnnotation {
 
 export async function registerDocumentAnnotationRoutes(app: FastifyInstance, pool: pg.Pool, config: ServerConfig) {
   const deploymentConfig = config;
-  app.get<{ Params: { bookId: string } }>('/api/books/:bookId/document-annotations', async (request, reply) => {
-    const config = requestOwnerConfig(deploymentConfig, request);
+  app.get<{ Params: { bookId: string }; Querystring: { pageIndex?: string } }>(
+    '/api/books/:bookId/document-annotations',
+    async (request, reply) => {
+      const config = requestOwnerConfig(deploymentConfig, request);
 
-    const book = await pool.query('select 1 from library_books where id = $1 and user_id = $2 and deleted_at is null', [
-      request.params.bookId,
-      config.defaultUserId,
-    ]);
-    if (!book.rows[0]) return reply.code(404).send({ error: 'book not found' });
-    const result = await pool.query(
-      `select id, book_id, page_index, annotation_type, anchor, quote, body, color,
+      const pageIndex = request.query.pageIndex === undefined ? null : Number(request.query.pageIndex);
+      if (
+        pageIndex !== null &&
+        (!/^\d+$/.test(request.query.pageIndex!) || !Number.isSafeInteger(pageIndex) || pageIndex > 2147483647)
+      ) {
+        return reply.code(400).send({ error: 'pageIndex must be a non-negative integer' });
+      }
+      const book = await pool.query(
+        'select 1 from library_books where id = $1 and user_id = $2 and deleted_at is null',
+        [request.params.bookId, config.defaultUserId],
+      );
+      if (!book.rows[0]) return reply.code(404).send({ error: 'book not found' });
+      const result = await pool.query(
+        `select id, book_id, page_index, annotation_type, anchor, quote, body, color,
               text_anchor_remap, created_at, updated_at
        from document_annotations
        where book_id = $1 and user_id = $2 and deleted_at is null
+         and ($3::integer is null or page_index = $3)
        order by updated_at desc`,
-      [request.params.bookId, config.defaultUserId],
-    );
-    return { annotations: result.rows.map(mapRow) };
-  });
+        [request.params.bookId, config.defaultUserId, pageIndex],
+      );
+      return { annotations: result.rows.map(mapRow) };
+    },
+  );
 
   app.put<{ Params: { bookId: string; annotationId: string }; Body: unknown }>(
     '/api/books/:bookId/document-annotations/:annotationId',

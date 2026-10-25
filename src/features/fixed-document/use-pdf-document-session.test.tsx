@@ -182,3 +182,29 @@ it('closes the source once when unmount falls between range creation and ownersh
   expect(resource.close).toHaveBeenCalledOnce();
   expect(runtime.getDocument).not.toHaveBeenCalled();
 });
+
+it.each(['initial', 'subsequent'] as const)(
+  'reports %s source failures through the reopen UI and disposes the session',
+  async (phase) => {
+    const resource = source();
+    const failure = new Error('원본 파일이 변경되었습니다. 작품을 다시 열어 주세요.');
+    const destroy = vi.fn(async () => {});
+    runtime.getDocument.mockReturnValue({ promise: Promise.resolve(document().pdf), destroy });
+    if (phase === 'initial')
+      resource.readRange = vi.fn(async () => {
+        throw failure;
+      });
+    const h = await harness(vi.fn(async () => resource));
+    if (phase === 'subsequent') {
+      expect(h.snapshot.status).toBe('ready');
+      resource.readRange = vi.fn(async () => {
+        throw failure;
+      });
+      await act(async () => runtime.getDocument.mock.calls[0][0].range.requestDataRange(100000, 110000));
+      expect(destroy).toHaveBeenCalledOnce();
+    }
+    expect(h.snapshot).toMatchObject({ status: 'failed', errorMessage: failure.message, pdf: undefined });
+    expect(resource.close).toHaveBeenCalledOnce();
+    h.dispose();
+  },
+);

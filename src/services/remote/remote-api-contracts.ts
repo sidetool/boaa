@@ -49,3 +49,16 @@ export class RemoteApiRequestTimeoutError extends Error {
     this.name = 'RemoteApiRequestTimeoutError';
   }
 }
+
+export class RemoteSourceRangeResponseError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'RemoteSourceRangeResponseError';
+  }
+}
+
+export function assertSourceVersion(headers: Headers, contentHash: string): void {
+  if (!contentHash || headers.get('etag') !== `"${contentHash}"`) {
+    throw new RemoteSourceRangeResponseError('원본 파일이 변경되었습니다. 작품을 다시 열어 주세요.');
+  }
+}

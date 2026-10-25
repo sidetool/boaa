@@ -48,6 +48,16 @@ export function usePdfDocumentSession(input: {
       else if (pendingSource) void pendingSource.close().catch(() => undefined);
       if (task) void task.destroy().catch(() => undefined);
     };
+    const fail = (error: unknown) => {
+      if (disposed) return;
+      setState({
+        key,
+        assets,
+        status: 'failed',
+        errorMessage: error instanceof Error ? error.message : 'PDF를 열지 못했습니다.',
+      });
+      dispose();
+    };
     setState({ key, assets, status: 'loading', errorMessage: '' });
     void (async () => {
       const source = await assets.openSource(bookId);
@@ -66,7 +76,7 @@ export function usePdfDocumentSession(input: {
         readRange: (start, end, signal) => source.readRange(start, end, signal),
         close: () => (closing ??= source.close()),
       };
-      range = await BookSourcePdfRangeTransport.open(pendingSource, 64 * 1024, controller.signal);
+      range = await BookSourcePdfRangeTransport.open(pendingSource, 64 * 1024, controller.signal, fail);
       pendingSource = undefined;
       if (disposed) {
         range.abort();
@@ -75,16 +85,7 @@ export function usePdfDocumentSession(input: {
       task = getDocument({ range, rangeChunkSize: 64 * 1024, disableAutoFetch: true, disableStream: true });
       const pdf = await task.promise;
       if (!disposed) setState({ key, assets, pdf, status: 'ready', errorMessage: '' });
-    })().catch((error: unknown) => {
-      if (disposed) return;
-      setState({
-        key,
-        assets,
-        status: 'failed',
-        errorMessage: error instanceof Error ? error.message : 'PDF를 열지 못했습니다.',
-      });
-      dispose();
-    });
+    })().catch(fail);
     return dispose;
   }, [enabled, bookId, key, assets]);
   const current = enabled && state?.key === key && state.assets === assets ? state : undefined;

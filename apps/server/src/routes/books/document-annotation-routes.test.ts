@@ -43,7 +43,11 @@ describe('hosted document annotations', () => {
             ? { rows: [...rows.values()].filter((row) => row.id === params[0] && row.user_id === params[1]) }
             : {
                 rows: [...rows.values()].filter(
-                  (row) => row.book_id === params[0] && row.user_id === params[1] && !row.deleted_at,
+                  (row) =>
+                    row.book_id === params[0] &&
+                    row.user_id === params[1] &&
+                    !row.deleted_at &&
+                    (params[2] == null || row.page_index === params[2]),
                 ),
               };
         }
@@ -95,6 +99,18 @@ describe('hosted document annotations', () => {
     expect((await app.inject({ method: 'GET', url: '/api/books/pdf_1/document-annotations' })).json()).toEqual({
       annotations: [annotation],
     });
+    expect(
+      (await app.inject({ method: 'GET', url: '/api/books/pdf_1/document-annotations?pageIndex=0' })).json(),
+    ).toEqual({ annotations: [annotation] });
+    expect(
+      (await app.inject({ method: 'GET', url: '/api/books/pdf_1/document-annotations?pageIndex=1' })).json(),
+    ).toEqual({ annotations: [] });
+    for (const pageIndex of ['-1', '1.5', 'abc', '', '2147483648']) {
+      expect(
+        (await app.inject({ method: 'GET', url: `/api/books/pdf_1/document-annotations?pageIndex=${pageIndex}` }))
+          .statusCode,
+      ).toBe(400);
+    }
     expect(syncEvents).toBe(1);
     expect(
       (

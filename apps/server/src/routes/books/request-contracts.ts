@@ -21,6 +21,7 @@ export interface BookPatchBody extends NormalizedBookMetadataPatch {
 }
 
 export interface ReadingPositionBody {
+  expectedContentRevisionId?: string;
   chapterId?: string;
   documentSectionId?: string;
   paragraphId?: string;
@@ -311,6 +312,11 @@ export function validateReadingPositionBody(value: unknown): ValidationResult<Va
   if (!body) return { ok: false, error: 'body must be an object' };
   const chapterId = stringField(body, 'chapterId');
   if (!chapterId) return { ok: false, error: 'chapterId is required' };
+  const expectedContentRevisionId = stringField(body, 'expectedContentRevisionId');
+  if (body.expectedContentRevisionId !== undefined && !expectedContentRevisionId) {
+    return { ok: false, error: 'expectedContentRevisionId must be a non-empty string' };
+  }
+
   const paragraphIndex = numberField(body, 'paragraphIndex');
   const offsetInParagraph = numberField(body, 'offsetInParagraph');
   const chapterProgress = numberField(body, 'chapterProgress');
@@ -333,6 +339,7 @@ export function validateReadingPositionBody(value: unknown): ValidationResult<Va
     ok: true,
     value: {
       chapterId,
+      expectedContentRevisionId,
       documentSectionId: optionalStringField(body, 'documentSectionId'),
       paragraphId: optionalStringField(body, 'paragraphId'),
       paragraphIndex,

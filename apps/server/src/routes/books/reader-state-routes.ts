@@ -37,6 +37,23 @@ export async function registerReaderStateRoutes(
         // Acquire the lock before the statement snapshot is taken. A lock inside
         // the CTE can wait for a DELETE, then still read its pre-delete snapshot.
         await client.query('select pg_advisory_xact_lock(hashtextextended($1, 7319))', [request.params.bookId]);
+        // Hold the book row through the position/read-state/event writes so an
+        // import or append cannot change the active revision after this check.
+        const book = await client.query<{ active_content_revision_id: string | null }>(
+          'select active_content_revision_id from library_books where id = $1 and user_id = $2 and deleted_at is null for update',
+          [request.params.bookId, config.defaultUserId],
+        );
+        if (!book.rows[0]) {
+          await client.query('rollback');
+          return reply.code(404).send({ error: 'book not found' });
+        }
+        if (
+          body.expectedContentRevisionId !== undefined &&
+          body.expectedContentRevisionId !== book.rows[0].active_content_revision_id
+        ) {
+          await client.query('rollback');
+          return reply.code(409).send({ error: 'content_revision_conflict' });
+        }
         const positionResult = await client.query(
           `
           with requested_chapter as (

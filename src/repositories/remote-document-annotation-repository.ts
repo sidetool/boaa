@@ -14,7 +14,12 @@ export class RemoteDocumentAnnotationRepository implements DocumentAnnotationRep
   }
 
   async listPage(bookId: string, pageIndex: number): Promise<DocumentAnnotation[]> {
-    return (await this.list(bookId)).filter((item) => item.pageIndex === pageIndex);
+    const result = await this.client.request<{ annotations: DocumentAnnotation[] }>(
+      `/books/${encodeURIComponent(bookId)}/document-annotations?pageIndex=${encodeURIComponent(String(pageIndex))}`,
+    );
+    for (const annotation of result.annotations) this.bookIds.set(annotation.id, bookId);
+    // Older servers ignore the query; keep the page contract and deletion map.
+    return result.annotations.filter((item) => item.pageIndex === pageIndex);
   }
 
   async save(annotation: DocumentAnnotation): Promise<void> {

@@ -259,17 +259,20 @@ async function setMembership(
   shelfId: string,
   bookId: string,
   included: boolean,
+  ownershipChecked = false,
 ) {
   const id = persistentId128('shelf_membership', [shelfId, bookId]);
   const now = new Date().toISOString();
-  const ownership = await client.query(
-    `select
+  if (!ownershipChecked) {
+    const ownership = await client.query(
+      `select
        exists(select 1 from shelves where id = $1 and user_id = $3) as shelf_exists,
        exists(select 1 from library_books where id = $2 and user_id = $3) as book_exists`,
-    [shelfId, bookId, userId],
-  );
-  if (!ownership.rows[0]?.shelf_exists) throw new Error('Shelf was not found');
-  if (!ownership.rows[0]?.book_exists) throw new Error('Book was not found');
+      [shelfId, bookId, userId],
+    );
+    if (!ownership.rows[0]?.shelf_exists) throw new Error('Shelf was not found');
+    if (!ownership.rows[0]?.book_exists) throw new Error('Book was not found');
+  }
   if (included) {
     const result = await client.query(
       `insert into shelf_memberships (id, shelf_id, book_id, user_id, created_at)
@@ -327,6 +330,7 @@ async function applyBookBatchCommand(
   userId: string,
   command: BatchLibraryCommand,
   target: BatchLibraryTarget,
+  shelfExists?: boolean,
 ): Promise<BatchLibraryItemResult> {
   const bookResult = await client.query('select * from library_books where id = $1 and user_id = $2 for update', [
     target.bookId,
@@ -338,7 +342,8 @@ async function applyBookBatchCommand(
     return { bookId: target.bookId, status: 'failed', reason: 'metadata_revision_changed' };
   }
   if (command.kind === 'add_to_shelf' || command.kind === 'remove_from_shelf') {
-    await setMembership(client, userId, command.shelfId, target.bookId, command.kind === 'add_to_shelf');
+    if (!shelfExists) throw new Error('Shelf was not found');
+    await setMembership(client, userId, command.shelfId, target.bookId, command.kind === 'add_to_shelf', true);
     return { bookId: target.bookId, status: 'applied', metadataRevision: Number(book.metadata_revision) };
   }
   const now = new Date().toISOString();
@@ -457,6 +462,12 @@ export async function applyHostedLibraryBatch(
   const client = await pool.connect();
   try {
     await client.query('begin');
+    // Concurrent replays must observe the committed receipt before attempting
+    // any item mutation. Scope the lock to this owner and exact key tuple.
+    await client.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [
+      `library-batch:${JSON.stringify([config.defaultUserId, idempotencyKey])}`,
+    ]);
+
     const existing = await client.query(
       'select * from library_operation_receipts where user_id = $1 and idempotency_key = $2',
       [config.defaultUserId, idempotencyKey],
@@ -471,11 +482,19 @@ export async function applyHostedLibraryBatch(
         createdAt: new Date(existing.rows[0].created_at).toISOString(),
       };
     }
+    let shelfExists: boolean | undefined;
+    if (command.kind === 'add_to_shelf' || command.kind === 'remove_from_shelf') {
+      const shelf = await client.query('select id from shelves where id = $1 and user_id = $2 for share', [
+        command.shelfId,
+        config.defaultUserId,
+      ]);
+      shelfExists = Boolean(shelf.rows[0]);
+    }
     const results: BatchLibraryItemResult[] = [];
     for (const target of targets) {
       await client.query('savepoint library_batch_item');
       try {
-        results.push(await applyBookBatchCommand(client, config.defaultUserId, command, target));
+        results.push(await applyBookBatchCommand(client, config.defaultUserId, command, target, shelfExists));
         await client.query('release savepoint library_batch_item');
       } catch (error) {
         await client.query('rollback to savepoint library_batch_item');

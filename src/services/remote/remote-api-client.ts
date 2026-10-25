@@ -1,3 +1,4 @@
+import { assertSourceVersion, RemoteSourceRangeResponseError } from './remote-api-contracts';
 import type { SelfHostSession } from '../../features/auth/self-host-session';
 import { integrityHash } from '../../domain/id-hash-contract';
 import type { PlainTTSRequest, PlainTTSVoices } from '../../providers/plain-tts';
@@ -536,6 +537,7 @@ export class RemoteApiClient {
     init: RequestInit = {},
     timeoutMs?: number,
     onProgress?: TaskProgressCallback,
+    validateResponse?: (response: Response) => void,
   ): Promise<{ blob: Blob; headers: Headers; status: number }> {
     const authToken = this.options.getAuthToken?.()?.trim();
     let blob!: Blob;
@@ -553,6 +555,13 @@ export class RemoteApiClient {
         if (!download.ok) {
           if (download.status === 401 && !this.options.session) this.options.onUnauthorized?.();
           throw await remoteError(download);
+        }
+        try {
+          validateResponse?.(download);
+        } catch (error) {
+          // Reject a replaced source before buffering a potentially enormous full response.
+          void download.body?.cancel().catch(() => undefined);
+          throw error;
         }
         if (!onProgress || !download.body) {
           blob = await download.blob();
@@ -611,8 +620,19 @@ export class RemoteApiClient {
     return `${this.baseUrl}/original-downloads/${ticket}`;
   }
 
-  getBookSource(bookId: string): Promise<{ blob: Blob; headers: Headers; status: number }> {
-    return this.requestBlob(`/books/${encodeURIComponent(bookId)}/source`);
+  getBookSource(
+    bookId: string,
+    expectedContentHash?: string,
+  ): Promise<{ blob: Blob; headers: Headers; status: number }> {
+    return this.requestBlob(
+      `/books/${encodeURIComponent(bookId)}/source`,
+      {},
+      undefined,
+      undefined,
+      expectedContentHash === undefined
+        ? undefined
+        : (response) => assertSourceVersion(response.headers, expectedContentHash),
+    );
   }
 
   saveDocumentTextPage(
@@ -636,11 +656,26 @@ export class RemoteApiClient {
     startInclusive: number,
     endExclusive: number,
     signal?: AbortSignal,
+    expectedContentHash?: string,
   ): Promise<{ blob: Blob; headers: Headers; status: number }> {
-    return this.requestBlob(`/books/${encodeURIComponent(bookId)}/source`, {
-      headers: { Range: `bytes=${startInclusive}-${Math.max(startInclusive, endExclusive - 1)}` },
-      signal,
-    });
+    return this.requestBlob(
+      `/books/${encodeURIComponent(bookId)}/source`,
+      {
+        headers: {
+          Range: `bytes=${startInclusive}-${Math.max(startInclusive, endExclusive - 1)}`,
+          ...(expectedContentHash === undefined ? {} : { 'If-Range': `"${expectedContentHash}"` }),
+        },
+        signal,
+      },
+      undefined,
+      undefined,
+      (response) => {
+        if (response.status !== 206) {
+          throw new RemoteSourceRangeResponseError('원본 부분 읽기에 실패했습니다. 작품을 다시 열어 주세요.');
+        }
+        if (expectedContentHash !== undefined) assertSourceVersion(response.headers, expectedContentHash);
+      },
+    );
   }
 
   reselectBookSource(
@@ -1011,7 +1046,10 @@ export class RemoteApiClient {
 
   async saveReadingPosition(
     bookId: string,
-    position: Omit<ReadingPosition, 'id' | 'novelId'> & { readonly documentSectionId?: string },
+    position: Omit<ReadingPosition, 'id' | 'novelId'> & {
+      readonly documentSectionId?: string;
+      readonly expectedContentRevisionId?: string;
+    },
   ): Promise<RemoteMutationResult> {
     const path = `/books/${encodeURIComponent(bookId)}/reading-position`;
     const init: RequestInit = {
@@ -1020,6 +1058,7 @@ export class RemoteApiClient {
       keepalive: true,
       body: JSON.stringify({
         chapterId: position.chapterId,
+        expectedContentRevisionId: position.expectedContentRevisionId,
         documentSectionId: position.documentSectionId,
         paragraphId: position.paragraphId,
         paragraphIndex: position.paragraphIndex,

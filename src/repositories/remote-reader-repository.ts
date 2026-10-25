@@ -239,6 +239,7 @@ export class RemoteReaderRepository implements ReaderRepository {
     try {
       result = await this.client.saveReadingPosition(input.novelId, {
         chapterId: input.chapterId,
+        expectedContentRevisionId: input.expectedContentRevisionId,
         documentSectionId: input.documentSectionId,
         paragraphId: input.paragraphId,
         paragraphIndex: input.paragraphIndex,
@@ -252,17 +253,23 @@ export class RemoteReaderRepository implements ReaderRepository {
       if (error instanceof RemoteApiError) {
         const status = error.status;
         const reason =
-          status === 401
-            ? 'authentication'
-            : status === 403
-              ? 'permission'
-              : status === 404
-                ? 'missing'
-                : status === 429
-                  ? 'rate-limit'
-                  : status >= 500
-                    ? 'server'
-                    : 'response';
+          status === 409 &&
+          typeof error.payload === 'object' &&
+          error.payload !== null &&
+          'error' in error.payload &&
+          error.payload.error === 'content_revision_conflict'
+            ? 'conflict'
+            : status === 401
+              ? 'authentication'
+              : status === 403
+                ? 'permission'
+                : status === 404
+                  ? 'missing'
+                  : status === 429
+                    ? 'rate-limit'
+                    : status >= 500
+                      ? 'server'
+                      : 'response';
         throw new ReadingPositionSaveError(reason, status, { cause: error });
       }
       if (error instanceof RemoteApiRequestTimeoutError)

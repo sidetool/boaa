@@ -22,10 +22,11 @@ describe('remote data safety repositories', () => {
           created_at: '2026-07-13T00:00:00.000Z',
         },
       })),
-      getBookSource: vi.fn(async () => ({ blob, headers: new Headers(), status: 200 })),
+      getBookSource: vi.fn(async () => ({ blob, headers: new Headers({ etag: '"sha256:source"' }), status: 200 })),
       getBookSourceRange: vi.fn(async (_bookId: string, start: number, end: number) => ({
         blob: blob.slice(start, end),
         headers: new Headers({
+          etag: '"sha256:source"',
           'content-range': `bytes ${start}-${end - 1}/${blob.size}`,
           'content-length': String(end - start),
         }),
@@ -48,7 +49,7 @@ describe('remote data safety repositories', () => {
     });
     const randomAccess = await repository.openSource('book_1');
     expect(new TextDecoder().decode(await randomAccess?.readRange(9, 15))).toBe('source');
-    expect(client.getBookSourceRange).toHaveBeenCalledWith('book_1', 9, 15, undefined);
+    expect(client.getBookSourceRange).toHaveBeenCalledWith('book_1', 9, 15, undefined, 'sha256:source');
   });
 
   it('rejects a source range response that was downgraded to a full HTTP 200 body', async () => {

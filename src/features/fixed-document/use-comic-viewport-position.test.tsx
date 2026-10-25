@@ -194,7 +194,7 @@ describe('stream comic resume ownership', () => {
     h.render();
     h.scroll(64_000);
     await h.settle();
-    expect(restorePage).toHaveBeenCalledWith(49);
+    expect(restorePage.mock.calls.map(([page]) => page)).toContain(49);
     expect(h.save).not.toHaveBeenCalled();
     body.querySelector = query;
     h.rows[49]!.image.naturalWidth = 0;

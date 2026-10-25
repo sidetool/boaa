@@ -10,16 +10,22 @@ export class BookSourcePdfRangeTransport extends PDFDataRangeTransport {
   private constructor(
     private readonly source: RandomAccessBookSource,
     initialData: Uint8Array,
+    private readonly onError?: (error: unknown) => void,
   ) {
     super(source.byteLength, initialData, true);
   }
 
-  static async open(source: RandomAccessBookSource, initialBytes = DEFAULT_INITIAL_BYTES, signal?: AbortSignal) {
+  static async open(
+    source: RandomAccessBookSource,
+    initialBytes = DEFAULT_INITIAL_BYTES,
+    signal?: AbortSignal,
+    onError?: (error: unknown) => void,
+  ) {
     signal?.throwIfAborted();
     const end = Math.min(source.byteLength, initialBytes);
     const initialData = signal ? await source.readRange(0, end, signal) : await source.readRange(0, end);
     signal?.throwIfAborted();
-    return new BookSourcePdfRangeTransport(source, initialData);
+    return new BookSourcePdfRangeTransport(source, initialData, onError);
   }
 
   override requestDataRange(begin: number, end: number): void {
@@ -34,6 +40,7 @@ export class BookSourcePdfRangeTransport extends PDFDataRangeTransport {
       .catch((error) => {
         if (!this.closed && (!(error instanceof DOMException) || error.name !== 'AbortError')) {
           this.abort();
+          this.onError?.(error);
         }
       });
   }

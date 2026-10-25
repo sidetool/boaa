@@ -1,7 +1,11 @@
 import type { LibraryStorageUsage } from '@boaa/contracts';
 import type { BookAssetMetadata, BookAssetProvenance, EncodingMode } from '../domain/types';
 import type { RemoteApiClient } from '../services/remote/remote-api-client';
-import { RemoteApiError } from '../services/remote/remote-api-contracts';
+import {
+  assertSourceVersion,
+  RemoteSourceRangeResponseError,
+  RemoteApiError,
+} from '../services/remote/remote-api-contracts';
 import type { BookAssetRepository } from './book-asset-repository';
 
 type JsonRecord = Record<string, unknown>;
@@ -84,12 +88,7 @@ function assertApprovedCoverRow(
   }
 }
 
-export class RemoteSourceRangeResponseError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = 'RemoteSourceRangeResponseError';
-  }
-}
+export { RemoteSourceRangeResponseError } from '../services/remote/remote-api-contracts';
 
 function assertValidRangeResponse(
   response: { blob: Blob; headers: Headers; status: number },
@@ -147,7 +146,11 @@ export class RemoteBookAssetRepository implements BookAssetRepository {
   }
 
   async exportSource(bookId: string) {
-    const [metadata, download] = await Promise.all([this.getActiveSource(bookId), this.client.getBookSource(bookId)]);
+    const metadata = await this.getActiveSource(bookId);
+    const download = await this.client.getBookSource(bookId, metadata.contentHash);
+    assertSourceVersion(download.headers, metadata.contentHash);
+    if (download.blob.size !== metadata.byteLength)
+      throw new RemoteSourceRangeResponseError('원본 파일 길이가 변경되었습니다. 다시 시도해 주세요.');
     return { metadata, blob: download.blob };
   }
 
@@ -163,9 +166,13 @@ export class RemoteBookAssetRepository implements BookAssetRepository {
         const start = Math.max(0, Math.floor(startInclusive));
         const end = Math.min(metadata.byteLength, Math.max(start, Math.floor(endExclusive)));
         if (end <= start) return new Uint8Array();
-        const response = await this.client.getBookSourceRange(bookId, start, end, signal);
+        const response = await this.client.getBookSourceRange(bookId, start, end, signal, metadata.contentHash);
         assertValidRangeResponse(response, start, end, metadata.byteLength);
-        return new Uint8Array(await response.blob.arrayBuffer());
+        assertSourceVersion(response.headers, metadata.contentHash);
+        const bytes = new Uint8Array(await response.blob.arrayBuffer());
+        signal?.throwIfAborted();
+        if (closed) throw new Error('Book source is closed.');
+        return bytes;
       },
       close: async () => {
         closed = true;

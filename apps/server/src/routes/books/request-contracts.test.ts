@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { defaultSettings } from '@boaa/reader-core/settings';
-import { validateSettingsBody } from './request-contracts';
+import { validateReadingPositionBody, validateSettingsBody } from './request-contracts';
 
 describe('reader settings request contract', () => {
   it.each(['server-voice-a', ''])('round-trips the global narration settings with server voice %j', (serverVoiceId) => {
@@ -170,4 +170,20 @@ it('rejects invalid synthesis units instead of silently resetting them', () => {
       ttsPlayback: { ...defaultSettings.ttsPlayback, plainChunking: 'unlimited' },
     }),
   ).toEqual({ ok: false, error: 'ttsPlayback.plainChunking is invalid' });
+});
+
+it('distinguishes omitted revision preconditions from invalid and explicit revisions', () => {
+  expect(validateReadingPositionBody({ chapterId: 'chapter' })).toMatchObject({
+    ok: true,
+    value: { expectedContentRevisionId: undefined },
+  });
+  expect(validateReadingPositionBody({ chapterId: 'chapter', expectedContentRevisionId: 'revision' })).toMatchObject({
+    ok: true,
+    value: { expectedContentRevisionId: 'revision' },
+  });
+  for (const expectedContentRevisionId of [null, '', ' ', 5, {}]) {
+    expect(validateReadingPositionBody({ chapterId: 'chapter', expectedContentRevisionId })).toMatchObject({
+      ok: false,
+    });
+  }
 });

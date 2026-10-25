@@ -5,6 +5,7 @@ import { RemoteApiClient, RemoteApiError } from './remote-api-client';
 
 const position = {
   chapterId: 'chapter',
+  expectedContentRevisionId: 'revision_old',
   paragraphIndex: 46,
   offsetInParagraph: 5,
   chapterProgress: 0.5,
@@ -30,7 +31,10 @@ it('retries a dropped connection with the identical position and timestamp', asy
   expect(fetch.mock.calls[0][1].keepalive).toBe(true);
   expect(fetch.mock.calls[1][1].keepalive).toBe(true);
   expect(fetch.mock.calls[1][1].body).toBe(fetch.mock.calls[0][1].body);
-  expect(JSON.parse(fetch.mock.calls[1][1].body).updatedAt).toBe(position.updatedAt);
+  expect(JSON.parse(fetch.mock.calls[1][1].body)).toMatchObject({
+    updatedAt: position.updatedAt,
+    expectedContentRevisionId: position.expectedContentRevisionId,
+  });
 });
 it.each([408, 500, 502, 503, 504])('retries a transient HTTP %s once', async (status) => {
   const fetch = vi.fn().mockResolvedValueOnce(new Response('{}', { status })).mockResolvedValueOnce(success());
@@ -73,6 +77,7 @@ it('does not double the request timeout when the server remains unreachable', as
 });
 
 it.each([
+  [409, 'response'],
   [401, 'authentication'],
   [403, 'permission'],
   [404, 'missing'],
@@ -100,4 +105,31 @@ it('preserves a real newer-position conflict without disguising it as connectivi
   await expect(
     new RemoteReaderRepository(client).saveReadingPosition({ novelId: 'book', ...position }),
   ).rejects.toBeInstanceOf(RemoteMutationConflictError);
+});
+
+it('forwards a pinned content revision through the repository and reports a typed conflict without retry', async () => {
+  const fetch = vi.fn(
+    async (_url: string, _init: RequestInit) =>
+      new Response(JSON.stringify({ error: 'content_revision_conflict' }), { status: 409 }),
+  );
+  vi.stubGlobal('fetch', fetch);
+  await expect(
+    new RemoteReaderRepository(new RemoteApiClient('/api')).saveReadingPosition({ novelId: 'book', ...position }),
+  ).rejects.toMatchObject({ name: 'ReadingPositionSaveError', reason: 'conflict', status: 409 });
+  expect(fetch).toHaveBeenCalledOnce();
+  expect(JSON.parse(String(fetch.mock.calls[0][1].body))).toMatchObject({ expectedContentRevisionId: 'revision_old' });
+});
+
+it('does not label same-timestamp replay conflicts as a changed content revision', async () => {
+  const fetch = vi.fn(
+    async () =>
+      new Response(JSON.stringify({ error: 'Conflict', message: 'same timestamp, different payload' }), {
+        status: 409,
+      }),
+  );
+  vi.stubGlobal('fetch', fetch);
+  await expect(
+    new RemoteReaderRepository(new RemoteApiClient('/api')).saveReadingPosition({ novelId: 'book', ...position }),
+  ).rejects.toMatchObject({ name: 'ReadingPositionSaveError', reason: 'response', status: 409 });
+  expect(fetch).toHaveBeenCalledOnce();
 });

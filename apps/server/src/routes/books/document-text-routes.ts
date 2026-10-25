@@ -199,12 +199,13 @@ export async function registerDocumentTextRoutes(
           parsed.revision.id,
           request.params.bookId,
         ]);
-        for (const block of parsed.blocks) {
-          await db.query(
-            `insert into document_text_blocks
-               (id, revision_id, book_id, page_index, block_order, role, text, normalized_text, quads, direction)
-             values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
-            [
+        if (parsed.blocks.length > 0) {
+          // The parser caps this at 512 blocks (5,120 parameters), well below
+          // PostgreSQL's parameter limit. Keep deletion and replacement atomic.
+          const values: unknown[] = [];
+          const rows = parsed.blocks.map((block) => {
+            const offset = values.length;
+            values.push(
               block.id,
               block.revisionId,
               block.bookId,
@@ -215,7 +216,14 @@ export async function registerDocumentTextRoutes(
               block.normalizedText,
               JSON.stringify(block.quads),
               block.direction,
-            ],
+            );
+            return `(${Array.from({ length: 10 }, (_, index) => `$${offset + index + 1}`).join(',')})`;
+          });
+          await db.query(
+            `insert into document_text_blocks
+               (id, revision_id, book_id, page_index, block_order, role, text, normalized_text, quads, direction)
+             values ${rows.join(',')}`,
+            values,
           );
         }
         return true;

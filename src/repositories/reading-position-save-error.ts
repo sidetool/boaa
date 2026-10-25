@@ -1,7 +1,16 @@
 export type ReadingPositionSaveFailure =
-  'connection' | 'timeout' | 'authentication' | 'permission' | 'missing' | 'rate-limit' | 'server' | 'response';
+  | 'conflict'
+  | 'connection'
+  | 'timeout'
+  | 'authentication'
+  | 'permission'
+  | 'missing'
+  | 'rate-limit'
+  | 'server'
+  | 'response';
 
 const messages: Record<ReadingPositionSaveFailure, string> = {
+  conflict: '본문이 변경되어 읽기 위치를 저장하지 못했습니다. 작품을 다시 열어 주세요.',
   connection: '서버에 연결하지 못해 읽기 위치를 저장하지 못했습니다.',
   timeout: '서버 응답이 늦어 읽기 위치를 저장하지 못했습니다.',
   authentication: '읽기 위치를 저장하지 못했습니다. 로그인 상태를 확인해 주세요.',
