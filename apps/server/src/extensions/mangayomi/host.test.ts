@@ -624,32 +624,40 @@ it('imports original JS files without a repository, preserves multi-source choic
   expect(host.catalog.getSources()[0].descriptor.title).toBe('Second');
   expect(host.snapshot().repositories).toHaveLength(0);
   await expect(host.inspectFile(source, 'extension.js', 1, signal)).rejects.toThrow('apk_version_not_newer');
+  const cancelled = await host.inspectFile(source, 'extension.js', 0, signal);
+  host.discard(cancelled.id);
+  await expect(host.install(cancelled.id, cancelled.revision, signal)).rejects.toThrow('apk_review_expired');
+});
+
+it('accepts original JS reviews through HTTP and native commands and rejects invalid filenames', async () => {
+  const host = await localFileHost();
+  const signal = new AbortController().signal;
   const app = Fastify();
   app.addHook('onRequest', async (request) => {
     request.principal = { userId: 'fixture-admin', role: 'admin', authMethod: 'legacy-token' };
   });
-  await registerApkExtensionRoutes(app, host, '/api/mangayomi-extensions');
-  const request = { name: 'extension.js', base64: source.toString('base64'), sourceIndex: 0 };
-  const uploaded = await app.inject({
-    method: 'POST',
-    url: '/api/mangayomi-extensions/inspect-file',
-    payload: request,
-  });
-  expect(uploaded.statusCode).toBe(200);
-  host.discard(uploaded.json().id);
-  const native = await dispatchApkCommand(host, { action: 'inspect-file', ...request }, signal);
-  expect(native.kind).toBe('json');
-  if (native.kind === 'json') host.discard((native.value as { id: string }).id);
-  const invalid = await app.inject({
-    method: 'POST',
-    url: '/api/mangayomi-extensions/inspect-file',
-    payload: { ...request, name: '../bad.js' },
-  });
-  expect(invalid.statusCode).toBe(422);
-  const cancelled = await host.inspectFile(source, 'extension.js', 0, signal);
-  host.discard(cancelled.id);
-  await expect(host.install(cancelled.id, cancelled.revision, signal)).rejects.toThrow('apk_review_expired');
-  await app.close();
+  try {
+    await registerApkExtensionRoutes(app, host, '/api/mangayomi-extensions');
+    const request = { name: 'extension.js', base64: localFileSource.toString('base64'), sourceIndex: 0 };
+    const uploaded = await app.inject({
+      method: 'POST',
+      url: '/api/mangayomi-extensions/inspect-file',
+      payload: request,
+    });
+    expect(uploaded.statusCode).toBe(200);
+    host.discard(uploaded.json().id);
+    const native = await dispatchApkCommand(host, { action: 'inspect-file', ...request }, signal);
+    expect(native.kind).toBe('json');
+    if (native.kind === 'json') host.discard((native.value as { id: string }).id);
+    const invalid = await app.inject({
+      method: 'POST',
+      url: '/api/mangayomi-extensions/inspect-file',
+      payload: { ...request, name: '../bad.js' },
+    });
+    expect(invalid.statusCode).toBe(422);
+  } finally {
+    await app.close();
+  }
 });
 
 it('refreshes installed artwork from its repository without reinstalling source code', async () => {
