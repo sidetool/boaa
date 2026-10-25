@@ -213,6 +213,38 @@ function fixture(confirmedBookId?: string) {
 }
 
 describe('TXT series import coordinator', () => {
+  it('does not publish the previous revision when a committed append cannot refresh metadata', async () => {
+    const h = fixture();
+    await h.seed([item(1)]);
+    const previous = h.novel()!;
+    const error = new ImportCommittedRefreshError(h.bookId, vi.fn(), vi.fn());
+    h.hooks.afterImport = async () => {
+      h.getNovel.mockRejectedValue(new Error('offline'));
+      throw error;
+    };
+
+    await expect(h.run([item(2)])).rejects.toBe(error);
+
+    expect(h.novel()!.activeContentRevisionId).not.toBe(previous.activeContentRevisionId);
+    expect(h.novel()!.totalChapters).toBe(2);
+    expect(h.onCommitted).not.toHaveBeenCalled();
+    expect(h.onProgress.mock.calls.at(-1)![0]).toMatchObject({ committed: 1, items: [item(2)] });
+    const link = (await h.state.listLinks()).find((entry) => entry.source.remoteId === 'release-2');
+    expect(link).toMatchObject({
+      localBookId: h.bookId,
+      pendingImport: { expectedActiveSourceContentHash: h.novel()!.sourceContentHash },
+    });
+
+    h.getNovel.mockResolvedValue(h.novel());
+    await reconcilePendingExternalSourceLinks(h.state, await h.state.listLinks(), [h.novel()!]);
+    const recovered = (await h.state.listLinks()).find((entry) => entry.source.remoteId === 'release-2');
+    expect(recovered).toMatchObject({
+      localBookId: h.bookId,
+      activeContentRevisionId: h.novel()!.activeContentRevisionId,
+      pendingImport: undefined,
+    });
+  });
+
   it.each([false, true])(
     'preserves the canonical committed ID after metadata failure (read recovers: %s)',
     async (recovers) => {

@@ -434,6 +434,9 @@ async function runDocumentSeries(
                 if (error instanceof ImportCommittedRefreshError) {
                   bookId = error.bookId;
                   activated = true;
+                  // The base describes the previous revision, not this confirmed commit.
+                  // Preserve its identity for recovery without publishing stale metadata.
+                  novel = undefined;
                   staged = await checkpointImportedExternalSourceLinks(options.state, staged, { id: bookId });
                 }
                 throw error;
@@ -488,7 +491,7 @@ async function runDocumentSeries(
         } else {
           if (!activated && inspected && !(importStarted && !base.novel && options.importService.mayChangeBookId))
             await restoreExternalSourceLinks(options.state, staged, previous).catch(() => undefined);
-          if (activated && novel) {
+          if (activated) {
             committed += batch.length;
             options.onProgress({
               received,
@@ -498,10 +501,13 @@ async function runDocumentSeries(
               items: batch,
             });
             if (replacedRelease) options.onReplacedRelease?.();
-            await options.onCommitted(novel, batch).catch(() => undefined);
-            throw Object.assign(new Error('본문은 저장되었습니다. 소스 연결은 새로고침할 때 복구합니다.'), {
-              cause: error,
-            });
+            if (novel) {
+              await options.onCommitted(novel, batch).catch(() => undefined);
+              throw Object.assign(new Error('본문은 저장되었습니다. 소스 연결은 새로고침할 때 복구합니다.'), {
+                cause: error,
+              });
+            }
+            throw error;
           }
           if (inspected && attempt === 0 && isBaseConflict(error) && !options.signal.aborted) {
             base = await snapshot(options, bookId);
