@@ -1,5 +1,6 @@
 import { Client, type SFTPWrapper, type FileEntry, type Stats } from 'ssh2';
 import { createHash } from 'node:crypto';
+import { sftpCall } from './sftp-call.js';
 import {
   REMOTE_FILE_MAX_BYTES,
   REMOTE_FILE_MAX_ENTRIES,
@@ -13,13 +14,12 @@ import {
   type RemoteFileSession,
   type SavedRemoteConnection,
 } from './common.js';
-function invoke<T>(run: (callback: (error: Error | undefined | null, value: T) => void) => void): Promise<T> {
-  return new Promise((resolve, reject) => run((e, value) => (e ? reject(e) : resolve(value))));
-}
 export async function openSftp(config: SavedRemoteConnection, signal: AbortSignal): Promise<RemoteFileSession> {
   const url = new URL(config.endpoint),
     address = await storageAddress(url.hostname),
     client = new Client();
+  const invoke = <T>(run: (callback: (error: Error | undefined | null, value: T) => void) => void) =>
+    sftpCall(client, signal, run);
   let hostKey = '',
     mismatch = false;
   signal.throwIfAborted();

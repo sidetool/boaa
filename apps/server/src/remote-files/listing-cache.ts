@@ -106,10 +106,17 @@ export class RemoteListingCache {
       deadline.unref();
       this.scans++;
       this.pending.set(input.key, next);
+      let cancelScan: () => void;
+      const cancelled = new Promise<never>((_, reject) => {
+        cancelScan = () => reject(abort.signal.reason ?? failure('cancelled'));
+        abort.signal.addEventListener('abort', cancelScan, { once: true });
+      });
+      // Cancellation can precede the load microtask and its race subscription.
+      void cancelled.catch(() => {});
       next.promise = Promise.resolve()
         .then(async () => {
           abort.signal.throwIfAborted();
-          const entries = await input.load(abort.signal);
+          const entries = await Promise.race([input.load(abort.signal), cancelled]);
           abort.signal.throwIfAborted();
           const row: Snapshot = {
             id: randomUUID(),
@@ -136,6 +143,7 @@ export class RemoteListingCache {
         })
         .finally(() => {
           clearTimeout(deadline);
+          abort.signal.removeEventListener('abort', cancelScan);
           this.scans--;
           if (this.pending.get(input.key) === next) this.pending.delete(input.key);
         });

@@ -26,6 +26,25 @@ const deferred = <T>() => {
   });
   return { promise, resolve };
 };
+it('releases abandoned scan capacity even if an upstream callback never returns', async () => {
+  const cache = new RemoteListingCache();
+  const old = await cache.get(args());
+  for (let attempt = 0; attempt < 4; attempt++) {
+    const controller = new AbortController();
+    const pending = cache.get({
+      ...args(),
+      reload: true,
+      signal: controller.signal,
+      load: async () => new Promise(() => {}),
+    });
+    await Promise.resolve();
+    controller.abort();
+    await expect(pending).rejects.toThrow();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+  expect((await cache.get(args())).id).toBe(old.id);
+  expect((await cache.get({ ...args(), reload: true })).id).not.toBe(old.id);
+});
 it('keeps snapshots indefinitely across runtime restart, refreshes explicitly and preserves a failed refresh', async () => {
   const root = await mkdtemp(join(tmpdir(), 'boaa-listing-cache-'));
   roots.push(root);
