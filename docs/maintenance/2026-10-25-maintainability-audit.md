@@ -585,9 +585,11 @@ DB를 사용하지 않았다. 새 테스트 파일은 추가하지 않았고 실
   허용 목록에 없는 7개 source/import 경로가 추가됐고 기존 `event-contract-translation`의 직접 import는
   사라졌다. 기존 ID 호환성을 확인하지 않고 허용 목록을 넓히거나 테스트를 삭제하지 않았다.
   실제 FNV 용도를 분류한 뒤 신규 ID 생성과 기존 데이터 호환 경계를 정해야 한다.
-- 오프라인 의존성 연결은 완료했지만 pnpm install은 `cpu-features`, `ssh2`의 미지정 build-script
-  정책 때문에 종료 코드 1을 반환했다. 허용 정책은 임의로 변경하지 않았다. 검증은 설치된 실행 파일을
-  직접 사용했으며, 프로젝트의 reproducible install 설정은 별도 정리가 필요하다.
+- 최초 pnpm install은 `cpu-features`, `ssh2`의 미정 build 정책 때문에 종료 코드 1을 반환했다.
+  후속 운영 검증에서 Node 22.23.2/pnpm 11.7.0의 격리된 clean offline frozen install로 동일 오류를
+  재현했다. 선택적 네이티브 가속 두 항목만 `allowBuilds: false`로 명시하자 다른 깨끗한 환경의
+  설치가 성공했다(413개 cache 재사용, 다운로드 0, lockfile 불변). 새 의존성에서 native binding이
+  없는 실제 암호화 SFTP 검사도 통과했다. 이 설치 차단은 해결했으며 전체 script 실행 허용은 하지 않았다.
 - 전체 browser/Docker/native/실제 소스 요청 테스트나 운영 부하 측정은 하지 않았다.
   테스트 개수가 많다는 이유로 저장·계정 경계·취소·복구 검증을 없애지 않았다.
 
