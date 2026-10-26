@@ -146,7 +146,7 @@ it('joins prefetch, replays without synthesis after speed changes and navigates 
   act(() => root.unmount());
 });
 
-it.each(['recover', 'cancel', 'non-retryable'] as const)(
+it.each(['recover', 'cancel', 'non-retryable', 'repeated-429', 'exhausted-429'] as const)(
   'handles a foreground listener joining failed prefetch: %s',
   async (scenario) => {
     vi.useFakeTimers();
@@ -156,12 +156,17 @@ it.each(['recover', 'cancel', 'non-retryable'] as const)(
       const synthesize = vi
         .fn()
         .mockImplementationOnce(
-          () =>
+          (_chapter: string | undefined, _request: unknown, _signal?: AbortSignal) =>
             new Promise<Blob>((_, fail) => {
               reject = fail;
             }),
         )
         .mockResolvedValue(new Blob(['audio']));
+      const repeated = scenario === 'repeated-429' || scenario === 'exhausted-429';
+      if (repeated) {
+        synthesize.mockRejectedValueOnce({ status: 429 }).mockRejectedValueOnce({ status: 429 });
+        if (scenario === 'exhausted-429') synthesize.mockRejectedValueOnce({ status: 429 });
+      }
       const abort = new AbortController();
       const playAudio = vi.fn(async () => true);
       const setHostedStatus = vi.fn();
@@ -221,21 +226,50 @@ it.each(['recover', 'cancel', 'non-retryable'] as const)(
         reject(
           Object.assign(new Error('fixture failure'), {
             status: scenario === 'non-retryable' ? 502 : 429,
-            payload: { retryAfterSeconds: 1 },
+            ...(repeated ? {} : { payload: { retryAfterSeconds: 1 } }),
           }),
         );
         await prefetch;
       });
       if (scenario === 'cancel') abort.abort();
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(1000);
-        expect(await play).toBe(scenario === 'recover');
-      });
-      expect(synthesize).toHaveBeenCalledTimes(scenario === 'recover' ? 2 : 1);
-      expect(playAudio).toHaveBeenCalledTimes(scenario === 'recover' ? 1 : 0);
-      if (scenario !== 'non-retryable')
+      const success = scenario === 'recover' || scenario === 'repeated-429';
+      if (repeated) {
+        for (const [index, seconds] of [10, 20, 40].entries()) {
+          expect(synthesize).toHaveBeenCalledTimes(index + 1);
+          expect(playAudio).not.toHaveBeenCalled();
+          expect(onError).not.toHaveBeenCalled();
+          expect(setHostedStatus).toHaveBeenLastCalledWith(
+            expect.anything(),
+            expect.stringContaining(`${seconds}초 후`),
+          );
+          await act(async () => {
+            await vi.advanceTimersByTimeAsync(seconds * 1000 - 1);
+          });
+          expect(synthesize).toHaveBeenCalledTimes(index + 1);
+          await act(async () => {
+            await vi.advanceTimersByTimeAsync(1);
+          });
+        }
+      } else {
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(1000);
+        });
+      }
+      expect(await play).toBe(success);
+      expect(synthesize).toHaveBeenCalledTimes(repeated ? 4 : scenario === 'recover' ? 2 : 1);
+      expect(playAudio).toHaveBeenCalledTimes(success ? 1 : 0);
+      // Every retry retains exactly the same chapter, text identity and voice; it never skips ahead.
+      for (const call of synthesize.mock.calls) expect(call.slice(0, 2)).toEqual(synthesize.mock.calls[0].slice(0, 2));
+      if (scenario === 'recover' || scenario === 'cancel')
         expect(setHostedStatus).toHaveBeenCalledWith(expect.anything(), expect.stringContaining('1초 후'));
-      if (scenario === 'recover') expect(onError).not.toHaveBeenCalled();
+      if (success || scenario === 'cancel') expect(onError).not.toHaveBeenCalled();
+      if (scenario === 'exhausted-429') {
+        expect(onError).toHaveBeenCalledExactlyOnceWith(expect.stringContaining('자동 재시도를 멈췄습니다'));
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(120_000);
+        });
+        expect(synthesize).toHaveBeenCalledTimes(4);
+      }
     } finally {
       if (root) act(() => root!.unmount());
       vi.useRealTimers();
