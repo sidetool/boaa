@@ -84,8 +84,9 @@ export class GeminiTTSProvider implements TTSSynthesisProvider {
       },
     );
     if (!response.ok) {
-      const errorText = await response.text().catch(() => '');
-      throw new Error(`Gemini TTS request failed with ${response.status}: ${errorText.slice(0, 500)}`);
+      // Preserve status for cooldown/retry without retaining provider text or credentials.
+      await response.body?.cancel().catch(() => undefined);
+      throw Object.assign(new Error(`Gemini TTS request failed with ${response.status}`), { status: response.status });
     }
     const json = await response.json().catch(() => undefined);
     const { buffer: pcm } = interactionAudioResponse(json);

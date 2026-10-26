@@ -170,31 +170,30 @@ export function usePlainTTS(input: {
         audioCache.remove(key);
         input.controller.setHostedStatus(operation, '현재 음성 다시 만드는 중');
       }
-      const blob = await waitForPlainTTSAudio(
-        audioCache.getOrCreate({
-          key,
-          chapter: paragraph.chapterId,
-          scope: scopeFor(request.contentRevision),
-          positions: playable.plainBatchPositions?.map((p) => p.paragraphIndex) ?? [],
-          fetch: (signal) =>
-            requestPlainTTSWithRetry(
-              () =>
+      // Retry at the playback consumer: an existing prefetch has no retry policy of its own.
+      // The cache still owns in-flight synthesis, so stopping playback never duplicates paid work.
+      const blob = await requestPlainTTSWithRetry(
+        () =>
+          waitForPlainTTSAudio(
+            audioCache.getOrCreate({
+              key,
+              chapter: paragraph.chapterId,
+              scope: scopeFor(request.contentRevision),
+              positions: playable.plainBatchPositions?.map((p) => p.paragraphIndex) ?? [],
+              fetch: (signal) =>
                 input.client!.synthesizePlainTTS(
                   paragraph.chapterId,
                   regeneration ? { ...request, regenerate: true } : request,
                   signal,
                 ),
-              {
-                signal,
-                onWait: (seconds) =>
-                  input.controller.setHostedStatus(
-                    operation,
-                    `음성 제공자 대기 중 · ${Math.ceil(seconds)}초 후 다시 시도`,
-                  ),
-              },
-            ),
-        }),
-        operation.controller.signal,
+            }),
+            operation.controller.signal,
+          ),
+        {
+          signal: operation.controller.signal,
+          onWait: (seconds) =>
+            input.controller.setHostedStatus(operation, `음성 제공자 대기 중 · ${Math.ceil(seconds)}초 후 다시 시도`),
+        },
       );
       regeneration?.prepared();
       if (!input.controller.isSessionCurrent(sessionId)) return true;

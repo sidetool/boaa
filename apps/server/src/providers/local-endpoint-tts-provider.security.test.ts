@@ -179,10 +179,8 @@ describe('local endpoint TTS egress policy', () => {
     }
   });
 
-  it('does not include endpoint credentials or response bodies in failures', async () => {
-    const fetchImpl = vi.fn(
-      async () => new Response('token=response-secret Authorization=Bearer leaked', { status: 503 }),
-    );
+  it.each([429, 503])('preserves HTTP %s without endpoint credentials or response bodies', async (status) => {
+    const fetchImpl = vi.fn(async () => new Response('token=response-secret Authorization=Bearer leaked', { status }));
     const provider = new LocalEndpointTTSProvider({
       endpointUrl: 'http://127.0.0.1:9010/synthesize?token=url-secret',
       fetchImpl,
@@ -191,7 +189,8 @@ describe('local endpoint TTS egress policy', () => {
     const error = await provider.synthesize({ text: 'hello', voiceProfile }).catch((caught: unknown) => caught);
     const message = error instanceof Error ? error.message : String(error);
 
-    expect(message).toBe('Local TTS endpoint request failed with status 503');
+    expect(message).toBe(`Local TTS endpoint request failed with status ${status}`);
+    expect(error).toMatchObject({ status });
     expect(message).not.toContain('url-secret');
     expect(message).not.toContain('response-secret');
     expect(message).not.toContain('Authorization');

@@ -81,7 +81,10 @@ export class LocalEndpointTTSProvider implements TTSSynthesisProvider {
       this.options,
     );
     if (!response.ok) {
-      throw new Error(`Local TTS endpoint request failed with status ${response.status}`);
+      await response.body?.cancel().catch(() => undefined);
+      throw Object.assign(new Error(`Local TTS endpoint request failed with status ${response.status}`), {
+        status: response.status,
+      });
     }
 
     const contentType = response.headers.get('content-type') ?? '';

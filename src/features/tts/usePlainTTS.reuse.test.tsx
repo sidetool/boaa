@@ -145,3 +145,100 @@ it('joins prefetch, replays without synthesis after speed changes and navigates 
   expect(hook.retryTarget()).toBeUndefined();
   act(() => root.unmount());
 });
+
+it.each(['recover', 'cancel', 'non-retryable'] as const)(
+  'handles a foreground listener joining failed prefetch: %s',
+  async (scenario) => {
+    vi.useFakeTimers();
+    let root: ReactTestRenderer | undefined;
+    try {
+      let reject!: (error: unknown) => void;
+      const synthesize = vi
+        .fn()
+        .mockImplementationOnce(
+          () =>
+            new Promise<Blob>((_, fail) => {
+              reject = fail;
+            }),
+        )
+        .mockResolvedValue(new Blob(['audio']));
+      const abort = new AbortController();
+      const playAudio = vi.fn(async () => true);
+      const setHostedStatus = vi.fn();
+      const onError = vi.fn();
+      const client = {
+        listPlainTTSVoices: async () => ({
+          available: true,
+          revision: 'v1',
+          voices: [{ id: 'voice', label: 'Voice', lang: 'ko' }],
+        }),
+        synthesizePlainTTS: synthesize,
+      } as unknown as Input['client'];
+      const controller = {
+        beginHostedPlayback: () => ({ controller: abort }),
+        isSessionCurrent: () => !abort.signal.aborted,
+        setHostedStatus,
+        playAudio,
+        finishOperation: vi.fn(),
+        stopAll: vi.fn(),
+      } as unknown as Input['controller'];
+      const paragraph = { id: 'p', index: 1, chapterId: 'c', novelId: 'b', text: '테스트 문단입니다.' } as Paragraph;
+      const playable = buildPlainTTSBatch({ paragraphs: [paragraph, { ...paragraph, id: 'p2', index: 2 }], rate: 1 })!;
+      let hook!: ReturnType<typeof usePlainTTS>;
+      function Harness() {
+        hook = usePlainTTS({
+          client,
+          enabled: true,
+          controller,
+          settings: {
+            ...DEFAULT_TTS_PLAYBACK_SETTINGS,
+            mode: 'plain',
+            voiceSource: 'server',
+            serverVoiceId: 'voice',
+            plainChunking: 'batch',
+          },
+          contentRevision: 'r',
+          chapterId: 'c',
+          rules: [],
+          onError,
+          systemTTS: { stop: vi.fn() } as unknown as Input['systemTTS'],
+        });
+        return null;
+      }
+      await act(async () => {
+        root = create(<Harness />);
+      });
+      let prefetch!: Promise<void>;
+      let play!: Promise<boolean>;
+      await act(async () => {
+        prefetch = hook.prefetch(playable, paragraph, 1);
+      });
+      await act(async () => {
+        play = hook.play(playable, paragraph, 1);
+      });
+      expect(synthesize).toHaveBeenCalledOnce();
+      await act(async () => {
+        reject(
+          Object.assign(new Error('fixture failure'), {
+            status: scenario === 'non-retryable' ? 502 : 429,
+            payload: { retryAfterSeconds: 1 },
+          }),
+        );
+        await prefetch;
+      });
+      if (scenario === 'cancel') abort.abort();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1000);
+        expect(await play).toBe(scenario === 'recover');
+      });
+      expect(synthesize).toHaveBeenCalledTimes(scenario === 'recover' ? 2 : 1);
+      expect(playAudio).toHaveBeenCalledTimes(scenario === 'recover' ? 1 : 0);
+      if (scenario !== 'non-retryable')
+        expect(setHostedStatus).toHaveBeenCalledWith(expect.anything(), expect.stringContaining('1초 후'));
+      if (scenario === 'recover') expect(onError).not.toHaveBeenCalled();
+    } finally {
+      if (root) act(() => root!.unmount());
+      vi.useRealTimers();
+    }
+  },
+);

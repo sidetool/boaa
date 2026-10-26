@@ -1,3 +1,5 @@
+import { GeminiAudioResponseError } from '../../providers/gemini-audio-response.js';
+import { GeminiTTSProvider } from '../../providers/gemini-tts-provider.js';
 import Fastify, { type FastifyInstance } from 'fastify';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -571,4 +573,56 @@ it('does not promote an enabled paid engine to the default when optional Superto
   expect(catalog.voices[0].id).toBe('gemini-tts:M1');
   expect((await f.request({ modelRevision: catalog.revision })).statusCode).toBe(400);
   expect(remote).not.toHaveBeenCalled();
+});
+
+// Exercise the actual adapter boundary: a mock with a status field hid this regression.
+it.each([
+  [429, 429, 'tts_rate_limited'],
+  [403, 502, 'tts_access_denied'],
+  [503, 502, 'tts_provider_failed'],
+] as const)('preserves Gemini HTTP %s through the playback route', async (upstream, status, code) => {
+  const f = await fixture();
+  const adapter = new GeminiTTSProvider({
+    apiKey: 'fixture-secret',
+    modelId: 'gemini-3.8-flash-lite-tts',
+    fetchImpl: async () => new Response('private provider body', { status: upstream }),
+  });
+  f.synthesize.mockImplementation((input) => adapter.synthesize(input));
+  const response = await f.request();
+  expect(response.statusCode).toBe(status);
+  expect(response.json().code).toBe(code);
+  expect(response.body).not.toMatch(/fixture-secret|private provider body/);
+  if (upstream === 429) {
+    expect(response.headers['retry-after']).toBe('10');
+    await f.request();
+    expect(f.synthesize).toHaveBeenCalledOnce();
+  }
+});
+
+it('distinguishes provider aborts from timeouts and never treats DOM exception codes as HTTP status', () => {
+  expect(classifyPlainTTSFailure(new DOMException('Cancelled', 'AbortError'))).toMatchObject({
+    code: 'tts_aborted',
+    status: 502,
+  });
+  expect(classifyPlainTTSFailure(new DOMException('Cancelled', 'AbortError')).upstreamStatus).toBeUndefined();
+  expect(classifyPlainTTSFailure(new DOMException('Late', 'TimeoutError'))).toMatchObject({
+    code: 'tts_timeout',
+    status: 504,
+  });
+});
+
+it('logs only diagnostic metadata for incomplete audio', async () => {
+  const f = await fixture();
+  const warn = vi.spyOn(f.app.log, 'warn');
+  f.synthesize.mockRejectedValue(new GeminiAudioResponseError('provider_finish_reason', 'MAX_TOKENS'));
+  const response = await f.request();
+  expect(response.statusCode).toBe(502);
+  expect(warn).toHaveBeenCalledWith({
+    event: 'plain_tts_failed',
+    errorCategory: 'tts_incomplete_audio',
+    upstreamStatus: undefined,
+    providerId: 'supertonic',
+    audioFailureReason: 'provider_finish_reason',
+    providerCompletion: 'MAX_TOKENS',
+  });
 });

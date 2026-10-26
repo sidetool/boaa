@@ -1,3 +1,4 @@
+import { GeminiAudioResponseError } from '../../providers/gemini-audio-response.js';
 import {
   MIN_PLAIN_TTS_BATCH_CHARACTERS,
   MAX_PLAIN_TTS_BATCH_CHARACTERS,
@@ -277,6 +278,7 @@ export async function registerPlainTTSRoutes(
       sample ? '/api/tts/plain/sample' : '/api/chapters/:chapterId/tts/plain',
       { bodyLimit: 64 * 1024 },
       async (request, reply) => {
+        let failureProvider: string | undefined;
         try {
           const availableSources = await sources();
           if (!availableSources.length) throw new PlainTTSError(503, '연결된 서버 음성이 없습니다.');
@@ -301,6 +303,7 @@ export async function registerPlainTTSRoutes(
             item.legacyIds ? !voiceId.includes(':') : voiceId.startsWith(item.id + ':'),
           );
           if (!source) throw new PlainTTSError(400, '선택한 엔진을 찾을 수 없습니다. 목소리 목록을 새로고침하세요.');
+          failureProvider = source.id;
           const selectedVoice = (await voices(source)).find((voice) => voiceKey(source, voice.id) === voiceId);
           if (!selectedVoice) throw new PlainTTSError(400, '선택한 목소리를 찾을 수 없습니다.');
           let text = PLAIN_TTS_SAMPLE;
@@ -445,6 +448,10 @@ export async function registerPlainTTSRoutes(
             event: 'plain_tts_failed',
             errorCategory: failure.code,
             upstreamStatus: failure.upstreamStatus,
+            providerId: failureProvider,
+            ...(error instanceof GeminiAudioResponseError
+              ? { audioFailureReason: error.reason, providerCompletion: error.completion }
+              : {}),
           });
           return reply.code(failure.status).send({ error: failure.message, code: failure.code });
         }
@@ -518,7 +525,10 @@ export function classifyPlainTTSFailure(error: unknown): {
         '음성 생성이 끝까지 완료되지 않았습니다. 읽던 묶음에서 다시 시도하거나 세부 청취 설정의 묶음 크기를 줄여 주세요.',
     };
   const rawStatus = value.status ?? value.code;
-  const upstreamStatus = typeof rawStatus === 'number' && Number.isInteger(rawStatus) ? rawStatus : undefined;
+  const upstreamStatus =
+    typeof rawStatus === 'number' && Number.isInteger(rawStatus) && rawStatus >= 100 && rawStatus <= 599
+      ? rawStatus
+      : undefined;
   if (upstreamStatus === 429)
     return {
       status: 429,
@@ -527,7 +537,13 @@ export function classifyPlainTTSFailure(error: unknown): {
       message:
         '음성 제공자의 요청 한도 또는 처리 용량에 도달했습니다. 잠시 후 다시 재생하세요. 문단 단위로 읽으면 요청 횟수를 줄일 수 있습니다.',
     };
-  if (value.name === 'TimeoutError' || value.name === 'AbortError' || upstreamStatus === 504)
+  if (value.name === 'AbortError')
+    return {
+      status: 502,
+      code: 'tts_aborted',
+      message: '음성 생성 요청이 중단되었습니다. 읽던 위치에서 다시 재생해 주세요.',
+    };
+  if (value.name === 'TimeoutError' || upstreamStatus === 504)
     return {
       status: 504,
       upstreamStatus,

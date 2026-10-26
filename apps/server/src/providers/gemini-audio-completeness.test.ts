@@ -101,3 +101,31 @@ it('rejects an empty WAV even when generation reports STOP', async () => {
     }),
   ).rejects.toThrow();
 });
+
+it('rejects partial PCM samples after joining chunks but permits split sample boundaries', () => {
+  const part = (data: string) => ({ type: 'audio', mime_type: 'audio/l16', data });
+  expect(() => interactionAudioResponse({ status: 'completed', outputs: [part('AQ==')] })).toThrow(
+    expect.objectContaining({ code: 'tts_incomplete_audio', reason: 'pcm_sample_alignment' }),
+  );
+  expect(interactionAudioResponse({ status: 'completed', outputs: [part('AQ=='), part('AA==')] }).buffer).toEqual(
+    Buffer.from([1, 0]),
+  );
+});
+
+it('reports safe distinct reasons without echoing provider payloads', () => {
+  for (const [response, reason, completion] of [
+    [{ status: 'incomplete' }, 'provider_status', 'incomplete'],
+    [{ status: 'private provider detail' }, 'provider_status', 'unknown'],
+    [{ status: 'completed', outputs: [] }, 'missing_audio', undefined],
+    [{ status: 'completed', outputs: [{ type: 'audio', data: '' }] }, 'empty_audio_part', undefined],
+  ] as const) {
+    try {
+      interactionAudioResponse(response);
+      expect.fail('must reject');
+    } catch (error) {
+      expect(error).toMatchObject({ code: 'tts_incomplete_audio', reason });
+      expect((error as { completion?: string }).completion).toBe(completion);
+      expect(JSON.stringify(error)).not.toContain('private provider detail');
+    }
+  }
+});
