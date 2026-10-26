@@ -111,6 +111,12 @@ export async function registerServerManagement(
     });
     app.addHook('onRequest', async (request, reply) => {
       if (exempt(request.url) || request.method === 'OPTIONS') return;
+      // Earlier async hooks may finish after the client has already disconnected.
+      // Its close event cannot be observed retroactively; do not admit that work.
+      if (reply.raw.destroyed || request.raw.aborted) {
+        reply.hijack();
+        return reply;
+      }
       if (recoveryRequired || activeLease())
         return reply.code(503).header('Retry-After', '5').send({ error: 'server_maintenance' });
       requests++;
