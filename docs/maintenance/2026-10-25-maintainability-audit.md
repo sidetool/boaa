@@ -749,3 +749,26 @@ DB를 사용하지 않았다. 새 테스트 파일은 추가하지 않았고 실
 `hotfixes/maintenance-request-accounting-20261026/`에 보관한다. 복구 자료는 관리 상태 볼륨의
 각 `operator-backups/` 및 `backups/tts-reliability-20261026-r2/`,
 `backups/maintenance-request-accounting-20261026/`에 있다.
+
+### 낭독 미리 생성하기 운영 반영 — 2026-10-26
+
+API·worker·웹을 `c0bac3d`로 함께 반영했다. 듣기 화면의 **미리 생성하기**에서 회차 범위의
+음성을 서버에 보관하고, 일반 듣기에서 같은 본문·목소리의 음성을 재사용한다. 계약과 상한은
+[provider 경계](../architecture/provider-boundaries.md)의 저장형 오디오북 절을 따른다.
+
+- 관련 검사 117개가 단계별로 통과했다. 최종 수정 모듈과 의존 경계의 타입 검사, lint,
+  서버 production bundle 검사와 웹 빌드를 통과했다. 최종 전체 TypeScript/Quality 재실행은 아니다.
+- 실제 패널과 모의 서버·WAV를 사용해 320/390/1280px 배치, 생성 확인·중단·재개 및 저장된
+  두 음성의 순서 재생·위치 저장을 확인했다. 실제 유료 API 생성이나 대량 생성 부하는 검증하지 않았다.
+- 일반 유지보수 lease로 진행 중 요청이 끝나기를 기다린 후 API·worker를 정상 종료했다.
+  PostgreSQL dump와 서버 파일을 백업하고 dump 읽기 검사를 거친 뒤 migration 65를 적용했다.
+  기존 사용자·책·장 건수와 계정·보기/낭독·provider·플러그인 설정 지문은 반영 전후 동일했다.
+- 교체 후 세 서비스의 이미지·코드와 HTTPS 웹 산출물을 확인했다. 실제 소유 책의 생성 목록 GET,
+  익명 접근 거부, 저장 음성 조회 경로를 확인했으며 합성 호출이나 임시 세션 생성은 없었다.
+  관리 상태는 complete/busy=false이며 유지보수 lease는 해제됐다.
+
+운영 근거는 설치 폴더의 `hotfixes/narration-preparation-20261026/`, 복구 자료는 관리 상태
+볼륨의 같은 이름 `backups/`와 `operator-backups/`에 보관한다. 스키마가 64에서 65로 바뀌므로
+이전 이미지만 재시작하는 롤백은 불가능하다. 적용 스크립트는 새 테이블이 비어 있고 migration
+체크섬이 일치할 때만 65를 되돌린다. 녹음이 생긴 이후에는 DB와 음성 파일을 함께 보존하는
+별도 복구가 필요하며, 녹음을 지워 자동 롤백하지 않는다.
