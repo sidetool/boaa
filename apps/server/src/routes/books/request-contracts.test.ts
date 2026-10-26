@@ -58,7 +58,7 @@ describe('reader settings request contract', () => {
       { field: 'mode', value: 'automatic', error: 'ttsPlayback.mode is invalid' },
       { field: 'voiceSource', value: 'cloud', error: 'ttsPlayback.voiceSource is invalid' },
       { field: 'serverVoiceId', value: 42, error: 'ttsPlayback.serverVoiceId is invalid' },
-      { field: 'serverVoiceId', value: 'v'.repeat(161), error: 'ttsPlayback.serverVoiceId is invalid' },
+      { field: 'serverVoiceId', value: 'v'.repeat(513), error: 'ttsPlayback.serverVoiceId is invalid' },
       { field: 'offlineOnly', value: 'true', error: 'ttsPlayback.offlineOnly must be boolean' },
       { field: 'footnotePlayback', value: 'unknown', error: 'ttsPlayback.footnotePlayback is invalid' },
     ])('rejects an invalid $field', ({ field, value, error }) => {

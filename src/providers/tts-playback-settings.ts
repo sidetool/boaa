@@ -26,7 +26,7 @@ export function normalizeTTSPlaybackSettings(
     schemaVersion: 1,
     mode: value?.mode === 'cast' ? 'cast' : 'plain',
     voiceSource: value?.voiceSource === 'server' ? 'server' : 'system',
-    serverVoiceId: typeof value?.serverVoiceId === 'string' ? value.serverVoiceId.slice(0, 160) : undefined,
+    serverVoiceId: typeof value?.serverVoiceId === 'string' ? value.serverVoiceId.slice(0, 512) : undefined,
     plainChunking:
       value?.plainChunking === 'batch' ? 'batch' : value?.plainChunking === 'paragraph' ? 'paragraph' : 'sentence',
     plainBatchCharacters: normalizePlainTTSBatchCharacters(value?.plainBatchCharacters),

@@ -420,3 +420,12 @@ UI가 하면 안 되는 것:
 - hosted mode의 provider secret은 encrypted `provider_secrets` row 또는 server env/mounted secret/cloud secret manager 중 하나로 들어온다. `provider_settings`, `voice_profiles.provider_options`, `provider_jobs.progress`, `analysis_runs.metadata`, `sync_events`, logs, toasts에는 secret 원문을 넣지 않는다.
 - desktop secure local provider secret은 Tauri command가 OS credential store에 저장한다. JS는 set/delete/test/status만 호출하고 secret 원문을 다시 읽지 않는다.
 - plain browser local web mode는 cloud provider key 저장/직접 호출을 지원하지 않는다. Hosted localhost/self-host 또는 desktop secure adapter를 사용한다.
+
+### 낭독 설정 저장 경계
+
+묶음 크기(`plainBatchCharacters`, 200–2000자 정수)는 전역 설정과 책별 덮어쓰기 모두
+`/api/settings` 저장·재조회 경로에서 보존한다. 화면의 임시 상태나 JSON 직렬화만으로 저장을
+검증하지 않고 서버 검증기·DB·동기화 이벤트와 재조회까지 검사한다. 서버 목소리 식별자는
+제공자 접두사를 포함해 합성 요청과 같은 최대 512자를 허용하며 160자로 자르지 않는다.
+책별 TTS 저장 항목과 기기/공유 설정 분류는 타입의 전체 키를 검사해 새 항목 누락을 막는다.
+보기 설정은 기존 기기별 저장 범위를 유지하고 서버 설정 저장으로 덮어쓰지 않는다.

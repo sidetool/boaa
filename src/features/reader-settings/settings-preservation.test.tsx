@@ -1,4 +1,6 @@
 import 'fake-indexeddb/auto';
+import { validateSettingsBody } from '../../../apps/server/src/routes/books/request-contracts';
+import { sharedReaderSettings } from '../../repositories/reader-settings-scope';
 import { act, create, type ReactTestRenderer } from 'react-test-renderer';
 import { beforeEach, expect, it, vi } from 'vitest';
 import type { ReaderSettings } from '../../domain/types';
@@ -18,7 +20,9 @@ async function fixture() {
     readerSettingsScope: 'settings-review',
     getSettings: vi.fn(async () => ({ settings: structuredClone(server) })),
     saveSettings: vi.fn(async (patch: Partial<ReaderSettings>) => {
-      server = { ...server, ...structuredClone(patch) };
+      const parsed = validateSettingsBody(structuredClone(patch));
+      if (!parsed.ok) throw new Error(parsed.error);
+      server = { ...server, ...sharedReaderSettings(parsed.value) };
     }),
   };
   const repository = new RemoteReaderRepository(client as unknown as RemoteApiClient);
@@ -60,8 +64,9 @@ async function fixture() {
       serverVoiceId: 'fixture:voice',
       rate: 1.2,
       plainChunking: 'batch',
+      plainBatchCharacters: 1200,
     },
-    ttsBookOverrides: { 'book-a': { rate: 1.4 } },
+    ttsBookOverrides: { 'book-a': { rate: 1.4, plainBatchCharacters: 300 } },
     downloadPolicy: { autoNext: true, nextCount: 3, retentionEnabled: true, keepRead: 10 },
     recentSearches: ['fixture query'],
     aiWorkflows: { schemaVersion: 1, defaultWorkflowId: 'fixture.workflow', bookOverrides: {} },

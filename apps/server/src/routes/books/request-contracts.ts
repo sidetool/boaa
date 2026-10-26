@@ -13,6 +13,10 @@ import type {
   TTSPlaybackSettings,
   TTSPlaybackSettingsOverride,
 } from '@boaa/contracts';
+import {
+  MIN_PLAIN_TTS_BATCH_CHARACTERS,
+  MAX_PLAIN_TTS_BATCH_CHARACTERS,
+} from '../../../../../src/providers/plain-tts-limits.js';
 import { normalizeBookMetadataPatch, type NormalizedBookMetadataPatch } from '@boaa/text-core/library-metadata';
 
 export interface BookPatchBody extends NormalizedBookMetadataPatch {
@@ -170,6 +174,26 @@ function validateAIWorkflowPreferences(value: unknown): ValidationResult<NonNull
   };
 }
 
+// Exhaustive: a new playback setting must also be preserved in book overrides.
+const TTS_OVERRIDE_FIELDS = {
+  mode: true,
+  voiceSource: true,
+  serverVoiceId: true,
+  plainChunking: true,
+  plainBatchCharacters: true,
+  offlineOnly: true,
+  footnotePlayback: true,
+  rate: true,
+  pitch: true,
+  volume: true,
+  sentencePauseMs: true,
+  paragraphPauseMs: true,
+  chapterPauseMs: true,
+  chapterEndBehavior: true,
+  sleepTimerDefault: true,
+  skippedContentTypes: true,
+} satisfies Record<keyof TTSPlaybackSettingsOverride, true>;
+
 function validateTTSPlaybackSettings(
   value: unknown,
   fallback: TTSPlaybackSettings,
@@ -187,7 +211,7 @@ function validateTTSPlaybackSettings(
     next.voiceSource = body.voiceSource;
   }
   if (body.serverVoiceId !== undefined) {
-    if (typeof body.serverVoiceId !== 'string' || body.serverVoiceId.length > 160)
+    if (typeof body.serverVoiceId !== 'string' || body.serverVoiceId.length > 512)
       return { ok: false, error: 'ttsPlayback.serverVoiceId is invalid' };
     next.serverVoiceId = body.serverVoiceId;
   }
@@ -195,6 +219,17 @@ function validateTTSPlaybackSettings(
     if (body.plainChunking !== 'sentence' && body.plainChunking !== 'paragraph' && body.plainChunking !== 'batch')
       return { ok: false, error: 'ttsPlayback.plainChunking is invalid' };
     next.plainChunking = body.plainChunking;
+  }
+  if (body.plainBatchCharacters !== undefined) {
+    const size = body.plainBatchCharacters;
+    if (
+      typeof size !== 'number' ||
+      !Number.isInteger(size) ||
+      size < MIN_PLAIN_TTS_BATCH_CHARACTERS ||
+      size > MAX_PLAIN_TTS_BATCH_CHARACTERS
+    )
+      return { ok: false, error: 'ttsPlayback.plainBatchCharacters is out of range' };
+    next.plainBatchCharacters = size;
   }
   if (body.offlineOnly !== undefined) {
     if (typeof body.offlineOnly !== 'boolean') return { ok: false, error: 'ttsPlayback.offlineOnly must be boolean' };
@@ -493,23 +528,7 @@ export function validateSettingsBody(value: unknown): ValidationResult<ReaderSet
       const parsed = validateTTSPlaybackSettings(merged, next.ttsPlayback);
       if (!parsed.ok) return parsed;
       const sparse: TTSPlaybackSettingsOverride = {};
-      for (const field of [
-        'mode',
-        'voiceSource',
-        'serverVoiceId',
-        'plainChunking',
-        'offlineOnly',
-        'footnotePlayback',
-        'rate',
-        'pitch',
-        'volume',
-        'sentencePauseMs',
-        'paragraphPauseMs',
-        'chapterPauseMs',
-        'chapterEndBehavior',
-        'sleepTimerDefault',
-        'skippedContentTypes',
-      ] as const) {
+      for (const field of Object.keys(TTS_OVERRIDE_FIELDS) as (keyof TTSPlaybackSettingsOverride)[]) {
         if (Object.prototype.hasOwnProperty.call(raw, field)) {
           Object.assign(sparse, {
             [field]: field === 'sleepTimerDefault' && raw[field] === null ? null : parsed.value[field],

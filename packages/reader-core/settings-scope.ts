@@ -46,7 +46,7 @@ export function sharedReaderSettings(settings: Partial<ReaderSettings>): SharedR
     downloadPolicy: settings.downloadPolicy,
     homeRows: settings.homeRows,
     recentSearches: settings.recentSearches,
-  };
+  } satisfies Record<Exclude<keyof ReaderSettings, keyof DeviceReaderSettings>, unknown>;
   return Object.fromEntries(Object.entries(shared).filter(([, value]) => value !== undefined)) as SharedReaderSettings;
 }
 
