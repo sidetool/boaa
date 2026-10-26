@@ -29,40 +29,40 @@
 
 정리 전 `9ee2947`의 Git 추적 파일 기준이다. 외부 라이선스·자산도 전체 파일 수에 포함된다.
 
-| 항목 | 측정값 | 해석 |
-| --- | ---: | --- |
-| 추적 파일 | 4,824 | 이 수만으로 삭제 대상을 정할 수 없음 |
-| Markdown | 90 | 현재 안내·과거 계획·라이선스 문서 혼재 |
-| `*.test.*`, `*.spec.*` 파일 | 1,009 | fixture 전체나 테스트 case 수가 아님 |
-| 루트 package script | 111 | 기능별 선택 실행과 전체 검증의 경계가 불명확 |
-| Quality CI가 선택하는 Vitest 파일 | 520 | 이미 합집합으로 중복 제거됨; 최초 문서·실행기 정리에서 동일 집합 보존 |
-| `src/App.tsx` | 6,216줄 | import 169개, 상태·작업·화면 연결이 한 곳에 집중 |
-| `useExternalSourceController.ts` | 4,410줄 | 목록·서재·구독·다운로드·복구를 함께 관리 |
-| `FixedDocumentScreen.tsx` | 3,615줄 | 형식별 세션·화면·입력·읽기 진행을 함께 관리 |
+| 항목                              |  측정값 | 해석                                                                  |
+| --------------------------------- | ------: | --------------------------------------------------------------------- |
+| 추적 파일                         |   4,824 | 이 수만으로 삭제 대상을 정할 수 없음                                  |
+| Markdown                          |      90 | 현재 안내·과거 계획·라이선스 문서 혼재                                |
+| `*.test.*`, `*.spec.*` 파일       |   1,009 | fixture 전체나 테스트 case 수가 아님                                  |
+| 루트 package script               |     111 | 기능별 선택 실행과 전체 검증의 경계가 불명확                          |
+| Quality CI가 선택하는 Vitest 파일 |     520 | 이미 합집합으로 중복 제거됨; 최초 문서·실행기 정리에서 동일 집합 보존 |
+| `src/App.tsx`                     | 6,216줄 | import 169개, 상태·작업·화면 연결이 한 곳에 집중                      |
+| `useExternalSourceController.ts`  | 4,410줄 | 목록·서재·구독·다운로드·복구를 함께 관리                              |
+| `FixedDocumentScreen.tsx`         | 3,615줄 | 형식별 세션·화면·입력·읽기 진행을 함께 관리                           |
 
 ## 후속 리팩토링 적용 현황
 
 검토 후 사용자 승인으로 `a8b6cd9`부터 구현했다. 아래는 유지보수 브랜치의 구현 상태이며 운영 배포 상태가 아니다.
 
-| 항목 | 반영한 변경 | 보존한 경계 |
-| --- | --- | --- |
-| A1 | 원본 ETag/If-Range 고정, body 수신 전 검증, export 버전 결합, 후속 PDF 오류 전달 | 다른 버전의 바이트를 혼합하지 않음; 검증 헤더가 없는 서버는 명시적 실패 |
-| A2 | 책장·소속 통합 조회와 오래된 응답 차단 | 한 refresh의 HTTP 2회→1회; 로컬/이전 adapter, 계정별 수명 유지 |
-| A3 | 복구 pass의 서재 snapshot·회차 조회 공유, bootstrap 결과 재사용 | 상태 변경 뒤 재조회, 큐 revision/CAS·휴지통·읽기 순서 유지 |
-| A4 — 일부 | 순수 조회와 반복 정합화 작업을 별도 모듈로 분리 | 기존 호출은 정합화를 계속 수행; 조회 때마다 생기는 쓰기 제거와 전용 조정자 도입은 미적용 |
-| A5 | 탐색·홈의 소비자별 취소와 취소 가능한 대기열 | 다른 소비자 요청 보존, 실제 loader 종료까지 동시 실행 수 제한 |
-| A6 | 옛 UI 11개 삭제, 기존 5개 테스트를 현재 UI로 이전, 미참조 전용 CSS 정리 | 공유 model/hook 보존; 실제 원본 다운로드 smoke도 현재 화면 사용 |
-| A7 — 일부 | 서재 조회/정합화 책임 분리와 PDF·만화 썸네일 component의 수명 분리 | 대형 App/TTS·reader controller 전체 재구성은 후속 범위 |
-| A8 | 페이지당 최대 512개 block INSERT를 1개로 묶음 | 기존 transaction·소유권·교체·rollback 유지; 동일 revision 저장 생략 없음 |
-| A9 | 책장 소유권 확인을 transaction당 1회로 줄임 | 항목별 savepoint·중복 입력 순서·부분 성공·no-op event 계약 유지 |
-| A10 | 미사용 탐색 설정 함수 3개와 전용 import 삭제 | 현행 설정 migration·계정 분리 유지 |
-| A11 | 사용자/멱등 키 잠금을 receipt 조회 전에 획득 | 같은 키 동시 요청은 같은 receipt, mutation/event는 한 번; 실패는 전체 rollback |
-| A12 | SHA256 표기 정규화와 같은 원본의 명시적 교체 선택 | 다른 인코딩/분할 재해석, 복사·건너뛰기 유지 |
-| A13 | 서버 `done` 이후 최초 manifest 실패까지 저장/갱신 구분, 계정별 완료 기록과 조회 전용 재시도 | 완전한 저장본 반환 유지; 완료 후 취소·재시작·시리즈 ID·다른 import 소비자의 복구 보호 |
-| A14 | 선택적 본문 버전을 전달하고 위치 저장 transaction에서 확인 | 구 클라이언트 필드 누락 허용, 충돌 시 위치·읽음 상태·event 모두 무변경 |
-| A15 — 보류 | 현행 header timeout 정책 유지 | 본문 제한은 제품 정책 변경이므로 이번 구조 정리에 포함하지 않음 |
-| A16 | 선택적 pageIndex를 서버에 전달 | 구 서버 대응 필터·삭제용 map·전체 주석 list/최종 갱신 유지 |
-| EPUB·TXT | 정확한 File/선택 수명에 묶인 준비 hash 재사용, 빈 서재 검사 생략, 서버 검증 TXT hash 재사용, EPUB 내부 중복 본문 hash 제거 | 실제 바이트 검증, 변경 가능한 공개 EPUB 입력의 재계산, 인코딩/분할/append/재개 경계 유지 |
+| 항목       | 반영한 변경                                                                                                                | 보존한 경계                                                                              |
+| ---------- | -------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| A1         | 원본 ETag/If-Range 고정, body 수신 전 검증, export 버전 결합, 후속 PDF 오류 전달                                           | 다른 버전의 바이트를 혼합하지 않음; 검증 헤더가 없는 서버는 명시적 실패                  |
+| A2         | 책장·소속 통합 조회와 오래된 응답 차단                                                                                     | 한 refresh의 HTTP 2회→1회; 로컬/이전 adapter, 계정별 수명 유지                           |
+| A3         | 복구 pass의 서재 snapshot·회차 조회 공유, bootstrap 결과 재사용                                                            | 상태 변경 뒤 재조회, 큐 revision/CAS·휴지통·읽기 순서 유지                               |
+| A4 — 일부  | 순수 조회와 반복 정합화 작업을 별도 모듈로 분리                                                                            | 기존 호출은 정합화를 계속 수행; 조회 때마다 생기는 쓰기 제거와 전용 조정자 도입은 미적용 |
+| A5         | 탐색·홈의 소비자별 취소와 취소 가능한 대기열                                                                               | 다른 소비자 요청 보존, 실제 loader 종료까지 동시 실행 수 제한                            |
+| A6         | 옛 UI 11개 삭제, 기존 5개 테스트를 현재 UI로 이전, 미참조 전용 CSS 정리                                                    | 공유 model/hook 보존; 실제 원본 다운로드 smoke도 현재 화면 사용                          |
+| A7 — 일부  | 서재 조회/정합화 책임 분리와 PDF·만화 썸네일 component의 수명 분리                                                         | 대형 App/TTS·reader controller 전체 재구성은 후속 범위                                   |
+| A8         | 페이지당 최대 512개 block INSERT를 1개로 묶음                                                                              | 기존 transaction·소유권·교체·rollback 유지; 동일 revision 저장 생략 없음                 |
+| A9         | 책장 소유권 확인을 transaction당 1회로 줄임                                                                                | 항목별 savepoint·중복 입력 순서·부분 성공·no-op event 계약 유지                          |
+| A10        | 미사용 탐색 설정 함수 3개와 전용 import 삭제                                                                               | 현행 설정 migration·계정 분리 유지                                                       |
+| A11        | 사용자/멱등 키 잠금을 receipt 조회 전에 획득                                                                               | 같은 키 동시 요청은 같은 receipt, mutation/event는 한 번; 실패는 전체 rollback           |
+| A12        | SHA256 표기 정규화와 같은 원본의 명시적 교체 선택                                                                          | 다른 인코딩/분할 재해석, 복사·건너뛰기 유지                                              |
+| A13        | 서버 `done` 이후 최초 manifest 실패까지 저장/갱신 구분, 계정별 완료 기록과 조회 전용 재시도                                | 완전한 저장본 반환 유지; 완료 후 취소·재시작·시리즈 ID·다른 import 소비자의 복구 보호    |
+| A14        | 선택적 본문 버전을 전달하고 위치 저장 transaction에서 확인                                                                 | 구 클라이언트 필드 누락 허용, 충돌 시 위치·읽음 상태·event 모두 무변경                   |
+| A15 — 보류 | 현행 header timeout 정책 유지                                                                                              | 본문 제한은 제품 정책 변경이므로 이번 구조 정리에 포함하지 않음                          |
+| A16        | 선택적 pageIndex를 서버에 전달                                                                                             | 구 서버 대응 필터·삭제용 map·전체 주석 list/최종 갱신 유지                               |
+| EPUB·TXT   | 정확한 File/선택 수명에 묶인 준비 hash 재사용, 빈 서재 검사 생략, 서버 검증 TXT hash 재사용, EPUB 내부 중복 본문 hash 제거 | 실제 바이트 검증, 변경 가능한 공개 EPUB 입력의 재계산, 인코딩/분할/append/재개 경계 유지 |
 
 격리 PostgreSQL에서 PDF 512블록의 block INSERT 1회와 책장 100항목 성공의 전체 SQL 506회를
 측정했다. 기존 호출 구조의 512회와 604회에서 각각 줄어든다(같은 입력과 transaction/event 계약 기준).
@@ -143,7 +143,6 @@
   프로덕션 동작은 추가하지 않았고 기존 동작 검사를 재사용했다.
 - 최종 제품 코드의 웹/서버 타입 검사, 변경 코드 lint/format, 웹 production build,
   도구·공개 경계 테스트 7개와 공개 소스·계약 경계 검사는 통과했다.
-
 
 ### 6.1 Sol high 독립 검증과 추가 수정
 
@@ -242,7 +241,6 @@
 임시 파일은 장기 보존을 보장하지 않는다. 이 사전 검증 단계에는 운영 배포를 포함하지 않았다.
 외부 push와 Windows/Android 검증은 하지 않았다.
 
-
 ### 운영 반영 결과 — 2026-10-25
 
 사용자의 배포 승인 후 **`a371efe`의 웹·API·작업자를 운영에 반영했다.** 기존 관리형 배포의
@@ -266,7 +264,6 @@ API 요청 연결도 없는 것을 확인했다. 두 번째 시도에서는 유�
 배포 근거는 운영 설치의 `hotfixes/maintenance-audit-20261025/`에 보관한다. 관리 상태 볼륨의
 `/state/backups/maintenance-audit-20261025-r2/`에 백업을, 같은 ID의 `operator-backups/`에
 이전 설정·이미지와 검증 기록을 보존했다. 이전 이미지도 남겨 두었다. 외부 이미지 공개나 push는 하지 않았다.
-
 
 운영 버전 기록도 후속 정합화했다. GitHub에 공개된 `v0.1.1-beta.6`의 실제 태그 커밋은
 `37a3cd7`이며 현재 운영 코드 `a371efe`의 조상이다. 현재 운영은 **공식 beta6 기반 + 운영 테스트용
@@ -363,19 +360,19 @@ TypeScript import 분석과 문자열/동적 참조 재검색에서 아래 11개
 현재 앱 화면 진입점에서 연결되지 않았다. 테스트와 수동 smoke의 참조는 별도로 남아 있으므로
 단순 `import 없음`만으로 일괄 삭제하면 검증까지 없애게 된다.
 
-| 예전 파일 (`src/features/` 아래) | 실제 UI (`src/ui-next/` 아래) |
-| --- | --- |
-| `backup/BackupPanel.tsx` | `library-tools/UiNextBackupSheet.tsx` |
+| 예전 파일 (`src/features/` 아래)              | 실제 UI (`src/ui-next/` 아래)                  |
+| --------------------------------------------- | ---------------------------------------------- |
+| `backup/BackupPanel.tsx`                      | `library-tools/UiNextBackupSheet.tsx`          |
 | `chapter-structure/ChapterStructurePanel.tsx` | `chapter-structure/UiNextChapterStructure.tsx` |
-| `discovery/DiscoveryEditor.tsx` | `discovery/DiscoveryEditSheet.tsx` |
-| `discovery/SaveDiscoveryList.tsx` | `discovery/SaveListSheet.tsx` |
-| `discovery/SourceQuickJump.tsx` | `discovery/SourceJumpSheet.tsx` |
-| `external-sources/SourceWorkManagement.tsx` | `source/SourceWorkTools.tsx` |
-| `import/ImportDialog.tsx` | `import/UiNextImportSheet.tsx` |
-| `library-folders/LibraryFolderPanel.tsx` | `library-tools/UiNextFolderSheet.tsx` |
-| `library/LibraryManagementPanel.tsx` | `LibraryManagementPanel.tsx` |
-| `library/LibraryWorkDialog.tsx` | `library-tools/UiNextLibraryWorkSheet.tsx` |
-| `library/OriginalFilesDialog.tsx` | `library-tools/UiNextOriginalFilesSheet.tsx` |
+| `discovery/DiscoveryEditor.tsx`               | `discovery/DiscoveryEditSheet.tsx`             |
+| `discovery/SaveDiscoveryList.tsx`             | `discovery/SaveListSheet.tsx`                  |
+| `discovery/SourceQuickJump.tsx`               | `discovery/SourceJumpSheet.tsx`                |
+| `external-sources/SourceWorkManagement.tsx`   | `source/SourceWorkTools.tsx`                   |
+| `import/ImportDialog.tsx`                     | `import/UiNextImportSheet.tsx`                 |
+| `library-folders/LibraryFolderPanel.tsx`      | `library-tools/UiNextFolderSheet.tsx`          |
+| `library/LibraryManagementPanel.tsx`          | `LibraryManagementPanel.tsx`                   |
+| `library/LibraryWorkDialog.tsx`               | `library-tools/UiNextLibraryWorkSheet.tsx`     |
+| `library/OriginalFilesDialog.tsx`             | `library-tools/UiNextOriginalFilesSheet.tsx`   |
 
 근거 진입점: `App.tsx:328`, `features/import/ImportFeatureHost.tsx:6`,
 `features/library/LibrarySourceFilesHost.tsx:3`, `features/book-workspace/BookWorkspaceScreens.tsx`,
@@ -565,13 +562,13 @@ IndexedDB를 사용한다. 아래에서 두 저장 경로를 구분한다.
 
 ### 먼저 시도할 작은 변경
 
-| 후보 | 적용 경로·근거 | 기대 효과와 주의점 |
-| --- | --- | --- |
-| 준비 단계 SHA256 재사용 | 공통 선택 화면 `import-duplicate-inspection.ts:30`, `useImportController.ts:535`; 서버 `server-upload-import-service.ts:335`는 이미 `expectedSourceContentHash` 지원 | 32MiB 이하에서 계산한 해시가 일반 입력에 전달되지 않아 재계산한다. 정확한 File 객체와 준비 세대에만 묶는다. 파일명·크기·수정시간 key는 다른 바이트를 구분하지 못하며, 잘못 재사용하면 이전 완료 job에 합류해 새 파일 검증까지 생략될 수 있다. |
-| 빈 서재의 중복용 해시 생략 | 공통 `inspectImportDuplicates`는 novels가 비어도 전체 파일을 읽음 | 8MiB 합성 File+빈 서재에서 중복 검사 전체 읽기 1회와 이후 업로드 hash의 8MiB 읽기를 확인했다. 중복 검사가 불필요하면 업로드 준비 시 한 번만 계산하면 된다. |
-| TXT worker의 원본 재해시 제거 | 서버 `import-service.ts:583` → `packages/text-core/parser.ts:163`; 조립 단계에 이미 검증한 `upload.contentHash` 존재 | 서버가 실제 바이트에서 계산한 hash만 기존 decode 함수와 `parseDecodedNovelTextForImport`에 전달한다. 클라이언트 주장이나 공통 parser의 검증 생략은 대상이 아니다. 합성 20MiB 해시 4회는 Node24에서 102–131ms였으며 전체 업로드 시간이 아니다. |
-| EPUB 정규화 본문 해시 재사용 | 공유 `packages/epub-core/index.ts:821`, `:879`에서 같은 sections를 결합·해시 | 이미지 복구 이후 내부 parse→materialize 연속 호출에 한정한다. 공개 EpubDocument는 호출자가 수정할 수 있어 객체에 붙인 과거 hash를 무조건 신뢰하면 안 된다. 원본 hash와 본문 hash도 합치지 않는다. 실제 절약 시간은 미측정. |
-| 완료 직후 manifest 재조회 축소 | 서버 업로드 `awaitImport`와 batch의 `getNovel` 두 경로 | A13의 집계 수정과 분리한다. 현재 공통 결과는 완전한 저장본이 아니므로 재조회를 유지한다. 서버 반환 계약·mapper를 맞춘 뒤 원격 경로만 줄이는 후보이며 즉시 적용할 단순 삭제가 아니다. |
+| 후보                           | 적용 경로·근거                                                                                                                                                       | 기대 효과와 주의점                                                                                                                                                                                                                            |
+| ------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 준비 단계 SHA256 재사용        | 공통 선택 화면 `import-duplicate-inspection.ts:30`, `useImportController.ts:535`; 서버 `server-upload-import-service.ts:335`는 이미 `expectedSourceContentHash` 지원 | 32MiB 이하에서 계산한 해시가 일반 입력에 전달되지 않아 재계산한다. 정확한 File 객체와 준비 세대에만 묶는다. 파일명·크기·수정시간 key는 다른 바이트를 구분하지 못하며, 잘못 재사용하면 이전 완료 job에 합류해 새 파일 검증까지 생략될 수 있다. |
+| 빈 서재의 중복용 해시 생략     | 공통 `inspectImportDuplicates`는 novels가 비어도 전체 파일을 읽음                                                                                                    | 8MiB 합성 File+빈 서재에서 중복 검사 전체 읽기 1회와 이후 업로드 hash의 8MiB 읽기를 확인했다. 중복 검사가 불필요하면 업로드 준비 시 한 번만 계산하면 된다.                                                                                    |
+| TXT worker의 원본 재해시 제거  | 서버 `import-service.ts:583` → `packages/text-core/parser.ts:163`; 조립 단계에 이미 검증한 `upload.contentHash` 존재                                                 | 서버가 실제 바이트에서 계산한 hash만 기존 decode 함수와 `parseDecodedNovelTextForImport`에 전달한다. 클라이언트 주장이나 공통 parser의 검증 생략은 대상이 아니다. 합성 20MiB 해시 4회는 Node24에서 102–131ms였으며 전체 업로드 시간이 아니다. |
+| EPUB 정규화 본문 해시 재사용   | 공유 `packages/epub-core/index.ts:821`, `:879`에서 같은 sections를 결합·해시                                                                                         | 이미지 복구 이후 내부 parse→materialize 연속 호출에 한정한다. 공개 EpubDocument는 호출자가 수정할 수 있어 객체에 붙인 과거 hash를 무조건 신뢰하면 안 된다. 원본 hash와 본문 hash도 합치지 않는다. 실제 절약 시간은 미측정.                    |
+| 완료 직후 manifest 재조회 축소 | 서버 업로드 `awaitImport`와 batch의 `getNovel` 두 경로                                                                                                               | A13의 집계 수정과 분리한다. 현재 공통 결과는 완전한 저장본이 아니므로 재조회를 유지한다. 서버 반환 계약·mapper를 맞춘 뒤 원격 경로만 줄이는 후보이며 즉시 적용할 단순 삭제가 아니다.                                                          |
 
 브라우저의 준비 단계 SHA256은 async 함수 안에서도 실제 계산은 JavaScript로 동기 실행된다.
 단순히 동시에 여러 파일을 검사하도록 바꾸기보다 결과 재사용과 불필요한 계산 생략이 먼저다.
@@ -638,18 +635,18 @@ DB를 사용하지 않았다. 새 테스트 파일은 추가하지 않았고 실
 
 ### 변경 범위와 필요한 행동 검증
 
-| 범위 | 먼저 적용할 수 있는 단위 | 구현 후 반드시 확인할 동작 |
-| --- | --- | --- |
-| A2·A10 | 책장 통합 조회, 미사용 함수 3개 제거를 각각 분리 | 로컬/원격 adapter, 변경 직후 refresh, 조회 실패 시 선택 유지, 계정 전환, 이전 설정 migration |
-| A12·A13 | 중복 판정과 재해석 선택 보존, 저장/후속 조회 실패 분리 | 같은 원본의 다른 encoding/split, 사용자 메타데이터·읽기 상태 보존, append의 최신 revision, 조회/callback 실패, 취소 후 늦은 완료 |
-| A16 | 선택적 pageIndex만 추가; 전체 list 유지 | 0·빈 페이지, 구 서버의 query 무시, 조회 후 삭제, 다른 페이지 주석 유지, 재배치 후 최신 상태 |
-| A1·A14 | 원본 읽기와 위치 저장을 각각 클라이언트/서버 경계에서 수정 | quoted ETag, 200 body 조기 취소, 최초/후속 range 실패 UI, 버전 필드 누락 정책, 구 버전 조합, append/reset 경쟁, 충돌 시 위치·읽음 상태·event 무변경 |
-| A3·A4 | 한 복구 pass의 snapshot 공유 후 복구 책임 분리 | links 우선·휴지통 포함 조회, 동시 큐 추가, 새 revision 보존, 가져오기 완료 후 재복구, purge/방문 journal 재실행, 실패를 빈 목록으로 오인하지 않음 |
-| A5·A7 | 소비자 취소와 작업 수명을 보존하며 하나씩 분리 | 공유 소비자 중 한 명만 취소, abort 무시 공급자, 화면 닫아도 다운로드 유지, runtime 중복 생성 방지, commit 이후 주석 정리 완료 |
-| A6 | 고유 검증을 현행 UI로 옮긴 뒤 옛 component만 제거 | 큰 원본 다운로드·닫은 뒤 늦은 응답·재시도·진행 단계, 실제 화면 연결; 공유 model/hook/CSS 유지 |
-| A8·A9·A11 | block INSERT batch, 공통 소유권 확인, 멱등 키 직렬화를 별도 변경 | 임시 DB에서 rollback·다른 책 충돌·변경된 동일 revision 저장·항목별 부분 성공·중복 입력 순서·동일 키 동시 2요청의 변경/event 1회 |
-| A15 | JSON 본문 제한을 별도 정책으로 정의 | 느리지만 진행 중인 응답, 큰 Blob, 멈춘 401/503 body, 저장 성공 뒤 응답 중단, 총 재시도 예산, 호출자/계정 취소 |
-| TXT·EPUB 속도 | File 수명에 묶인 준비 hash 및 서버 검증 TXT hash부터 각각 적용 | 동일 파일 메타데이터·다른 바이트, 재선택/재개, 파싱·장·본문 identity 동등성, 취소·교체·원본 보존; 실제 단계별 시간 비교 |
+| 범위          | 먼저 적용할 수 있는 단위                                         | 구현 후 반드시 확인할 동작                                                                                                                          |
+| ------------- | ---------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| A2·A10        | 책장 통합 조회, 미사용 함수 3개 제거를 각각 분리                 | 로컬/원격 adapter, 변경 직후 refresh, 조회 실패 시 선택 유지, 계정 전환, 이전 설정 migration                                                        |
+| A12·A13       | 중복 판정과 재해석 선택 보존, 저장/후속 조회 실패 분리           | 같은 원본의 다른 encoding/split, 사용자 메타데이터·읽기 상태 보존, append의 최신 revision, 조회/callback 실패, 취소 후 늦은 완료                    |
+| A16           | 선택적 pageIndex만 추가; 전체 list 유지                          | 0·빈 페이지, 구 서버의 query 무시, 조회 후 삭제, 다른 페이지 주석 유지, 재배치 후 최신 상태                                                         |
+| A1·A14        | 원본 읽기와 위치 저장을 각각 클라이언트/서버 경계에서 수정       | quoted ETag, 200 body 조기 취소, 최초/후속 range 실패 UI, 버전 필드 누락 정책, 구 버전 조합, append/reset 경쟁, 충돌 시 위치·읽음 상태·event 무변경 |
+| A3·A4         | 한 복구 pass의 snapshot 공유 후 복구 책임 분리                   | links 우선·휴지통 포함 조회, 동시 큐 추가, 새 revision 보존, 가져오기 완료 후 재복구, purge/방문 journal 재실행, 실패를 빈 목록으로 오인하지 않음   |
+| A5·A7         | 소비자 취소와 작업 수명을 보존하며 하나씩 분리                   | 공유 소비자 중 한 명만 취소, abort 무시 공급자, 화면 닫아도 다운로드 유지, runtime 중복 생성 방지, commit 이후 주석 정리 완료                       |
+| A6            | 고유 검증을 현행 UI로 옮긴 뒤 옛 component만 제거                | 큰 원본 다운로드·닫은 뒤 늦은 응답·재시도·진행 단계, 실제 화면 연결; 공유 model/hook/CSS 유지                                                       |
+| A8·A9·A11     | block INSERT batch, 공통 소유권 확인, 멱등 키 직렬화를 별도 변경 | 임시 DB에서 rollback·다른 책 충돌·변경된 동일 revision 저장·항목별 부분 성공·중복 입력 순서·동일 키 동시 2요청의 변경/event 1회                     |
+| A15           | JSON 본문 제한을 별도 정책으로 정의                              | 느리지만 진행 중인 응답, 큰 Blob, 멈춘 401/503 body, 저장 성공 뒤 응답 중단, 총 재시도 예산, 호출자/계정 취소                                       |
+| TXT·EPUB 속도 | File 수명에 묶인 준비 hash 및 서버 검증 TXT hash부터 각각 적용   | 동일 파일 메타데이터·다른 바이트, 재선택/재개, 파싱·장·본문 identity 동등성, 취소·교체·원본 보존; 실제 단계별 시간 비교                             |
 
 작은 후보도 관련 동작 검증 전에는 안전 판정이 아니다. 공통 parser·저장소 변경은 운영 서버뿐 아니라
 정적 웹/IndexedDB와 내장 서버 소비자도 확인한다. 새 테스트 파일을 항목마다 늘리지 않고 기존 동작
@@ -714,7 +711,6 @@ DB를 사용하지 않았다. 새 테스트 파일은 추가하지 않았고 실
 - EPUB asset DB/IndexedDB batch, 청크 상태 조회 축소, 다중 회차 준비의 요약/취소, complete와 worker 조립 인계는 미적용이다. 실제 단계별 지연과 메모리를 측정해 비용이 큰 경로부터 적용한다.
 - 기존 FNV 사용 경계는 남은 문제다. 이 리팩토링의 통과를 위해 검사나 허용 목록을 완화하지 않는다. 의존성 build-script의 미정 정책으로 인한 설치 차단은 위 실환경 검증에서 해결했다.
 - 이후 배포에서도 운영 변경과의 차이를 다시 확인한다. 이번 운영 코드 기준은 위의 `a371efe`이며, 작업 폴더의 후속 문서 커밋이나 새 구현이 자동 배포되는 것은 아니다.
-
 
 ### 후속 TTS·배포 요청 집계 수정 — 2026-10-26
 
@@ -800,3 +796,34 @@ API·worker·웹을 `b28e7f4`로 반영했다. 이전 별도 저장 음성 플�
 운영 근거와 복구 자료는 `hotfixes/prepared-reader-20261026/` 및 관리 상태 볼륨의 같은 이름
 `operator-backups/`, `backups/`에 있다. 다른 작업자의 TTS 환경 변경은 이 배포 전에 이미 원복됐고,
 이번 배포에서 TTS 주소·모델 환경변수나 사용자 provider/reader 설정을 과거 DB로 복원하지 않았다.
+
+### 로컬·OpenAI 호환 TTS 서버 연결 관리 — 2026-10-26
+
+API·worker·웹을 `7bba0ef`로 운영 반영했다. 듣기 → TTS 엔진 연결의 **TTS 서버**에서
+로컬 JSON TTS 서버 또는 OpenAI 호환 음성 API를 추가·확인·수정·켜고 끄기·삭제할 수 있다.
+기존 제공자나 기본 목소리를 교체하지 않으며 연결별 설정은 서버 DB에 암호화해 저장한다.
+모델/목소리 목록을 제공하지 않는 서버는 ID를 직접 입력한다. 연결 확인은 메타데이터 조회이고
+합성 요청은 보내지 않는다. 서버 자체 실행과 실제 API 호환성은 별도 전제다.
+
+- Opus medium이 기존 듣기 화면 스타일로 UI를 구현했다. 새 중첩 시트나 애니메이션은 추가하지 않았다.
+- 관련 백엔드 83개, UI 58개 테스트 및 마지막 입력 계약 8개 재검사가 통과했다. 변경 모듈과
+  의존 경계의 웹·서버 타입 검사, lint/format, 순환 검사, 서버 bundle·hosted 웹 빌드를 완료했다.
+  전체 저장소 Quality 재실행은 아니다.
+- Chromium에서 실제 컴포넌트·시트·HTTP 클라이언트와 모의 계정 API를 사용해 320/390/1280px
+  등록/수정·키 보존·비활성·삭제·실패 안내를 확인했다. 최초 fixture에서 빠진 실제 공용 base CSS를
+  포함한 뒤 각 입력칸의 너비까지 측정했고 최종 여섯 화면을 검토했다. 전체 운영 App·안드로이드
+  실기기나 실제 외부 TTS 합성을 검증한 것으로 보지 않는다.
+- 유지보수 lease, API/worker 정상 종료, DB·파일 백업과 dump 읽기 검사 후 스키마 65→66을 적용했다.
+  새 테이블만 추가했고 계정·읽기/낭독·provider·플러그인·기존 연결·녹음 및 구간 행 지문이 동일했다.
+  API/worker/web의 기존 환경변수 전체 지문도 동일하다. TTS 주소·모델·허용 호스트를 바꾸거나
+  과거 DB를 복원하지 않았다.
+- 운영 연결 목록 API의 관리자 조회·익명 차단·no-store 응답, 기존 목소리 목록을 확인했다.
+  기존 일시정지 작업의 완성된 58개 구간·세 회차의 리더 계획 및 실제 저장 음성 조회가 통과했다.
+  새 연결 등록·실제 합성·유료 호출·임시 로그인 세션 생성 없이 기존 작업 상태와 설정을 보존했다.
+- 공개 HTTPS 웹 산출물, 세 서비스 이미지/코드/health, 재시작 0회, 관리 complete/busy=false 및
+  lease 해제를 확인했다. 운영 근거·복구 자료는 `hotfixes/tts-connections-20261026/`와 관리 상태
+  볼륨의 같은 이름 `operator-backups/`, `backups/`에 있다.
+
+일반 서버 낭독과 미리 생성하기에 연결한다. 화자별 전용 제공자 설정까지 확장한 것은 아니다.
+모델 변경은 URL·프로토콜·선택 모델 기준으로 판단하고, 이름·API 키·목소리 목록·요청 분할 한도의
+변경만으로 기존 생성 작업의 모델이 바뀐 것으로 처리하지 않는다.
