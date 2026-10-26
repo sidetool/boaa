@@ -35,6 +35,7 @@ import { SettingsSlider } from '../../features/reader-settings/SettingsSlider';
 import TTSAddonPanel, { type TTSAddonPanelProps } from '../../features/tts/TTSAddonPanel';
 import UiNextAudiobookPanel from './UiNextAudiobookPanel';
 import UiNextSpokenTextFilters from './UiNextSpokenTextFilters';
+import UiNextTTSConnections from './UiNextTTSConnections';
 import type { TTSVoice } from '../../providers/tts';
 import { cx, Segmented, Switch } from '../components/primitives';
 import './listen.css';
@@ -216,6 +217,9 @@ export default function UiNextListenPanel(props: TTSAddonPanelProps) {
                   서버 설정 열기
                 </button>
               </p>
+            )}
+            {props.ttsConnections && (
+              <UiNextTTSConnections port={props.ttsConnections} onChanged={props.onTTSConnectionsChanged} />
             )}
             <ProviderSettingsPanel
               scope="tts_synthesis"

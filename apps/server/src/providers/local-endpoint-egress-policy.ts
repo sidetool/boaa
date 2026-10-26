@@ -18,6 +18,7 @@ export interface LocalEndpointEgressOptions {
   readonly allowedHosts?: readonly string[];
   readonly lookup?: (hostname: string) => Promise<readonly LocalEndpointAddress[]>;
   readonly fetchImpl?: typeof fetch;
+  readonly maxResponseBytes?: number;
 }
 
 export interface LocalEndpointRequest {
@@ -66,7 +67,7 @@ export async function requestLocalEndpoint(
       throw errorWithCause('Local TTS endpoint network request failed', error);
     }
   }
-  return requestPinnedEndpoint(endpoint, request);
+  return requestPinnedEndpoint(endpoint, request, options.maxResponseBytes ?? 32 * 1024 * 1024);
 }
 
 async function approveLocalEndpoint(
@@ -178,7 +179,11 @@ function isLoopbackAddress(value: LocalEndpointAddress): boolean {
   return loopbackAddresses.check(address.address, address.family === 4 ? 'ipv4' : 'ipv6');
 }
 
-function requestPinnedEndpoint(endpoint: ApprovedEndpoint, request: LocalEndpointRequest): Promise<Response> {
+function requestPinnedEndpoint(
+  endpoint: ApprovedEndpoint,
+  request: LocalEndpointRequest,
+  maxBytes: number,
+): Promise<Response> {
   if (request.signal?.aborted) return Promise.reject(abortError());
 
   return new Promise<Response>((resolve, reject) => {
@@ -211,8 +216,18 @@ function requestPinnedEndpoint(endpoint: ApprovedEndpoint, request: LocalEndpoin
     const send = endpoint.url.protocol === 'https:' ? https.request : http.request;
     const outgoing = send(requestOptions, (incoming) => {
       const chunks: Buffer[] = [];
+      let bytes = 0;
       incoming.on('data', (chunk: Buffer | string) => {
-        chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+        const data = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+        bytes += data.length;
+        if (bytes > maxBytes) {
+          const error = new Error('Local TTS endpoint response exceeds the size limit');
+          rejectOnce(error);
+          incoming.destroy();
+          outgoing.destroy();
+          return;
+        }
+        chunks.push(data);
       });
       incoming.on('error', (error) => {
         rejectOnce(errorWithCause('Local TTS endpoint network request failed', error));

@@ -19,6 +19,7 @@ import {
 import type { ActiveTTSPlayback } from '../../providers/tts-playback-session';
 import type { TTSStatus, TTSVoice } from '../../providers/tts';
 import type { PlainTTSVoices } from '../../providers/plain-tts';
+import type { TTSConnectionsPort } from '../../providers/tts-connections';
 import type { AudiobookInput, AudiobookPort, SavedAudiobook } from '../../providers/plain-audiobook';
 import { voiceApprovalForProfile, type VoiceProductStateV1, type VoiceSampleKind } from '../../providers/voice-product';
 import type { RemoteProviderJob, RemoteProviderSettings } from '../../services/remote/remote-api-client';
@@ -148,6 +149,10 @@ export interface TTSAddonPanelProps {
   refreshPlainVoices?(): void;
   /** Opens 설정 › 서버 관리, where an administrator installs the optional server narration voice. */
   openServerSettings?(): void;
+  /** Saved local/OpenAI-compatible TTS servers, edited on the ui-next engines page. */
+  readonly ttsConnections?: TTSConnectionsPort;
+  /** A saved server changed: reload the plain voice catalog without changing the chosen voice. */
+  onTTSConnectionsChanged?(): void;
   saveSystemVoice(target: VoiceTarget, providerVoiceId: string): void | Promise<unknown>;
   saveHostedVoice(target: VoiceTarget, providerVoiceId: string): void | Promise<unknown>;
   saveHostedVoiceOption(

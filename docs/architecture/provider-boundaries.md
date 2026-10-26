@@ -15,6 +15,39 @@
 `src/providers/browser-audio-session.ts`, `apps/server/src/routes/ai/plain-tts-routes.ts`와
 `apps/server/src/providers/`에 있다. 회귀 검증은 해당 모듈의 행동 테스트를 따른다.
 
+### 추가 TTS 서버
+
+듣기 → TTS 엔진 연결 → **TTS 서버**에서 로컬 JSON 엔진과 OpenAI 호환 음성 API를 여러 개
+등록한다. 기존 `local-endpoint`, `TTS_PLAIN_*`, 기본 목소리와 provider 설정은 교체하지 않는다.
+새 연결은 일반 서버 목소리와 미리 생성하기에 참여하며 기존 화자별 provider 등록과는 별개다.
+
+- `GET/POST /api/tts/connections`, `PUT/DELETE /:id`, `POST /probe` 및 `POST /:id/probe`는
+  기존 provider와 같은 bootstrap 관리자 경계다. migration 0066의 `tts_connections`에 주소와 API 키를
+  AES-GCM으로 암호화한다. 계정·연결 ID를 AAD로 사용하며 최대 16개를 트랜잭션으로 제한한다.
+- 로컬 기본 주소에는 `/synthesize`, OpenAI 호환 기본 주소에는 `/audio/speech`를 붙인다.
+  OpenAI 호환의 호스트만 입력하면 `/v1/audio/speech`다. 완성된 합성 주소도 받는다.
+  키는 Bearer 헤더로 전송한다. 편집 시 키 생략은 유지, 빈 문자열은 삭제이며 origin 변경 시
+  기존 키를 자동 전달하지 않는다. 브라우저 저장소에는 연결이나 키를 저장하지 않는다.
+- 연결 확인은 같은 서버의 모델·목소리 목록 GET만 수행한다. 합성·과금 호출은 하지 않는다.
+  `/models`, `/voices`를 지원하지 않는 서버는 모델·음성 ID를 직접 입력한다. 자동 입력 한도 탐지는 없다.
+  각 요청은 등록한 호스트로 DNS를 검증·고정하고, 인프라 주소 및 리다이렉트를 허용하지 않는다.
+  발견 응답은 256KiB, 합성 전송 응답은 32MiB로 제한한다.
+- OpenAI 호환 요청은 `model/input/voice/response_format/speed`, 로컬 요청은 기존
+  `modelId/text/voiceId/voiceProfile` 계약을 쓴다. 채팅 completion API는 TTS 연결이 아니다.
+  기본 엔진 입력 제한은 1000자이며 긴 낭독 단위는 최대 8개 구간으로 순차 분할한다.
+  분할 결과는 같은 형식의 PCM WAV만 합치며 본문 낭독 위치와 저장 작업은 하나의 원래 단위를 유지한다.
+  고급 설정 범위는 1–20000자, 1–32구간이다. 한 요청은 하나의 텍스트를 보내므로 구간 수는 문장 수가 아니다.
+- 연결 ID와 실제 주소·프로토콜·모델로 합성 모델을 식별한다. 이름·키·목록 변경이나 다른 서버 추가는
+  기존 모델의 작업을 무효화하지 않는다. 실제 모델/주소 변경은 새 생성에서 차단하며 이미 만든 파일은 보존한다.
+  각 전송 전후에 연결 존재·활성화·모델을 다시 확인한다. 삭제는 음성 파일이나 읽기 설정을 삭제하지 않는다.
+- API와 worker는 같은 DB와 암호화 키를 읽는다. 등록 후 환경변수 변경이나 재시작은 필요하지 않다.
+  GPU 모델 서버의 설치·시작은 그 서버 운영 범위다.
+
+구현은 `providers/tts-connection*.ts`, `routes/ai/tts-connection-routes.ts`,
+`src/services/remote/tts-connections-client.ts`, `UiNextTTSConnections.tsx`에 있다.
+격리 PostgreSQL·네트워크 테스트와 `scripts/performance/tts-connections-ui-smoke.mjs`는
+저장·권한·취소·모델 식별·형식 및 모바일 UI를 검증하며 실제 외부 엔진의 합성 품질을 보장하지 않는다.
+
 ### 저장형 오디오북
 
 `audiobook-routes.ts`와 `services/audiobook-*.ts`는 일반 서버 음성을 사용자가 지정한 회차 범위만큼

@@ -17,6 +17,7 @@ function fixture() {
       expect(params[0]).toBe('admin_fixture');
       if (sql.includes('from provider_settings')) return { rows: [row] };
       if (sql.includes('from provider_secrets')) return { rows: [] };
+      if (sql.includes('from tts_connections')) return { rows: [] };
       throw new Error('unexpected query');
     }),
   } as unknown as pg.Pool;

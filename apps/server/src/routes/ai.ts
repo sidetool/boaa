@@ -1,5 +1,6 @@
 import { requireAdmin } from '../auth.js';
 import { registerPlainTTSRoutes } from './ai/plain-tts-routes.js';
+import { registerTTSConnectionRoutes } from './ai/tts-connection-routes.js';
 import type { Queue } from 'bullmq';
 import type { FastifyInstance } from 'fastify';
 import pg from 'pg';
@@ -28,6 +29,7 @@ export async function registerAIRoutes(
         throw Object.assign(new Error('provider_capability_unavailable'), { statusCode: 403 });
     });
     await registerProviderIntegrationRoutes(app, pool, config);
+    await registerTTSConnectionRoutes(app, pool, config);
     await registerAnalysisWorkflowRoutes(app, pool, config, providerQueue);
     await registerProviderJobRoutes(app, pool, config, providerQueue);
     await registerLabelMutationRoutes(app, pool, config);

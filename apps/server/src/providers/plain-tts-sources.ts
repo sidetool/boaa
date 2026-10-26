@@ -1,5 +1,6 @@
 import type pg from 'pg';
 import { structuredIntegrityHash } from '@boaa/text-core/hash';
+import { TTSConnectionStore } from './tts-connections.js';
 import type { TTSSynthesisProvider } from '../../../../src/providers/tts';
 import type { ServerConfig } from '../config.js';
 import { listServerProviderCatalog } from './server-provider-catalog.js';
@@ -86,6 +87,7 @@ export async function loadPlainTTSSources(
         }),
     });
   }
+  sources.push(...(await new TTSConnectionStore(pool, config, env).sources()));
   return sources.sort(
     (a, b) => Number(b.id === settings.defaultProviderId) - Number(a.id === settings.defaultProviderId),
   );

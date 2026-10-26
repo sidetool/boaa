@@ -279,6 +279,7 @@ import { TTS_NEUTRAL_SAMPLE_KO_V1, ttsVoiceSampleText } from './providers/tts-vo
 import { createSampleNovel } from './data/sample';
 import type { RemoteProviderJob } from './services/remote/remote-api-client';
 import { createAudiobookPort } from './services/remote/audiobook-client';
+import { createTTSConnectionsPort } from './services/remote/tts-connections-client';
 import {
   defaultSettings,
   getStoredApiAuthToken,
@@ -2701,6 +2702,13 @@ export default function App() {
       ),
     [selectedHostedTTSProvider?.providerId, voiceProductController.state?.catalogSnapshots],
   );
+  const ttsConnections = useMemo(() => {
+    // A different account must remount the editor and discard any typed credential.
+    void ttsAccountScope;
+    return canUseProviders && readerRuntime.mode === 'remote' && providerApiClient
+      ? createTTSConnectionsPort(providerApiClient)
+      : undefined;
+  }, [canUseProviders, readerRuntime.mode, providerApiClient, ttsAccountScope]);
   const audiobookPort = useMemo(
     () =>
       canUseProviders && readerRuntime.mode === 'remote' && providerApiClient && selectedNovel?.id
@@ -5935,6 +5943,10 @@ export default function App() {
                   await plainTTS.preview();
                 }}
                 refreshPlainVoices={plainTTS.refresh}
+                ttsConnections={ttsConnections}
+                onTTSConnectionsChanged={() => {
+                  void plainTTS.refresh();
+                }}
                 openServerSettings={openServerSettings}
                 audiobook={
                   audiobookPort && ['txt', 'markdown', 'epub'].includes(selectedNovel.format ?? 'txt')

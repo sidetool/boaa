@@ -12,6 +12,8 @@ export interface LocalEndpointTTSProviderOptions extends LocalEndpointEgressOpti
   readonly endpointUrl: string;
   readonly modelId?: string;
   readonly providerOptions?: Record<string, unknown>;
+  readonly apiKey?: string;
+  readonly voices?: readonly TTSVoice[];
 }
 
 export class LocalEndpointTTSProvider implements TTSSynthesisProvider {
@@ -24,13 +26,18 @@ export class LocalEndpointTTSProvider implements TTSSynthesisProvider {
   constructor(private readonly options: LocalEndpointTTSProviderOptions) {}
 
   async listVoices(): Promise<TTSVoice[]> {
+    if (this.options.voices) return this.options.voices.map((voice) => ({ ...voice }));
     const endpointUrl = this.options.endpointUrl.trim();
     if (!endpointUrl) throw new Error('TTS_LOCAL_ENDPOINT_URL is required for local-endpoint provider');
     const signal = AbortSignal.timeout(10_000);
     const urls = [localEndpointVoicesUrl(endpointUrl)];
     if (isOpenAIEndpoint(endpointUrl)) urls.push(endpointUrl.replace(/\/audio\/speech\/?(?:\?.*)?$/, '/voices'));
     for (const url of urls) {
-      const response = await requestLocalEndpoint(url, { method: 'GET', signal }, this.options);
+      const response = await requestLocalEndpoint(
+        url,
+        { method: 'GET', signal, headers: this.authorization() },
+        this.options,
+      );
       if (response.status === 404 || response.status === 405) continue;
       if (!response.ok) throw new Error(`Local TTS voices request failed with status ${response.status}`);
       return parseLocalEndpointVoices(await response.json());
@@ -53,7 +60,7 @@ export class LocalEndpointTTSProvider implements TTSSynthesisProvider {
       endpointUrl,
       {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...this.authorization() },
         body: JSON.stringify(
           isOpenAIEndpoint(endpointUrl)
             ? {
@@ -96,7 +103,14 @@ export class LocalEndpointTTSProvider implements TTSSynthesisProvider {
     }
 
     const json = await response.json().catch(() => undefined);
-    return parseLocalEndpointJson(json, endpointSecretValues(new URL(endpointUrl)));
+    return parseLocalEndpointJson(json, [
+      ...endpointSecretValues(new URL(endpointUrl)),
+      ...(this.options.apiKey ? [this.options.apiKey] : []),
+    ]);
+  }
+
+  private authorization(): Record<string, string> {
+    return this.options.apiKey ? { Authorization: `Bearer ${this.options.apiKey}` } : {};
   }
 }
 

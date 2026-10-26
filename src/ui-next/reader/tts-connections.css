@@ -1,0 +1,145 @@
+/* Saved TTS servers on the engines page: a plain list, and an in-place editor reusing the filter form styles. */
+.un-tts-conn-list {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.un-tts-conn-list li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 56px;
+  border-bottom: 1px solid var(--un-line);
+}
+
+.un-tts-conn-list li.is-off .un-tts-conn-text {
+  opacity: 0.5;
+}
+
+.un-tts-conn-text {
+  display: grid;
+  flex: 1;
+  gap: 2px;
+  min-width: 0;
+}
+
+.un-tts-conn-text :is(b, small) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.un-tts-conn-text b {
+  font-size: 14.5px;
+  font-weight: 650;
+}
+
+.un-tts-conn-text small,
+.un-tts-conn-empty {
+  color: var(--un-text-3);
+  font-size: 12.5px;
+}
+
+.un-tts-conn-empty {
+  margin: 0;
+  padding: 14px 16px;
+  border-radius: 12px;
+  background: var(--un-bg-2);
+  text-align: center;
+}
+
+.un-tts-conn-editor {
+  gap: 12px;
+}
+
+.un-tts-conn-editor > .un-segmented {
+  width: 100%;
+}
+
+.un-tts-conn-editor > .un-segmented button {
+  flex: 1;
+}
+
+.un-tts-conn-fields .is-wide {
+  grid-column: 1 / -1;
+}
+
+.un-tts-conn-voices {
+  display: grid;
+  gap: 4px;
+}
+
+.un-tts-conn-voices > span,
+.un-tts-conn-advanced summary {
+  color: var(--un-text-2);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.un-tts-conn-editor textarea {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 13.5px;
+}
+
+.un-tts-conn-probe {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+}
+
+.un-tts-conn-probe small {
+  flex: 1;
+  min-width: 12em;
+  color: var(--un-text-3);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.un-tts-conn-models button {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.un-tts-conn-editor .un-filter-check > span {
+  display: grid;
+  gap: 1px;
+}
+
+.un-tts-conn-editor .un-filter-check small {
+  color: var(--un-text-3);
+  font-size: 12px;
+}
+
+.un-tts-conn-advanced {
+  display: grid;
+  gap: 8px;
+}
+
+.un-tts-conn-advanced[open] summary {
+  margin-bottom: 8px;
+}
+
+.un-tts-conn-advanced summary {
+  cursor: pointer;
+}
+
+.un-tts-conn-confirm {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.un-tts-conn-confirm small {
+  color: var(--un-text-2);
+  font-size: 13px;
+}
+
+@media (max-width: 420px) {
+  .un-tts-conn-editor .un-filter-fields {
+    grid-template-columns: 1fr;
+  }
+}

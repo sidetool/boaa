@@ -4,10 +4,12 @@ import ProviderSettingsPanel from '../../features/providers/ProviderSettingsPane
 import TTSAddonPanel, { type TTSAddonPanelProps } from '../../features/tts/TTSAddonPanel';
 import { DEFAULT_TTS_PLAYBACK_SETTINGS } from '../../providers/tts-playback-settings';
 import UiNextListenPanel from './UiNextListenPanel';
+import UiNextTTSConnections from './UiNextTTSConnections';
 import { usePlainTTS } from '../../features/tts/usePlainTTS';
 import { useTTSExecutionController } from '../../features/tts/useTTSExecutionController';
 import { buildPlainTTSBatch } from '../../providers/plain-tts';
 import type { Paragraph } from '../../domain/types';
+import type { TTSConnection, TTSConnectionsPort } from '../../providers/tts-connections';
 
 // Who may open 서버 관리: the server must expose management and the account must hold manageServer.
 const access = vi.hoisted(() => ({ managed: false, manageServer: true }));
@@ -550,6 +552,24 @@ describe('UiNextListenPanel plain engine voices', () => {
     click(button(root, '듣기'));
     expect(props.refreshPlainVoices).toHaveBeenCalledOnce();
     expect(button(root, '재생')).toBeDefined();
+  });
+  it('lists saved TTS servers on the engines page only when the port is wired', () => {
+    const port: TTSConnectionsPort = {
+      list: vi.fn(() => new Promise<TTSConnection[]>(() => {})),
+      probe: vi.fn(),
+      save: vi.fn(),
+      remove: vi.fn(),
+    };
+    const without = mount(serverFixture('M1'));
+    click(button(without.root.findByProps({ 'aria-label': '더 많은 청취 설정' }), /^TTS 엔진 연결/));
+    expect(without.root.findAllByType(UiNextTTSConnections)).toHaveLength(0);
+    act(() => renderer!.unmount());
+    const { root, props } = mount(serverFixture('M1', { ttsConnections: port, onTTSConnectionsChanged: vi.fn() }));
+    click(button(root.findByProps({ 'aria-label': '더 많은 청취 설정' }), /^TTS 엔진 연결/));
+    const panel = root.findByType(UiNextTTSConnections);
+    expect(panel.props.port).toBe(port);
+    expect(panel.props.onChanged).toBe(props.onTTSConnectionsChanged);
+    expect(root.findByType(ProviderSettingsPanel)).toBeDefined();
   });
 });
 

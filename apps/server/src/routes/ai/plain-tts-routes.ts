@@ -1,4 +1,5 @@
 import type { PlainTTSModel } from '../../../../../src/providers/plain-tts';
+import { TTSConnectionError } from '../../providers/tts-connection-config.js';
 import type { AudiobookService } from '../../services/audiobook-service.js';
 import { registerAudiobookRoutes } from './audiobook-routes.js';
 import { AudiobookAudioStore } from '../../services/audiobook-audio.js';
@@ -624,6 +625,8 @@ export function classifyPlainTTSFailure(error: unknown): {
   message: string;
   upstreamStatus?: number;
 } {
+  if (error instanceof TTSConnectionError)
+    return { status: error.statusCode, code: 'tts_connection_failed', message: error.message };
   const value =
     error && typeof error === 'object'
       ? (error as { status?: unknown; code?: unknown; name?: unknown; message?: unknown })
