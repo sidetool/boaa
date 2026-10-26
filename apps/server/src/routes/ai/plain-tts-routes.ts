@@ -1,3 +1,6 @@
+import type { AudiobookService } from '../../services/audiobook-service.js';
+import { registerAudiobookRoutes } from './audiobook-routes.js';
+import { AudiobookAudioStore } from '../../services/audiobook-audio.js';
 import { GeminiAudioResponseError } from '../../providers/gemini-audio-response.js';
 import {
   MIN_PLAIN_TTS_BATCH_CHARACTERS,
@@ -37,8 +40,14 @@ export async function registerPlainTTSRoutes(
   app: FastifyInstance,
   pool: pg.Pool,
   config: ServerConfig,
-  options: { env?: NodeJS.ProcessEnv; provider?: TTSSynthesisProvider; sources?: () => Promise<PlainTTSSource[]> } = {},
-): Promise<void> {
+  options: {
+    savedAudiobooks?: boolean;
+    audiobookBackground?: boolean;
+    env?: NodeJS.ProcessEnv;
+    provider?: TTSSynthesisProvider;
+    sources?: () => Promise<PlainTTSSource[]>;
+  } = {},
+): Promise<AudiobookService | undefined> {
   const env = options.env ?? process.env;
   const modelId = env.TTS_PLAIN_MODEL_ID?.trim();
   const revision = env.TTS_PLAIN_MODEL_REVISION?.trim();
@@ -108,6 +117,9 @@ export async function registerPlainTTSRoutes(
   const diskCache = options.provider
     ? undefined
     : createPlainTTSAudioCache(path.join(config.dataDir, 'plain-tts-audio'));
+  const retained = !options.savedAudiobooks
+    ? undefined
+    : new AudiobookAudioStore(path.join(config.dataDir, 'saved-audiobooks'));
   const cache = new Map<string, Audio>();
   let cacheBytes = 0;
   const pending = new Map<string, Promise<Audio>>();
@@ -144,8 +156,18 @@ export async function registerPlainTTSRoutes(
     // Schedule after assigning the task so even synchronous fake adapters obey the identity fence.
     const task = Promise.resolve()
       .then(async () => {
-        if (regenerate) await diskCache?.remove(key);
-        const persisted = regenerate ? undefined : await diskCache?.get(key);
+        if (regenerate) {
+          await diskCache?.remove(key);
+          if (retained)
+            await pool.query(
+              `update saved_audiobook_items i set cache_key=null from saved_audiobooks a
+            where i.audiobook_id=a.id and i.cache_key=$1 and a.user_id=$2`,
+              [key, config.defaultUserId],
+            );
+        }
+        const persisted = regenerate
+          ? undefined
+          : ((await diskCache?.get(key)) ?? (await retained?.find(pool, config.defaultUserId, key)));
         if (persisted) return persisted;
         const now = new Date().toISOString();
         const adapter = await source.createProvider();
@@ -227,8 +249,7 @@ export async function registerPlainTTSRoutes(
     return task;
   }
 
-  app.get('/api/tts/plain/voices', async (_request, reply) => {
-    reply.header('Cache-Control', 'private, no-store');
+  async function catalog(): Promise<PlainTTSVoices> {
     const items = await sources();
     const results = await Promise.all(
       items.map(async (source) => {
@@ -271,7 +292,169 @@ export async function registerPlainTTSRoutes(
     if (!items.length)
       result.message = '서버 음성을 연결하지 않았습니다. 기기 목소리를 사용하거나 TTS 엔진을 연결하세요.';
     return result;
+  }
+  app.get('/api/tts/plain/voices', async (_request, reply) => {
+    reply.header('Cache-Control', 'private, no-store');
+    return catalog();
   });
+
+  async function render(
+    chapterId: string | undefined,
+    body: Record<string, unknown>,
+    sample = false,
+    onProvider?: (id: string) => void,
+  ) {
+    const availableSources = await sources();
+    if (!availableSources.length) throw new PlainTTSError(503, '연결된 서버 음성이 없습니다.');
+    if (!body || typeof body !== 'object' || Array.isArray(body))
+      throw new PlainTTSError(400, '낭독 요청이 올바르지 않습니다.');
+    if (body.regenerate !== undefined && (typeof body.regenerate !== 'boolean' || sample))
+      throw new PlainTTSError(400, '음성 재생성 요청이 올바르지 않습니다.');
+    const { voiceId, rate, modelRevision } = body;
+    if (
+      typeof voiceId !== 'string' ||
+      voiceId.length > 512 ||
+      typeof rate !== 'number' ||
+      !Number.isFinite(rate) ||
+      rate < 0.5 ||
+      rate > 2.5
+    )
+      throw new PlainTTSError(400, '목소리 또는 속도가 올바르지 않습니다.');
+    if (modelRevision !== catalogRevision(availableSources))
+      throw new PlainTTSError(409, '서버 모델이 변경되었습니다. 목소리 목록을 새로고침하세요.');
+    const source = availableSources.find((item) =>
+      item.legacyIds ? !voiceId.includes(':') : voiceId.startsWith(item.id + ':'),
+    );
+    if (!source) throw new PlainTTSError(400, '선택한 엔진을 찾을 수 없습니다. 목소리 목록을 새로고침하세요.');
+    onProvider?.(source.id);
+    const selectedVoice = (await voices(source)).find((voice) => voiceKey(source, voice.id) === voiceId);
+    if (!selectedVoice) throw new PlainTTSError(400, '선택한 목소리를 찾을 수 없습니다.');
+    let text = PLAIN_TTS_SAMPLE;
+    let sourceKey: unknown = { sample: 1 };
+    const loadSource = async (reference = { paragraphId: body.paragraphId, paragraphHash: body.paragraphHash }) => {
+      if (!chapterId) throw new PlainTTSError(400, '회차 ID가 필요합니다.');
+      const result = await pool.query<SourceRow>(
+        `
+              select p.paragraph, p.text, p.book_id, b.language, b.active_content_revision_id, p.paragraph_index
+              from paragraph_search p join library_books b on b.id = p.book_id
+              where p.chapter_id = $1 and p.paragraph_id = $2 and b.user_id = $3 and b.deleted_at is null
+            `,
+        [chapterId, reference.paragraphId, config.defaultUserId],
+      );
+      const row = result.rows[0];
+      if (!row) throw new PlainTTSError(404, '원문 문단을 찾을 수 없습니다.');
+      const paragraph = {
+        ...row.paragraph,
+        text: row.text,
+        id: String(reference.paragraphId),
+        novelId: row.book_id,
+        chapterId: chapterId,
+      };
+      if (
+        plainTTSParagraphHash(paragraph) !== reference.paragraphHash ||
+        (body.contentRevision ?? null) !== row.active_content_revision_id
+      )
+        throw new PlainTTSError(409, '본문이 변경되었습니다. 회차를 다시 열어주세요.');
+      return { row, paragraph };
+    };
+    if (!sample) {
+      if (
+        typeof body.paragraphId !== 'string' ||
+        typeof body.paragraphHash !== 'string' ||
+        typeof body.chunkHash !== 'string'
+      )
+        throw new PlainTTSError(400, '원문 위치가 필요합니다.');
+      if (
+        body.chunking !== undefined &&
+        body.chunking !== 'sentence' &&
+        body.chunking !== 'paragraph' &&
+        body.chunking !== 'batch'
+      )
+        throw new PlainTTSError(400, '낭독 단위를 확인하세요.');
+      if (
+        body.batchCharacters !== undefined &&
+        (body.chunking !== 'batch' ||
+          typeof body.batchCharacters !== 'number' ||
+          !Number.isInteger(body.batchCharacters) ||
+          body.batchCharacters < MIN_PLAIN_TTS_BATCH_CHARACTERS ||
+          body.batchCharacters > MAX_PLAIN_TTS_BATCH_CHARACTERS)
+      )
+        throw new PlainTTSError(400, '묶음 크기는 200~2000자로 설정해 주세요.');
+      const rules = parsePlainTTSRules(body.rules);
+      const { row, paragraph } = await loadSource();
+      let item;
+      if (body.batch !== undefined) {
+        if (
+          body.chunking !== 'batch' ||
+          !Array.isArray(body.batch) ||
+          body.batch.length < 2 ||
+          body.batch.length > 16 ||
+          body.batch.some(
+            (ref) => !ref || typeof ref.paragraphId !== 'string' || typeof ref.paragraphHash !== 'string',
+          ) ||
+          body.batch[0].paragraphId !== body.paragraphId ||
+          body.batch[0].paragraphHash !== body.paragraphHash
+        )
+          throw new PlainTTSError(400, '묶음 원문 위치가 올바르지 않습니다.');
+        const loaded = await Promise.all(body.batch.map((ref) => loadSource(ref)));
+        if (
+          loaded.some(
+            (entry, index) =>
+              entry.row.book_id !== row.book_id ||
+              (index > 0 && entry.row.paragraph_index <= loaded[index - 1].row.paragraph_index),
+          )
+        )
+          throw new PlainTTSError(400, '묶음 원문 순서가 올바르지 않습니다.');
+        item = buildPlainTTSBatch({
+          paragraphs: loaded.map((entry) => entry.paragraph),
+          batchCharacters: body.batchCharacters as number | undefined,
+          language: row.language,
+          rules,
+          rate,
+        });
+        if (item?.spokenTextFingerprint !== body.chunkHash) item = undefined;
+      } else {
+        item = buildPlainTTSItems({
+          paragraph,
+          language: row.language,
+          rules,
+          rate,
+          chunking: body.chunking,
+          batchCharacters: body.batchCharacters as number | undefined,
+        }).find((item) => item.spokenTextFingerprint === body.chunkHash);
+      }
+      if (!item) throw new PlainTTSError(409, '낭독할 문장이 원문과 일치하지 않습니다.');
+      text = item.text;
+      sourceKey = {
+        book: row.book_id,
+        chapter: chapterId,
+        paragraph: body.paragraphId,
+        revision: row.active_content_revision_id,
+        source: body.paragraphHash,
+        chunk: body.chunkHash,
+        batch: body.batch,
+      };
+    }
+    const key = structuredIntegrityHash({
+      version: 'plain-tts-v1',
+      ...(source.id.startsWith('gemini') ? { audioValidation: 2 } : {}),
+      user: config.defaultUserId,
+      sourceKey,
+      provider: source.id,
+      modelId: source.modelId,
+      revision: source.revision,
+      voiceId,
+      rate,
+      text,
+    });
+    const audio = await synthesize(key, text, selectedVoice.id, rate, source, body.regenerate === true);
+    // Ownership and revision may change while inference runs.
+    if (!sample) {
+      await loadSource();
+      if (Array.isArray(body.batch)) await Promise.all(body.batch.map((ref) => loadSource(ref)));
+    }
+    return { ...audio, key };
+  }
 
   for (const sample of [false, true]) {
     app.post<{ Params: { chapterId: string }; Body: Record<string, unknown> }>(
@@ -280,157 +463,9 @@ export async function registerPlainTTSRoutes(
       async (request, reply) => {
         let failureProvider: string | undefined;
         try {
-          const availableSources = await sources();
-          if (!availableSources.length) throw new PlainTTSError(503, '연결된 서버 음성이 없습니다.');
-          const body = request.body;
-          if (!body || typeof body !== 'object' || Array.isArray(body))
-            throw new PlainTTSError(400, '낭독 요청이 올바르지 않습니다.');
-          if (body.regenerate !== undefined && (typeof body.regenerate !== 'boolean' || sample))
-            throw new PlainTTSError(400, '음성 재생성 요청이 올바르지 않습니다.');
-          const { voiceId, rate, modelRevision } = body;
-          if (
-            typeof voiceId !== 'string' ||
-            voiceId.length > 512 ||
-            typeof rate !== 'number' ||
-            !Number.isFinite(rate) ||
-            rate < 0.5 ||
-            rate > 2.5
-          )
-            throw new PlainTTSError(400, '목소리 또는 속도가 올바르지 않습니다.');
-          if (modelRevision !== catalogRevision(availableSources))
-            throw new PlainTTSError(409, '서버 모델이 변경되었습니다. 목소리 목록을 새로고침하세요.');
-          const source = availableSources.find((item) =>
-            item.legacyIds ? !voiceId.includes(':') : voiceId.startsWith(item.id + ':'),
-          );
-          if (!source) throw new PlainTTSError(400, '선택한 엔진을 찾을 수 없습니다. 목소리 목록을 새로고침하세요.');
-          failureProvider = source.id;
-          const selectedVoice = (await voices(source)).find((voice) => voiceKey(source, voice.id) === voiceId);
-          if (!selectedVoice) throw new PlainTTSError(400, '선택한 목소리를 찾을 수 없습니다.');
-          let text = PLAIN_TTS_SAMPLE;
-          let sourceKey: unknown = { sample: 1 };
-          const loadSource = async (
-            reference = { paragraphId: body.paragraphId, paragraphHash: body.paragraphHash },
-          ) => {
-            const result = await pool.query<SourceRow>(
-              `
-              select p.paragraph, p.text, p.book_id, b.language, b.active_content_revision_id, p.paragraph_index
-              from paragraph_search p join library_books b on b.id = p.book_id
-              where p.chapter_id = $1 and p.paragraph_id = $2 and b.user_id = $3 and b.deleted_at is null
-            `,
-              [request.params.chapterId, reference.paragraphId, config.defaultUserId],
-            );
-            const row = result.rows[0];
-            if (!row) throw new PlainTTSError(404, '원문 문단을 찾을 수 없습니다.');
-            const paragraph = {
-              ...row.paragraph,
-              text: row.text,
-              id: String(reference.paragraphId),
-              novelId: row.book_id,
-              chapterId: request.params.chapterId,
-            };
-            if (
-              plainTTSParagraphHash(paragraph) !== reference.paragraphHash ||
-              (body.contentRevision ?? null) !== row.active_content_revision_id
-            )
-              throw new PlainTTSError(409, '본문이 변경되었습니다. 회차를 다시 열어주세요.');
-            return { row, paragraph };
-          };
-          if (!sample) {
-            if (
-              typeof body.paragraphId !== 'string' ||
-              typeof body.paragraphHash !== 'string' ||
-              typeof body.chunkHash !== 'string'
-            )
-              throw new PlainTTSError(400, '원문 위치가 필요합니다.');
-            if (
-              body.chunking !== undefined &&
-              body.chunking !== 'sentence' &&
-              body.chunking !== 'paragraph' &&
-              body.chunking !== 'batch'
-            )
-              throw new PlainTTSError(400, '낭독 단위를 확인하세요.');
-            if (
-              body.batchCharacters !== undefined &&
-              (body.chunking !== 'batch' ||
-                typeof body.batchCharacters !== 'number' ||
-                !Number.isInteger(body.batchCharacters) ||
-                body.batchCharacters < MIN_PLAIN_TTS_BATCH_CHARACTERS ||
-                body.batchCharacters > MAX_PLAIN_TTS_BATCH_CHARACTERS)
-            )
-              throw new PlainTTSError(400, '묶음 크기는 200~2000자로 설정해 주세요.');
-            const rules = parsePlainTTSRules(body.rules);
-            const { row, paragraph } = await loadSource();
-            let item;
-            if (body.batch !== undefined) {
-              if (
-                body.chunking !== 'batch' ||
-                !Array.isArray(body.batch) ||
-                body.batch.length < 2 ||
-                body.batch.length > 16 ||
-                body.batch.some(
-                  (ref) => !ref || typeof ref.paragraphId !== 'string' || typeof ref.paragraphHash !== 'string',
-                ) ||
-                body.batch[0].paragraphId !== body.paragraphId ||
-                body.batch[0].paragraphHash !== body.paragraphHash
-              )
-                throw new PlainTTSError(400, '묶음 원문 위치가 올바르지 않습니다.');
-              const loaded = await Promise.all(body.batch.map((ref) => loadSource(ref)));
-              if (
-                loaded.some(
-                  (entry, index) =>
-                    entry.row.book_id !== row.book_id ||
-                    (index > 0 && entry.row.paragraph_index <= loaded[index - 1].row.paragraph_index),
-                )
-              )
-                throw new PlainTTSError(400, '묶음 원문 순서가 올바르지 않습니다.');
-              item = buildPlainTTSBatch({
-                paragraphs: loaded.map((entry) => entry.paragraph),
-                batchCharacters: body.batchCharacters as number | undefined,
-                language: row.language,
-                rules,
-                rate,
-              });
-              if (item?.spokenTextFingerprint !== body.chunkHash) item = undefined;
-            } else {
-              item = buildPlainTTSItems({
-                paragraph,
-                language: row.language,
-                rules,
-                rate,
-                chunking: body.chunking,
-                batchCharacters: body.batchCharacters as number | undefined,
-              }).find((item) => item.spokenTextFingerprint === body.chunkHash);
-            }
-            if (!item) throw new PlainTTSError(409, '낭독할 문장이 원문과 일치하지 않습니다.');
-            text = item.text;
-            sourceKey = {
-              book: row.book_id,
-              chapter: request.params.chapterId,
-              paragraph: body.paragraphId,
-              revision: row.active_content_revision_id,
-              source: body.paragraphHash,
-              chunk: body.chunkHash,
-              batch: body.batch,
-            };
-          }
-          const key = structuredIntegrityHash({
-            version: 'plain-tts-v1',
-            ...(source.id.startsWith('gemini') ? { audioValidation: 2 } : {}),
-            user: config.defaultUserId,
-            sourceKey,
-            provider: source.id,
-            modelId: source.modelId,
-            revision: source.revision,
-            voiceId,
-            rate,
-            text,
+          const audio = await render(request.params.chapterId, request.body, sample, (id) => {
+            failureProvider = id;
           });
-          const audio = await synthesize(key, text, selectedVoice.id, rate, source, body.regenerate === true);
-          // Ownership and revision may change while inference runs.
-          if (!sample) {
-            await loadSource();
-            if (Array.isArray(body.batch)) await Promise.all(body.batch.map((ref) => loadSource(ref)));
-          }
           return reply.header('Cache-Control', 'private, no-store').type(audio.contentType).send(audio.data);
         } catch (error) {
           if (error instanceof PlainTTSError) {
@@ -458,6 +493,18 @@ export async function registerPlainTTSRoutes(
       },
     );
   }
+  if (retained)
+    return await registerAudiobookRoutes(app, pool, config, {
+      audioStore: retained,
+      background: options.audiobookBackground,
+      catalog,
+      render: (chapterId, request) => render(chapterId, request as unknown as Record<string, unknown>),
+      rules: parsePlainTTSRules,
+      failure: (error) =>
+        error instanceof PlainTTSError
+          ? { status: error.status, message: error.message }
+          : classifyPlainTTSFailure(error),
+    });
 }
 
 class PlainTTSError extends Error {

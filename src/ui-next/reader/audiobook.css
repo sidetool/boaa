@@ -1,0 +1,403 @@
+/* ui-next 저장 오디오북 page inside the 듣기 tab. Self-contained: the page may mount before listen.css. */
+
+.un-book {
+  display: grid;
+  gap: 22px;
+  min-width: 0;
+}
+
+.un-book-group {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+}
+
+.un-book-group-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-height: 28px;
+}
+
+.un-book-group-head h3 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 750;
+  letter-spacing: -0.015em;
+}
+
+.un-book-group-head small {
+  color: var(--un-text-3);
+  font-size: 12.5px;
+}
+
+.un-book .un-segmented {
+  width: 100%;
+}
+
+.un-book .un-segmented button {
+  flex: 1;
+}
+
+.un-book-note {
+  margin: 0;
+  color: var(--un-text-3);
+  font-size: 13px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+
+.un-book-note b {
+  color: var(--un-text-2);
+  font-weight: 650;
+}
+
+.un-book-note.is-box {
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: var(--un-bg-2);
+}
+
+.un-book-error {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin: 0;
+  color: var(--un-danger);
+  font-size: 13px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.un-book-error > svg {
+  flex: none;
+  margin-top: 2px;
+}
+
+/* ───────── range ───────── */
+
+.un-book-range {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+}
+
+.un-book-range > span {
+  color: var(--un-text-3);
+}
+
+.un-book select {
+  width: 100%;
+  min-width: 0;
+  height: 40px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 10px;
+  background: var(--un-bg-2);
+  color: var(--un-text);
+  font: inherit;
+  font-size: 14px;
+  text-overflow: ellipsis;
+}
+
+/* ───────── estimate ───────── */
+
+.un-book-estimate {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+  border-radius: 16px;
+  background: var(--un-bg-2);
+}
+
+.un-book-estimate dl {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin: 0;
+}
+
+.un-book-estimate dl > div {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.un-book-estimate dt {
+  color: var(--un-text-3);
+  font-size: 12px;
+}
+
+.un-book-estimate dd {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 750;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+.un-book-voice {
+  margin: 0;
+  color: var(--un-text-3);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.un-book-voice b {
+  color: var(--un-text);
+  font-weight: 650;
+}
+
+.un-book-ack {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgb(245 184 75 / 10%);
+  color: var(--un-text-2);
+  font-size: 13px;
+  line-height: 1.5;
+  cursor: pointer;
+}
+
+.un-book-ack input {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  margin: 1px 0 0;
+  accent-color: #f5b84b;
+}
+
+.un-book-ack b {
+  color: #f5b84b;
+  font-weight: 700;
+}
+
+.un-book-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+/* ───────── saved list ───────── */
+
+.un-book-list {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.un-book-item {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  padding: 14px;
+  border-radius: 16px;
+  background: var(--un-bg-2);
+}
+
+.un-book-item.is-playing {
+  box-shadow: inset 0 0 0 1px var(--un-accent);
+}
+
+.un-book-item-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.un-book-item-head b {
+  min-width: 0;
+  font-size: 15px;
+  font-weight: 700;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.un-book-badge {
+  flex: none;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgb(255 255 255 / 8%);
+  color: var(--un-text-2);
+  font-size: 12px;
+  font-weight: 650;
+  white-space: nowrap;
+}
+
+.un-book-badge:is(.is-running, .is-queued, .is-pausing) {
+  background: var(--un-accent-soft);
+  color: var(--un-accent-2);
+}
+
+.un-book-badge.is-completed {
+  background: rgb(70 200 130 / 14%);
+  color: #5fd39a;
+}
+
+.un-book-badge.is-failed {
+  background: rgb(255 90 106 / 12%);
+  color: var(--un-danger);
+}
+
+.un-book-meta {
+  color: var(--un-text-3);
+  font-size: 12.5px;
+  line-height: 1.5;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+.un-book-item .un-book-actions {
+  margin-top: 2px;
+}
+
+.un-book-remove {
+  margin-left: auto;
+  color: var(--un-text-3);
+}
+
+.un-book-confirm {
+  display: grid;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgb(255 255 255 / 4%);
+}
+
+.un-book-confirm p {
+  margin: 0;
+  color: var(--un-text-2);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.un-btn.un-book-danger {
+  background: rgb(255 90 106 / 16%);
+  color: var(--un-danger);
+}
+
+.un-btn.un-book-danger:hover {
+  background: rgb(255 90 106 / 24%);
+}
+
+/* ───────── saved playback ───────── */
+
+.un-book-player {
+  display: grid;
+  gap: 12px;
+  padding: 16px 16px 14px;
+  border-radius: 20px;
+  background: linear-gradient(160deg, rgb(91 140 255 / 14%), transparent 70%), var(--un-bg-2);
+}
+
+.un-book-player-now {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.un-book-player-now small {
+  color: var(--un-accent-2);
+  font-size: 12.5px;
+  font-weight: 700;
+}
+
+.un-book-player-now b {
+  font-size: 16px;
+  font-weight: 750;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.un-book-player-now b span {
+  color: var(--un-text-3);
+  font-size: 13.5px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.un-book-player-controls {
+  display: grid;
+  grid-template-columns: 1fr auto auto auto 1fr;
+  align-items: center;
+  gap: 14px;
+}
+
+.un-book-ctl,
+.un-book-play {
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  color: var(--un-text);
+  transition:
+    background 0.15s,
+    transform 0.1s;
+}
+
+.un-book-ctl {
+  width: 44px;
+  height: 44px;
+  background: none;
+}
+
+.un-book-player-controls > .un-book-ctl:first-child {
+  justify-self: start;
+  width: 40px;
+  height: 40px;
+  color: var(--un-text-2);
+}
+
+.un-book-ctl:hover:not(:disabled) {
+  background: rgb(255 255 255 / 8%);
+}
+
+.un-book-play {
+  width: 56px;
+  height: 56px;
+  background: #f5f5f7;
+  color: #0b0b0c;
+}
+
+.un-book-play:hover:not(:disabled) {
+  background: #fff;
+}
+
+.un-book-play:active:not(:disabled),
+.un-book-ctl:active:not(:disabled) {
+  transform: scale(0.94);
+}
+
+.un-book-ctl:disabled,
+.un-book-play:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+@media (max-width: 380px) {
+  .un-book-player-controls {
+    gap: 4px;
+  }
+
+  .un-book-estimate dd {
+    font-size: 16px;
+  }
+}
+
+/* Ghost buttons share the card colour; lift them so 듣기 reads as a button. */
+.un-book-item .un-btn.is-ghost {
+  background: rgb(255 255 255 / 8%);
+}
+
+.un-book-item .un-btn.is-ghost:hover {
+  background: rgb(255 255 255 / 13%);
+}

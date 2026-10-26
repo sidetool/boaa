@@ -276,6 +276,7 @@ import {
 import { TTS_NEUTRAL_SAMPLE_KO_V1, ttsVoiceSampleText } from './providers/tts-voice-samples';
 import { createSampleNovel } from './data/sample';
 import type { RemoteProviderJob } from './services/remote/remote-api-client';
+import { createAudiobookPort } from './services/remote/audiobook-client';
 import {
   defaultSettings,
   getStoredApiAuthToken,
@@ -2713,6 +2714,13 @@ export default function App() {
     voiceURI: settings.ttsVoiceURI,
     onError: (message) => showToast(message, 'warning'),
   });
+  const audiobookPort = useMemo(
+    () =>
+      canUseProviders && readerRuntime.mode === 'remote' && providerApiClient && selectedNovel?.id
+        ? createAudiobookPort(providerApiClient, selectedNovel.id)
+        : undefined,
+    [canUseProviders, readerRuntime, providerApiClient, selectedNovel?.id],
+  );
   const hostedTTSPlaybackReady =
     (hostedProviderMode || desktopProviderMode) && Boolean(selectedHostedTTSProvider) && hostedVoiceProfiles.length > 0;
   const selectedTTSPlaybackReady = plainMode ? plainServerSelected && plainTTS.ready : hostedTTSPlaybackReady;
@@ -5848,6 +5856,41 @@ export default function App() {
                 }}
                 refreshPlainVoices={plainTTS.refresh}
                 openServerSettings={openServerSettings}
+                audiobook={
+                  audiobookPort && ['txt', 'markdown', 'epub'].includes(selectedNovel.format ?? 'txt')
+                    ? {
+                        key: JSON.stringify([readerRuntime.session?.epoch, ttsAccountScope, selectedNovel.id]),
+                        port: audiobookPort,
+                        chapters: [...chapters]
+                          .sort((a, b) => a.index - b.index)
+                          .map(({ id, title }) => ({ id, title })),
+                        currentChapterId: currentChapter.id,
+                        generation:
+                          plainServerSelected && plainTTS.ready && spokenFilters.ready && plainTTS.catalog
+                            ? {
+                                voiceId:
+                                  ttsPlaybackSettings.serverVoiceId ||
+                                  (plainTTS.catalog.defaultVoiceId ?? plainTTS.catalog.voices[0]?.id) ||
+                                  '',
+                                modelRevision: plainTTS.catalog.revision!,
+                                chunking: ttsPlaybackSettings.plainChunking ?? 'sentence',
+                                batchCharacters:
+                                  ttsPlaybackSettings.plainChunking === 'batch'
+                                    ? ttsPlaybackSettings.plainBatchCharacters
+                                    : undefined,
+                                footnotePlayback: ttsPlaybackSettings.footnotePlayback,
+                                rules: spokenTextRules,
+                              }
+                            : undefined,
+                        rate: ttsPlaybackSettings.rate,
+                        volume: ttsPlaybackSettings.volume,
+                        beforePlayback: () => {
+                          stopTTS();
+                          voiceSampleAudioSession.stop(true);
+                        },
+                      }
+                    : undefined
+                }
                 bookOverrideEnabled={ttsBookOverrideEnabled}
                 pitchSupported={plainMode ? !plainServerSelected : selectedTTSPitchSupported}
                 resumeLabel={

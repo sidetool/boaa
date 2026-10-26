@@ -38,6 +38,13 @@ interface SavedStatus {
   status: ServerManagementStatus;
 }
 
+declare module 'fastify' {
+  interface FastifyInstance {
+    /** Reserves activity for server-owned work that has no open HTTP request. */
+    beginBackgroundWork?: () => (() => void) | undefined;
+  }
+}
+
 export async function registerServerManagement(
   app: FastifyInstance,
   queues: Pick<Queue, 'getJobCounts'>[],
@@ -51,6 +58,17 @@ export async function registerServerManagement(
   const exempt = (url: string) =>
     /^(?:\/api)?\/(?:admin\/system(?:\/|$)|health$|ready$|auth\/)/.test(url.split('?')[0]);
   const activeLease = () => lease && lease.expiresAt > Date.now() && lease.expiresAt < Date.now() + 300_000;
+  app.decorate('beginBackgroundWork', () => {
+    if (recoveryRequired || activeLease()) return undefined;
+    requests++;
+    let released = false;
+    return () => {
+      if (!released) {
+        released = true;
+        requests--;
+      }
+    };
+  });
   async function status(): Promise<ServerManagementStatus> {
     if (!directory) return idleStatus();
     try {

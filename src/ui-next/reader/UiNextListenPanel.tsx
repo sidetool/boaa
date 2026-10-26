@@ -6,6 +6,7 @@ import {
 import {
   AlertCircle,
   AudioLines,
+  BookHeadphones,
   ChevronLeft,
   ChevronRight,
   Minus,
@@ -32,12 +33,13 @@ import type { TTSPlaybackSettings } from '../../domain/types';
 import ProviderSettingsPanel from '../../features/providers/ProviderSettingsPanel';
 import { SettingsSlider } from '../../features/reader-settings/SettingsSlider';
 import TTSAddonPanel, { type TTSAddonPanelProps } from '../../features/tts/TTSAddonPanel';
+import UiNextAudiobookPanel from './UiNextAudiobookPanel';
 import UiNextSpokenTextFilters from './UiNextSpokenTextFilters';
 import type { TTSVoice } from '../../providers/tts';
 import { cx, Segmented, Switch } from '../components/primitives';
 import './listen.css';
 
-type Page = 'main' | 'details' | 'advanced' | 'engines' | 'filters';
+type Page = 'main' | 'details' | 'advanced' | 'engines' | 'filters' | 'audiobook';
 // Plain catalog entries may name the engine they run on; ids stay opaque and are saved as-is.
 type EngineVoice = TTSVoice & { providerId?: string; providerName?: string; modelId?: string; paid?: boolean };
 interface EngineStatus {
@@ -53,6 +55,7 @@ const PAGE_TITLE: Record<Exclude<Page, 'main'>, string> = {
   advanced: '화자·고급 설정',
   engines: 'TTS 엔진 연결',
   filters: '발음·문자 필터',
+  audiobook: '미리 생성하기',
 };
 type SleepValue = TTSPlaybackSettings['sleepTimerDefault'];
 type SkipKind = 'skip_line' | 'skip_prefix' | 'skip_suffix';
@@ -196,6 +199,8 @@ export default function UiNextListenPanel(props: TTSAddonPanelProps) {
             importFilters={props.importSpokenTextFilters}
             remove={props.deleteSpokenTextSkipRule}
           />
+        ) : page === 'audiobook' && props.audiobook ? (
+          <UiNextAudiobookPanel controls={props.audiobook} />
         ) : page === 'engines' ? (
           <>
             <p className="un-listen-note">
@@ -622,6 +627,16 @@ export default function UiNextListenPanel(props: TTSAddonPanelProps) {
       </div>
 
       <nav className="un-listen-links" aria-label="더 많은 청취 설정">
+        {props.audiobook && !localStatic && (
+          <button type="button" onClick={() => setPage('audiobook')}>
+            <BookHeadphones size={19} aria-hidden="true" />
+            <span>
+              <b>미리 생성하기</b>
+              <small>음성을 미리 만들어 두고 기다림 없이 듣기</small>
+            </span>
+            <ChevronRight size={18} aria-hidden="true" />
+          </button>
+        )}
         {props.saveSpokenTextFilter && (
           <button type="button" onClick={() => setPage('filters')}>
             <SpellCheck size={19} aria-hidden="true" />

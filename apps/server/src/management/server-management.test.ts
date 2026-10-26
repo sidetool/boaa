@@ -40,6 +40,33 @@ async function fixture(beforeManagement?: (request: FastifyRequest, reply: Fasti
 }
 const headers = { authorization: 'Bearer owner' };
 describe('server management mailbox', () => {
+  it('counts background generation as activity and blocks new work during maintenance', async () => {
+    const { app, directory } = await fixture();
+    const release = app.beginBackgroundWork!();
+    expect(release).toBeTypeOf('function');
+    await expect
+      .poll(async () => JSON.parse(await readFile(path.join(directory, 'activity.json'), 'utf8')).idle, {
+        timeout: 5000,
+      })
+      .toBe(false);
+    await atomicJson(path.join(directory, 'maintenance.json'), {
+      id: 'background-check',
+      expiresAt: Date.now() + 20_000,
+    });
+    await expect
+      .poll(async () => JSON.parse(await readFile(path.join(directory, 'activity.json'), 'utf8')).leaseId, {
+        timeout: 5000,
+      })
+      .toBe('background-check');
+    expect(app.beginBackgroundWork!()).toBeUndefined();
+    release!();
+    release!();
+    await expect
+      .poll(async () => JSON.parse(await readFile(path.join(directory, 'activity.json'), 'utf8')).idle, {
+        timeout: 5000,
+      })
+      .toBe(true);
+  });
   it('requires authentication and rejects arbitrary commands/URLs', async () => {
     const { app, directory } = await fixture();
     expect(

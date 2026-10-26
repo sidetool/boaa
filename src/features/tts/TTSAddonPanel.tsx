@@ -19,6 +19,7 @@ import {
 import type { ActiveTTSPlayback } from '../../providers/tts-playback-session';
 import type { TTSStatus, TTSVoice } from '../../providers/tts';
 import type { PlainTTSVoices } from '../../providers/plain-tts';
+import type { AudiobookInput, AudiobookPort } from '../../providers/plain-audiobook';
 import { voiceApprovalForProfile, type VoiceProductStateV1, type VoiceSampleKind } from '../../providers/voice-product';
 import type { RemoteProviderJob, RemoteProviderSettings } from '../../services/remote/remote-api-client';
 import type { HostedTTSOfflineCacheStatus } from '../../storage/hosted-tts-offline-cache';
@@ -46,6 +47,23 @@ export interface VoiceTarget {
 
 interface DisplayVoiceTarget extends VoiceTarget {
   readonly color?: string;
+}
+
+/** Saved ordinary-voice audiobooks for the open book, stored on the account's server. */
+export interface TTSAudiobookControls {
+  /** Account and book identity; a new key drops every list, job view and saved playback. */
+  readonly key: string;
+  readonly port: AudiobookPort;
+  /** Reading order. */
+  readonly chapters: readonly { readonly id: string; readonly title: string }[];
+  readonly currentChapterId?: string;
+  /** Only while an ordinary server voice is chosen and ready; saved audio stays playable without it. */
+  readonly generation?: Omit<AudiobookInput, 'chapterIds'>;
+  /** Listening rate and volume for saved audio, which is always synthesized at 1x. */
+  readonly rate: number;
+  readonly volume?: number;
+  /** Stops live listening and previews before saved audio starts. */
+  beforePlayback(): void | Promise<void>;
 }
 
 export interface TTSAddonPanelProps {
@@ -106,6 +124,7 @@ export interface TTSAddonPanelProps {
     readonly hosted?: VoiceCastingPoolView;
   };
   readonly bookCharacterCount: number;
+  readonly audiobook?: TTSAudiobookControls;
   /** Show only the speaker and advanced section, without the panel's own intro, tabs and status. */
   readonly view?: 'advanced';
   refreshStatus(): void | Promise<unknown>;

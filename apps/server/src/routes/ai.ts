@@ -32,7 +32,7 @@ export async function registerAIRoutes(
     await registerProviderJobRoutes(app, pool, config, providerQueue);
     await registerLabelMutationRoutes(app, pool, config);
     await registerTTSCacheRoutes(app, pool, config, providerQueue);
-    await registerPlainTTSRoutes(app, pool, config);
+    await registerPlainTTSRoutes(app, pool, config, { savedAudiobooks: true });
     await registerArtifactRoutes(app, pool, config);
     await registerCharacterGraphV2Routes(app, pool, config);
     await registerVoiceProductRoutes(app, pool, config);
