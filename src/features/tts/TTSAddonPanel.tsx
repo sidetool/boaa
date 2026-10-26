@@ -19,7 +19,7 @@ import {
 import type { ActiveTTSPlayback } from '../../providers/tts-playback-session';
 import type { TTSStatus, TTSVoice } from '../../providers/tts';
 import type { PlainTTSVoices } from '../../providers/plain-tts';
-import type { AudiobookInput, AudiobookPort } from '../../providers/plain-audiobook';
+import type { AudiobookInput, AudiobookPort, SavedAudiobook } from '../../providers/plain-audiobook';
 import { voiceApprovalForProfile, type VoiceProductStateV1, type VoiceSampleKind } from '../../providers/voice-product';
 import type { RemoteProviderJob, RemoteProviderSettings } from '../../services/remote/remote-api-client';
 import type { HostedTTSOfflineCacheStatus } from '../../storage/hosted-tts-offline-cache';
@@ -51,7 +51,7 @@ interface DisplayVoiceTarget extends VoiceTarget {
 
 /** Saved ordinary-voice audiobooks for the open book, stored on the account's server. */
 export interface TTSAudiobookControls {
-  /** Account and book identity; a new key drops every list, job view and saved playback. */
+  /** Account and book identity; a new key drops the previous job list. */
   readonly key: string;
   readonly port: AudiobookPort;
   /** Reading order. */
@@ -62,8 +62,8 @@ export interface TTSAudiobookControls {
   /** Listening rate and volume for saved audio, which is always synthesized at 1x. */
   readonly rate: number;
   readonly volume?: number;
-  /** Stops live listening and previews before saved audio starts. */
-  beforePlayback(): void | Promise<void>;
+  /** Selects the recorded plan and starts the existing reader's TTS session. */
+  listen(item: SavedAudiobook): void | Promise<void>;
 }
 
 export interface TTSAddonPanelProps {
@@ -125,6 +125,7 @@ export interface TTSAddonPanelProps {
   };
   readonly bookCharacterCount: number;
   readonly audiobook?: TTSAudiobookControls;
+  readonly preparedVoiceLabel?: string;
   /** Show only the speaker and advanced section, without the panel's own intro, tabs and status. */
   readonly view?: 'advanced';
   refreshStatus(): void | Promise<unknown>;

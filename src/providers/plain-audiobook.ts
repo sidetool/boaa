@@ -1,4 +1,6 @@
 import type { SpokenTextRule, TTSFootnotePlaybackPolicy } from '../domain/types';
+import type { PlainTTSModel } from './plain-tts';
+import type { PlayableTtsSegment } from './tts-playback';
 
 /** Ordinary narration saved on the account's server, independently of disposable caches. */
 export interface AudiobookInput {
@@ -9,6 +11,16 @@ export interface AudiobookInput {
   batchCharacters?: number;
   footnotePlayback: TTSFootnotePlaybackPolicy;
   rules: readonly SpokenTextRule[];
+  /** Set by the server from the chosen voice, never from unrelated catalog entries. */
+  model?: PlainTTSModel;
+}
+
+export interface PreparedNarration {
+  id: string;
+  chapterId: string;
+  contentRevision?: string;
+  voiceLabel: string;
+  items: { ordinal: number; paragraphIndex: number; nextParagraphIndex: number; playable: PlayableTtsSegment }[];
 }
 
 export interface AudiobookEstimate {
@@ -27,6 +39,7 @@ export type AudiobookStatus = 'queued' | 'running' | 'pausing' | 'paused' | 'fai
 export interface SavedAudiobook extends AudiobookEstimate {
   id: string;
   bookId: string;
+  chapterIds?: readonly string[];
   title: string;
   status: AudiobookStatus;
   completedItems: number;
@@ -51,4 +64,10 @@ export interface AudiobookPort {
   remove(id: string): Promise<void>;
   audio(id: string, index: number, signal?: AbortSignal): Promise<Blob>;
   progress(id: string, index: number): Promise<void>;
+  reader(
+    chapterId: string,
+    choice: { id?: string; voiceId?: string },
+    signal?: AbortSignal,
+  ): Promise<PreparedNarration | undefined>;
+  resolve(id: string, index: number, regenerate?: boolean, signal?: AbortSignal): Promise<Blob>;
 }

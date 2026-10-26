@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type pg from 'pg';
-import type { AudiobookInput, SavedAudiobook } from '../../../../src/providers/plain-audiobook';
-import type { PlainTTSRequest, PlainTTSVoices } from '../../../../src/providers/plain-tts';
+import type { AudiobookInput, SavedAudiobook, PreparedNarration } from '../../../../src/providers/plain-audiobook';
+import type { PlainTTSRequest, PlainTTSVoices, PlainTTSModel } from '../../../../src/providers/plain-tts';
 import { requestPlainTTSWithRetry } from '../../../../src/providers/plain-tts-retry';
 import { AudiobookAudioStore, type SavedAudio } from './audiobook-audio.js';
 import { audiobookError, planAudiobook, type AudiobookPlan } from './audiobook-plan.js';
@@ -30,6 +30,7 @@ function view(row: JobRow): SavedAudiobook {
     ...row.estimate,
     id: row.id,
     bookId: row.book_id,
+    chapterIds: row.settings.chapterIds,
     title: row.title,
     status: row.status,
     completedItems: row.completed_items,
@@ -46,6 +47,8 @@ export class AudiobookService {
   private active?: { id: string; abort: AbortController };
   private lastCleanup = 0;
   private closing = false;
+  private foreground = 0;
+  private items = new Map<string, { task: Promise<SavedAudio>; regenerate: boolean }>();
   async stop() {
     this.closing = true;
     if (this.active) {
@@ -55,14 +58,23 @@ export class AudiobookService {
         [this.active.id, this.owner],
       );
     }
+    await Promise.allSettled([...this.items.values()].map(({ task }) => task));
   }
   constructor(
     private readonly pool: pg.Pool,
     private readonly owner: string,
     readonly audioStore: AudiobookAudioStore,
     private readonly catalog: () => Promise<PlainTTSVoices>,
-    private readonly render: (chapterId: string, request: PlainTTSRequest) => Promise<SavedAudio>,
+    private readonly render: (
+      chapterId: string,
+      request: PlainTTSRequest,
+      model?: PlainTTSModel,
+    ) => Promise<SavedAudio>,
     private readonly failure: (error: unknown) => { message: string; status: number },
+    private readonly resolveModel?: (
+      settings: AudiobookInput,
+      probe: { chapterId: string; request: PlainTTSRequest; key?: string },
+    ) => Promise<PlainTTSModel>,
   ) {}
 
   async plan(bookId: string, settings: AudiobookInput) {
@@ -88,6 +100,215 @@ export class AudiobookService {
     ).rows[0];
     if (!row) throw audiobookError(404, '저장한 오디오북을 찾을 수 없습니다.');
     return row;
+  }
+  /** Rebuild source anchors from the recording's plan, not the listener's current chunk/filter settings. */
+  async reader(
+    bookId: string,
+    chapterId: string,
+    choice: { id?: string; voiceId?: string },
+  ): Promise<PreparedNarration | undefined> {
+    const row = (
+      await this.pool.query(
+        `select a.* from saved_audiobooks a join library_books b on b.id=a.book_id
+      where a.book_id=$1 and a.user_id=$2 and b.user_id=$2 and b.deleted_at is null and a.status<>'deleting'
+      and a.content_revision is not distinct from b.active_content_revision_id
+      and exists(select 1 from saved_audiobook_items i where i.audiobook_id=a.id and i.chapter_id=$3)
+      and ($4::text is null or a.id::text=$4) and ($4::text is not null or a.settings->>'voiceId'=$5)
+      order by a.created_at desc limit 1`,
+        [bookId, this.owner, chapterId, choice.id ?? null, choice.voiceId ?? null],
+      )
+    ).rows[0] as JobRow | undefined;
+    if (!row) return;
+    const plan = await planAudiobook(this.pool, this.owner, bookId, { ...row.settings, chapterIds: [chapterId] });
+    const saved = (
+      await this.pool.query(
+        'select ordinal,request,status from saved_audiobook_items where audiobook_id=$1 and chapter_id=$2 order by ordinal',
+        [row.id, chapterId],
+      )
+    ).rows;
+    if (plan.items.length !== saved.length)
+      throw audiobookError(409, '본문 구성이 변경되어 미리 만든 음성을 연결하지 못했어요.');
+    return {
+      id: row.id,
+      chapterId,
+      contentRevision: row.content_revision ?? undefined,
+      voiceLabel: row.estimate.voiceLabel,
+      items: plan.items.map((item, index) => {
+        const old = saved[index];
+        if (
+          old.request.chunkHash !== item.request.chunkHash ||
+          old.request.paragraphHash !== item.request.paragraphHash
+        )
+          throw audiobookError(409, '본문이 변경되어 미리 만든 음성을 연결하지 못했어요.');
+        return {
+          ordinal: old.ordinal,
+          paragraphIndex: item.paragraphIndex,
+          nextParagraphIndex: item.nextParagraphIndex,
+          playable: {
+            ...item.playable,
+            speakerLabel: row.estimate.voiceLabel,
+            preparedAudio: { id: row.id, ordinal: old.ordinal, ready: old.status === 'ready' },
+          },
+        };
+      }),
+    };
+  }
+  private async model(job: JobRow) {
+    if (job.settings.model || !this.resolveModel) return job.settings.model;
+    // Older plans did not store model identity. Prove it from their existing audio key (or unchanged catalog).
+    const probe = (
+      await this.pool.query(
+        `select chapter_id,request,cache_key from saved_audiobook_items where audiobook_id=$1 order by (status='ready') desc,ordinal limit 1`,
+        [job.id],
+      )
+    ).rows[0];
+    const model = await this.resolveModel(job.settings, {
+      chapterId: probe.chapter_id,
+      request: probe.request,
+      key: probe.cache_key ?? undefined,
+    });
+    await this.pool.query(
+      "update saved_audiobooks set settings=jsonb_set(settings,'{model}',$2::jsonb) where id=$1 and user_id=$3",
+      [job.id, JSON.stringify(model), this.owner],
+    );
+    job.settings = { ...job.settings, model };
+    return model;
+  }
+  /** Foreground and background use the same item and file, including in-flight requests. */
+  async resolve(id: string, ordinal: number, regenerate = false): Promise<SavedAudio> {
+    this.foreground++;
+    try {
+      return await this.ensureItem(await this.get(id), ordinal, regenerate);
+    } catch (error) {
+      // Do not let the background runner automatically repeat an ambiguous foreground failure.
+      const failure = this.failure(error);
+      if (failure.status !== 429 && /^[a-f0-9-]{36}$/.test(id))
+        await this.pool.query(
+          `update saved_audiobooks set status='failed',error_message=$3,updated_at=now()
+          where id=$1 and user_id=$2 and status in ('queued','running')`,
+          [id, this.owner, (error as { statusCode?: number }).statusCode ? (error as Error).message : failure.message],
+        );
+      throw error;
+    } finally {
+      this.foreground--;
+    }
+  }
+  private ensureItem(job: JobRow, ordinal: number, regenerate = false): Promise<SavedAudio> {
+    if (!Number.isSafeInteger(ordinal) || ordinal < 0)
+      return Promise.reject(audiobookError(400, '낭독 위치를 확인해 주세요.'));
+    const key = job.id + ':' + ordinal;
+    const old = this.items.get(key);
+    if (old) {
+      if (regenerate && !old.regenerate) return old.task.then(() => this.ensureItem(job, ordinal, true));
+      return old.task;
+    }
+    const task = this.writeItem(job, ordinal, regenerate).finally(() => {
+      if (this.items.get(key)?.task === task) this.items.delete(key);
+    });
+    this.items.set(key, { task, regenerate });
+    return task;
+  }
+  private async writeItem(job: JobRow, ordinal: number, regenerate: boolean): Promise<SavedAudio> {
+    const client = await this.pool.connect();
+    let locked = false;
+    const lock = 'prepared-narration:' + job.id + ':' + ordinal;
+    try {
+      // Cross-process item fence. Waiting listeners share the completed file without a second provider call.
+      await client.query('select pg_advisory_lock(hashtextextended($1,0))', [lock]);
+      locked = true;
+      if (this.closing) throw audiobookError(503, '서버가 잠시 다시 시작 중입니다.');
+      const item = (
+        await client.query(
+          `select i.* from saved_audiobook_items i join saved_audiobooks a on a.id=i.audiobook_id
+        join library_books b on b.id=a.book_id where i.audiobook_id=$1 and i.ordinal=$2 and a.user_id=$3 and b.user_id=$3
+        and a.status<>'deleting' and b.deleted_at is null and a.content_revision is not distinct from b.active_content_revision_id`,
+          [job.id, ordinal, this.owner],
+        )
+      ).rows[0];
+      if (!item) throw audiobookError(409, '본문 또는 미리 만든 음성의 위치가 변경됐습니다.');
+      const stored = regenerate ? undefined : await this.audioStore.get(job.id, ordinal);
+      if (stored && item.status === 'ready') return stored;
+      if (!stored && item.status === 'dispatching')
+        throw audiobookError(409, '중단된 생성 요청이 있어요. 미리 생성하기에서 이어 만들기를 눌러 주세요.');
+      if (!stored && item.status === 'ready' && !regenerate)
+        throw audiobookError(410, '음성 파일을 읽지 못했어요. 현재 음성 다시 만들기를 눌러 주세요.');
+      let audio = stored;
+      if (!audio) {
+        const model = await this.model(job);
+        const usage = Number(
+          (
+            await client.query('select coalesce(sum(bytes),0) as bytes from saved_audiobooks where user_id=$1', [
+              this.owner,
+            ])
+          ).rows[0].bytes,
+        );
+        if (usage + 16 * 1024 * 1024 > AUDIOBOOK_QUOTA_BYTES)
+          throw audiobookError(409, '음성 저장 공간이 가득 찼습니다.');
+        const account = (
+          await client.query(
+            "select 1 from self_host_accounts where user_id=$1 and (role<>'admin' or status<>'active')",
+            [this.owner],
+          )
+        ).rows[0];
+        if (account) throw audiobookError(403, '계정 권한이 변경되었습니다.');
+        await client.query('begin');
+        const admitted = (
+          await client.query(
+            "select id from saved_audiobooks where id=$1 and user_id=$2 and status<>'deleting' for update",
+            [job.id, this.owner],
+          )
+        ).rowCount;
+        if (!admitted) throw audiobookError(409, '음성 작업이 삭제되었습니다.');
+        await client.query(
+          "update saved_audiobook_items set status='dispatching' where audiobook_id=$1 and ordinal=$2",
+          [job.id, ordinal],
+        );
+        await client.query('commit');
+        try {
+          audio = await this.render(
+            item.chapter_id,
+            { ...item.request, rules: job.settings.rules, ...(regenerate ? { regenerate: true } : {}) },
+            model,
+          );
+        } catch (error) {
+          await client.query('update saved_audiobook_items set status=$3 where audiobook_id=$1 and ordinal=$2', [
+            job.id,
+            ordinal,
+            item.status === 'ready' ? 'ready' : 'pending',
+          ]);
+          throw error;
+        }
+      }
+      await client.query('begin');
+      const current = (
+        await client.query(
+          `select a.id from saved_audiobooks a join library_books b on b.id=a.book_id
+        where a.id=$1 and a.user_id=$2 and a.status<>'deleting' and b.user_id=$2 and b.deleted_at is null
+        and a.content_revision is not distinct from b.active_content_revision_id for update of a for share of b`,
+          [job.id, this.owner],
+        )
+      ).rows[0];
+      if (!current) throw audiobookError(409, '생성 중 본문 또는 작업이 변경됐습니다.');
+      await this.audioStore.put(job.id, ordinal, audio);
+      await client.query(
+        "update saved_audiobook_items set status='ready',cache_key=$3,bytes=$4 where audiobook_id=$1 and ordinal=$2",
+        [job.id, ordinal, audio.key, audio.data.length],
+      );
+      await client.query(
+        `update saved_audiobooks a set completed_items=x.n,bytes=x.bytes,
+        status=case when x.n=a.total_items then 'completed' else a.status end,updated_at=now()
+        from (select count(*)::int n,coalesce(sum(bytes),0) bytes from saved_audiobook_items where audiobook_id=$1 and status='ready') x where a.id=$1`,
+        [job.id],
+      );
+      await client.query('commit');
+      return audio;
+    } catch (error) {
+      await client.query('rollback');
+      throw error;
+    } finally {
+      if (locked) await client.query('select pg_advisory_unlock(hashtextextended($1,0))', [lock]);
+      client.release();
+    }
   }
   async create(plan: AudiobookPlan, fingerprint: string, confirmPaid: boolean): Promise<SavedAudiobook> {
     if (fingerprint !== plan.estimate.fingerprint)
@@ -205,7 +426,7 @@ export class AudiobookService {
     await this.get(id);
     const changed = await this.pool.query(
       `update saved_audiobooks set status='deleting',updated_at=now() where id=$1 and user_id=$2
-      and status not in ('running','pausing') returning id`,
+      and status not in ('running','pausing') and not exists(select 1 from saved_audiobook_items where audiobook_id=$1 and status='dispatching') returning id`,
       [id, this.owner],
     );
     if (!changed.rowCount) throw audiobookError(409, '생성을 중단한 뒤 삭제해 주세요.');
@@ -217,15 +438,32 @@ export class AudiobookService {
   }
   async audio(id: string, ordinal: number): Promise<SavedAudio> {
     const job = await this.get(id);
-    if (job.status === 'deleting' || !Number.isSafeInteger(ordinal) || ordinal < 0 || ordinal >= job.completed_items)
-      throw audiobookError(404, '아직 저장되지 않은 음성입니다.');
+    const ready =
+      Number.isSafeInteger(ordinal) &&
+      ordinal >= 0 &&
+      (
+        await this.pool.query(
+          "select 1 from saved_audiobook_items where audiobook_id=$1 and ordinal=$2 and status='ready'",
+          [id, ordinal],
+        )
+      ).rowCount;
+    if (job.status === 'deleting' || !ready) throw audiobookError(404, '아직 저장되지 않은 음성입니다.');
     const audio = await this.audioStore.get(id, ordinal);
     if (!audio) throw audiobookError(410, '저장된 음성 파일이 없거나 손상됐습니다. 오디오북을 다시 만들어 주세요.');
     return audio;
   }
   async progress(id: string, index: number) {
-    const job = await this.get(id);
-    if (!Number.isSafeInteger(index) || index < 0 || index >= job.completed_items)
+    await this.get(id);
+    if (
+      !Number.isSafeInteger(index) ||
+      index < 0 ||
+      !(
+        await this.pool.query(
+          "select 1 from saved_audiobook_items where audiobook_id=$1 and ordinal=$2 and status='ready'",
+          [id, index],
+        )
+      ).rowCount
+    )
       throw audiobookError(400, '재생 위치가 올바르지 않습니다.');
     await this.pool.query('update saved_audiobooks set playback_index=$2 where id=$1 and user_id=$3', [
       id,
@@ -240,7 +478,7 @@ export class AudiobookService {
     let locked = false;
     try {
       locked = (await client.query('select pg_try_advisory_lock($1::bigint) as locked', [RUNNER_LOCK])).rows[0].locked;
-      if (!locked || this.closing) return;
+      if (!locked || this.closing || this.foreground > 0) return;
       if (Date.now() - this.lastCleanup > 60_000) {
         const ids = await this.audioStore.ids();
         const existing = new Set(
@@ -288,7 +526,13 @@ export class AudiobookService {
             [job.id],
           )
         ).rows[0];
-        if (!item) throw new Error('audiobook_missing_item');
+        if (!item) {
+          await client.query(
+            "update saved_audiobooks set status='completed',error_message=null where id=$1 and completed_items=total_items",
+            [job.id],
+          );
+          return;
+        }
         const authority = (
           await client.query(
             `select b.id from library_books b where b.id=$1 and b.user_id=$2 and b.deleted_at is null
@@ -298,77 +542,48 @@ export class AudiobookService {
           )
         ).rows[0];
         if (!authority) throw audiobookError(409, '본문 또는 계정 권한이 변경됐습니다. 새 오디오북을 만들어 주세요.');
-        const usage = Number(
-          (
-            await client.query('select coalesce(sum(bytes),0) as bytes from saved_audiobooks where user_id=$1', [
-              this.owner,
-            ])
-          ).rows[0].bytes,
-        );
-        if (usage + 16 * 1024 * 1024 > AUDIOBOOK_QUOTA_BYTES)
-          throw audiobookError(409, '오디오북 저장 공간이 가득 찼습니다. 일부를 삭제한 뒤 이어 만들어 주세요.');
         await client.query('update saved_audiobooks set current_chapter_title=$2 where id=$1', [
           job.id,
           item.chapter_title,
         ]);
-        await client.query(
-          "update saved_audiobook_items set status='dispatching' where audiobook_id=$1 and ordinal=$2",
-          [job.id, item.ordinal],
-        );
         // Reuse a fully saved file left by a crash between atomic rename and the DB commit.
-        const audio =
-          (await this.audioStore.get(job.id, item.ordinal)) ??
-          (await requestPlainTTSWithRetry(
-            async () => {
-              const current = (await client.query('select status from saved_audiobooks where id=$1', [job.id])).rows[0];
-              if (current?.status !== 'running') {
-                abort.abort();
-                abort.signal.throwIfAborted();
-              }
-              try {
-                return await this.render(item.chapter_id, { ...item.request, rules: job.settings.rules });
-              } catch (error) {
-                const retry = error as { status?: number; retryAfterSeconds?: number };
-                if (retry?.status === 429 && typeof retry.retryAfterSeconds === 'number')
-                  throw Object.assign(new Error('음성 제공자의 요청 제한이 풀리기를 기다리고 있습니다.'), {
-                    status: 429,
-                    payload: { retryAfterSeconds: retry.retryAfterSeconds },
-                  });
-                throw error;
-              }
+        await requestPlainTTSWithRetry(
+          async () => {
+            const current = (await client.query('select status from saved_audiobooks where id=$1', [job.id])).rows[0];
+            if (current?.status !== 'running') {
+              abort.abort();
+              abort.signal.throwIfAborted();
+            }
+            try {
+              return await this.ensureItem(job, item.ordinal);
+            } catch (error) {
+              const retry = error as { status?: number; retryAfterSeconds?: number };
+              if (retry?.status === 429 && typeof retry.retryAfterSeconds === 'number')
+                throw Object.assign(new Error('음성 제공자의 요청 제한이 풀리기를 기다리고 있습니다.'), {
+                  status: 429,
+                  payload: { retryAfterSeconds: retry.retryAfterSeconds },
+                });
+              throw error;
+            }
+          },
+          {
+            signal: abort.signal,
+            onWait: (seconds) => {
+              void this.pool
+                .query("update saved_audiobooks set error_message=$2 where id=$1 and status='running'", [
+                  job.id,
+                  `음성 제공자 대기 중 · ${Math.ceil(seconds)}초 후 다시 시도`,
+                ])
+                .catch(() => {});
             },
-            {
-              signal: abort.signal,
-              onWait: (seconds) => {
-                void this.pool
-                  .query("update saved_audiobooks set error_message=$2 where id=$1 and status='running'", [
-                    job.id,
-                    `음성 제공자 대기 중 · ${Math.ceil(seconds)}초 후 다시 시도`,
-                  ])
-                  .catch(() => {});
-              },
-            },
-          ));
-        await this.audioStore.put(job.id, item.ordinal, audio);
-        await client.query('begin');
-        const owned = (
-          await client.query(
-            `select b.id from library_books b where b.id=$1 and b.user_id=$2 and b.deleted_at is null
-          and b.active_content_revision_id is not distinct from $3::text for share`,
-            [job.book_id, this.owner, job.content_revision],
-          )
-        ).rows[0];
-        if (!owned) throw audiobookError(409, '생성 중 본문이 변경되어 멈췄습니다.');
-        await client.query(
-          "update saved_audiobook_items set status='ready',cache_key=$3,bytes=$4 where audiobook_id=$1 and ordinal=$2",
-          [job.id, item.ordinal, audio.key, audio.data.length],
+          },
         );
         await client.query(
-          `update saved_audiobooks set completed_items=completed_items+1,bytes=bytes+$2,error_message=null,
-          status=case when completed_items+1=total_items then 'completed' when status='pausing' then 'paused' else 'queued' end,updated_at=now() where id=$1`,
-          [job.id, audio.data.length],
+          `update saved_audiobooks set error_message=null,
+          status=case when status='pausing' then 'paused' else 'queued' end,updated_at=now()
+          where id=$1 and status in ('running','pausing')`,
+          [job.id],
         );
-        await client.query('commit');
       } catch (error) {
         await client.query('rollback');
         const message = (error as { statusCode?: number }).statusCode
@@ -376,7 +591,7 @@ export class AudiobookService {
           : this.failure(error).message;
         await client.query(
           `update saved_audiobooks set status=case when status='pausing' then 'paused' else 'failed' end,
-          error_message=case when status='pausing' then null else $2 end,updated_at=now() where id=$1`,
+          error_message=case when status='pausing' then null else $2 end,updated_at=now() where id=$1 and status in ('running','pausing')`,
           [job.id, message],
         );
       } finally {

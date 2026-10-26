@@ -4,7 +4,7 @@ import type { SpokenTextRule } from '@boaa/contracts';
 import type { ServerConfig } from '../../config.js';
 import { requireAdmin } from '../../auth.js';
 import type { AudiobookInput } from '../../../../../src/providers/plain-audiobook';
-import type { PlainTTSRequest, PlainTTSVoices } from '../../../../../src/providers/plain-tts';
+import type { PlainTTSRequest, PlainTTSVoices, PlainTTSModel } from '../../../../../src/providers/plain-tts';
 import { AudiobookAudioStore, type SavedAudio } from '../../services/audiobook-audio.js';
 import { AudiobookService } from '../../services/audiobook-service.js';
 import { audiobookError, validateAudiobookInput } from '../../services/audiobook-plan.js';
@@ -16,7 +16,11 @@ export async function registerAudiobookRoutes(
   options: {
     audioStore: AudiobookAudioStore;
     catalog(): Promise<PlainTTSVoices>;
-    render(chapterId: string, request: PlainTTSRequest): Promise<SavedAudio>;
+    render(chapterId: string, request: PlainTTSRequest, model?: PlainTTSModel): Promise<SavedAudio>;
+    resolveModel?: (
+      settings: AudiobookInput,
+      probe: { chapterId: string; request: PlainTTSRequest; key?: string },
+    ) => Promise<PlainTTSModel>;
     rules(input: unknown): SpokenTextRule[];
     failure(error: unknown): { status: number; message: string };
     background?: boolean;
@@ -29,6 +33,7 @@ export async function registerAudiobookRoutes(
     options.catalog,
     options.render,
     options.failure,
+    options.resolveModel,
   );
   await app.register(async (routes) => {
     routes.addHook('preHandler', async (request) => {
@@ -61,6 +66,53 @@ export async function registerAudiobookRoutes(
       reply.header('Cache-Control', 'private, no-store');
       return { audiobooks: await service.list(request.params.bookId) };
     });
+    routes.get<{ Params: { bookId: string }; Querystring: { chapterId: string; id?: string; voiceId?: string } }>(
+      '/api/books/:bookId/audiobooks/reader',
+      async (request, reply) => {
+        const { chapterId, id, voiceId } = request.query;
+        if (
+          typeof chapterId !== 'string' ||
+          chapterId.length > 256 ||
+          (id !== undefined && (typeof id !== 'string' || id.length > 64)) ||
+          (voiceId !== undefined && (typeof voiceId !== 'string' || voiceId.length > 512))
+        )
+          throw audiobookError(400, '낭독 위치를 확인해 주세요.');
+        reply.header('Cache-Control', 'private, no-store');
+        return { plan: await service.reader(request.params.bookId, chapterId, { id, voiceId }) };
+      },
+    );
+    routes.post<{ Params: { id: string; ordinal: string }; Body?: { regenerate?: boolean } }>(
+      '/api/audiobooks/:id/resolve/:ordinal',
+      { bodyLimit: 1024 },
+      async (request, reply) => {
+        if (request.body?.regenerate !== undefined && typeof request.body.regenerate !== 'boolean')
+          throw audiobookError(400, '재시도 요청을 확인해 주세요.');
+        const release = app.beginBackgroundWork ? app.beginBackgroundWork() : () => {};
+        if (!release) throw audiobookError(503, '서버 업데이트 중입니다. 잠시 후 다시 재생해 주세요.');
+        try {
+          const audio = await service.resolve(
+            request.params.id,
+            Number(request.params.ordinal),
+            request.body?.regenerate === true,
+          );
+          return reply.header('Cache-Control', 'private, no-store').type(audio.contentType).send(audio.data);
+        } catch (error) {
+          if ((error as { statusCode?: number }).statusCode) throw error;
+          const failure = options.failure(error);
+          return reply.code(failure.status).send({
+            error: failure.message,
+            ...(failure.status === 429
+              ? {
+                  code: 'tts_rate_limited',
+                  retryAfterSeconds: (error as { retryAfterSeconds?: number }).retryAfterSeconds ?? 5,
+                }
+              : {}),
+          });
+        } finally {
+          release();
+        }
+      },
+    );
     routes.post<{ Params: { bookId: string }; Body: AudiobookInput }>(
       '/api/books/:bookId/audiobooks/estimate',
       { bodyLimit: 256 * 1024 },

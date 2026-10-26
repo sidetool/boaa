@@ -1,4 +1,4 @@
-import { AlertCircle, Pause, Play, RefreshCw, RotateCcw, SkipBack, SkipForward, Square, Trash2 } from 'lucide-react';
+import { AlertCircle, Pause, Play, RefreshCw, Trash2 } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { TTSAudiobookControls } from '../../features/tts/TTSAddonPanel';
 import type {
@@ -9,7 +9,6 @@ import type {
 } from '../../providers/plain-audiobook';
 import { formatBytes, formatCount } from '../../utils/format';
 import { cx, Progress, Segmented } from '../components/primitives';
-import { useSavedAudiobookPlayback, type SavedPlaybackNotice } from './useSavedAudiobookPlayback';
 import './audiobook.css';
 
 type Scope = 'current' | 'range' | 'all';
@@ -87,9 +86,6 @@ function AudiobookBody({ controls }: { controls: TTSAudiobookControls }) {
     const timer = window.setTimeout(() => void refresh(), POLL_MS);
     return () => window.clearTimeout(timer);
   }, [busy, listed, refresh]);
-
-  const finished = useCallback(() => void refresh(), [refresh]);
-  const player = useSavedAudiobookPlayback(latest, items, setItems, finished);
 
   // ───────── new audiobook ─────────
   const currentIndex = chapters.findIndex((chapter) => chapter.id === currentChapterId);
@@ -189,67 +185,20 @@ function AudiobookBody({ controls }: { controls: TTSAudiobookControls }) {
     void act(item.id, () => latest.current.port.control(item.id, 'resume', item.paid && confirmed));
   };
   const remove = (item: SavedAudiobook) => {
-    if (player.state?.id === item.id) player.stop();
     void act(item.id, () => latest.current.port.remove(item.id));
   };
 
   const totalBytes = items?.reduce((sum, item) => sum + item.bytes, 0) ?? 0;
-  const playing = player.state && items?.find((item) => item.id === player.state?.id);
-
+  const listen = async (item: SavedAudiobook) => {
+    setActionError(undefined);
+    try {
+      await latest.current.listen(item);
+    } catch (error) {
+      if (alive.current) setActionError({ id: item.id, text: message(error, '본문에서 듣기를 시작하지 못했어요.') });
+    }
+  };
   return (
     <div className="un-book">
-      {playing && player.state && (
-        <section className="un-book-player" aria-label="미리 만든 음성 재생">
-          <div className="un-book-player-now">
-            <small>
-              {player.state.loading ? '불러오는 중' : player.state.paused ? '일시정지됨' : '저장 음성 듣는 중'}
-            </small>
-            <b>
-              {rangeLabel(playing)}
-              <span>
-                {' '}
-                · {formatCount(player.state.index + 1)} / {formatCount(playing.itemCount)} 구간
-              </span>
-            </b>
-          </div>
-          <Progress value={(player.state.index + 1) / Math.max(1, playing.itemCount)} label="저장 음성 재생 위치" />
-          <div className="un-book-player-controls">
-            <button type="button" className="un-book-ctl" onClick={player.stop} aria-label="저장 음성 정지">
-              <Square size={18} />
-            </button>
-            <button
-              type="button"
-              className="un-book-ctl"
-              onClick={() => player.play(playing, player.state!.index - 1)}
-              disabled={player.state.index <= 0}
-              aria-label="이전 구간"
-            >
-              <SkipBack size={21} />
-            </button>
-            <button
-              type="button"
-              className="un-book-play"
-              onClick={player.state.paused ? player.resume : player.pause}
-              disabled={player.state.loading}
-              aria-label={player.state.paused ? '계속 듣기' : '일시정지'}
-            >
-              {player.state.paused ? <Play size={24} fill="currentColor" /> : <Pause size={24} fill="currentColor" />}
-            </button>
-            <button
-              type="button"
-              className="un-book-ctl"
-              onClick={() => player.play(playing, player.state!.index + 1)}
-              disabled={player.state.index + 1 >= playing.completedItems}
-              aria-label="다음 구간"
-            >
-              <SkipForward size={21} />
-            </button>
-            <span aria-hidden="true" />
-          </div>
-          <p className="un-book-note">이 화면을 닫으면 재생은 멈춰요. 들은 위치는 서버에 저장돼요.</p>
-        </section>
-      )}
-
       <section className="un-book-group" aria-labelledby="un-book-new">
         <div className="un-book-group-head">
           <h3 id="un-book-new">생성할 범위</h3>
@@ -412,12 +361,10 @@ function AudiobookBody({ controls }: { controls: TTSAudiobookControls }) {
                 <SavedItem
                   key={item.id}
                   item={item}
-                  playing={player.state?.id === item.id}
                   pending={pending === item.id}
                   confirm={confirm?.id === item.id ? confirm.action : undefined}
                   error={actionError?.id === item.id ? actionError.text : undefined}
-                  notice={player.notice?.id === item.id ? player.notice : undefined}
-                  onPlay={(index) => player.play(item, index)}
+                  onPlay={() => void listen(item)}
                   onPause={() => void act(item.id, () => latest.current.port.control(item.id, 'pause'))}
                   onResume={(confirmed) => resume(item, confirmed)}
                   onRemove={(confirmed) => (confirmed ? remove(item) : setConfirm({ id: item.id, action: 'remove' }))}
@@ -426,8 +373,8 @@ function AudiobookBody({ controls }: { controls: TTSAudiobookControls }) {
               ))}
             </ul>
             <p className="un-book-note">
-              서버에 {formatBytes(totalBytes)} 보관 중. 만드는 작업은 앱을 닫아도 서버에서 계속돼요. 같은 본문·목소리로
-              일반 듣기를 할 때도 이 녹음을 다시 써요.
+              서버에 {formatBytes(totalBytes)} 보관 중. 만드는 작업은 앱을 닫아도 서버에서 계속돼요. 본문에서 평소처럼
+              듣고, 읽는 위치와 다음 화도 함께 따라가요.
             </p>
           </>
         )}
@@ -466,11 +413,9 @@ function rangeLabel(item: Pick<SavedAudiobook, 'firstChapterTitle' | 'lastChapte
 
 function SavedItem({
   item,
-  playing,
   pending,
   confirm,
   error,
-  notice,
   onPlay,
   onPause,
   onResume,
@@ -478,12 +423,10 @@ function SavedItem({
   onCancel,
 }: {
   item: SavedAudiobook;
-  playing: boolean;
   pending: boolean;
   confirm?: Confirm['action'];
   error?: string;
-  notice?: SavedPlaybackNotice;
-  onPlay(index: number): void;
+  onPlay(): void;
   onPause(): void;
   onResume(confirmed?: boolean): void;
   onRemove(confirmed?: boolean): void;
@@ -492,14 +435,12 @@ function SavedItem({
   const generating = item.status === 'queued' || item.status === 'running';
   const stopped = item.status === 'paused' || item.status === 'failed';
   const removable = !generating && item.status !== 'pausing' && item.status !== 'deleting';
-  const playable = item.completedItems > 0 && item.status !== 'deleting';
-  // playbackIndex is the part last started; resuming replays it from its start.
-  const resumeAt = Math.min(item.playbackIndex, Math.max(0, item.completedItems - 1));
+  const playable = item.status !== 'deleting';
   const remaining = Math.max(0, item.itemCount - item.completedItems);
   const created = new Date(item.createdAt);
 
   return (
-    <li className={cx('un-book-item', playing && 'is-playing')}>
+    <li className="un-book-item">
       <div className="un-book-item-head">
         <b>{rangeLabel(item)}</b>
         <span className={cx('un-book-badge', `is-${item.status}`)}>{STATUS_LABEL[item.status]}</span>
@@ -522,18 +463,6 @@ function SavedItem({
           {error ?? item.error}
         </p>
       )}
-      {notice &&
-        (notice.error ? (
-          <p className="un-book-error" role="alert">
-            <AlertCircle size={15} aria-hidden="true" />
-            {notice.text}
-          </p>
-        ) : (
-          <p className="un-book-note" role="status">
-            {notice.text}
-          </p>
-        ))}
-
       {confirm ? (
         <div
           className="un-book-confirm"
@@ -561,16 +490,10 @@ function SavedItem({
         </div>
       ) : (
         <div className="un-book-actions">
-          {playable && !playing && (
-            <button type="button" className="un-btn is-ghost is-sm" onClick={() => onPlay(resumeAt)}>
+          {playable && (
+            <button type="button" className="un-btn is-ghost is-sm" onClick={onPlay} disabled={pending}>
               <Play size={15} fill="currentColor" aria-hidden="true" />
-              {resumeAt > 0 ? `이어 듣기 · ${formatCount(resumeAt + 1)}구간` : '듣기'}
-            </button>
-          )}
-          {playable && !playing && resumeAt > 0 && (
-            <button type="button" className="un-btn is-text is-sm" onClick={() => onPlay(0)}>
-              <RotateCcw size={14} aria-hidden="true" />
-              처음부터
+              본문에서 듣기
             </button>
           )}
           {generating && (

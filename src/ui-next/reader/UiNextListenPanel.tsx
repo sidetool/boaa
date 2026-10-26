@@ -157,11 +157,13 @@ export default function UiNextListenPanel(props: TTSAddonPanelProps) {
     !voiceSetup &&
     localEngine?.available !== true &&
     (serverVoiceMissing || defaultUnavailable || (selectedEngineDown && selectedEngine?.id === 'supertonic'));
-  const playbackUnavailable = plainMode
-    ? serverPlain
-      ? !serverReady || serverVoiceMissing || defaultUnavailable || selectedEngineDown
-      : props.unavailable
-    : props.unavailable && !props.hostedPlaybackReady;
+  const playbackUnavailable = props.preparedVoiceLabel
+    ? false
+    : plainMode
+      ? serverPlain
+        ? !serverReady || serverVoiceMissing || defaultUnavailable || selectedEngineDown
+        : props.unavailable
+      : props.unavailable && !props.hostedPlaybackReady;
   const rateUnavailable = props.unavailable && !props.hostedPlaybackReady && !serverReady;
   const count = props.paragraphCount;
   const index = props.paragraphIndex;
@@ -313,7 +315,13 @@ export default function UiNextListenPanel(props: TTSAddonPanelProps) {
             {index !== undefined && count ? `${index + 1}번째 문단` : count ? `${count}개 문단` : '본문 없음'}
             {index !== undefined && count ? <span> / {count}</span> : null}
           </b>
-          {props.activePlayback && <span className="un-listen-voice">{props.activePlayback.speakerLabel}</span>}
+          {(props.preparedVoiceLabel || props.activePlayback) && (
+            <span className="un-listen-voice">
+              {props.preparedVoiceLabel
+                ? `미리 만든 음성 · ${props.preparedVoiceLabel}`
+                : props.activePlayback?.speakerLabel}
+            </span>
+          )}
         </div>
         <div className="un-listen-bar" aria-hidden="true">
           <span style={{ width: `${index !== undefined && count ? ((index + 1) / count) * 100 : 0}%` }} />

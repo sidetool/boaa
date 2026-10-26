@@ -1,7 +1,7 @@
 import { act, create, type ReactTestRenderer } from 'react-test-renderer';
 import { expect, it, vi } from 'vitest';
 import { usePlainTTS } from './usePlainTTS';
-import { buildPlainTTSBatch } from '../../providers/plain-tts';
+import { buildPlainTTSBatch, buildPlainTTSItems } from '../../providers/plain-tts';
 import { ttsQueueItemFingerprint } from '../../providers/tts-playback-resume';
 import { DEFAULT_TTS_PLAYBACK_SETTINGS } from '../../providers/tts-playback-settings';
 import type { Paragraph } from '../../domain/types';
@@ -276,3 +276,90 @@ it.each(['recover', 'cancel', 'non-retryable', 'repeated-429', 'exhausted-429'] 
     }
   },
 );
+
+it('uses prepared items with the normal audio controller despite different current settings or an offline model', async () => {
+  const ordinary = vi.fn();
+  const client = {
+    listPlainTTSVoices: async () => ({ available: false, voices: [], revision: 'changed-catalog' }),
+    synthesizePlainTTS: ordinary,
+  } as unknown as Input['client'];
+  const resolve = vi.fn(async () => new Blob(['recorded']));
+  const port = { resolve } as unknown as NonNullable<Input['prepared']>;
+  const progress = vi.fn();
+  const playAudio = vi.fn(async (_blob: Blob, _session: number, update?: (fraction: number) => void) => {
+    update?.(0.7);
+    return true;
+  });
+  const controller = {
+    beginHostedPlayback: () => ({ controller: new AbortController() }),
+    isSessionCurrent: () => true,
+    setHostedStatus: vi.fn(),
+    playAudio,
+    finishOperation: vi.fn(),
+    stopAll: vi.fn(),
+  } as unknown as Input['controller'];
+  const paragraph = { id: 'p', index: 1, chapterId: 'c', novelId: 'b', text: '이미 만든 문장입니다.' } as Paragraph;
+  const playable = {
+    ...buildPlainTTSItems({ paragraph, rate: 1, chunking: 'sentence' })[0],
+    preparedAudio: { id: 'job', ordinal: 3, ready: true },
+  };
+  let hook!: ReturnType<typeof usePlainTTS>;
+  let owner = {};
+  const systemTTS = { stop: vi.fn() } as unknown as Input['systemTTS'];
+  function Harness({ changed = false }: { changed?: boolean }) {
+    hook = usePlainTTS({
+      client,
+      owner,
+      enabled: true,
+      prepared: port,
+      controller,
+      systemTTS,
+      contentRevision: 'r1',
+      chapterId: 'c',
+      rules: [],
+      onError: vi.fn(),
+      settings: {
+        ...DEFAULT_TTS_PLAYBACK_SETTINGS,
+        voiceSource: 'server',
+        serverVoiceId: changed ? 'different' : 'old',
+        plainChunking: changed ? 'sentence' : 'batch',
+        rate: changed ? 1.8 : 1,
+      },
+    });
+    return null;
+  }
+  let root!: ReactTestRenderer;
+  try {
+    await act(async () => {
+      root = create(<Harness />);
+    });
+    expect(hook.ready).toBe(false);
+    await act(async () => {
+      await hook.prefetch(playable, paragraph, 1);
+      await hook.play(playable, paragraph, 1, progress);
+    });
+    await act(async () => {
+      root.update(<Harness changed />);
+    });
+    await act(async () => {
+      await hook.play(playable, paragraph, 2, progress);
+    });
+    expect(resolve).toHaveBeenCalledTimes(1);
+    expect(resolve).toHaveBeenCalledWith('job', 3, false, expect.any(AbortSignal));
+    expect(ordinary).not.toHaveBeenCalled();
+    expect(progress).toHaveBeenCalledWith(0.7);
+    expect(hook.retryTarget()).toEqual({ index: 0, fingerprint: ttsQueueItemFingerprint(playable) });
+    await act(async () => {
+      await hook.play(playable, paragraph, 3, undefined, { prepared: vi.fn() });
+    });
+    expect(resolve).toHaveBeenLastCalledWith('job', 3, true, expect.any(AbortSignal));
+    expect(resolve).toHaveBeenCalledTimes(2);
+    owner = {};
+    await act(async () => {
+      root.update(<Harness changed />);
+    });
+    expect(hook.retryTarget()).toBeUndefined();
+  } finally {
+    act(() => root?.unmount());
+  }
+});

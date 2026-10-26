@@ -21,6 +21,7 @@ export interface PlainTTSSource {
   name: string;
   modelId?: string;
   revision: string;
+  synthesisRevision?: string;
   paid: boolean;
   /** Only an explicitly configured default may supply the unspecified server voice. */
   default?: boolean;
@@ -54,6 +55,10 @@ export async function loadPlainTTSSources(
     if (id === 'local-endpoint' && !providerOptions.voice && env.TTS_LOCAL_ENDPOINT_VOICE_ID?.trim()) {
       providerOptions.voice = env.TTS_LOCAL_ENDPOINT_VOICE_ID.trim();
     }
+    const synthesisOptions = { ...providerOptions };
+    // These options are overridden by ordinary listening's request, not the selected synthesis model.
+    for (const key of ['voice', 'responseFormat', 'outputFormat', 'audioEncoding', 'format', 'speed', 'speakingRate'])
+      delete synthesisOptions[key];
     sources.push({
       id,
       name: id === 'local-endpoint' && modelId === 'supertonic-3-ko' ? 'Supertonic 3' : entry.displayName,
@@ -61,6 +66,7 @@ export async function loadPlainTTSSources(
       paid: id !== 'local-endpoint',
       default: id === settings.defaultProviderId,
       providerOptions,
+      synthesisRevision: structuredIntegrityHash({ id, modelId, providerOptions: synthesisOptions }),
       revision: structuredIntegrityHash({
         id,
         modelId,

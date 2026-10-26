@@ -51,6 +51,21 @@ describe('ordinary TTS provider configuration', () => {
     f.row.provider_options['gemini-tts'].voice = 'Puck';
     const after = (await loadPlainTTSSources(f.pool, f.config, f.env))[0];
     expect(after.revision).not.toBe(before.revision);
+    expect(after.synthesisRevision).toBe(before.synthesisRevision);
+  });
+
+  it('keeps the selected model identity across catalog, default and credential-timestamp changes', async () => {
+    const f = fixture();
+    const before = (await loadPlainTTSSources(f.pool, f.config, f.env)).find((s) => s.id === 'gemini-tts')!;
+    f.row.updated_at = '2026-10-26T12:00:00Z';
+    f.row.default_provider_id = 'local-endpoint';
+    const after = (await loadPlainTTSSources(f.pool, f.config, f.env)).find((s) => s.id === 'gemini-tts')!;
+    expect(after.revision).not.toBe(before.revision);
+    expect(after.synthesisRevision).toBe(before.synthesisRevision);
+    f.row.model_overrides = { 'gemini-tts': 'another-model' };
+    expect(
+      (await loadPlainTTSSources(f.pool, f.config, f.env)).find((s) => s.id === 'gemini-tts')!.synthesisRevision,
+    ).not.toBe(before.synthesisRevision);
   });
 });
 

@@ -1,3 +1,4 @@
+import type { PlainTTSModel } from '../../../../../src/providers/plain-tts';
 import type { AudiobookService } from '../../services/audiobook-service.js';
 import { registerAudiobookRoutes } from './audiobook-routes.js';
 import { AudiobookAudioStore } from '../../services/audiobook-audio.js';
@@ -109,6 +110,11 @@ export async function registerPlainTTSRoutes(
   }
   const voiceKey = (source: PlainTTSSource, id: string) =>
     source.legacyIds ? id : `${source.id}:${encodeURIComponent(id)}`;
+  const sourceModel = (source: PlainTTSSource): PlainTTSModel => ({
+    providerId: source.id,
+    modelId: source.modelId,
+    revision: source.synthesisRevision ?? source.revision,
+  });
   const catalogRevision = (items: PlainTTSSource[]) =>
     items.length === 1 && items[0].legacyIds
       ? items[0].revision
@@ -277,6 +283,7 @@ export async function registerPlainTTSRoutes(
           providerId: source.id,
           providerName: source.name,
           modelId: source.modelId,
+          model: sourceModel(source),
           paid: source.paid,
         })),
       ),
@@ -298,11 +305,12 @@ export async function registerPlainTTSRoutes(
     return catalog();
   });
 
-  async function render(
+  async function prepare(
     chapterId: string | undefined,
     body: Record<string, unknown>,
     sample = false,
     onProvider?: (id: string) => void,
+    expected?: PlainTTSModel | { legacyRevision: string; legacyKey?: string },
   ) {
     const availableSources = await sources();
     if (!availableSources.length) throw new PlainTTSError(503, '연결된 서버 음성이 없습니다.');
@@ -320,12 +328,25 @@ export async function registerPlainTTSRoutes(
       rate > 2.5
     )
       throw new PlainTTSError(400, '목소리 또는 속도가 올바르지 않습니다.');
-    if (modelRevision !== catalogRevision(availableSources))
-      throw new PlainTTSError(409, '서버 모델이 변경되었습니다. 목소리 목록을 새로고침하세요.');
     const source = availableSources.find((item) =>
       item.legacyIds ? !voiceId.includes(':') : voiceId.startsWith(item.id + ':'),
     );
     if (!source) throw new PlainTTSError(400, '선택한 엔진을 찾을 수 없습니다. 목소리 목록을 새로고침하세요.');
+    const model = sourceModel(source);
+    if (expected && 'providerId' in expected) {
+      if (structuredIntegrityHash(expected) !== structuredIntegrityHash(model))
+        throw new PlainTTSError(
+          409,
+          '이 음성을 만들던 모델의 설정이 바뀌었습니다. 이미 만든 구간은 계속 들을 수 있어요.',
+        );
+    } else if (
+      !expected &&
+      (typeof body.voiceRevision === 'string'
+        ? body.voiceRevision !== model.revision
+        : modelRevision !== catalogRevision(availableSources))
+    ) {
+      throw new PlainTTSError(409, '선택한 목소리의 모델이 변경되었습니다. 목소리 목록을 새로고침하세요.');
+    }
     onProvider?.(source.id);
     const selectedVoice = (await voices(source)).find((voice) => voiceKey(source, voice.id) === voiceId);
     if (!selectedVoice) throw new PlainTTSError(400, '선택한 목소리를 찾을 수 없습니다.');
@@ -435,7 +456,7 @@ export async function registerPlainTTSRoutes(
         batch: body.batch,
       };
     }
-    const key = structuredIntegrityHash({
+    const keyInput = {
       version: 'plain-tts-v1',
       ...(source.id.startsWith('gemini') ? { audioValidation: 2 } : {}),
       user: config.defaultUserId,
@@ -446,13 +467,45 @@ export async function registerPlainTTSRoutes(
       voiceId,
       rate,
       text,
-    });
+    };
+    const legacyKey = structuredIntegrityHash(keyInput);
+    const key = structuredIntegrityHash({ ...keyInput, revision: model.revision });
+    if (
+      expected &&
+      'legacyRevision' in expected &&
+      expected.legacyRevision !== catalogRevision(availableSources) &&
+      expected.legacyKey !== legacyKey &&
+      expected.legacyKey !== key
+    )
+      throw new PlainTTSError(
+        409,
+        '기존 음성의 생성 모델을 확인하지 못했습니다. 이미 만든 구간은 계속 들을 수 있어요.',
+      );
+    const verify = async () => {
+      if (!sample) {
+        await loadSource();
+        if (Array.isArray(body.batch)) await Promise.all(body.batch.map((ref) => loadSource(ref)));
+      }
+    };
+    return { key, model, text, rate, source, selectedVoice, verify };
+  }
+  async function render(
+    chapterId: string | undefined,
+    body: Record<string, unknown>,
+    sample = false,
+    onProvider?: (id: string) => void,
+    expected?: PlainTTSModel,
+  ) {
+    const { key, text, selectedVoice, rate, source, verify } = await prepare(
+      chapterId,
+      body,
+      sample,
+      onProvider,
+      expected,
+    );
     const audio = await synthesize(key, text, selectedVoice.id, rate, source, body.regenerate === true);
     // Ownership and revision may change while inference runs.
-    if (!sample) {
-      await loadSource();
-      if (Array.isArray(body.batch)) await Promise.all(body.batch.map((ref) => loadSource(ref)));
-    }
+    await verify();
     return { ...audio, key };
   }
 
@@ -498,7 +551,18 @@ export async function registerPlainTTSRoutes(
       audioStore: retained,
       background: options.audiobookBackground,
       catalog,
-      render: (chapterId, request) => render(chapterId, request as unknown as Record<string, unknown>),
+      render: (chapterId, request, model) =>
+        render(chapterId, request as unknown as Record<string, unknown>, false, undefined, model),
+      resolveModel: async (settings, probe) =>
+        (
+          await prepare(
+            probe.chapterId,
+            { ...probe.request, rules: settings.rules } as unknown as Record<string, unknown>,
+            false,
+            undefined,
+            { legacyRevision: settings.modelRevision, legacyKey: probe.key },
+          )
+        ).model,
       rules: parsePlainTTSRules,
       failure: (error) =>
         error instanceof PlainTTSError

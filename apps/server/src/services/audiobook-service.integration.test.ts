@@ -81,6 +81,165 @@ async function setup(pool: pg.Pool) {
 }
 
 (harness ? describe : describe.skip)('durable ordinary audiobooks', () => {
+  it('shares foreground and background items, counts out-of-order completion and preserves source anchors', async () => {
+    await withPostgresSchema(harness!, 'prepared_shared', async (pool) => {
+      const f = await setup(pool);
+      try {
+        const plan = await f.service.plan('book', { ...settings, chunking: 'batch', batchCharacters: 700 });
+        const job = await f.service.create(plan, plan.estimate.fingerprint, true);
+        let finish!: () => void;
+        const held = new Promise<void>((resolve) => {
+          finish = resolve;
+        });
+        const original = f.render.getMockImplementation()!;
+        f.render.mockImplementationOnce(async (...args) => {
+          await held;
+          return original(...args);
+        });
+        const first = f.service.resolve(job.id, 1);
+        const joined = f.service.resolve(job.id, 1);
+        await vi.waitFor(() => expect(f.render).toHaveBeenCalledTimes(1));
+        await f.service.tick();
+        expect(f.render).toHaveBeenCalledTimes(1);
+        await expect(f.service.remove(job.id)).rejects.toMatchObject({ statusCode: 409 });
+        finish();
+        expect((await first).data).toEqual((await joined).data);
+        expect((await f.service.list('book'))[0]).toMatchObject({ completedItems: 1, status: 'queued' });
+        expect((await f.service.audio(job.id, 1)).data.length).toBeGreaterThan(0);
+        await expect(f.service.audio(job.id, 0)).rejects.toMatchObject({ statusCode: 404 });
+        await f.service.progress(job.id, 1);
+        const anchors = await f.service.reader('book', 'c2', { id: job.id });
+        expect(anchors?.items).toHaveLength(1);
+        expect(anchors?.items[0]).toMatchObject({
+          ordinal: 1,
+          paragraphIndex: 0,
+          playable: { preparedAudio: { id: job.id, ordinal: 1, ready: true } },
+        });
+        expect(anchors?.items[0].playable.plainBatchPositions?.map((p) => p.paragraphIndex)).toEqual([0, 1]);
+        await f.service.tick();
+        expect(f.render).toHaveBeenCalledTimes(2);
+        expect((await f.service.list('book'))[0]).toMatchObject({ completedItems: 2, status: 'completed' });
+        await pool.query("update library_books set active_content_revision_id='new-revision'");
+        expect(await f.service.reader('book', 'c2', { id: job.id })).toBeUndefined();
+        await expect(f.service.resolve(job.id, 1)).rejects.toMatchObject({ statusCode: 409 });
+      } finally {
+        await f.cleanup();
+      }
+    });
+  });
+  it('does not retry ambiguous foreground failures in the background and allows explicit retry', async () => {
+    await withPostgresSchema(harness!, 'prepared_failure', async (pool) => {
+      const f = await setup(pool);
+      try {
+        const plan = await f.service.plan('book', settings);
+        const job = await f.service.create(plan, plan.estimate.fingerprint, true);
+        f.render.mockRejectedValueOnce(new Error('provider disconnected'));
+        await expect(f.service.resolve(job.id, 0)).rejects.toThrow('provider disconnected');
+        expect((await f.service.list('book'))[0].status).toBe('failed');
+        await f.service.tick();
+        expect(f.render).toHaveBeenCalledTimes(1);
+        await f.service.resolve(job.id, 0);
+        expect(f.render).toHaveBeenCalledTimes(2);
+        expect((await f.service.list('book'))[0].completedItems).toBe(1);
+      } finally {
+        await f.cleanup();
+      }
+    });
+  });
+  it('pins only the selected model and serves ready audio with no engine through the reader routes', async () => {
+    await withPostgresSchema(harness!, 'prepared_models', async (pool) => {
+      const f = await setup(pool);
+      const app = Fastify();
+      const synthesize = vi.fn(async () => ({
+        audio: new Uint8Array([82, 73, 70, 70, 1, 2, 3, 4]).buffer,
+        contentType: 'audio/wav',
+      }));
+      const provider = {
+        providerId: 'local-endpoint',
+        displayName: 'Fixture',
+        supportsStreaming: false,
+        supportsAudioCache: true,
+        supportsPerCharacterVoice: false,
+        listVoices: async () => [{ id: 'voice', label: 'Recorded voice', lang: 'ko' }],
+        synthesize,
+      } as TTSSynthesisProvider;
+      let model = 'stable';
+      let revision = 'old';
+      let extra = false;
+      let offline = false;
+      app.addHook('onRequest', async (request) => {
+        request.principal = { userId: 'owner', role: 'admin', authMethod: 'legacy-token' };
+      });
+      try {
+        const service = (await registerPlainTTSRoutes(
+          app,
+          pool,
+          { ...loadConfig({ DEFAULT_USER_ID: 'owner' }), dataDir: f.directory },
+          {
+            provider,
+            savedAudiobooks: true,
+            audiobookBackground: false,
+            env: {},
+            sources: async () =>
+              offline
+                ? []
+                : [
+                    ...(extra
+                      ? [
+                          {
+                            id: 'other',
+                            name: 'Other model',
+                            modelId: 'unrelated',
+                            revision: 'new',
+                            paid: false,
+                            createProvider: async () => provider,
+                          },
+                        ]
+                      : []),
+                    {
+                      id: 'fixture',
+                      name: 'Fixture',
+                      modelId: 'same-model',
+                      revision,
+                      synthesisRevision: model,
+                      paid: false,
+                      createProvider: async () => provider,
+                    },
+                  ],
+          },
+        ))!;
+        const voices = (await app.inject('/api/tts/plain/voices')).json();
+        const plan = await service.plan('book', { ...settings, modelRevision: voices.revision });
+        const job = await service.create(plan, plan.estimate.fingerprint, false);
+        expect((await service.get(job.id)).settings.model).toMatchObject({
+          providerId: 'fixture',
+          modelId: 'same-model',
+          revision: 'stable',
+        });
+        await service.tick();
+        revision = 'unrelated-settings-timestamp';
+        extra = true;
+        await service.tick();
+        expect(synthesize).toHaveBeenCalledTimes(2);
+        expect((await service.get(job.id)).completed_items).toBe(2);
+        model = 'changed-model';
+        await service.tick();
+        expect((await service.list('book'))[0]).toMatchObject({ status: 'failed', completedItems: 2 });
+        expect(synthesize).toHaveBeenCalledTimes(2);
+        offline = true;
+        const reader = await app.inject(`/api/books/book/audiobooks/reader?chapterId=c1&id=${job.id}`);
+        expect(reader.statusCode).toBe(200);
+        expect(reader.json().plan.items[0].playable.preparedAudio.ready).toBe(true);
+        const audio = await app.inject({ method: 'POST', url: `/api/audiobooks/${job.id}/resolve/0`, payload: {} });
+        expect(audio.statusCode).toBe(200);
+        expect(synthesize).toHaveBeenCalledTimes(2);
+        expect((await app.inject(`/api/books/other/audiobooks/reader?chapterId=c1&id=${job.id}`)).json()).toEqual({});
+      } finally {
+        await app.close();
+        await f.cleanup();
+      }
+    });
+  });
   it('finishes pending deletion after a book is hidden and does not dispatch after shutdown', async () => {
     await withPostgresSchema(harness!, 'audiobook_cleanup', async (pool) => {
       const f = await setup(pool);
@@ -121,7 +280,7 @@ async function setup(pool: pg.Pool) {
         synthesize,
       } as TTSSynthesisProvider;
       const apps: ReturnType<typeof Fastify>[] = [];
-      const open = async (enabled = true) => {
+      const open = async (enabled = true, extra = false) => {
         const app = Fastify();
         apps.push(app);
         app.addHook('onRequest', async (request) => {
@@ -135,6 +294,18 @@ async function setup(pool: pg.Pool) {
             provider,
             savedAudiobooks: true,
             audiobookBackground: false,
+            sources: extra
+              ? async () => [
+                  {
+                    id: 'other',
+                    name: 'Unrelated model',
+                    modelId: 'unrelated',
+                    revision: 'unrelated',
+                    paid: false,
+                    createProvider: async () => provider,
+                  },
+                ]
+              : undefined,
             env: {
               TTS_PLAIN_ENABLED: enabled ? 'true' : 'false',
               TTS_PLAIN_MODEL_ID: 'fixture',
@@ -150,15 +321,23 @@ async function setup(pool: pg.Pool) {
         const job = await first.service.create(plan, plan.estimate.fingerprint, false);
         await first.service.tick();
         expect(synthesize).toHaveBeenCalledTimes(1);
+        // A deployed v1 plan has no selected-model identity; prove migration using its recorded audio key.
+        await pool.query("update saved_audiobooks set settings=settings-'model' where id=$1", [job.id]);
         await first.app.close();
-        const second = await open();
-        const input = { ...plan.items[0].request, rules: [] };
+        const second = await open(true, true);
+        const input = { ...plan.items[0].request, voiceRevision: 'model', rules: [] };
         const response = await second.app.inject({ method: 'POST', url: '/api/chapters/c1/tts/plain', payload: input });
         expect(response.statusCode).toBe(200);
         expect(synthesize).toHaveBeenCalledTimes(1);
+        await second.service.tick();
+        expect(synthesize).toHaveBeenCalledTimes(2);
+        expect((await second.service.get(job.id)).settings.model).toMatchObject({
+          providerId: 'supertonic',
+          revision: 'model',
+        });
         const offline = await open(false);
         expect((await offline.app.inject(`/api/audiobooks/${job.id}/audio/0`)).statusCode).toBe(200);
-        expect(synthesize).toHaveBeenCalledTimes(1);
+        expect(synthesize).toHaveBeenCalledTimes(2);
       } finally {
         for (const app of apps) await app.close();
         await f.cleanup();

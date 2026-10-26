@@ -11,6 +11,14 @@ export interface PlainTTSVoice extends TTSVoice {
   providerName?: string;
   modelId?: string;
   paid?: boolean;
+  /** Identity of this synthesis model, independent of catalog order and connection credentials. */
+  model?: PlainTTSModel;
+}
+
+export interface PlainTTSModel {
+  providerId: string;
+  modelId?: string;
+  revision: string;
 }
 
 export interface PlainTTSProviderStatus {
@@ -38,6 +46,7 @@ export interface PlainTTSRequest {
   regenerate?: boolean;
   voiceId: string;
   modelRevision: string;
+  voiceRevision?: string;
   rate: number;
   paragraphId: string;
   paragraphHash: string;

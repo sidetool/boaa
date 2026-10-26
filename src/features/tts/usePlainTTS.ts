@@ -2,6 +2,7 @@ import { PlainTTSSessionCache, waitForPlainTTSAudio } from '../../providers/plai
 import { requestPlainTTSWithRetry } from '../../providers/plain-tts-retry';
 import { ttsQueueItemFingerprint } from '../../providers/tts-playback-resume';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import type { AudiobookPort } from '../../providers/plain-audiobook';
 import type { Paragraph, SpokenTextRule, TTSPlaybackSettings } from '../../domain/types';
 import {
   plainTTSParagraphHash,
@@ -27,6 +28,7 @@ export function usePlainTTS(input: {
   controller: ReturnType<typeof useTTSExecutionController>;
   systemTTS: TTSProvider;
   voiceURI?: string;
+  prepared?: AudiobookPort;
   onError(message: string): void;
 }) {
   // Own the resource by account/runtime/content identity, not by playback or speed.
@@ -108,10 +110,14 @@ export function usePlainTTS(input: {
     chapterId: string;
     index: number;
     fingerprint: string;
+    prepared?: boolean;
   }>();
   const retryTarget = () => {
     const target = lastPlayback.current;
-    return target && target.cache === audioCache && target.scope === scopeFor() && target.chapterId === input.chapterId
+    return target &&
+      target.cache === audioCache &&
+      (target.prepared || target.scope === scopeFor()) &&
+      target.chapterId === input.chapterId
       ? { index: target.index, fingerprint: target.fingerprint }
       : undefined;
   };
@@ -130,6 +136,7 @@ export function usePlainTTS(input: {
     return {
       voiceId,
       modelRevision: catalog.revision,
+      voiceRevision: catalog.voices.find((voice) => voice.id === voiceId)?.model?.revision,
       rate: 1,
       paragraphId: paragraph.id,
       paragraphHash: plainTTSParagraphHash(paragraph),
@@ -157,6 +164,45 @@ export function usePlainTTS(input: {
       return true;
     }
     try {
+      if (playable.preparedAudio && input.prepared) {
+        const item = playable.preparedAudio;
+        input.controller.setHostedStatus(
+          operation,
+          regeneration ? '현재 음성 다시 만드는 중' : item.ready ? '미리 만든 음성 불러오는 중' : '현재 구간 준비 중',
+        );
+        const key = `prepared:${item.id}:${item.ordinal}`;
+        lastPlayback.current = {
+          cache: audioCache,
+          scope: scopeFor(),
+          chapterId: paragraph.chapterId,
+          index: paragraph.index - 1,
+          fingerprint: ttsQueueItemFingerprint(playable),
+          prepared: true,
+        };
+        if (regeneration) audioCache.remove(key);
+        const blob = await requestPlainTTSWithRetry(
+          () =>
+            waitForPlainTTSAudio(
+              audioCache.getOrCreate({
+                key,
+                chapter: paragraph.chapterId,
+                scope: scopeFor(),
+                positions: playable.plainBatchPositions?.map((p) => p.paragraphIndex) ?? [],
+                fetch: (signal) => input.prepared!.resolve(item.id, item.ordinal, !!regeneration, signal),
+              }),
+              operation.controller.signal,
+            ),
+          {
+            signal: operation.controller.signal,
+            onWait: (seconds) =>
+              input.controller.setHostedStatus(operation, `음성 제공자 대기 중 · ${Math.ceil(seconds)}초 후 다시 시도`),
+          },
+        );
+        regeneration?.prepared();
+        if (!input.controller.isSessionCurrent(sessionId)) return true;
+        input.controller.setHostedStatus(operation, undefined);
+        return await input.controller.playAudio(blob, sessionId, onProgress);
+      }
       const request = requestFor(playable, paragraph);
       const key = structuredIntegrityHash({ chapter: paragraph.chapterId, request });
       lastPlayback.current = {
@@ -222,6 +268,22 @@ export function usePlainTTS(input: {
       ? latestContent.current.revision
       : input.contentRevision,
   ) => {
+    if (playable.preparedAudio && input.prepared) {
+      if (!input.controller.isSessionCurrent(sessionId)) return;
+      const item = playable.preparedAudio;
+      try {
+        await audioCache.getOrCreate({
+          key: `prepared:${item.id}:${item.ordinal}`,
+          chapter: paragraph.chapterId,
+          scope: scopeFor(),
+          positions: playable.plainBatchPositions?.map((p) => p.paragraphIndex) ?? [],
+          fetch: (signal) => input.prepared!.resolve(item.id, item.ordinal, false, signal),
+        });
+      } catch {
+        /* Foreground reports the error. */
+      }
+      return;
+    }
     let request: PlainTTSRequest;
     try {
       request = { ...requestFor(playable, paragraph), contentRevision };

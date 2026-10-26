@@ -4,35 +4,6 @@ import type { TTSAudiobookControls } from '../../features/tts/TTSAddonPanel';
 import type { AudiobookEstimate, AudiobookPort, SavedAudiobook } from '../../providers/plain-audiobook';
 import UiNextAudiobookPanel from './UiNextAudiobookPanel';
 
-// One fake media element per test: each playBlob waits until the test ends that part.
-const media = vi.hoisted(() => ({
-  played: [] as Blob[],
-  stops: 0,
-  rates: [] as number[],
-  finish: undefined as ((played: boolean) => void) | undefined,
-}));
-vi.mock('../../providers/browser-audio-session', () => ({
-  BrowserAudioSession: class {
-    playBlob(blob: Blob) {
-      media.played.push(blob);
-      return new Promise<boolean>((resolve) => (media.finish = resolve));
-    }
-    setPlaybackRate(rate: number) {
-      media.rates.push(rate);
-    }
-    setVolume() {}
-    pause() {}
-    async resume() {
-      return true;
-    }
-    stop() {
-      media.stops += 1;
-      media.finish?.(false);
-      media.finish = undefined;
-    }
-  },
-}));
-
 // The node test environment has no window; the panel's poll timer uses window.setTimeout as in the browser.
 if (typeof window === 'undefined') vi.stubGlobal('window', globalThis);
 
@@ -85,6 +56,8 @@ function port(list: () => Promise<SavedAudiobook[]>, overrides: Partial<Audioboo
     remove: vi.fn(async () => undefined),
     audio: vi.fn(async (_id: string, index: number) => new Blob([`part-${index}`])),
     progress: vi.fn(async () => undefined),
+    reader: vi.fn(async () => undefined),
+    resolve: vi.fn(async () => new Blob(['audio'])),
     ...overrides,
   } satisfies AudiobookPort;
 }
@@ -96,7 +69,7 @@ function controls(overrides: Partial<TTSAudiobookControls> = {}): TTSAudiobookCo
     currentChapterId: 'c2',
     generation,
     rate: 1.2,
-    beforePlayback: vi.fn(),
+    listen: vi.fn(),
     ...overrides,
   };
 }
@@ -105,10 +78,6 @@ let renderer: ReactTestRenderer | undefined;
 afterEach(() => {
   act(() => renderer?.unmount());
   renderer = undefined;
-  media.played = [];
-  media.stops = 0;
-  media.rates = [];
-  media.finish = undefined;
   vi.useRealTimers();
 });
 async function flush() {
@@ -206,7 +175,7 @@ describe('UiNextAudiobookPanel creating', () => {
     expect(hasButton(root, '글자 수 확인')).toBe(false);
     expect(hasButton(root, '전체')).toBe(false);
     expect(text(root)).toContain('엔진이 꺼져 있어도 들을 수 있어요');
-    expect(hasButton(root, '듣기')).toBe(true);
+    expect(hasButton(root, '본문에서 듣기')).toBe(true);
   });
 });
 
@@ -271,69 +240,39 @@ describe('UiNextAudiobookPanel saved jobs', () => {
   });
 });
 
-describe('UiNextAudiobookPanel saved playback', () => {
-  it('stops live listening first, plays stored parts in order and stops at the generated edge', async () => {
-    const order: string[] = [];
-    const api = port(async () => [saved({ status: 'paused', completedItems: 2, playbackIndex: 0 })]);
-    vi.mocked(api.audio).mockImplementation(async (_id: string, index: number) => {
-      order.push(`audio-${index}`);
-      return new Blob([`part-${index}`]);
-    });
-    const beforePlayback = vi.fn(() => {
-      order.push('before');
-    });
-    const root = await mount(controls({ port: api, beforePlayback }));
-
-    await click(button(root, '듣기'));
-    expect(order.slice(0, 2)).toEqual(['before', 'audio-0']);
-    expect(media.rates).toContain(1.2);
-    expect(api.progress).toHaveBeenCalledWith('book-1', 0);
-    expect(text(root)).toContain('1 / 4 구간');
-
-    await act(async () => media.finish?.(true));
-    await flush();
-    expect(api.progress).toHaveBeenLastCalledWith('book-1', 1);
-    await act(async () => media.finish?.(true));
-    await flush();
-
-    expect(media.played).toHaveLength(2);
-    expect(api.audio).toHaveBeenCalledTimes(2);
-    // The outcome sits on that audiobook's card, not at the top of the page.
-    expect(text(root.findByType('li'))).toContain('여기까지 만들어졌어요');
+describe('UiNextAudiobookPanel reader playback', () => {
+  it.each([0, 2, 4])(
+    'hands the recording to the reader at %i completed items without an independent audio player',
+    async (completedItems) => {
+      const item = saved({ status: 'paused', completedItems, chapterIds: ['c1', 'c2'] });
+      const api = port(async () => [item]);
+      const listen = vi.fn();
+      const root = await mount(controls({ port: api, listen, generation: undefined }));
+      await click(button(root, '본문에서 듣기'));
+      expect(listen).toHaveBeenCalledExactlyOnceWith(item);
+      expect(api.audio).not.toHaveBeenCalled();
+      expect(api.resolve).not.toHaveBeenCalled();
+      expect(api.progress).not.toHaveBeenCalled();
+    },
+  );
+  it('keeps a handoff failure on its card and permits retry', async () => {
+    const listen = vi.fn().mockRejectedValueOnce(new Error('본문이 변경됐어요')).mockResolvedValue(undefined);
+    const root = await mount(controls({ port: port(async () => [saved()]), listen }));
+    await click(button(root, '본문에서 듣기'));
+    expect(text(root.findByType('li'))).toContain('본문이 변경됐어요');
+    await click(button(root, '본문에서 듣기'));
+    expect(listen).toHaveBeenCalledTimes(2);
   });
-
-  it('writes positions one at a time and only the newest after a slow save', async () => {
-    let release: () => void = () => undefined;
-    const api = port(async () => [saved({ completedItems: 4 })], {
-      progress: vi.fn(() => new Promise<void>((resolve) => (release = resolve))),
-    });
-    const root = await mount(controls({ port: api }));
-    await click(button(root, '듣기'));
-    await act(async () => media.finish?.(true));
-    await flush();
-    await act(async () => media.finish?.(true));
-    await flush();
-    expect(api.progress).toHaveBeenCalledTimes(1);
-
-    await act(async () => release());
-    await flush();
-    expect(api.progress).toHaveBeenCalledTimes(2);
-    expect(api.progress).toHaveBeenLastCalledWith('book-1', 2);
-  });
-
-  it('ends saved playback when the account or book changes', async () => {
+  it('does not offer the previous account recording after the owner changes', async () => {
     const first = port(async () => [saved()]);
-    const root = await mount(controls({ port: first }));
-    await click(button(root, '듣기'));
-    const stops = media.stops;
-
+    await mount(controls({ port: first }));
     const second = port(async () => []);
     act(() =>
       renderer!.update(<UiNextAudiobookPanel controls={controls({ key: 'account-2:novel-1', port: second })} />),
     );
     await flush();
-    expect(media.stops).toBeGreaterThan(stops);
     expect(second.list).toHaveBeenCalledTimes(1);
     expect(text(renderer!.root)).toContain('아직 미리 만든 음성이 없어요');
+    expect(hasButton(renderer!.root, '본문에서 듣기')).toBe(false);
   });
 });

@@ -1,4 +1,9 @@
-import type { AudiobookEstimate, AudiobookPort, SavedAudiobook } from '../../providers/plain-audiobook';
+import type {
+  AudiobookEstimate,
+  AudiobookPort,
+  SavedAudiobook,
+  PreparedNarration,
+} from '../../providers/plain-audiobook';
 import type { RemoteApiClient } from './remote-api-client';
 
 export function createAudiobookPort(client: RemoteApiClient, bookId: string): AudiobookPort {
@@ -15,6 +20,23 @@ export function createAudiobookPort(client: RemoteApiClient, bookId: string): Au
     );
   return {
     list: async (signal) => (await client.request<{ audiobooks: SavedAudiobook[] }>(path, { signal })).audiobooks,
+    reader: async (chapterId, choice, signal) => {
+      const query = new URLSearchParams({ chapterId, ...choice });
+      return (await client.request<{ plan?: PreparedNarration }>(`${path}/reader?${query}`, { signal })).plan;
+    },
+    resolve: async (id, index, regenerate, signal) =>
+      (
+        await client.requestBlob(
+          `${item(id)}/resolve/${index}`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ regenerate: !!regenerate }),
+            signal,
+          },
+          120_000,
+        )
+      ).blob,
     estimate: (input, signal) => post<AudiobookEstimate>(`${path}/estimate`, input, signal),
     create: (input, fingerprint, confirmPaid, signal) =>
       post<SavedAudiobook>(path, { ...input, fingerprint, confirmPaid }, signal),

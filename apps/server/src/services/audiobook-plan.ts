@@ -11,6 +11,7 @@ import {
 } from '../../../../src/providers/plain-tts';
 import { planEpubFootnotePlayback } from '../../../../src/providers/epub-footnote-playback';
 import { hasSpokenContent } from '../../../../src/providers/tts-spoken-content';
+import type { PlayableTtsSegment } from '../../../../src/providers/tts-playback';
 
 export const audiobookError = (statusCode: number, message: string) =>
   Object.assign(new Error(message), { statusCode });
@@ -18,6 +19,9 @@ export interface AudiobookPlanItem {
   chapterId: string;
   chapterTitle: string;
   request: Omit<PlainTTSRequest, 'rules'>;
+  paragraphIndex: number;
+  nextParagraphIndex: number;
+  playable: PlayableTtsSegment;
 }
 export interface AudiobookPlan {
   bookId: string;
@@ -56,11 +60,11 @@ export async function planAudiobook(
   userId: string,
   bookId: string,
   settings: AudiobookInput,
-  catalog: PlainTTSVoices,
+  catalog?: PlainTTSVoices,
 ): Promise<AudiobookPlan> {
   validateAudiobookInput(settings);
-  const voice = catalog.voices.find((v) => v.id === settings.voiceId);
-  if (!voice || !catalog.available || catalog.revision !== settings.modelRevision)
+  const voice = catalog?.voices.find((v) => v.id === settings.voiceId);
+  if (catalog && (!voice || !catalog.available || catalog.revision !== settings.modelRevision))
     throw audiobookError(409, '선택한 목소리가 변경됐습니다. 음성 목록을 다시 불러와 주세요.');
   const book = (
     await pool.query(
@@ -148,6 +152,10 @@ export async function planAudiobook(
         items.push({
           chapterId: chapter.id,
           chapterTitle: chapter.title,
+          paragraphIndex: paragraph.index - 1,
+          nextParagraphIndex:
+            (paragraphs[prepared.nextParagraphIndex]?.index ?? paragraphs[paragraphs.length - 1].index + 1) - 1,
+          playable,
           request: {
             voiceId: settings.voiceId,
             modelRevision: settings.modelRevision,
@@ -161,20 +169,20 @@ export async function planAudiobook(
             batch: playable.plainBatch,
           },
         });
-        planBytes += Buffer.byteLength(JSON.stringify(items[items.length - 1]));
+        planBytes += Buffer.byteLength(JSON.stringify(items[items.length - 1].request));
         if (planBytes > 32 * 1024 * 1024) throw audiobookError(413, '한 번에 만들 회차 범위를 줄여 주세요.');
       }
       index = prepared.nextParagraphIndex;
     }
   }
   if (!items.length) throw audiobookError(400, '선택한 범위에 낭독할 본문이 없습니다.');
-  const normalized = { ...settings, chapterIds: chapters.map((c) => c.id) };
+  const normalized = { ...settings, model: voice?.model ?? settings.model, chapterIds: chapters.map((c) => c.id) };
   const fingerprint = structuredIntegrityHash({
     userId,
     bookId,
     revision: book.active_content_revision_id,
     settings: normalized,
-    items,
+    items: items.map(({ chapterId, request }) => ({ chapterId, request })),
   });
   return {
     bookId,
@@ -187,9 +195,9 @@ export async function planAudiobook(
       chapterCount: chapters.length,
       itemCount: items.length,
       characters,
-      voiceLabel: voice.label,
-      providerName: voice.providerName ?? '서버 음성',
-      paid: voice.paid === true,
+      voiceLabel: voice?.label ?? settings.voiceId,
+      providerName: voice?.providerName ?? '서버 음성',
+      paid: voice?.paid === true,
       firstChapterTitle: chapters[0].title,
       lastChapterTitle: chapters[chapters.length - 1].title,
     },
