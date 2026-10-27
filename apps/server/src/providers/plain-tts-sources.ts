@@ -2,6 +2,7 @@ import type pg from 'pg';
 import { structuredIntegrityHash } from '@boaa/text-core/hash';
 import { TTSConnectionStore } from './tts-connections.js';
 import type { TTSSynthesisProvider } from '../../../../src/providers/tts';
+import type { AudiobookInput } from '../../../../src/providers/plain-audiobook';
 import type { ServerConfig } from '../config.js';
 import { listServerProviderCatalog } from './server-provider-catalog.js';
 import {
@@ -24,11 +25,22 @@ export interface PlainTTSSource {
   revision: string;
   synthesisRevision?: string;
   paid: boolean;
+  /** Background preparation only. Unknown/custom servers remain serial. Not part of audio identity. */
+  backgroundConcurrency?: 1 | 2;
   /** Only an explicitly configured default may supply the unspecified server voice. */
   default?: boolean;
   legacyIds?: boolean;
   providerOptions?: Record<string, unknown>;
   createProvider(): Promise<TTSSynthesisProvider>;
+}
+
+export function preparedTTSConcurrency(settings: AudiobookInput, sources: readonly PlainTTSSource[]): 1 | 2 {
+  const models = settings.cast ? Object.values(settings.cast.models) : settings.model ? [settings.model] : [];
+  // Mixed pools obey the least capable server. Payment and protocol do not establish GPU capacity.
+  return models.length &&
+    models.every((model) => sources.find((s) => s.id === model.providerId)?.backgroundConcurrency === 2)
+    ? 2
+    : 1;
 }
 
 /** Reuse administrator-owned provider settings and secrets; never accept an endpoint or key from playback. */
@@ -65,6 +77,7 @@ export async function loadPlainTTSSources(
       name: id === 'local-endpoint' && modelId === 'supertonic-3-ko' ? 'Supertonic 3' : entry.displayName,
       modelId,
       paid: id !== 'local-endpoint',
+      backgroundConcurrency: id === 'local-endpoint' ? 1 : 2,
       default: id === settings.defaultProviderId,
       providerOptions,
       synthesisRevision: structuredIntegrityHash({ id, modelId, providerOptions: synthesisOptions }),

@@ -6,6 +6,8 @@ import { AudiobookAudioStore, type SavedAudio } from './audiobook-audio.js';
 import { audiobookError, planAudiobook, type AudiobookPlan } from './audiobook-plan.js';
 
 const RUNNER_LOCK = '61879419263191';
+const MAX_AUDIO_BYTES = 16 * 1024 * 1024;
+class BackgroundYield extends Error {}
 export const AUDIOBOOK_QUOTA_BYTES = 20 * 1024 ** 3;
 type JobRow = {
   id: string;
@@ -81,6 +83,7 @@ export class AudiobookService {
       settings: AudiobookInput,
       probe: { chapterId: string; request: PlainTTSRequest; key?: string },
     ) => Promise<PlainTTSModel>,
+    private readonly backgroundConcurrency: (settings: AudiobookInput) => Promise<1 | 2> = async () => 1,
   ) {}
 
   async plan(bookId: string, settings: AudiobookInput) {
@@ -189,7 +192,14 @@ export class AudiobookService {
   async resolve(id: string, ordinal: number, regenerate = false): Promise<SavedAudio> {
     this.foreground++;
     try {
-      return await this.ensureItem(await this.get(id), ordinal, regenerate);
+      const job = await this.get(id);
+      try {
+        return await this.ensureItem(job, ordinal, regenerate);
+      } catch (error) {
+        // A joined background admission may have yielded before dispatch. Listening can still own this item.
+        if (!(error instanceof BackgroundYield)) throw error;
+        return await this.ensureItem(job, ordinal, regenerate);
+      }
     } catch (error) {
       // Do not let the background runner automatically repeat an ambiguous foreground failure.
       const failure = this.failure(error);
@@ -204,7 +214,7 @@ export class AudiobookService {
       this.foreground--;
     }
   }
-  private ensureItem(job: JobRow, ordinal: number, regenerate = false): Promise<SavedAudio> {
+  private ensureItem(job: JobRow, ordinal: number, regenerate = false, background = false): Promise<SavedAudio> {
     if (!Number.isSafeInteger(ordinal) || ordinal < 0)
       return Promise.reject(audiobookError(400, '낭독 위치를 확인해 주세요.'));
     const key = job.id + ':' + ordinal;
@@ -213,13 +223,13 @@ export class AudiobookService {
       if (regenerate && !old.regenerate) return old.task.then(() => this.ensureItem(job, ordinal, true));
       return old.task;
     }
-    const task = this.writeItem(job, ordinal, regenerate).finally(() => {
+    const task = this.writeItem(job, ordinal, regenerate, background).finally(() => {
       if (this.items.get(key)?.task === task) this.items.delete(key);
     });
     this.items.set(key, { task, regenerate });
     return task;
   }
-  private async writeItem(job: JobRow, ordinal: number, regenerate: boolean): Promise<SavedAudio> {
+  private async writeItem(job: JobRow, ordinal: number, regenerate: boolean, background: boolean): Promise<SavedAudio> {
     const client = await this.pool.connect();
     let locked = false;
     const lock = 'prepared-narration:' + job.id + ':' + ordinal;
@@ -227,7 +237,10 @@ export class AudiobookService {
       // Cross-process item fence. Waiting listeners share the completed file without a second provider call.
       await client.query('select pg_advisory_lock(hashtextextended($1,0))', [lock]);
       locked = true;
-      if (this.closing) throw audiobookError(503, '서버가 잠시 다시 시작 중입니다.');
+      if (this.closing) {
+        if (background) throw new BackgroundYield();
+        throw audiobookError(503, '서버가 잠시 다시 시작 중입니다.');
+      }
       const item = (
         await client.query(
           `select i.* from saved_audiobook_items i join saved_audiobooks a on a.id=i.audiobook_id
@@ -246,15 +259,6 @@ export class AudiobookService {
       let audio = stored;
       if (!audio) {
         const model = await this.model(job);
-        const usage = Number(
-          (
-            await client.query('select coalesce(sum(bytes),0) as bytes from saved_audiobooks where user_id=$1', [
-              this.owner,
-            ])
-          ).rows[0].bytes,
-        );
-        if (usage + 16 * 1024 * 1024 > AUDIOBOOK_QUOTA_BYTES)
-          throw audiobookError(409, '음성 저장 공간이 가득 찼습니다.');
         const account = (
           await client.query(
             "select 1 from self_host_accounts where user_id=$1 and (role<>'admin' or status<>'active')",
@@ -263,13 +267,27 @@ export class AudiobookService {
         ).rows[0];
         if (account) throw audiobookError(403, '계정 권한이 변경되었습니다.');
         await client.query('begin');
+        // Reserve space for each in-flight response, including other jobs and foreground listeners.
+        await client.query('select pg_advisory_xact_lock(hashtextextended($1,0))', [`audiobook:${this.owner}`]);
+        const usage = (
+          await client.query(
+            `select coalesce(sum(bytes),0) bytes,
+            (select count(*) from saved_audiobook_items i join saved_audiobooks a on a.id=i.audiobook_id
+             where a.user_id=$1 and i.status='dispatching') pending
+            from saved_audiobooks where user_id=$1`,
+            [this.owner],
+          )
+        ).rows[0];
+        if (Number(usage.bytes) + (Number(usage.pending) + 1) * MAX_AUDIO_BYTES > AUDIOBOOK_QUOTA_BYTES)
+          throw audiobookError(409, '음성 저장 공간이 가득 찼습니다.');
         const admitted = (
           await client.query(
-            "select id from saved_audiobooks where id=$1 and user_id=$2 and status<>'deleting' for update",
+            "select status from saved_audiobooks where id=$1 and user_id=$2 and status<>'deleting' for update",
             [job.id, this.owner],
           )
-        ).rowCount;
+        ).rows[0];
         if (!admitted) throw audiobookError(409, '음성 작업이 삭제되었습니다.');
+        if (background && (this.closing || admitted.status !== 'running')) throw new BackgroundYield();
         await client.query(
           "update saved_audiobook_items set status='dispatching' where audiobook_id=$1 and ordinal=$2",
           [job.id, ordinal],
@@ -495,13 +513,13 @@ export class AudiobookService {
     ]);
   }
 
-  /** One durable item per turn. A session advisory lock fences multiple API processes without a long DB transaction. */
-  async tick(): Promise<void> {
+  /** At most two independent items per turn; the global lock remains held until every dispatched item settles. */
+  async tick(): Promise<boolean> {
     const client = await this.pool.connect();
     let locked = false;
     try {
       locked = (await client.query('select pg_try_advisory_lock($1::bigint) as locked', [RUNNER_LOCK])).rows[0].locked;
-      if (!locked || this.closing || this.foreground > 0) return;
+      if (!locked || this.closing || this.foreground > 0) return false;
       if (Date.now() - this.lastCleanup > 60_000) {
         const ids = await this.audioStore.ids();
         const existing = new Set(
@@ -535,10 +553,10 @@ export class AudiobookService {
           [this.owner],
         )
       ).rows[0] as JobRow | undefined;
-      if (!job) return;
+      if (!job) return false;
       if (this.closing) {
         await client.query("update saved_audiobooks set status='queued' where id=$1 and status='running'", [job.id]);
-        return;
+        return false;
       }
       const abort = new AbortController();
       this.active = { id: job.id, abort };
@@ -547,18 +565,21 @@ export class AudiobookService {
           if (!this.speaker) throw audiobookError(503, '화자별 생성 연결을 확인해 주세요.');
           await this.speaker.advance(job.id, abort.signal);
         }
-        const item = (
+        // After a rate limit, probe with one request before restoring parallel work.
+        const width = job.rate_limit_attempts > 0 ? 1 : await this.backgroundConcurrency(job.settings);
+        const items = (
           await client.query(
-            "select * from saved_audiobook_items where audiobook_id=$1 and status<>'ready' order by ordinal limit 1",
-            [job.id],
+            "select * from saved_audiobook_items where audiobook_id=$1 and status<>'ready' order by ordinal limit $2",
+            [job.id, width === 2 ? 2 : 1],
           )
-        ).rows[0];
+        ).rows;
+        const item = items[0];
         if (!item) {
           await client.query(
             "update saved_audiobooks set status=case when status='pausing' then 'paused' when planning_complete and completed_items=total_items then 'completed' else 'queued' end,error_message=null,retry_at=null,rate_limit_attempts=0,updated_at=now() where id=$1 and status in ('running','pausing')",
             [job.id],
           );
-          return;
+          return false;
         }
         const authority = (
           await client.query(
@@ -577,13 +598,26 @@ export class AudiobookService {
         abort.signal.throwIfAborted();
         const current = (await client.query('select status from saved_audiobooks where id=$1', [job.id])).rows[0];
         if (current?.status !== 'running') throw new DOMException('Stopped', 'AbortError');
-        await this.ensureItem(job, item.ordinal);
+        const results = await Promise.allSettled(items.map((next) => this.ensureItem(job, next.ordinal, false, true)));
+        const failures = results.flatMap((result) => (result.status === 'rejected' ? [result.reason] : []));
+        // An ambiguous failure must never become an automatic retry just because its sibling hit 429.
+        const permanent = failures.find(
+          (error) => !(error instanceof BackgroundYield) && this.failure(error).status !== 429,
+        );
+        if (permanent) throw permanent;
+        const limited = failures.filter((error) => this.failure(error).status === 429);
+        if (limited.length) {
+          const retryAfter = (error: { retryAfterSeconds?: number; payload?: { retryAfterSeconds?: number } }) =>
+            error.retryAfterSeconds ?? error.payload?.retryAfterSeconds ?? 0;
+          throw limited.reduce((a, b) => (retryAfter(a) >= retryAfter(b) ? a : b));
+        }
         await client.query(
           `update saved_audiobooks set error_message=null,retry_at=null,rate_limit_attempts=0,
           status=case when status='pausing' then 'paused' else 'queued' end,updated_at=now()
           where id=$1 and status in ('running','pausing')`,
           [job.id],
         );
+        return results.some((result) => result.status === 'fulfilled');
       } catch (error) {
         await client.query('rollback');
         if (this.failure(error).status === 429) {
@@ -602,7 +636,14 @@ export class AudiobookService {
             where id=$1 and status in ('running','pausing')`,
             [job.id, seconds, `음성 제공자 요청 제한으로 대기 중 · ${Math.ceil(seconds)}초 후 자동으로 이어 만들어요.`],
           );
-          return;
+          return false;
+        }
+        if (error instanceof BackgroundYield || (abort.signal.aborted && this.closing)) {
+          await client.query(
+            "update saved_audiobooks set status=case when status='pausing' then 'paused' else 'queued' end where id=$1 and status in ('running','pausing')",
+            [job.id],
+          );
+          return false;
         }
         const message = (error as { statusCode?: number }).statusCode
           ? (error as Error).message
@@ -612,6 +653,7 @@ export class AudiobookService {
           error_message=case when status='pausing' then null else $2 end,updated_at=now() where id=$1 and status in ('running','pausing')`,
           [job.id, message],
         );
+        return false;
       } finally {
         this.active = undefined;
       }

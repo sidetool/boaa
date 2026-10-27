@@ -1,7 +1,8 @@
 import type pg from 'pg';
 import { describe, expect, it, vi } from 'vitest';
 import { loadConfig } from '../config.js';
-import { loadPlainTTSSources } from './plain-tts-sources.js';
+import { loadPlainTTSSources, preparedTTSConcurrency } from './plain-tts-sources.js';
+import type { AudiobookInput } from '../../../../src/providers/plain-audiobook';
 
 function fixture() {
   const row = {
@@ -30,6 +31,48 @@ function fixture() {
   const config = loadConfig({ DEFAULT_USER_ID: 'admin_fixture' });
   return { row, pool, env, config };
 }
+
+it('parallelizes known cloud preparation without changing model identity or assuming custom-server capacity', async () => {
+  const f = fixture();
+  const sources = await loadPlainTTSSources(f.pool, f.config, f.env);
+  const cloud = { providerId: 'gemini-tts', revision: 'same' };
+  const local = { providerId: 'local-endpoint', revision: 'same' };
+  const input: AudiobookInput = {
+    chapterIds: ['c1'],
+    voiceId: 'v',
+    modelRevision: 'catalog',
+    chunking: 'paragraph',
+    footnotePlayback: 'skip',
+    rules: [],
+    model: cloud,
+  };
+  expect(preparedTTSConcurrency(input, sources)).toBe(2);
+  expect(preparedTTSConcurrency({ ...input, model: local }, sources)).toBe(1);
+  expect(preparedTTSConcurrency({ ...input, model: undefined }, sources)).toBe(1);
+  expect(
+    preparedTTSConcurrency(
+      input,
+      sources.filter((s) => s.id !== cloud.providerId),
+    ),
+  ).toBe(1);
+  expect(
+    preparedTTSConcurrency(
+      input,
+      sources.map((s) => ({ ...s, paid: true, backgroundConcurrency: undefined })),
+    ),
+  ).toBe(1);
+  const cast: NonNullable<AudiobookInput['cast']> = {
+    engineId: 'fixture',
+    engineRevision: 'v1',
+    engineVersion: 'v1',
+    characterVoiceIds: ['other'],
+    models: { narrator: cloud, other: local },
+  };
+  expect(preparedTTSConcurrency({ ...input, cast }, sources)).toBe(1);
+  expect(
+    preparedTTSConcurrency({ ...input, cast: { ...cast, models: { narrator: cloud, other: cloud } } }, sources),
+  ).toBe(2);
+});
 
 describe('ordinary TTS provider configuration', () => {
   it('uses owner settings, excludes disabled providers, and keeps credentials server-side', async () => {

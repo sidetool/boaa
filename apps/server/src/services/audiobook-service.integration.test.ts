@@ -37,7 +37,7 @@ const catalog = async () => ({
   revision: 'model',
   voices: [{ id: 'fixture:voice', label: 'Fixture', lang: 'ko', paid: true, providerName: 'Fixture API' }],
 });
-async function setup(pool: pg.Pool) {
+async function setup(pool: pg.Pool, concurrency: 1 | 2 = 1) {
   await pool.query(`create table users(id text primary key);
     create table library_books(id text primary key,user_id text,title text,format text,language text,active_content_revision_id text,deleted_at timestamptz);
     create table chapters(id text primary key,book_id text,title text,chapter_index integer);
@@ -79,11 +79,139 @@ async function setup(pool: pg.Pool) {
     contentType: 'audio/wav',
     key: structuredIntegrityHash({ chapter, request }),
   }));
-  const service = new AudiobookService(pool, 'owner', store, catalog, render, classifyPlainTTSFailure);
+  const service = new AudiobookService(
+    pool,
+    'owner',
+    store,
+    catalog,
+    render,
+    classifyPlainTTSFailure,
+    undefined,
+    async () => concurrency,
+  );
   return { directory, store, render, service, cleanup: () => rm(directory, { recursive: true, force: true }) };
 }
 
 (harness ? describe : describe.skip)('durable ordinary audiobooks', () => {
+  it('runs at most two, saves out-of-order results, shares playback and preserves the original anchors', async () => {
+    await withPostgresSchema(harness!, 'prepared_parallel', async (pool) => {
+      const f = await setup(pool, 2);
+      const release = new Map<string, () => void>();
+      const original = f.render.getMockImplementation()!;
+      f.render.mockImplementation(async (...args) => {
+        await new Promise<void>((resolve) => release.set(args[1].paragraphId, resolve));
+        return original(...args);
+      });
+      try {
+        const plan = await f.service.plan('book', settings);
+        const job = await f.service.create(plan, plan.estimate.fingerprint, true);
+        const turn = f.service.tick();
+        await vi.waitFor(() => expect(release.size).toBe(2));
+        const secondRunner = new AudiobookService(pool, 'owner', f.store, catalog, f.render, classifyPlainTTSFailure);
+        expect(await secondRunner.tick()).toBe(false);
+        const listener = f.service.resolve(job.id, 1);
+        release.get('c1-2')!();
+        await listener;
+        expect(f.render).toHaveBeenCalledTimes(2);
+        expect((await f.service.list('book'))[0].completedItems).toBe(1);
+        const anchors = await f.service.reader('book', 'c1', { id: job.id });
+        expect(anchors?.items.map((i) => [i.ordinal, i.paragraphIndex, i.playable.preparedAudio?.ready])).toEqual([
+          [0, 0, false],
+          [1, 1, true],
+        ]);
+        release.get('c1-1')!();
+        expect(await turn).toBe(true);
+        f.render.mockImplementation(original);
+        expect(await f.service.tick()).toBe(true);
+        expect((await f.service.list('book'))[0]).toMatchObject({ status: 'completed', completedItems: 4 });
+        expect(f.render.mock.calls.map((c) => c[1].paragraphId).sort()).toEqual(['c1-1', 'c1-2', 'c2-1', 'c2-2']);
+        await f.service.resolve(job.id, 1);
+        expect(f.render).toHaveBeenCalledTimes(4);
+        expect(await f.service.tick()).toBe(false);
+      } finally {
+        for (const done of release.values()) done();
+        await f.service.stop();
+        await f.cleanup();
+      }
+    });
+  });
+  it.each(['pause', 'shutdown', '429', 'timeout-and-429', 'quota'] as const)(
+    'drains concurrent work safely on %s',
+    async (action) => {
+      await withPostgresSchema(harness!, 'prepared_parallel_control', async (pool) => {
+        const f = await setup(pool, 2);
+        let finish!: () => void;
+        const gate = new Promise<void>((resolve) => {
+          finish = resolve;
+        });
+        const original = f.render.getMockImplementation()!;
+        f.render.mockImplementation(async (...args) => {
+          await gate;
+          if (action === 'timeout-and-429' && args[1].paragraphId === 'c1-1')
+            throw new DOMException('deadline', 'TimeoutError');
+          if (action === 'timeout-and-429' || (action === '429' && args[1].paragraphId === 'c1-1'))
+            throw Object.assign(new Error('limited'), { status: 429, retryAfterSeconds: 600 });
+          return original(...args);
+        });
+        try {
+          const plan = await f.service.plan('book', settings);
+          const job = await f.service.create(plan, plan.estimate.fingerprint, true);
+          if (action === 'quota')
+            await pool.query('update saved_audiobooks set bytes=$2 where id=$1', [
+              job.id,
+              AUDIOBOOK_QUOTA_BYTES - 24 * 1024 * 1024,
+            ]);
+          const work = f.service.tick();
+          await vi.waitFor(() => expect(f.render).toHaveBeenCalledTimes(action === 'quota' ? 1 : 2));
+          let stopped: Promise<unknown> | undefined;
+          if (action === 'pause' || action === 'shutdown') {
+            stopped = action === 'shutdown' ? f.service.stop() : f.service.control(job.id, 'pause');
+            await vi.waitFor(async () => expect((await f.service.list('book'))[0].status).toBe('pausing'));
+          }
+          if (action === 'quota') {
+            // Both writers have been admitted to the pool; the rejected writer releases its connection.
+            await vi.waitFor(() => expect(pool.totalCount - pool.idleCount).toBe(2));
+            expect(f.render).toHaveBeenCalledTimes(1);
+          }
+          finish();
+          await Promise.all([work, stopped]);
+          const saved = (await f.service.list('book'))[0];
+          if (action === 'pause' || action === 'shutdown')
+            expect(saved).toMatchObject({ status: 'paused', completedItems: 2 });
+          else if (action === 'quota')
+            expect(saved).toMatchObject({
+              status: 'failed',
+              completedItems: 1,
+              error: expect.stringContaining('저장 공간'),
+            });
+          else if (action === 'timeout-and-429') expect(saved).toMatchObject({ status: 'failed', completedItems: 0 });
+          else expect(saved).toMatchObject({ status: 'queued', completedItems: 1 });
+          expect(await f.service.tick()).toBe(false);
+          expect(f.render).toHaveBeenCalledTimes(action === 'quota' ? 1 : 2);
+          if (action === '429') {
+            const retry = (
+              await pool.query('select extract(epoch from retry_at-now()) seconds from saved_audiobooks where id=$1', [
+                job.id,
+              ])
+            ).rows[0];
+            expect(Number(retry.seconds)).toBeGreaterThan(590);
+            await pool.query("update saved_audiobooks set retry_at=now()-interval '1 second' where id=$1", [job.id]);
+            f.render.mockImplementation(original);
+            expect(await f.service.tick()).toBe(true);
+            expect(f.render).toHaveBeenCalledTimes(3);
+            expect(f.render.mock.calls[2][1].paragraphId).toBe('c1-1');
+            await f.service.tick();
+            expect(f.render).toHaveBeenCalledTimes(5);
+            expect((await f.service.list('book'))[0]).toMatchObject({ status: 'completed', completedItems: 4 });
+          }
+        } finally {
+          finish();
+          await f.service.stop();
+          await f.cleanup();
+        }
+      });
+    },
+  );
   it('shares foreground and background items, counts out-of-order completion and preserves source anchors', async () => {
     await withPostgresSchema(harness!, 'prepared_shared', async (pool) => {
       const f = await setup(pool);

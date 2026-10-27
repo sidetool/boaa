@@ -24,6 +24,7 @@ export async function registerAudiobookRoutes(
     rules(input: unknown): SpokenTextRule[];
     failure(error: unknown): { status: number; message: string };
     background?: boolean;
+    backgroundConcurrency?(settings: AudiobookInput): Promise<1 | 2>;
   },
 ) {
   const service = new AudiobookService(
@@ -34,6 +35,7 @@ export async function registerAudiobookRoutes(
     options.render,
     options.failure,
     options.resolveModel,
+    options.backgroundConcurrency,
   );
   await app.register(async (routes) => {
     routes.addHook('preHandler', async (request) => {
@@ -170,8 +172,13 @@ export async function registerAudiobookRoutes(
       timer.unref();
       return;
     }
+    let delay = 1000;
     work = service
       .tick()
+      .then((progressed) => {
+        // Yield to playback/maintenance between turns, without a mandatory second per saved item.
+        if (progressed) delay = 0;
+      })
       .catch(() => {
         app.log.warn({ event: 'audiobook_runner_failed' });
       })
@@ -179,7 +186,7 @@ export async function registerAudiobookRoutes(
         release();
         work = undefined;
         if (!stopping) {
-          timer = setTimeout(run, 1000);
+          timer = setTimeout(run, delay);
           timer.unref();
         }
       });

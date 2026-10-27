@@ -33,7 +33,7 @@ const harness = await startPostgresIntegrationHarness();
 afterAll(async () => {
   await harness?.stop();
 }, POSTGRES_HARNESS_CLEANUP_TIMEOUT_MS);
-async function setup(pool: pg.Pool) {
+async function setup(pool: pg.Pool, concurrency: 1 | 2 = 1) {
   await pool.query(`create table users(id text primary key);create table library_books(id text primary key,user_id text,title text,format text,language text,active_content_revision_id text,deleted_at timestamptz);
  create table chapters(id text primary key,book_id text,title text,chapter_index int);create table paragraph_search(book_id text,chapter_id text,paragraph_id text,paragraph_index int,paragraph jsonb,text text);
  create table self_host_accounts(user_id text,role text,status text);insert into users values('owner'),('other');insert into library_books values('book','owner','Fixture','txt','ko','rev',null);insert into self_host_accounts values('owner','admin','active');
@@ -77,6 +77,8 @@ async function setup(pool: pg.Pool) {
       throw Error('ordinary synthesis forbidden');
     },
     classifyPlainTTSFailure,
+    undefined,
+    async () => concurrency,
   );
   let last!: SpeakerEngineStep;
   let request!: Extract<SpeakerEngineResult, { kind: 'request' }>;
@@ -182,7 +184,7 @@ async function setup(pool: pg.Pool) {
 (harness ? describe : describe.skip)('speaker background generation with real preset35 and PostgreSQL', () => {
   it('plays prepared source spans during generation, keeps stable voices, and reuses analysis for another voice pool', async () => {
     await withPostgresSchema(harness!, 'speaker_full', async (pool) => {
-      const f = await setup(pool);
+      const f = await setup(pool, 2);
       try {
         const estimate = await f.service.estimate('book', f.input);
         await expect(f.service.create('book', f.input, estimate.fingerprint, false)).rejects.toThrow('API');
@@ -322,7 +324,7 @@ async function setup(pool: pg.Pool) {
         await gate;
         return original(...args);
       });
-      let pending: Promise<void> | undefined;
+      let pending: Promise<boolean> | undefined;
       try {
         const job = await f.create();
         await f.audio.tick();
@@ -447,7 +449,7 @@ async function setup(pool: pg.Pool) {
             current.addEventListener('abort', () => reject(current.reason), { once: true }),
           );
         });
-      let pending: Promise<void> | undefined;
+      let pending: Promise<boolean> | undefined;
       try {
         await f.create();
         await f.audio.tick();
@@ -472,7 +474,7 @@ async function setup(pool: pg.Pool) {
       await withPostgresSchema(harness!, 'speaker_accept_race', async (pool) => {
         const f = await setup(pool);
         const revoker = await pool.connect();
-        let pending: Promise<void> | undefined;
+        let pending: Promise<boolean> | undefined;
         let committed = false;
         try {
           const job = await f.create();

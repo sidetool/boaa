@@ -29,7 +29,7 @@ import {
 import type { TTSSynthesisProvider } from '../../../../../src/providers/tts';
 import { structuredIntegrityHash } from '@boaa/text-core/hash';
 import type { PlainTTSVoices } from '../../../../../src/providers/plain-tts';
-import { loadPlainTTSSources, type PlainTTSSource } from '../../providers/plain-tts-sources.js';
+import { loadPlainTTSSources, preparedTTSConcurrency, type PlainTTSSource } from '../../providers/plain-tts-sources.js';
 import type { ServerConfig } from '../../config.js';
 import { createServerTTSSynthesisProvider } from '../../providers/server-tts-provider-factory.js';
 
@@ -585,6 +585,7 @@ export async function registerPlainTTSRoutes(
     const service = await registerAudiobookRoutes(app, pool, config, {
       audioStore: retained,
       background: options.audiobookBackground,
+      backgroundConcurrency: async (settings) => preparedTTSConcurrency(settings, await sources()),
       catalog,
       render: (chapterId, request, model) =>
         // Preparing ahead can wait longer than interactive narration; still one bounded request, never a replay.
