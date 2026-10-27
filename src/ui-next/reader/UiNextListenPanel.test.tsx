@@ -747,7 +747,7 @@ describe('UiNextListenPanel 화자별 미리 생성하기', () => {
     click(button(root.findByProps({ 'aria-label': '더 많은 청취 설정' }), /^화자별 미리 생성하기/));
     const panel = root.findByType(UiNextSpeakerGenerationPanel);
     act(() => panel.props.onManageEngines());
-    expect(text(root.findByProps({ className: 'un-listen-page-title' }))).toBe('분석 모델 연결');
+    expect(text(root.findByProps({ className: 'un-listen-page-title' }))).toBe('모델 연결');
     const editor = root.findByType(UiNextSpeakerEngines);
     expect(editor.props.port).toBe(controls.engines);
     expect(root.findByType(UiNextSpeakerGenerationPanel)).toBe(panel);

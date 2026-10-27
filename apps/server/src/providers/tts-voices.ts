@@ -34,5 +34,45 @@ export const GEMINI_VOICES = [
   'Sulafat',
 ];
 export function namedVoices(names: readonly string[]): TTSVoice[] {
-  return names.map((id) => ({ id, label: id, lang: 'und' }));
+  return names.map((id) => ({
+    id,
+    label: id,
+    lang: 'und',
+    ...(names === GEMINI_VOICES ? { description: GEMINI_TRAITS[id] } : {}),
+  }));
 }
+
+// Provider-documented characteristics, translated for the library. No inferred gender/age.
+// https://ai.google.dev/gemini-api/docs/speech-generation#voice-options
+const GEMINI_TRAITS: Record<string, string> = {
+  Zephyr: '밝은 음색',
+  Puck: '경쾌한 전달',
+  Charon: '정보 전달에 어울리는 음색',
+  Kore: '단단한 음색',
+  Fenrir: '흥이 넘치는 전달',
+  Leda: '젊은 느낌의 음색',
+  Orus: '단단한 음색',
+  Aoede: '산뜻한 음색',
+  Callirrhoe: '편안한 전달',
+  Autonoe: '밝은 음색',
+  Enceladus: '숨결이 느껴지는 음색',
+  Iapetus: '선명한 음색',
+  Umbriel: '편안한 전달',
+  Algieba: '매끄러운 음색',
+  Despina: '매끄러운 음색',
+  Erinome: '선명한 음색',
+  Algenib: '거친 질감의 음색',
+  Rasalgethi: '정보 전달에 어울리는 음색',
+  Laomedeia: '경쾌한 전달',
+  Achernar: '부드러운 음색',
+  Alnilam: '단단한 음색',
+  Schedar: '고른 전달',
+  Gacrux: '성숙한 느낌의 음색',
+  Pulcherrima: '적극적인 전달',
+  Achird: '친근한 음색',
+  Zubenelgenubi: '격식 없이 편안한 전달',
+  Vindemiatrix: '온화한 음색',
+  Sadachbia: '활기찬 전달',
+  Sadaltager: '지적인 느낌의 전달',
+  Sulafat: '따뜻한 음색',
+};

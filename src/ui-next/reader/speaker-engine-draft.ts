@@ -32,6 +32,7 @@ export const PROTOCOL_HINT: Record<Protocol, { url: string; model: string; note:
 };
 
 export interface Draft {
+  purpose: 'analysis' | 'casting';
   name: string;
   protocol: Protocol;
   url: string;
@@ -51,6 +52,7 @@ export interface Draft {
 }
 
 export const emptyDraft = (): Draft => ({
+  purpose: 'analysis',
   name: '',
   protocol: 'openai',
   url: '',
@@ -69,6 +71,7 @@ export const emptyDraft = (): Draft => ({
 });
 
 export const draftFrom = (engine: SpeakerEngine): Draft => ({
+  purpose: engine.purpose ?? 'analysis',
   name: engine.name,
   protocol: engine.protocol,
   url: engine.url,
@@ -135,6 +138,7 @@ export function readDraft(draft: Draft, current?: SpeakerEngine) {
   const engineToken = secret(draft.engineToken, draft.clearToken);
   const maxOutputTokens = outputTokens(draft.maxOutputTokens);
   const input: SpeakerEngineInput = {
+    ...(draft.purpose === 'casting' || current?.purpose ? { purpose: draft.purpose } : {}),
     name: draft.name.trim() || draft.modelId.trim() || hostName(draft.url) || '분석 모델',
     engineUrl: draft.engineUrl.trim(),
     ...(engineToken !== undefined ? { engineToken } : {}),

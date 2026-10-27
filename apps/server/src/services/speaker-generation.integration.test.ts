@@ -38,7 +38,12 @@ async function setup(pool: pg.Pool) {
  create table chapters(id text primary key,book_id text,title text,chapter_index int);create table paragraph_search(book_id text,chapter_id text,paragraph_id text,paragraph_index int,paragraph jsonb,text text);
  create table self_host_accounts(user_id text,role text,status text);insert into users values('owner'),('other');insert into library_books values('book','owner','Fixture','txt','ko','rev',null);insert into self_host_accounts values('owner','admin','active');
  insert into chapters values('c1','book','First',1),('c2','book','Second',2);`);
-  for (const name of ['0065_saved_audiobooks.sql', '0067_audiobook_retry.sql', '0068_speaker_generation.sql'])
+  for (const name of [
+    '0065_saved_audiobooks.sql',
+    '0067_audiobook_retry.sql',
+    '0068_speaker_generation.sql',
+    '0069_voice_library.sql',
+  ])
     await pool.query(await readFile(new URL('../db/migrations/' + name, import.meta.url), 'utf8'));
   for (const id of ['c1', 'c2']) {
     const p = {

@@ -50,6 +50,7 @@ async function setup(pool: pg.Pool) {
   await pool.query(await readFile(new URL('../db/migrations/0065_saved_audiobooks.sql', import.meta.url), 'utf8'));
   await pool.query(await readFile(new URL('../db/migrations/0067_audiobook_retry.sql', import.meta.url), 'utf8'));
   await pool.query(await readFile(new URL('../db/migrations/0068_speaker_generation.sql', import.meta.url), 'utf8'));
+  await pool.query(await readFile(new URL('../db/migrations/0069_voice_library.sql', import.meta.url), 'utf8'));
   for (const chapterId of ['c1', 'c2'])
     for (let index = 1; index <= 2; index++) {
       const paragraph = {

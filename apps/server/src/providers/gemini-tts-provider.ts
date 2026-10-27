@@ -25,6 +25,82 @@ export class GeminiTTSProvider implements TTSSynthesisProvider {
     return namedVoices(GEMINI_VOICES);
   }
 
+  async designVoice(input: { alias: string; prompt: string; language: string; modelId: string; signal: AbortSignal }) {
+    const key = this.options.apiKey?.trim();
+    if (!key) throw new Error('Gemini TTS API key is required');
+    const response = await (this.options.fetchImpl ?? fetch)(
+      `${this.options.baseUrl?.replace(/\/+$/, '') || 'https://generativelanguage.googleapis.com'}/v1beta/voices`,
+      {
+        method: 'POST',
+        signal: input.signal,
+        redirect: 'error',
+        headers: { 'x-goog-api-key': key, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          store: true,
+          voice: {
+            type: 'prompted',
+            model: input.modelId,
+            display_name: input.alias,
+            ...(input.language ? { language_code: input.language } : {}),
+            prompted: { input: input.prompt },
+          },
+        }),
+      },
+    );
+    if (!response.ok) {
+      await response.body?.cancel().catch(() => undefined);
+      throw ttsHttpError(`Gemini voice design failed with ${response.status}`, response);
+    }
+    const reader = response.body?.getReader();
+    if (!reader) throw new Error('Gemini voice design returned no response');
+    const chunks: Uint8Array[] = [];
+    let bytes = 0;
+    try {
+      while (true) {
+        const part = await reader.read();
+        if (part.done) break;
+        bytes += part.value.byteLength;
+        if (bytes > 6 * 1024 * 1024) {
+          await reader.cancel();
+          throw new Error('Gemini voice design response is too large');
+        }
+        chunks.push(part.value);
+      }
+    } finally {
+      reader.releaseLock();
+    }
+    let value;
+    try {
+      value = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+    } catch {
+      throw new Error('Gemini voice design returned invalid JSON');
+    }
+    if (!value || typeof value !== 'object' || Array.isArray(value))
+      throw new Error('Gemini voice design returned an invalid response');
+    if (typeof value.id !== 'string' || !/^voice_[A-Za-z0-9_-]{1,240}$/.test(value.id))
+      throw new Error('Gemini voice design returned an invalid voice ID');
+    let sample;
+    if (value.sample_audio) {
+      const audio = value.sample_audio;
+      if (
+        typeof audio.data !== 'string' ||
+        !/^[A-Za-z0-9+/]*={0,2}$/.test(audio.data) ||
+        !['audio/wav', 'audio/mpeg'].includes(audio.mime_type)
+      )
+        throw new Error('Gemini voice design returned invalid sample audio');
+      const data = Buffer.from(audio.data, 'base64');
+      if (
+        !data.length ||
+        data.byteLength > 4 * 1024 * 1024 ||
+        (audio.mime_type === 'audio/wav' &&
+          (data.toString('ascii', 0, 4) !== 'RIFF' || data.toString('ascii', 8, 12) !== 'WAVE'))
+      )
+        throw new Error('Gemini voice sample is invalid');
+      sample = { data, contentType: audio.mime_type as string };
+    }
+    return { id: value.id as string, sample };
+  }
+
   async synthesize(input: TTSSynthesisInput): Promise<TTSSynthesisResult> {
     const apiKey = this.options.apiKey?.trim();
     if (!apiKey) throw new Error('GEMINI_API_KEY or GOOGLE_API_KEY is required for gemini-tts provider');

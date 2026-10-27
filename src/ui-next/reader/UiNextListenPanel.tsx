@@ -37,13 +37,15 @@ import TTSAddonPanel, { type TTSAddonPanelProps } from '../../features/tts/TTSAd
 import UiNextAudiobookPanel from './UiNextAudiobookPanel';
 import UiNextSpeakerEngines from './UiNextSpeakerEngines';
 import UiNextSpeakerGenerationPanel from './UiNextSpeakerGenerationPanel';
+import UiNextVoiceLibrary from './UiNextVoiceLibrary';
 import UiNextSpokenTextFilters from './UiNextSpokenTextFilters';
 import UiNextTTSConnections from './UiNextTTSConnections';
 import type { TTSVoice } from '../../providers/tts';
 import { cx, Segmented, Switch } from '../components/primitives';
 import './listen.css';
 
-type Page = 'main' | 'details' | 'advanced' | 'engines' | 'filters' | 'audiobook' | 'speaker' | 'speakerEngines';
+type Page =
+  'main' | 'details' | 'advanced' | 'engines' | 'filters' | 'audiobook' | 'speaker' | 'speakerEngines' | 'voiceLibrary';
 // Plain catalog entries may name the engine they run on; ids stay opaque and are saved as-is.
 type EngineVoice = TTSVoice & { providerId?: string; providerName?: string; modelId?: string; paid?: boolean };
 interface EngineStatus {
@@ -61,7 +63,8 @@ const PAGE_TITLE: Record<Exclude<Page, 'main'>, string> = {
   filters: '발음·문자 필터',
   audiobook: '미리 생성하기',
   speaker: '화자별 미리 생성하기',
-  speakerEngines: '분석 모델 연결',
+  speakerEngines: '모델 연결',
+  voiceLibrary: '목소리 보관함',
 };
 type SleepValue = TTSPlaybackSettings['sleepTimerDefault'];
 type SkipKind = 'skip_line' | 'skip_prefix' | 'skip_suffix';
@@ -121,6 +124,7 @@ export default function UiNextListenPanel(props: TTSAddonPanelProps) {
   const [page, setPage] = useState<Page>('main');
   // The analysis model page opens over 화자별 미리 생성하기, which stays mounted to keep its choices.
   const [speakerEnginesRevision, setSpeakerEnginesRevision] = useState(0);
+  const [voiceLibraryRevision, setVoiceLibraryRevision] = useState(0);
   const settings = props.playbackSettings;
   const plainMode = !providers || settings.mode !== 'cast';
   const { changePlaybackSettings } = props;
@@ -183,7 +187,7 @@ export default function UiNextListenPanel(props: TTSAddonPanelProps) {
 
   const speakerGeneration = !localStatic && providers ? props.speakerGeneration : undefined;
   if (page !== 'main') {
-    const parent: Page = page === 'speakerEngines' ? 'speaker' : 'main';
+    const parent: Page = page === 'speakerEngines' || page === 'voiceLibrary' ? 'speaker' : 'main';
     return (
       <div className="un-listen">
         <button
@@ -199,19 +203,33 @@ export default function UiNextListenPanel(props: TTSAddonPanelProps) {
           {parent === 'main' ? '듣기' : PAGE_TITLE[parent]}
         </button>
         <h3 className="un-listen-page-title">{PAGE_TITLE[page]}</h3>
-        {(page === 'speaker' || page === 'speakerEngines') && speakerGeneration ? (
+        {(page === 'speaker' || page === 'speakerEngines' || page === 'voiceLibrary') && speakerGeneration ? (
           <>
             <div hidden={page !== 'speaker'}>
               <UiNextSpeakerGenerationPanel
                 controls={speakerGeneration}
                 enginesRevision={speakerEnginesRevision}
                 onManageEngines={() => setPage('speakerEngines')}
+                onManageVoices={() => setPage('voiceLibrary')}
+                voicesRevision={voiceLibraryRevision}
               />
             </div>
             {page === 'speakerEngines' && (
               <UiNextSpeakerEngines
                 port={speakerGeneration.engines}
                 onChanged={() => setSpeakerEnginesRevision((value) => value + 1)}
+              />
+            )}
+            {page === 'voiceLibrary' && speakerGeneration.voiceLibrary && (
+              <UiNextVoiceLibrary
+                key={speakerGeneration.key}
+                port={speakerGeneration.voiceLibrary}
+                voices={speakerGeneration.voices?.voices ?? []}
+                beforePreview={speakerGeneration.beforePreview}
+                onChanged={() => {
+                  setVoiceLibraryRevision((v) => v + 1);
+                  void Promise.resolve(speakerGeneration.refreshVoices()).catch(() => undefined);
+                }}
               />
             )}
           </>

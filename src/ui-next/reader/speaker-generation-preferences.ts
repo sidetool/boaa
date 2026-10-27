@@ -23,6 +23,7 @@ const same = (a?: SpeakerGenerationPreferences, b?: SpeakerGenerationPreferences
     b &&
     a.engineId === b.engineId &&
     a.narratorVoiceId === b.narratorVoiceId &&
+    JSON.stringify(a.casting) === JSON.stringify(b.casting) &&
     a.characterVoiceIds.length === b.characterVoiceIds.length &&
     a.characterVoiceIds.every((id, index) => id === b.characterVoiceIds[index]),
   );
@@ -58,7 +59,11 @@ export function speakerPreferenceQueue(port: SpeakerGenerationPort): SpeakerPref
     },
     port,
     save(value) {
-      latest = { ...value, characterVoiceIds: [...value.characterVoiceIds] };
+      latest = {
+        ...value,
+        characterVoiceIds: [...value.characterVoiceIds],
+        casting: value.casting ? { ...value.casting } : undefined,
+      };
       waiting = latest;
       if (!running) void drain();
     },

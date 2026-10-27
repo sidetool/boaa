@@ -1,4 +1,7 @@
 import { SpeakerEngineStore } from '../../providers/speaker-engine-store.js';
+import { VoiceLibraryStore, voiceSourceModel } from '../../services/voice-library-store.js';
+import { SpeakerVoiceCasting } from '../../services/speaker-voice-casting.js';
+import { registerVoiceLibraryRoutes } from './voice-library-routes.js';
 import { SpeakerGenerationService } from '../../services/speaker-generation-service.js';
 import { registerSpeakerGenerationRoutes } from './speaker-generation-routes.js';
 import type { PlainTTSModel } from '../../../../../src/providers/plain-tts';
@@ -90,6 +93,9 @@ export async function registerPlainTTSRoutes(
         : await loadPlainTTSSources(pool, config, env)),
   ];
   const catalogs = new Map<string, { expires: number; task: Promise<Awaited<ReturnType<typeof discover>>> }>();
+  const library = options.savedAudiobooks
+    ? new VoiceLibraryStore(pool, config.defaultUserId, sources, catalog)
+    : undefined;
   async function discover(source: PlainTTSSource) {
     const adapter = await source.createProvider();
     if (!adapter.listVoices) throw new Error('voice_discovery_unavailable');
@@ -103,14 +109,30 @@ export async function registerPlainTTSRoutes(
   async function voices(source: PlainTTSSource) {
     const key = source.id + ':' + source.revision;
     const old = catalogs.get(key);
-    if (old && old.expires > Date.now()) return old.task;
-    const task = discover(source).catch((error) => {
-      catalogs.delete(key);
-      throw error;
-    });
-    if (catalogs.size >= 16) catalogs.delete(catalogs.keys().next().value!);
-    catalogs.set(key, { expires: Date.now() + 30_000, task });
-    return task;
+    const task =
+      old && old.expires > Date.now()
+        ? old.task
+        : discover(source).catch((error) => {
+            catalogs.delete(key);
+            throw error;
+          });
+    if (!old || old.expires <= Date.now()) {
+      if (catalogs.size >= 16) catalogs.delete(catalogs.keys().next().value!);
+      catalogs.set(key, { expires: Date.now() + 30_000, task });
+    }
+    const found = [...(await task)];
+    for (const row of (await library?.rows()) ?? []) {
+      if (
+        row.provider_id !== source.id ||
+        structuredIntegrityHash(row.model) !== structuredIntegrityHash(voiceSourceModel(source))
+      )
+        continue;
+      const index = found.findIndex((v) => v.id === row.provider_voice_id);
+      const voice = { id: row.provider_voice_id, label: row.metadata.alias, lang: row.metadata.language || 'und' };
+      if (index >= 0) found[index] = { ...found[index], ...voice };
+      else if (row.origin === 'designed') found.push(voice);
+    }
+    return found;
   }
   const voiceKey = (source: PlainTTSSource, id: string) =>
     source.legacyIds ? id : `${source.id}:${encodeURIComponent(id)}`;
@@ -583,10 +605,11 @@ export async function registerPlainTTSRoutes(
           ? { status: error.status, message: error.message }
           : classifyPlainTTSFailure(error),
     });
+    const engines = new SpeakerEngineStore(pool, config, env);
     const speaker = new SpeakerGenerationService(
       pool,
       config.defaultUserId,
-      new SpeakerEngineStore(pool, config, env),
+      engines,
       service,
       catalog,
       async (text, voiceId, expected, key, regenerate) => {
@@ -604,8 +627,13 @@ export async function registerPlainTTSRoutes(
           throw new PlainTTSError(409, '생성 중 모델 연결이 바뀌었어요.');
         return { ...audio, key };
       },
+      library ? new SpeakerVoiceCasting(pool, config.defaultUserId, library, engines, catalog) : undefined,
     );
     await registerSpeakerGenerationRoutes(app, pool, config, speaker, service, parsePlainTTSRules);
+    if (library)
+      await registerVoiceLibraryRoutes(app, config, library, async (voice) =>
+        render(undefined, { voiceId: voice.voiceId, rate: 1, modelRevision: (await catalog()).revision }, true),
+      );
     return service;
   }
 }

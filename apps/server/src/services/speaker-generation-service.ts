@@ -9,6 +9,7 @@ import { planEpubFootnotePlayback } from '../../../../src/providers/epub-footnot
 import { audiobookError } from './audiobook-plan.js';
 import { AudiobookService } from './audiobook-service.js';
 import { SpeakerEngineStore } from '../providers/speaker-engine-store.js';
+import type { SpeakerVoiceCasting } from './speaker-voice-casting.js';
 import {
   speakerPlan,
   loadSpeakerChapter,
@@ -44,6 +45,7 @@ export class SpeakerGenerationService {
       key: string,
       regenerate: boolean,
     ) => Promise<SavedAudio>,
+    readonly casting?: SpeakerVoiceCasting,
   ) {
     audio.speaker = this;
   }
@@ -162,13 +164,24 @@ export class SpeakerGenerationService {
       analyzedChapters: r.next_chapter,
       contextChapterCount: r.context_ids.length - r.settings.chapterIds.length,
       readyChapterIds: r.ready_ids,
+      castVoiceIds: Object.keys(r.settings.cast?.models ?? {}),
     }));
   }
   async estimate(bookId: string, input: SpeakerGenerationInput) {
-    return (await speakerPlan(this.pool, this.owner, bookId, input, await this.catalog(), this.engines)).estimate;
+    return (
+      await speakerPlan(this.pool, this.owner, bookId, input, await this.catalog(), this.engines, this.casting?.library)
+    ).estimate;
   }
   async create(bookId: string, input: SpeakerGenerationInput, fingerprint: string, paid: boolean) {
-    const { plan } = await speakerPlan(this.pool, this.owner, bookId, input, await this.catalog(), this.engines);
+    const { plan } = await speakerPlan(
+      this.pool,
+      this.owner,
+      bookId,
+      input,
+      await this.catalog(),
+      this.engines,
+      this.casting?.library,
+    );
     const job = await this.audio.create(plan, fingerprint, paid);
     return (await this.list(bookId)).find((j) => j.id === job.id)!;
   }
@@ -187,6 +200,15 @@ export class SpeakerGenerationService {
         `update speaker_analysis set dispatching=false,bytes=case when response_rejected then octet_length(coalesce(checkpoint::text,''))+octet_length(coalesce(result::text,'')) else bytes end,model_response=case when response_rejected then null else model_response end,response_rejected=false
         where user_id=$1 and book_id=$2 and analysis_key=$3 and result is null`,
         [this.owner, run.book_id, run.analysis_key],
+      );
+      await client.query(
+        'update speaker_voice_decisions set dispatching=false,response=case when rejected then null else response end,rejected=false where audiobook_id=$1',
+        [id],
+      );
+      // Only an explicit, already cost-confirmed resume may retry an ambiguous creation.
+      await client.query(
+        "update tts_voice_designs set status='retry' where user_id=$1 and request_id like $2 and status in ('dispatching','uncertain')",
+        [this.owner, `cast_${id.replaceAll('-', '')}_%`],
       );
       await client.query('commit');
     } catch (e) {
@@ -249,7 +271,7 @@ export class SpeakerGenerationService {
       if (state.input_hash !== inputHash)
         throw audiobookError(409, '이전 회차의 분석 기록이 달라졌어요. 새 작업으로 만들어 주세요.');
       if (state.result) {
-        await this.acceptChapter(run, loaded, state.result);
+        await this.acceptChapter(run, loaded, state.result, signal);
         return;
       }
       const config = run.settings.cast!;
@@ -332,6 +354,7 @@ export class SpeakerGenerationService {
     run: Run,
     loaded: Awaited<ReturnType<typeof loadSpeakerChapter>>,
     result: Extract<SpeakerEngineResult, { kind: 'complete' }>,
+    signal: AbortSignal,
   ) {
     if (
       !result.identities.every(
@@ -348,13 +371,21 @@ export class SpeakerGenerationService {
     const sourceIds = new Set(loaded.paragraphs.map((p) => p.id));
     if (result.labels.some((l) => !sourceIds.has(l.paragraphId)))
       throw audiobookError(502, '분석 결과에 다른 문단이 포함됐어요.');
-    const assignments = { ...run.assignments };
+    let assignments = { ...run.assignments };
+    const validationAssignments = { ...assignments };
     const choices = run.settings.cast!.characterVoiceIds;
     for (const i of result.identities)
-      if (!Object.hasOwn(assignments, i.id))
-        assignments[i.id] = choices[Object.keys(assignments).length % choices.length];
-    castRequests(loaded.paragraphs, result.labels, result.identities, assignments, run.settings);
+      if (!Object.hasOwn(validationAssignments, i.id))
+        validationAssignments[i.id] = choices[Object.keys(validationAssignments).length % choices.length];
+    castRequests(loaded.paragraphs, result.labels, result.identities, validationAssignments, run.settings);
     const selected = run.settings.chapterIds.includes(loaded.chapter.id);
+    if (selected && this.casting) {
+      await this.pool.query("update speaker_generation_runs set stage='casting' where audiobook_id=$1", [run.id]);
+      const selected = await this.casting.select(run, loaded.chapter, result, signal);
+      if (!selected) return;
+      assignments = selected.assignments;
+      run.settings = { ...run.settings, cast: { ...run.settings.cast!, models: selected.models } };
+    } else if (selected) assignments = validationAssignments;
     const ps = planEpubFootnotePlayback({
       paragraphs: loaded.paragraphs,
       startIndex: 0,
@@ -402,8 +433,8 @@ export class SpeakerGenerationService {
         );
       }
       await c.query(
-        `update saved_audiobooks set total_items=$2,estimate=jsonb_set(estimate,'{itemCount}',to_jsonb($2::int)),planning_complete=$3 where id=$1`,
-        [run.id, total, run.next_chapter + 1 === run.chapter_ids.length],
+        `update saved_audiobooks set total_items=$2,estimate=jsonb_set(estimate,'{itemCount}',to_jsonb($2::int)),planning_complete=$3,settings=$4 where id=$1`,
+        [run.id, total, run.next_chapter + 1 === run.chapter_ids.length, run.settings],
       );
       await c.query(
         "update speaker_generation_runs set next_chapter=next_chapter+1,ledger=$2,assignments=$3,stage='audio' where audiobook_id=$1 and next_chapter=$4",
@@ -416,6 +447,13 @@ export class SpeakerGenerationService {
     } finally {
       c.release();
     }
+  }
+  async castings(id: string) {
+    return this.casting ? this.casting.list(await this.run(id)) : [];
+  }
+  async assign(id: string, speakerId: string, voiceId: string) {
+    if (!this.casting) throw audiobookError(409, '목소리 보관함을 사용할 수 없어요.');
+    await this.casting.assign(await this.run(id), speakerId, voiceId);
   }
   async reader(id: string, chapterId: string): Promise<PreparedNarration> {
     const run = await this.run(id);

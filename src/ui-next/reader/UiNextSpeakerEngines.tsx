@@ -131,7 +131,10 @@ function Engines({ port, onChanged }: UiNextSpeakerEnginesProps) {
   // Anything a check was asked about makes its pending answer stale.
   const patchTarget = (
     next: Partial<
-      Pick<Draft, 'protocol' | 'url' | 'apiKey' | 'clearKey' | 'engineUrl' | 'engineToken' | 'clearToken' | 'modelId'>
+      Pick<
+        Draft,
+        'purpose' | 'protocol' | 'url' | 'apiKey' | 'clearKey' | 'engineUrl' | 'engineToken' | 'clearToken' | 'modelId'
+      >
     >,
   ) => {
     if (probeController.current) {
@@ -252,7 +255,7 @@ function Engines({ port, onChanged }: UiNextSpeakerEnginesProps) {
   return (
     <section className="un-listen-group un-tts-conn" aria-label="분석 모델">
       <div className="un-listen-group-head">
-        <h3>분석 모델</h3>
+        <h3>{editing === undefined ? '연결한 모델' : current ? '연결 수정' : '연결 추가'}</h3>
         {editing === undefined && (
           <button type="button" className="un-btn is-ghost is-sm" onClick={() => open()}>
             <Plus size={15} aria-hidden="true" />
@@ -264,8 +267,8 @@ function Engines({ port, onChanged }: UiNextSpeakerEnginesProps) {
       {editing === undefined ? (
         <>
           <p className="un-listen-note">
-            누가 말하는지 찾는 언어 모델이에요. 읽어 주는 TTS 목소리와는 따로 저장돼요. 연결 정보는 계정에 암호화해
-            저장해요.
+            화자를 찾는 모델과 목소리를 고르는 모델을 따로 연결할 수 있어요. API 서비스와 로컬 모델 모두 지원하고, 접속
+            정보는 계정에 암호화해 저장해요.
           </p>
           {loadError && (
             <p className="un-filter-help is-error" role="alert">
@@ -286,7 +289,8 @@ function Engines({ port, onChanged }: UiNextSpeakerEnginesProps) {
                   <span className="un-tts-conn-text">
                     <b>{engine.name}</b>
                     <small>
-                      {PROTOCOL_LABEL[engine.protocol]} · {engine.modelId}
+                      {engine.purpose === 'casting' ? '목소리 선정' : '화자 분석'} · {PROTOCOL_LABEL[engine.protocol]} ·{' '}
+                      {engine.modelId}
                       {hostName(engine.url) ? ` · ${hostName(engine.url)}` : ''}
                       {engine.paid ? ' · 유료 API' : ''}
                     </small>
@@ -331,6 +335,16 @@ function Engines({ port, onChanged }: UiNextSpeakerEnginesProps) {
           <p className="un-filter-help">{hint.note}</p>
 
           <div className="un-filter-fields un-tts-conn-fields">
+            <label className="is-wide">
+              <span>모델 용도</span>
+              <select
+                value={draft.purpose}
+                onChange={(e) => patchTarget({ purpose: e.target.value as Draft['purpose'] })}
+              >
+                <option value="analysis">화자 분석</option>
+                <option value="casting">목소리 선정</option>
+              </select>
+            </label>
             <label className="is-wide">
               <span>이름</span>
               <input
@@ -394,7 +408,11 @@ function Engines({ port, onChanged }: UiNextSpeakerEnginesProps) {
               {probeState.busy ? <RefreshCw size={15} aria-hidden="true" /> : <Search size={15} aria-hidden="true" />}
               {probeState.busy ? '확인 중' : '연결 확인'}
             </button>
-            <small>분석은 하지 않고 분석 서비스와 모델 목록만 확인해요.</small>
+            <small>
+              {draft.purpose === 'casting'
+                ? '목소리를 선정하지 않고 모델 목록만 확인해요.'
+                : '분석은 하지 않고 분석 서비스와 모델 목록만 확인해요.'}
+            </small>
           </div>
           {probeState.error && (
             <p className="un-filter-help is-error" role="alert">
@@ -451,7 +469,7 @@ function Engines({ port, onChanged }: UiNextSpeakerEnginesProps) {
               checked={draft.enabled}
               onChange={(event) => patch({ enabled: event.target.checked })}
             />
-            <span>분석 모델 목록에 보이기</span>
+            <span>모델 목록에 보이기</span>
           </label>
 
           <details className="un-tts-conn-advanced" open={advancedChanged || decisions.engineToken || undefined}>
@@ -497,7 +515,7 @@ function Engines({ port, onChanged }: UiNextSpeakerEnginesProps) {
                   </select>
                 </label>
               )}
-              <label className="is-wide">
+              <label className="is-wide" hidden={draft.purpose === 'casting'}>
                 <span>분석 서비스 주소</span>
                 <input
                   value={draft.engineUrl}
@@ -510,7 +528,7 @@ function Engines({ port, onChanged }: UiNextSpeakerEnginesProps) {
                   onChange={(event) => patchTarget({ engineUrl: event.target.value })}
                 />
               </label>
-              <label className="is-wide">
+              <label className="is-wide" hidden={draft.purpose === 'casting'}>
                 <span>분석 서비스 토큰 (선택)</span>
                 <input
                   type="password"
@@ -543,8 +561,9 @@ function Engines({ port, onChanged }: UiNextSpeakerEnginesProps) {
               </p>
             )}
             <p className="un-filter-help">
-              분석 서비스는 BOAA와 함께 실행하는 별도 컨테이너예요. 다른 곳에서 실행할 때만 주소를 바꾸세요. 출력 토큰은{' '}
-              {SPEAKER_ENGINE_OUTPUT.min}~{SPEAKER_ENGINE_OUTPUT.max}, 기본 {SPEAKER_ENGINE_OUTPUT.default}.
+              {draft.purpose !== 'casting' &&
+                '분석 서비스는 BOAA와 함께 실행하는 별도 컨테이너예요. 다른 곳에서 실행할 때만 주소를 바꾸세요. '}
+              출력 토큰은 {SPEAKER_ENGINE_OUTPUT.min}~{SPEAKER_ENGINE_OUTPUT.max}, 기본 {SPEAKER_ENGINE_OUTPUT.default}.
               {draft.protocol === 'openai' &&
                 ' 모델이 max_tokens를 거절하면 출력 한도 방식을 max_completion_tokens로 바꾸세요.'}
             </p>

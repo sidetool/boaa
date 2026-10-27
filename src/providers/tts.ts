@@ -3,6 +3,8 @@ import type { VoiceProfile } from '../domain/types';
 export interface TTSVoice {
   id: string;
   label: string;
+  /** Documented vocal traits for selection; never changes synthesis identity. */
+  description?: string;
   lang: string;
   nativeVoice?: SpeechSynthesisVoice;
 }
@@ -114,6 +116,14 @@ export interface TTSSynthesisProvider {
   readonly supportsAudioCache: boolean;
   readonly supportsPerCharacterVoice: boolean;
   listVoices?(): Promise<TTSVoice[]>;
+  /** Optional provider capability; OpenAI-compatible synthesis does not imply voice creation. */
+  designVoice?(input: {
+    alias: string;
+    prompt: string;
+    language: string;
+    modelId: string;
+    signal: AbortSignal;
+  }): Promise<{ id: string; sample?: { data: Uint8Array; contentType: string } }>;
   synthesize(input: TTSSynthesisInput): Promise<TTSSynthesisResult>;
 }
 

@@ -27,6 +27,8 @@ export function normalizeSpeakerEngine(input: unknown, probe = false): SpeakerEn
   if (!input || typeof input !== 'object' || Array.isArray(input))
     throw connectionError('분석 연결 설정을 확인해 주세요.');
   const v = input as SpeakerEngineInput;
+  if (v.purpose !== undefined && !['analysis', 'casting'].includes(v.purpose))
+    throw connectionError('모델 용도를 확인해 주세요.');
   if (v.tokenLimitParameter !== undefined && !['max_tokens', 'max_completion_tokens'].includes(v.tokenLimitParameter))
     throw connectionError('출력 한도 방식을 확인해 주세요.');
   if (
@@ -44,6 +46,7 @@ export function normalizeSpeakerEngine(input: unknown, probe = false): SpeakerEn
   const u = new URL(url);
   if (u.pathname === '/' || !u.pathname) url += v.protocol === 'openai' ? '/v1' : '/v1beta';
   return {
+    ...(v.purpose ? { purpose: v.purpose } : {}),
     name: text(v.name, 80) || u.hostname,
     engineUrl: speakerUrl(v.engineUrl),
     protocol: v.protocol,
@@ -57,6 +60,16 @@ export function normalizeSpeakerEngine(input: unknown, probe = false): SpeakerEn
     ...(v.apiKey !== undefined ? { apiKey: text(v.apiKey, 4096) } : {}),
     ...(v.engineToken !== undefined ? { engineToken: text(v.engineToken, 4096) } : {}),
   };
+}
+export function castingRevision(v: SpeakerEngineInput) {
+  return structuredIntegrityHash({
+    protocol: v.protocol,
+    url: v.url,
+    modelId: v.modelId,
+    maxOutputTokens: v.maxOutputTokens,
+    tokenLimitParameter: v.tokenLimitParameter ?? 'max_tokens',
+    reasoning: v.reasoning,
+  });
 }
 export function speakerRevision(v: SpeakerEngineInput) {
   return structuredIntegrityHash({

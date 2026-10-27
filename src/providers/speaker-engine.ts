@@ -1,5 +1,6 @@
 /** Optional analysis service. Model credentials are held by BOAA, never by the browser or analysis engine. */
 export interface SpeakerEngineInput {
+  purpose?: 'analysis' | 'casting';
   name: string;
   engineUrl: string;
   engineToken?: string;

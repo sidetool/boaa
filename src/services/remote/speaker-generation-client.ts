@@ -6,6 +6,7 @@ import type {
   SpeakerGenerationPreferences,
 } from '../../providers/speaker-generation';
 import type { RemoteApiClient } from './remote-api-client';
+import type { VoiceLibraryPort, LibraryVoice, BookVoiceAssignment } from '../../providers/voice-library';
 
 function send<T>(client: RemoteApiClient, url: string, method: string, body: unknown, signal?: AbortSignal) {
   return client.request<T>(
@@ -49,5 +50,30 @@ export function createSpeakerGenerationPort(client: RemoteApiClient, bookId: str
     remove: async (id) => {
       await client.request(item(id), { method: 'DELETE' });
     },
+    castings: async (id, signal) =>
+      (await client.request<{ assignments: BookVoiceAssignment[] }>(item(id) + '/castings', { signal })).assignments,
+    assign: async (id, speakerId, voiceId, signal) => {
+      await send(client, item(id) + '/castings', 'PUT', { speakerId, voiceId }, signal);
+    },
+  };
+}
+export function createVoiceLibraryPort(client: RemoteApiClient): VoiceLibraryPort {
+  const base = '/tts/voice-library',
+    item = (id: string) => base + '/' + encodeURIComponent(id);
+  return {
+    list: (signal) => client.request(base, { signal }),
+    save: (input, signal, id) => send<LibraryVoice>(client, id ? item(id) : base, id ? 'PUT' : 'POST', input, signal),
+    remove: async (id, signal) => {
+      await client.request(item(id), { method: 'DELETE', signal });
+    },
+    design: (input, signal) =>
+      client.request<LibraryVoice>(
+        base + '/design',
+        { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(input), signal },
+        150000,
+      ),
+    sample: async (id, signal) =>
+      (await client.requestBlob(item(id) + '/sample', { method: 'POST', signal }, 60000, undefined, undefined, true))
+        .blob,
   };
 }

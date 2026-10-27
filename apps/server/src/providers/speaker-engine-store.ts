@@ -12,7 +12,7 @@ import {
   loadProviderSecretMasterKey,
 } from './server-provider-secrets.js';
 import { connectionError } from './tts-connection-config.js';
-import { normalizeSpeakerEngine, speakerRevision } from './speaker-engine-config.js';
+import { normalizeSpeakerEngine, speakerRevision, castingRevision } from './speaker-engine-config.js';
 import { SpeakerEngineTransport } from './speaker-engine-transport.js';
 type Row = { id: string; ciphertext: string; iv: string; auth_tag: string; key_version: string };
 export class SpeakerEngineStore {
@@ -58,6 +58,13 @@ export class SpeakerEngineStore {
     const v = this.decode(await this.row(id, db));
     if (!v.enabled || (revision && speakerRevision(v) !== revision))
       throw connectionError('이 작업의 분석 모델 연결이 바뀌었어요. 기존 결과는 보관돼 있어요.', 409);
+    return v;
+  }
+  async loadCasting(id: string, revision?: string, db?: Pick<pg.Pool, 'query'>) {
+    const v = await this.load(id, undefined, db);
+    if (v.purpose !== 'casting') throw connectionError('목소리 선정용 모델 연결을 골라 주세요.', 400);
+    if (revision && castingRevision(v) !== revision)
+      throw connectionError('목소리 선정 모델이 바뀌었어요. 기존 배정은 보관돼 있어요.', 409);
     return v;
   }
   private merge(v: SpeakerEngineInput, old: SpeakerEngineInput) {
@@ -116,7 +123,8 @@ export class SpeakerEngineStore {
   async probe(input: unknown, signal: AbortSignal, id?: string): Promise<SpeakerEngineDiscovery> {
     let v = normalizeSpeakerEngine(input, true);
     if (id) v = this.merge(v, this.decode(await this.row(id)));
-    const capabilities = await this.transport.capabilities(v, signal);
+    const capabilities =
+      v.purpose === 'casting' ? { engineVersion: 'voice-selection-v1' } : await this.transport.capabilities(v, signal);
     return { engineVersion: capabilities.engineVersion, models: await this.transport.models(v, signal) };
   }
 }

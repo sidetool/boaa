@@ -13,7 +13,9 @@ import type { SpeakerChapter, SpeakerLabel, SpeakerIdentity } from '../../../../
 import type { AudiobookPlan } from './audiobook-plan.js';
 import { audiobookError } from './audiobook-plan.js';
 import type { SpeakerEngineStore } from '../providers/speaker-engine-store.js';
-import { speakerRevision } from '../providers/speaker-engine-config.js';
+import { speakerRevision, castingRevision } from '../providers/speaker-engine-config.js';
+import { normalizeCasting } from './speaker-voice-selection.js';
+import type { VoiceLibraryStore } from './voice-library-store.js';
 import type { PlayableTtsSegment } from '../../../../src/providers/tts-playback';
 
 export interface CastRequest extends Omit<PlainTTSRequest, 'rules'> {
@@ -34,6 +36,7 @@ export async function speakerPlan(
   input: SpeakerGenerationInput,
   catalog: PlainTTSVoices,
   engines: SpeakerEngineStore,
+  library?: VoiceLibraryStore,
 ): Promise<{ plan: AudiobookPlan; estimate: SpeakerGenerationEstimate }> {
   if (
     !input ||
@@ -81,6 +84,18 @@ export async function speakerPlan(
   if (voices.some((v) => !v?.model) || !catalog.available)
     throw audiobookError(409, '선택한 서버 목소리를 다시 확인해 주세요.');
   const engine = await engines.load(input.engineId);
+  if (engine.purpose === 'casting') throw audiobookError(400, '화자 분석에는 분석용 모델 연결을 골라 주세요.');
+  const casting = normalizeCasting(input.casting);
+  const selecting = casting?.engineId ? await engines.loadCasting(casting.engineId) : undefined;
+  const designer = casting?.autoDesign
+    ? (await library?.list())?.designers.find((d) => d.id === casting.designProviderId)
+    : undefined;
+  if (casting?.autoDesign && !designer)
+    throw audiobookError(400, '설명으로 목소리를 만들 수 있는 TTS 연결을 골라 주세요.');
+  const designModel = casting?.autoDesign
+    ? catalog.voices.find((v) => v.providerId === casting.designProviderId)?.model
+    : undefined;
+  if (casting?.autoDesign && !designModel) throw audiobookError(409, '목소리를 만들 TTS 모델을 확인해 주세요.');
   const capabilities = await engines.transport.capabilities(engine, AbortSignal.timeout(15000));
   const analysisKey = structuredIntegrityHash({
     book: bookId,
@@ -103,12 +118,23 @@ export async function speakerPlan(
       engineVersion: capabilities.engineVersion,
       characterVoiceIds: input.characterVoiceIds,
       models,
+      ...(casting
+        ? { casting: { ...casting, engineRevision: selecting ? castingRevision(selecting) : undefined, designModel } }
+        : {}),
     },
   };
   const fingerprint = structuredIntegrityHash({
     book: bookId,
     revision: book.active_content_revision_id,
     analysisKey,
+    pinnedVoices: library
+      ? (
+          await pool.query(
+            'select speaker_id,voice_id from speaker_voice_bindings where user_id=$1 and book_id=$2 and analysis_key=$3 and pinned order by speaker_id',
+            [owner, bookId, analysisKey],
+          )
+        ).rows
+      : undefined,
     settings: { ...settings, modelRevision: undefined },
   });
   const estimate: SpeakerGenerationEstimate = {
@@ -118,7 +144,9 @@ export async function speakerPlan(
     characters,
     modelLabel: engine.modelId,
     voiceLabel: '화자별 목소리',
-    paid: engine.paid || voices.some((v) => v!.paid),
+    selectionModelLabel: selecting?.modelId,
+    maxDesignedVoices: casting?.autoDesign ? casting.maxDesignedVoices : undefined,
+    paid: engine.paid || voices.some((v) => v!.paid) || !!selecting?.paid || !!designer?.paid,
   };
   return {
     estimate,

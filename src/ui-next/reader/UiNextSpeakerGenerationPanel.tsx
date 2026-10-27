@@ -14,6 +14,9 @@ import { formatBytes, formatCount } from '../../utils/format';
 import { cx, Progress } from '../components/primitives';
 import { ChapterScopeFields, chapterScopeSummary, useChapterScope } from './chapter-scope';
 import { speakerPreferenceQueue } from './speaker-generation-preferences';
+import UiNextCastingOptions from './UiNextCastingOptions';
+import UiNextBookVoices from './UiNextBookVoices';
+import type { SpeakerCastingOptions, LibraryVoice, VoiceDesignProvider } from '../../providers/voice-library';
 import './audiobook.css';
 import './speaker-generation.css';
 
@@ -33,6 +36,7 @@ const ACTIVE: readonly AudiobookStatus[] = ['queued', 'running', 'pausing', 'del
 const STEPS = [
   ['attribution', '화자 찾기'],
   ['identity', '인물 연결'],
+  ['casting', '목소리 선정'],
   ['audio', '음성 만들기'],
 ] as const;
 const message = (error: unknown, fallback: string) =>
@@ -45,6 +49,8 @@ export interface UiNextSpeakerGenerationPanelProps {
   onManageEngines?(): void;
   /** Bumped when analysis models were edited: reload the list without changing the choice. */
   readonly enginesRevision?: number;
+  onManageVoices?(): void;
+  readonly voicesRevision?: number;
 }
 
 /** 화자별 미리 생성하기: the server finds speakers, assigns voices and makes audio; the reader plays what is ready. */
@@ -53,7 +59,13 @@ export default function UiNextSpeakerGenerationPanel(props: UiNextSpeakerGenerat
   return <Body key={props.controls.key} {...props} />;
 }
 
-function Body({ controls, onManageEngines, enginesRevision = 0 }: UiNextSpeakerGenerationPanelProps) {
+function Body({
+  controls,
+  onManageEngines,
+  enginesRevision = 0,
+  onManageVoices,
+  voicesRevision = 0,
+}: UiNextSpeakerGenerationPanelProps) {
   const latest = useRef(controls);
   latest.current = controls;
   const alive = useRef(true);
@@ -110,6 +122,26 @@ function Body({ controls, onManageEngines, enginesRevision = 0 }: UiNextSpeakerG
   const [engineChoice, setEngineChoice] = useState(restored?.engineId || undefined);
   const [narratorChoice, setNarratorChoice] = useState(restored?.narratorVoiceId || undefined);
   const [poolChoice, setPoolChoice] = useState<readonly string[] | undefined>(restored?.characterVoiceIds);
+  const [castingChoice, setCastingChoice] = useState<SpeakerCastingOptions | undefined>(restored?.casting);
+  const [library, setLibrary] = useState<{ voices: LibraryVoice[]; designers: VoiceDesignProvider[] }>();
+  const [libraryError, setLibraryError] = useState<string>();
+  useEffect(() => {
+    const port = controls.voiceLibrary;
+    if (!port) return;
+    const c = new AbortController();
+    port.list(c.signal).then(
+      (v) => {
+        if (!c.signal.aborted) {
+          setLibrary(v);
+          setLibraryError(undefined);
+        }
+      },
+      (e) => {
+        if (!c.signal.aborted) setLibraryError(message(e, '목소리 보관함을 불러오지 못했어요.'));
+      },
+    );
+    return () => c.abort();
+  }, [controls.voiceLibrary, voicesRevision]);
   const [saveFailed, setSaveFailed] = useState(false);
   useEffect(() => queue.onError(() => setSaveFailed(true)), [queue]);
   useEffect(() => {
@@ -124,6 +156,7 @@ function Body({ controls, onManageEngines, enginesRevision = 0 }: UiNextSpeakerG
           setEngineChoice((current) => current ?? (value.engineId || undefined));
           setNarratorChoice((current) => current ?? (value.narratorVoiceId || undefined));
           setPoolChoice((current) => current ?? value.characterVoiceIds);
+          setCastingChoice((current) => current ?? value.casting);
         }
         setPrefs('ready');
       },
@@ -149,9 +182,10 @@ function Body({ controls, onManageEngines, enginesRevision = 0 }: UiNextSpeakerG
     return () => run.abort();
   }, [enginesRevision]);
   // A choice is kept by id while the list reloads; if it disappears it is shown as missing, never swapped.
-  const firstEnabled = engines?.find((engine) => engine.enabled)?.id;
+  const analysisEngines = engines?.filter((e) => e.purpose !== 'casting');
+  const firstEnabled = analysisEngines?.find((engine) => engine.enabled)?.id;
   const engineId = engineChoice ?? firstEnabled ?? '';
-  const engine = engines?.find((item) => item.id === engineId);
+  const engine = analysisEngines?.find((item) => item.id === engineId);
   const engineMissing = Boolean(engines && engineId && !engine);
   const engineOff = engine?.enabled === false;
 
@@ -168,12 +202,17 @@ function Body({ controls, onManageEngines, enginesRevision = 0 }: UiNextSpeakerG
   // Untouched pool = the narrator's engine, so a free narrator never quietly pulls in a paid engine.
   const poolFor = (id: string) => {
     const lead = voices.find((voice) => voice.id === id);
-    return voices
+    const eligible = voices
       .filter((voice) => lead && voice.id !== id && voice.providerId === lead.providerId && !down(voice))
+      .filter((voice) => library?.voices.find((v) => v.voiceId === voice.id)?.enabled !== false)
       .map((voice) => voice.id);
+    const curated = eligible.filter((id) => library?.voices.some((v) => v.voiceId === id && v.enabled));
+    if (!eligible.length && lead && !down(lead) && library?.voices.find((v) => v.voiceId === id)?.enabled !== false)
+      return [id];
+    return (curated.length ? curated : eligible).slice(0, 32);
   };
   const defaultPool = poolFor(narratorId);
-  const pool = (poolChoice ?? defaultPool).filter((id) => id !== narratorId);
+  const pool = poolChoice ?? defaultPool;
   const poolIsDefault = pool.length === defaultPool.length && defaultPool.every((id) => pool.includes(id));
   const poolMissing = pool.filter((id) => catalog && !voices.some((voice) => voice.id === id));
   const poolDown = pool.filter((id) => {
@@ -186,16 +225,20 @@ function Body({ controls, onManageEngines, enginesRevision = 0 }: UiNextSpeakerG
     const narratorVoiceId = next.narratorVoiceId ?? narratorId;
     const characterVoiceIds = next.resetPool
       ? poolFor(narratorVoiceId)
-      : (next.characterVoiceIds ?? [...(poolChoice ?? poolFor(narratorVoiceId))]).filter(
-          (id) => id !== narratorVoiceId,
-        );
+      : (next.characterVoiceIds ?? [...(poolChoice ?? poolFor(narratorVoiceId))]);
     if (next.engineId !== undefined) setEngineChoice(next.engineId);
     if (next.narratorVoiceId !== undefined) setNarratorChoice(next.narratorVoiceId);
     if (next.characterVoiceIds !== undefined) setPoolChoice(next.characterVoiceIds);
+    if (next.casting !== undefined) setCastingChoice(next.casting);
     if (next.resetPool) setPoolChoice(undefined);
     if (prefs !== 'ready') return;
     setSaveFailed(false);
-    queue.save({ engineId: next.engineId ?? engineId, narratorVoiceId, characterVoiceIds });
+    queue.save({
+      engineId: next.engineId ?? engineId,
+      narratorVoiceId,
+      characterVoiceIds,
+      casting: next.casting ?? castingChoice,
+    });
   };
   const togglePool = (id: string) =>
     choose({ characterVoiceIds: pool.includes(id) ? pool.filter((item) => item !== id) : [...pool, id] });
@@ -204,7 +247,7 @@ function Body({ controls, onManageEngines, enginesRevision = 0 }: UiNextSpeakerG
   const range = useChapterScope(controls.chapters, controls.currentChapterId);
   const problem = !engines
     ? undefined
-    : engines.length === 0
+    : analysisEngines?.length === 0
       ? '먼저 분석 모델을 연결해 주세요.'
       : !engineId
         ? '분석 모델을 골라 주세요.'
@@ -228,14 +271,20 @@ function Body({ controls, onManageEngines, enginesRevision = 0 }: UiNextSpeakerG
                           ? '만들 회차를 골라 주세요.'
                           : undefined;
   // Missing models or voices are already explained in their own section.
-  const problemAbove = engines?.length === 0 || !catalog?.available || voices.length === 0;
+  const problemAbove = analysisEngines?.length === 0 || !catalog?.available || voices.length === 0;
   const input: SpeakerGenerationInput | undefined =
-    engines && !problem && prefs !== 'loading'
+    engines &&
+    !problem &&
+    prefs !== 'loading' &&
+    (!controls.voiceLibrary || !!library) &&
+    (!castingChoice?.engineId ||
+      !!engines.find((e) => e.id === castingChoice.engineId && e.enabled && e.purpose === 'casting'))
       ? {
           chapterIds: range.selected.map((chapter) => chapter.id),
           engineId,
           narratorVoiceId: narratorId,
           characterVoiceIds: [...pool],
+          ...(castingChoice ? { casting: castingChoice } : {}),
           rules: controls.rules,
           footnotePlayback: controls.footnotePlayback,
         }
@@ -376,7 +425,7 @@ function Body({ controls, onManageEngines, enginesRevision = 0 }: UiNextSpeakerG
           </p>
         ) : !engines ? (
           <p className="un-book-note">불러오는 중…</p>
-        ) : engines.length === 0 ? (
+        ) : analysisEngines?.length === 0 ? (
           <div className="un-book-note is-box">
             아직 연결한 분석 모델이 없어요.{' '}
             {onManageEngines && (
@@ -394,7 +443,7 @@ function Body({ controls, onManageEngines, enginesRevision = 0 }: UiNextSpeakerG
           >
             {!engineId && <option value="">분석 모델 고르기</option>}
             {engineMissing && <option value={engineId}>목록에 없는 분석 모델</option>}
-            {engines.map((item) => (
+            {analysisEngines?.map((item) => (
               <option key={item.id} value={item.id} disabled={!item.enabled && item.id !== engineId}>
                 {item.name}
                 {item.name !== item.modelId ? ` · ${item.modelId}` : ''}
@@ -447,46 +496,50 @@ function Body({ controls, onManageEngines, enginesRevision = 0 }: UiNextSpeakerG
                 ))}
               </select>
             </label>
-            <div className="un-cast-field">
-              <span id="un-cast-pool">
-                인물 목소리 <small>{formatCount(pool.length)}개 선택</small>
-              </span>
-              {voiceGroups.map((group) => (
-                <div key={group.key} className="un-cast-pool">
-                  {voiceGroups.length > 1 && <small>{group.label}</small>}
-                  <div className="un-listen-chips" role="group" aria-labelledby="un-cast-pool">
-                    {group.voices.map((voice) => {
-                      const isNarrator = voice.id === narratorId;
-                      const on = !isNarrator && pool.includes(voice.id);
-                      return (
-                        <button
-                          key={voice.id}
-                          type="button"
-                          aria-pressed={on}
-                          className={cx(on && 'is-active')}
-                          disabled={prefs === 'loading' || isNarrator || (down(voice) && !on)}
-                          onClick={() => togglePool(voice.id)}
-                        >
-                          {voice.label}
-                          {isNarrator ? ' · 내레이터' : voice.paid ? ' · 유료' : ''}
-                        </button>
-                      );
-                    })}
+            <details className="un-cast-options">
+              <summary>자동 배정에 쓸 목소리 · {pool.length}개</summary>
+              <div className="un-cast-field">
+                <span id="un-cast-pool">
+                  인물 목소리 <small>{formatCount(pool.length)}개 선택</small>
+                </span>
+                {voiceGroups.map((group) => (
+                  <div key={group.key} className="un-cast-pool">
+                    {voiceGroups.length > 1 && <small>{group.label}</small>}
+                    <div className="un-listen-chips" role="group" aria-labelledby="un-cast-pool">
+                      {group.voices.map((voice) => {
+                        const isNarrator = voice.id === narratorId;
+                        const on = pool.includes(voice.id);
+                        return (
+                          <button
+                            key={voice.id}
+                            type="button"
+                            aria-pressed={on}
+                            className={cx(on && 'is-active')}
+                            disabled={prefs === 'loading' || (down(voice) && !on) || (!on && pool.length >= 32)}
+                            onClick={() => togglePool(voice.id)}
+                          >
+                            {voice.label}
+                            {isNarrator ? ' · 내레이터' : voice.paid ? ' · 유료' : ''}
+                          </button>
+                        );
+                      })}
+                    </div>
                   </div>
-                </div>
-              ))}
-              {missingPoolVoices.length > 0 && (
-                <div className="un-listen-chips" role="group" aria-label="목록에 없는 인물 목소리">
-                  {missingPoolVoices.map((id) => (
-                    <button key={id} type="button" aria-pressed className="is-active" onClick={() => togglePool(id)}>
-                      목록에 없음 · {id}
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
+                ))}
+                {missingPoolVoices.length > 0 && (
+                  <div className="un-listen-chips" role="group" aria-label="목록에 없는 인물 목소리">
+                    {missingPoolVoices.map((id) => (
+                      <button key={id} type="button" aria-pressed className="is-active" onClick={() => togglePool(id)}>
+                        목록에 없음 · {id}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </details>
             <p className="un-book-note">
-              인물마다 고른 목소리 중 하나를 자동으로 정해요. 이 작업 안에서 같은 인물은 같은 목소리로 읽어요.
+              같은 작품에서 한 번 정한 목소리는 다음 생성 작업에서도 사용해요. 원하는 목소리만 고르려면 목록을 펼쳐
+              주세요.
               {!poolIsDefault && (
                 <>
                   {' '}
@@ -499,6 +552,29 @@ function Body({ controls, onManageEngines, enginesRevision = 0 }: UiNextSpeakerG
           </>
         )}
       </section>
+
+      {controls.voiceLibrary && (
+        <>
+          <div className="un-book-actions">
+            <button type="button" className="un-btn is-ghost is-sm" onClick={onManageVoices}>
+              목소리 보관함
+            </button>
+          </div>
+          {libraryError && (
+            <p className="un-book-error" role="alert">
+              {libraryError}
+            </p>
+          )}
+          <UiNextCastingOptions
+            value={castingChoice}
+            engines={engines?.filter((e) => e.purpose === 'casting') ?? []}
+            designers={library?.designers ?? []}
+            disabled={prefs === 'loading'}
+            onChange={(casting) => choose({ casting })}
+            onManage={onManageEngines}
+          />
+        </>
+      )}
 
       <section className="un-book-group" aria-label="만들기">
         {problem && engines && !problemAbove && <p className="un-book-note is-box">{problem}</p>}
@@ -540,6 +616,16 @@ function Body({ controls, onManageEngines, enginesRevision = 0 }: UiNextSpeakerG
             <p className="un-book-voice">
               TTS 목소리 <b>{fresh.voiceLabel}</b>
             </p>
+            {fresh.selectionModelLabel && (
+              <p className="un-book-voice">
+                목소리 선정 <b>{fresh.selectionModelLabel}</b>
+              </p>
+            )}
+            {!!fresh.maxDesignedVoices && (
+              <p className="un-book-note">
+                주요 인물에게 필요한 새 목소리를 최대 {fresh.maxDesignedVoices}개 만들어요. 목소리 제작 비용도 포함돼요.
+              </p>
+            )}
             {fresh.paid && (
               <label className="un-book-ack">
                 <input type="checkbox" checked={paidAck} onChange={(event) => setPaidAck(event.target.checked)} />
@@ -620,6 +706,7 @@ function Body({ controls, onManageEngines, enginesRevision = 0 }: UiNextSpeakerG
               <JobItem
                 key={item.id}
                 item={item}
+                bookVoices={<UiNextBookVoices job={item} port={controls.port} voices={voices} />}
                 pending={pending === item.id}
                 confirm={confirm?.id === item.id ? confirm.action : undefined}
                 error={actionError?.id === item.id ? actionError.text : undefined}
@@ -664,6 +751,7 @@ function rangeLabel(item: SpeakerGenerationJob) {
 
 function JobItem({
   item,
+  bookVoices,
   pending,
   confirm,
   error,
@@ -674,6 +762,7 @@ function JobItem({
   onCancel,
 }: {
   item: SpeakerGenerationJob;
+  bookVoices?: import('react').ReactNode;
   pending: boolean;
   confirm?: Confirm['action'];
   error?: string;
@@ -737,6 +826,7 @@ function JobItem({
           {error ?? item.error}
         </p>
       )}
+      {bookVoices}
       {confirm ? (
         <div
           className="un-book-confirm"

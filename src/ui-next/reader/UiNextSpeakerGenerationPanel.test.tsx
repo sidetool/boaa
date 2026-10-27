@@ -10,6 +10,7 @@ import type {
   TTSSpeakerGenerationControls,
 } from '../../providers/speaker-generation';
 import UiNextSpeakerGenerationPanel from './UiNextSpeakerGenerationPanel';
+import type { LibraryVoice, VoiceLibraryPort } from '../../providers/voice-library';
 
 // The node test environment has no window; the panel's poll timer uses window.setTimeout as in the browser.
 if (typeof window === 'undefined') vi.stubGlobal('window', globalThis);
@@ -138,13 +139,139 @@ async function flush() {
     for (let i = 0; i < 8; i += 1) await Promise.resolve();
   });
 }
-async function mount(props: TTSSpeakerGenerationControls, extra: { onManageEngines?: () => void } = {}) {
+async function mount(
+  props: TTSSpeakerGenerationControls,
+  extra: { onManageEngines?: () => void; onManageVoices?: () => void } = {},
+) {
   act(() => {
     renderer = create(<UiNextSpeakerGenerationPanel controls={props} {...extra} />);
   });
   await flush();
   return renderer!.root;
 }
+
+function libraryVoice(voiceId: string, enabled = true): LibraryVoice {
+  return {
+    id: 'library-' + voiceId,
+    voiceId,
+    providerId: 'tts-a',
+    providerVoiceId: voiceId,
+    model: { providerId: 'tts-a', revision: 'stable' },
+    origin: 'catalog',
+    alias: '보관함 ' + voiceId,
+    timbre: '따뜻함',
+    description: '합성 설명',
+    language: 'ko',
+    enabled,
+    sampleAvailable: false,
+    available: true,
+    createdAt: '2026-10-27T00:00:00.000Z',
+  };
+}
+function libraryPort(voices: LibraryVoice[] = []): VoiceLibraryPort {
+  return {
+    list: vi.fn(async () => ({
+      voices,
+      designers: [{ id: 'designer', name: '제작 TTS', modelId: 'tts-model', paid: true }],
+    })),
+    save: vi.fn(async () => libraryVoice('a3')),
+    remove: vi.fn(async () => {}),
+    design: vi.fn(async () => libraryVoice('a3')),
+    sample: vi.fn(async () => new Blob()),
+  };
+}
+function castingField(root: ReactTestInstance, label: string) {
+  const parent = root
+    .findAllByType('label')
+    .find((n) => n.children.some((c) => typeof c !== 'string' && c.type === 'span' && text(c).startsWith(label)));
+  if (!parent) throw Error('missing casting field ' + label);
+  return parent.find((n) => ['input', 'select'].includes(String(n.type)));
+}
+
+describe('voice library casting choices', () => {
+  it('defaults the pool to enabled curated voices and keeps a one-voice local narrator usable', async () => {
+    const api = port();
+    let root = await mount(
+      controls({ port: api, voiceLibrary: libraryPort([libraryVoice('a2', false), libraryVoice('a3')]) }),
+    );
+    expect(button(root, /^목소리 3/).props['aria-pressed']).toBe(true);
+    expect(button(root, /^목소리 2/).props['aria-pressed']).toBe(false);
+    expect(api.savePreferences).not.toHaveBeenCalled();
+    act(() => renderer!.unmount());
+    renderer = undefined;
+    root = await mount(
+      controls({ port: port(), voiceLibrary: libraryPort(), voices: catalog({ voices: [catalog().voices[0]] }) }),
+    );
+    expect(button(root, /^목소리 1/).props['aria-pressed']).toBe(true);
+    expect(button(root, '분석 범위 확인').props.disabled).toBe(false);
+  });
+
+  it('retains independent casting preferences across reopen and includes them in estimate and create payloads', async () => {
+    const api = port();
+    vi.mocked(api.estimate).mockResolvedValue(estimate({ paid: true }));
+    const props = controls({
+      port: api,
+      voiceLibrary: libraryPort(),
+      engines: engines(async () => [
+        engine({ purpose: 'analysis' }),
+        engine({ id: 'casting-model', purpose: 'casting', name: '선정 모델', modelId: 'casting-model-id' }),
+      ]),
+    });
+    let root = await mount(props);
+    expect(text(select(root, '분석 모델'))).not.toContain('선정 모델');
+    expect(text(castingField(root, '목소리 선정 모델'))).not.toContain('분석 A');
+    act(() => castingField(root, '목소리 선정 모델').props.onChange({ target: { value: 'casting-model' } }));
+    await flush();
+    act(() => castingField(root, '주요 인물에게 어울리는 목소리 만들기').props.onChange({ target: { checked: true } }));
+    await flush();
+    act(() => castingField(root, '목소리 제작 모델 ID').props.onChange({ target: { value: 'custom-design-model' } }));
+    await flush();
+    const casting = {
+      engineId: 'casting-model',
+      autoDesign: true,
+      maxDesignedVoices: 4,
+      designProviderId: 'designer',
+      designModelId: 'custom-design-model',
+    };
+    expect(api.savePreferences).toHaveBeenLastCalledWith(expect.objectContaining({ casting }));
+    act(() => renderer!.unmount());
+    renderer = undefined;
+    root = await mount(props);
+    expect(castingField(root, '목소리 선정 모델').props.value).toBe('casting-model');
+    expect(castingField(root, '목소리 제작 모델 ID').props.value).toBe('custom-design-model');
+    await click(button(root, '분석 범위 확인'));
+    expect(api.estimate).toHaveBeenCalledWith(expect.objectContaining({ casting }), expect.any(AbortSignal));
+    expect(button(root, '생성 시작').props.disabled).toBe(true);
+    act(() =>
+      castingField(root, '분석 모델이나 음성 서비스의 API 사용 요금').props.onChange({ target: { checked: true } }),
+    );
+    await flush();
+    await click(button(root, '생성 시작'));
+    expect(api.create).toHaveBeenCalledWith(
+      expect.objectContaining({ casting }),
+      'fp-1',
+      true,
+      expect.any(AbortSignal),
+    );
+  });
+
+  it('opens model and voice management without resetting the selected casting mode', async () => {
+    const manageEngines = vi.fn(),
+      manageVoices = vi.fn();
+    const props = controls({
+      voiceLibrary: libraryPort(),
+      engines: engines(async () => [engine(), engine({ id: 'cast', purpose: 'casting', name: '선정용' })]),
+    });
+    const root = await mount(props, { onManageEngines: manageEngines, onManageVoices: manageVoices });
+    act(() => castingField(root, '목소리 선정 모델').props.onChange({ target: { value: 'cast' } }));
+    await flush();
+    await click(button(root, '모델 연결'));
+    await click(button(root, '목소리 보관함'));
+    expect(manageEngines).toHaveBeenCalledTimes(1);
+    expect(manageVoices).toHaveBeenCalledTimes(1);
+    expect(castingField(root, '목소리 선정 모델').props.value).toBe('cast');
+  });
+});
 function text(node: ReactTestInstance): string {
   if (String(node.props['aria-hidden']) === 'true') return '';
   return node.children.map((child) => (typeof child === 'string' ? child : text(child))).join('');
@@ -174,7 +301,11 @@ describe('UiNextSpeakerGenerationPanel creating', () => {
     expect(button(root, /^목소리 2/).props['aria-pressed']).toBe(true);
     expect(button(root, /^목소리 3/).props['aria-pressed']).toBe(true);
     expect(button(root, /^외부 1/).props['aria-pressed']).toBe(false);
-    expect(button(root, /^목소리 1/).props.disabled).toBe(true);
+    expect(button(root, /^목소리 1/).props.disabled).toBe(false);
+    expect(button(root, /^목소리 1/).props['aria-pressed']).toBe(false);
+    await click(button(root, /^목소리 1/));
+    expect(button(root, /^목소리 1/).props['aria-pressed']).toBe(true);
+    expect(button(root, /^목소리 2/).props['aria-pressed']).toBe(true);
   });
 
   it('shows the real analysis range, then asks for paid consent before creating once', async () => {
@@ -281,7 +412,7 @@ describe('UiNextSpeakerGenerationPanel jobs', () => {
     const listen = vi.fn();
     const root = await mount(controls({ port: port(async () => [job()]), listen }));
     const steps = root.findByProps({ 'aria-label': '진행 단계' });
-    expect(text(steps)).toBe('화자 찾기인물 연결음성 만들기');
+    expect(text(steps)).toBe('화자 찾기인물 연결목소리 선정음성 만들기');
     expect(steps.findByProps({ 'aria-current': 'step' }).children).toEqual(['음성 만들기']);
     expect(text(root)).toContain('앞 회차 1개 포함');
     expect(text(root)).toContain('들을 수 있는 회차 1/2');

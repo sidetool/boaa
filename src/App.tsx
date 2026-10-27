@@ -1,4 +1,8 @@
-import { createSpeakerEnginesPort, createSpeakerGenerationPort } from './services/remote/speaker-generation-client';
+import {
+  createSpeakerEnginesPort,
+  createSpeakerGenerationPort,
+  createVoiceLibraryPort,
+} from './services/remote/speaker-generation-client';
 import type { SavedAudiobook } from './providers/plain-audiobook';
 import { preparedNarrationSession, preparedNarrationJump } from './providers/prepared-narration';
 import type { PreparedNarration } from './providers/plain-audiobook';
@@ -2730,6 +2734,10 @@ export default function App() {
       ? createSpeakerGenerationPort(providerApiClient, selectedNovel.id)
       : undefined;
   }, [audiobookPort, providerApiClient, selectedNovel?.id, ttsAccountScope]);
+  const voiceLibrary = useMemo(() => {
+    void ttsAccountScope;
+    return speakerEngines && providerApiClient ? createVoiceLibraryPort(providerApiClient) : undefined;
+  }, [speakerEngines, providerApiClient, ttsAccountScope]);
   const [preparedChoice, setPreparedChoice] = useState<{ owner: object; id: string; label: string }>();
   const preparedChoiceRef = useRef(preparedChoice);
   preparedChoiceRef.current = preparedChoice;
@@ -5993,6 +6001,8 @@ export default function App() {
                         key: JSON.stringify([readerRuntime.session?.epoch, ttsAccountScope, selectedNovel.id]),
                         port: speakerGenerationPort,
                         engines: speakerEngines,
+                        voiceLibrary,
+                        beforePreview: () => stopTTS(),
                         chapters: [...chapters]
                           .sort((a, b) => a.index - b.index)
                           .map(({ id, title }) => ({ id, title })),

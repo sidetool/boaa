@@ -10,6 +10,7 @@ import type {
 } from '../../../../../src/providers/speaker-generation';
 import type { SpokenTextRule } from '@boaa/contracts';
 import { audiobookError } from '../../services/audiobook-plan.js';
+import { normalizeCasting } from '../../services/speaker-voice-selection.js';
 
 export async function registerSpeakerGenerationRoutes(
   app: FastifyInstance,
@@ -73,6 +74,7 @@ export async function registerSpeakerGenerationRoutes(
         engineId: b.engineId,
         narratorVoiceId: b.narratorVoiceId,
         characterVoiceIds: b.characterVoiceIds,
+        casting: normalizeCasting(b.casting),
         rules: parsePlainTTSRules(b.rules),
         footnotePlayback: b.footnotePlayback,
       };
@@ -107,6 +109,7 @@ export async function registerSpeakerGenerationRoutes(
           engineId: v.engineId,
           narratorVoiceId: v.narratorVoiceId,
           characterVoiceIds: [...new Set(v.characterVoiceIds)],
+          casting: normalizeCasting(v.casting, true),
         };
         const written = await pool.query(
           `insert into speaker_generation_preferences(book_id,user_id,value)
@@ -122,6 +125,31 @@ export async function registerSpeakerGenerationRoutes(
       '/api/books/:bookId/speaker-generation/estimate',
       { bodyLimit: 256 * 1024 },
       async (req) => service.estimate(req.params.bookId, input(req.body)),
+    );
+    routes.get<{ Params: { bookId: string; id: string } }>(
+      '/api/books/:bookId/speaker-generation/:id/castings',
+      async (req) => {
+        if (!(await service.list(req.params.bookId)).some((j) => j.id === req.params.id))
+          throw audiobookError(404, '생성 작업을 찾을 수 없어요.');
+        return { assignments: await service.castings(req.params.id) };
+      },
+    );
+    routes.put<{ Params: { bookId: string; id: string }; Body: { speakerId: string; voiceId: string } }>(
+      '/api/books/:bookId/speaker-generation/:id/castings',
+      { bodyLimit: 4096 },
+      async (req) => {
+        if (!(await service.list(req.params.bookId)).some((j) => j.id === req.params.id))
+          throw audiobookError(404, '생성 작업을 찾을 수 없어요.');
+        if (
+          typeof req.body?.speakerId !== 'string' ||
+          req.body.speakerId.length > 256 ||
+          typeof req.body.voiceId !== 'string' ||
+          req.body.voiceId.length > 512
+        )
+          throw audiobookError(400, '인물과 목소리를 확인해 주세요.');
+        await service.assign(req.params.id, req.body.speakerId, req.body.voiceId);
+        return { ok: true };
+      },
     );
     routes.post<{
       Params: { bookId: string };
