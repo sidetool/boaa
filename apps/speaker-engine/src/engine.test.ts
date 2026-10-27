@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { prepare, step } from './engine';
+import { ENGINE_VERSION, prepare, step } from './engine';
+import type { SequentialIdentityLedgerV1 } from './preset35/sequential-identity-core';
 import { SPEAKER_ENGINE_PROTOCOL, type SpeakerEngineResult } from '../../../src/providers/speaker-engine-protocol';
 
 type Request = Extract<SpeakerEngineResult, { kind: 'request' }>;
@@ -8,6 +9,115 @@ function begin(s = source, ledger?: unknown) {
   return step({ protocol: SPEAKER_ENGINE_PROTOCOL, source: s, ledger }) as Request;
 }
 describe('real preset35 adapter', () => {
+  it('requires compact-lorebook retrieval terms in the B schema and rejects a model reply that omits them', () => {
+    const a = begin();
+    expect(ENGINE_VERSION).toBe('preset35-boaa-2');
+    expect(a.checkpoint).toMatchObject({ version: ENGINE_VERSION });
+    const b = step({
+      protocol: SPEAKER_ENGINE_PROTOCOL,
+      source,
+      checkpoint: a.checkpoint,
+      response: JSON.stringify(attribution(source)),
+    }) as Request;
+    expect(b.stage).toBe('identity');
+    expect(b.schema).toMatchObject({
+      properties: {
+        groups: {
+          items: {
+            required: expect.arrayContaining(['retrieval_terms']),
+            properties: { retrieval_terms: { type: 'ARRAY', items: { type: 'STRING' } } },
+          },
+        },
+      },
+    });
+    const valid = identity(b);
+    const { retrieval_terms: _terms, ...missing } = valid.groups[0];
+    expect(() =>
+      step({
+        protocol: SPEAKER_ENGINE_PROTOCOL,
+        source,
+        checkpoint: b.checkpoint,
+        response: JSON.stringify({ ...valid, groups: [missing] }),
+      }),
+    ).toThrow('speaker_engine_lorebook_retrieval_terms_required');
+    expect(
+      step({
+        protocol: SPEAKER_ENGINE_PROTOCOL,
+        source,
+        checkpoint: b.checkpoint,
+        response: JSON.stringify({ ...valid, groups: [{ ...valid.groups[0], retrieval_terms: [] }] }),
+      }).kind,
+    ).toBe('complete');
+  });
+  it('retains only source-grounded retrieval phrases and activates that identity by its role in the next chapter', () => {
+    const roleSource = {
+      ...source,
+      chapter: {
+        ...source.chapter,
+        paragraphs: [{ id: 'p1', index: 1, text: '민아가 말했다. 별빛 우체부가 전할 소식이었다. “안녕 🌙.”' }],
+      },
+    };
+    const a = begin(roleSource);
+    const b = step({
+      protocol: SPEAKER_ENGINE_PROTOCOL,
+      source: roleSource,
+      checkpoint: a.checkpoint,
+      response: JSON.stringify(attribution(roleSource)),
+    }) as Request;
+    const wire = identity(b);
+    wire.groups[0].retrieval_terms = ['별빛 우체부', '근거 없는 용병단장'];
+    const done = step({
+      protocol: SPEAKER_ENGINE_PROTOCOL,
+      source: roleSource,
+      checkpoint: b.checkpoint,
+      response: JSON.stringify(wire),
+    });
+    if (done.kind !== 'complete') throw Error('expected complete');
+    const ledger = done.ledger as SequentialIdentityLedgerV1;
+    expect(ledger.entries[0].retrievalTerms).toEqual(['별빛 우체부']);
+    expect(ledger.entries[0].aliases).not.toContain('별빛 우체부');
+    const next = {
+      ...roleSource,
+      chapter: {
+        ...roleSource.chapter,
+        id: 'c2',
+        index: 2,
+        paragraphs: [{ id: 'p3', index: 1, text: '별빛 우체부가 웃었다. “다시 만났네.”' }],
+      },
+    };
+    expect(next.chapter.paragraphs[0].text).not.toContain('민아');
+    const a2 = begin(next, ledger);
+    const nextWire = attribution(next);
+    nextWire.new_speakers[0].surface = '별빛 우체부';
+    const b2 = step({
+      protocol: SPEAKER_ENGINE_PROTOCOL,
+      source: next,
+      ledger,
+      checkpoint: a2.checkpoint,
+      response: JSON.stringify(nextWire),
+    }) as Request;
+    expect(b2.stage).toBe('identity');
+    const packet = JSON.parse(b2.prompt.split('\nSOURCE_JSON=')[1]);
+    expect(packet.activated_prior_identities).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          work_speaker_id: done.identities[0].id,
+          retrieval_terms: ['별빛 우체부'],
+          activation_reasons: expect.arrayContaining(['local_retrieval_term_match', 'source_retrieval_term_match']),
+        }),
+      ]),
+    );
+    const linked = step({
+      protocol: SPEAKER_ENGINE_PROTOCOL,
+      source: next,
+      ledger,
+      checkpoint: b2.checkpoint,
+      response: JSON.stringify(identity(b2, done.identities[0].id)),
+    });
+    if (linked.kind !== 'complete') throw Error('expected linked identity');
+    expect(linked.identities.map((i) => i.id)).toEqual([done.identities[0].id]);
+    expect(linked.labels.every((l) => l.speakerId === done.identities[0].id)).toBe(true);
+  });
   it('runs A then B, keeps source UTF-16 spans and links the same speaker in the next chapter', () => {
     const a = begin();
     expect(a.stage).toBe('attribution');

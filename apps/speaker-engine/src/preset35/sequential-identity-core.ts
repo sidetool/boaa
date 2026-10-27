@@ -693,6 +693,20 @@ export const sequentialIdentityResponseSchema = {
   },
 } as const;
 
+export const sequentialIdentityResponseSchemaCompactLorebook = {
+  ...sequentialIdentityResponseSchema,
+  properties: {
+    ...sequentialIdentityResponseSchema.properties,
+    groups: {
+      ...sequentialIdentityResponseSchema.properties.groups,
+      items: {
+        ...sequentialIdentityResponseSchema.properties.groups.items,
+        required: [...sequentialIdentityResponseSchema.properties.groups.items.required, 'retrieval_terms'],
+      },
+    },
+  },
+} as const;
+
 export function buildSequentialIdentityPrompt(
   prepared: PreparedSequentialIdentityBlock,
   options: { readonly currentBlockEncoding?: 'readable_objects' | 'compact_rows' } = {},

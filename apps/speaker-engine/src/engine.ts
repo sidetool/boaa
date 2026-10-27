@@ -10,7 +10,7 @@ import {
 import * as a from './preset35/chapter-context-speaker';
 import * as b from './preset35/sequential-identity-core';
 
-export const ENGINE_VERSION = 'preset35-boaa-1';
+export const ENGINE_VERSION = 'preset35-boaa-2';
 type Checkpoint = {
   version: string;
   fingerprint: string;
@@ -199,7 +199,7 @@ export function step(input: SpeakerEngineStep): SpeakerEngineResult {
         stage: 'identity',
         checkpoint: { ...checkpoint, outputs, phase: 'identity' },
         prompt: b.buildSequentialIdentityPrompt(block),
-        schema: b.sequentialIdentityResponseSchema,
+        schema: b.sequentialIdentityResponseSchemaCompactLorebook,
       };
   }
   const wire = b.parseSequentialIdentityWire(
@@ -207,6 +207,10 @@ export function step(input: SpeakerEngineStep): SpeakerEngineResult {
       ? input.response
       : { groups: [], target_labels: [] },
   );
+  // The shared parser also accepts older presets. Enforce this service's 3.5 schema even
+  // when a compatible model endpoint does not enforce the supplied response schema.
+  if (wire.groups.some((group) => !Array.isArray(group.retrieval_terms)))
+    throw new Error('speaker_engine_lorebook_retrieval_terms_required');
   const result = b.applySequentialIdentityWire({ prepared: block, priorLedger: ledger, wire });
   return {
     kind: 'complete',

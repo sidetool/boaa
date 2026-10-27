@@ -46,6 +46,7 @@ export function identity(request: Request, existing = 'NONE') {
             action: existing === 'NONE' ? 'CREATE_NEW' : 'LINK_EXISTING',
             existing_work_speaker_id: existing,
             canonical_display: '민아',
+            retrieval_terms: ['민아'],
             member_local_speaker_ids: ids,
             review_required: false,
           },
