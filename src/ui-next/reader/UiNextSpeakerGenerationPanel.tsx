@@ -11,7 +11,8 @@ import type {
   TTSSpeakerGenerationControls,
 } from '../../providers/speaker-generation';
 import { formatBytes, formatCount } from '../../utils/format';
-import { cx, Progress } from '../components/primitives';
+import { cx } from '../components/primitives';
+import SpeakerJobProgress from './SpeakerJobProgress';
 import { ChapterScopeFields, chapterScopeSummary, useChapterScope } from './chapter-scope';
 import { speakerPreferenceQueue } from './speaker-generation-preferences';
 import UiNextCastingOptions from './UiNextCastingOptions';
@@ -785,7 +786,9 @@ function JobItem({
     <li className="un-book-item">
       <div className="un-book-item-head">
         <b>{rangeLabel(item)}</b>
-        <span className={cx('un-book-badge', `is-${item.status}`)}>{STATUS_LABEL[item.status]}</span>
+        <span className={cx('un-book-badge', `is-${item.status}`)}>
+          {item.status === 'queued' && item.retryAt ? '재시도 대기' : STATUS_LABEL[item.status]}
+        </span>
       </div>
       <small className="un-book-meta">
         {formatCount(item.chapterCount)}개 회차 · {item.voiceLabel} · {item.providerName}
@@ -803,21 +806,8 @@ function JobItem({
           ))}
         </ol>
       )}
-      {item.status !== 'completed' && (
-        <Progress value={item.completedItems / Math.max(1, item.itemCount)} label="생성 진행" />
-      )}
-      <small className="un-book-meta">
-        {item.stage === 'waiting' && generating ? '차례를 기다리는 중 · ' : ''}
-        화자 분석 {formatCount(item.analyzedChapters)}개 회차
-        {item.contextChapterCount > 0 ? ` (앞 회차 ${formatCount(item.contextChapterCount)}개 포함)` : ''} · 들을 수
-        있는 회차 {formatCount(ready)}/{formatCount(item.chapterCount)}
-      </small>
-      <small className="un-book-meta">
-        {formatCount(item.completedItems)} / {formatCount(item.itemCount)} 구간 · {formatBytes(item.bytes)}
-        {generating && item.currentChapterTitle ? ` · ${item.currentChapterTitle}` : ''}
-        {item.status === 'pausing' ? ' · 지금 구간을 마치면 멈춰요' : ''}
-      </small>
-      {(item.error || error) && (
+      <SpeakerJobProgress item={item} />
+      {(error || (item.error && !(item.status === 'queued' && item.retryAt))) && (
         <p
           className={!error && item.status === 'queued' ? 'un-book-meta' : 'un-book-error'}
           role={!error && item.status === 'queued' ? 'status' : 'alert'}
@@ -836,7 +826,7 @@ function JobItem({
           <p>
             {confirm === 'remove'
               ? `만든 음성 ${formatBytes(item.bytes)}를 서버에서 지워요. 되돌릴 수 없어요.`
-              : `남은 ${formatCount(remaining)}개 구간을 이어 만들어요. 분석 모델이나 음성 서비스의 API 사용 요금이 발생할 수 있어요.`}
+              : `${item.planningComplete === false || item.itemCount === 0 ? '남은 회차의 분석과 음성 생성을 이어가요.' : `남은 ${formatCount(remaining)}개 구간을 이어 만들어요.`} 분석 모델이나 음성 서비스의 API 사용 요금이 발생할 수 있어요.`}
           </p>
           <div className="un-book-actions">
             <button

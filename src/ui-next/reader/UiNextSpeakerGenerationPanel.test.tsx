@@ -408,6 +408,90 @@ describe('UiNextSpeakerGenerationPanel creating', () => {
 });
 
 describe('UiNextSpeakerGenerationPanel jobs', () => {
+  it('shows the current analysis chapter instead of zero audio totals while the plan is unknown', async () => {
+    const root = await mount(
+      controls({
+        port: port(async () => [
+          job({
+            stage: 'identity',
+            itemCount: 0,
+            completedItems: 0,
+            bytes: 0,
+            readyChapterIds: [],
+            analyzedChapters: 1,
+            chapterCount: 1,
+            contextChapterCount: 68,
+            planningComplete: false,
+            analysisProgress: {
+              chapterCount: 69,
+              currentChapter: { number: 2, title: '중립적인 두 번째 회차', contextOnly: true },
+            },
+          }),
+        ]),
+      }),
+    );
+    expect(text(root)).toContain('인물 연결 중');
+    expect(text(root)).toContain('69개 중 2번째 회차');
+    expect(text(root)).toContain('인물 파악을 위한 앞 회차');
+    expect(text(root)).toContain('분석 완료 1 / 69회차');
+    expect(text(root)).toContain('음성 구간 수는 회차 분석 후 표시돼요.');
+    expect(text(root)).not.toContain('0 / 0 구간');
+    expect(text(root)).not.toContain('0 B');
+    expect(root.findByProps({ 'aria-label': '회차 분석 진행' })).toBeDefined();
+    expect(button(root, '본문에서 듣기').props.disabled).toBe(true);
+  });
+
+  it('shows scheduled rate-limit waiting without claiming the model is processing or repeating an old wait duration', async () => {
+    const retryAt = new Date(Date.now() + 300000).toISOString();
+    const root = await mount(
+      controls({
+        port: port(async () => [
+          job({
+            status: 'queued',
+            stage: 'identity',
+            itemCount: 0,
+            completedItems: 0,
+            bytes: 0,
+            readyChapterIds: [],
+            retryAt,
+            error: '음성 제공자 요청 제한으로 대기 중 · 300초 후 자동으로 이어 만들어요.',
+          }),
+        ]),
+      }),
+    );
+    expect(text(root)).toContain('요청 제한으로 대기 중');
+    expect(text(root)).toContain('자동으로 다시 시도해요.');
+    expect(root.findByType('time').props.dateTime).toBe(retryAt);
+    expect(text(root)).not.toContain('300초');
+    expect(text(root)).not.toContain('인물 연결 중');
+    expect(root.findAll((n) => n.type === 'svg' && String(n.props.className).includes('un-spin'))).toHaveLength(0);
+    expect(button(root, '멈추기').props.disabled).toBe(false);
+  });
+
+  it('explains resume before any audio plan exists and labels partial plan counts', async () => {
+    const api = port(async () => [
+      job({
+        status: 'failed',
+        stage: 'attribution',
+        paid: true,
+        planningComplete: false,
+        itemCount: 0,
+        completedItems: 0,
+        readyChapterIds: [],
+        error: '분석 응답 오류',
+      }),
+    ]);
+    const root = await mount(controls({ port: api }));
+    expect(text(root)).toContain('화자 찾기 단계에서 중단됐어요');
+    await click(button(root, '다시 시도'));
+    expect(text(root)).toContain('남은 회차의 분석과 음성 생성을 이어가요.');
+    expect(text(root)).not.toContain('남은 0개 구간');
+    vi.mocked(api.list).mockResolvedValue([job({ planningComplete: false })]);
+    await click(button(root, '목록 새로고침'));
+    expect(text(root)).toContain('지금까지 계획된 음성 4 / 10 구간');
+    expect(root.findByProps({ 'aria-label': '회차 분석 진행' })).toBeDefined();
+    expect(root.findAllByProps({ 'aria-label': '생성 진행' })).toHaveLength(0);
+  });
   it('shows the stage and ready chapters, and plays a partly made job in the reader', async () => {
     const listen = vi.fn();
     const root = await mount(controls({ port: port(async () => [job()]), listen }));

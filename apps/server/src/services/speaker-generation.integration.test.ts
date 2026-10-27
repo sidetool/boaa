@@ -182,6 +182,38 @@ async function setup(pool: pg.Pool, concurrency: 1 | 2 = 1) {
   };
 }
 (harness ? describe : describe.skip)('speaker background generation with real preset35 and PostgreSQL', () => {
+  it('reports context analysis position and durable retry time before an audio plan exists', async () => {
+    await withPostgresSchema(harness!, 'speaker_progress', async (pool) => {
+      const f = await setup(pool);
+      try {
+        const job = await f.create({ ...f.input, chapterIds: ['c2'] });
+        await pool.query("update speaker_generation_runs set stage='identity' where audiobook_id=$1", [job.id]);
+        await pool.query(
+          "update saved_audiobooks set retry_at=now()+interval '5 minutes',rate_limit_attempts=6 where id=$1",
+          [job.id],
+        );
+        const first = (await f.service.list('book'))[0];
+        expect(first).toMatchObject({
+          chapterCount: 1,
+          itemCount: 0,
+          completedItems: 0,
+          analyzedChapters: 0,
+          planningComplete: false,
+          analysisProgress: { chapterCount: 2, currentChapter: { number: 1, title: 'First', contextOnly: true } },
+        });
+        expect(Date.parse(first.retryAt!)).toBeGreaterThan(Date.now());
+        await pool.query('update speaker_generation_runs set next_chapter=1 where audiobook_id=$1', [job.id]);
+        await pool.query("update saved_audiobooks set status='running' where id=$1", [job.id]);
+        const next = (await f.service.list('book'))[0];
+        expect(next.analysisProgress?.currentChapter).toEqual({ number: 2, title: 'Second', contextOnly: false });
+        expect(next.retryAt).toBeUndefined();
+        expect(next.analyzedChapters).toBe(1);
+        expect(f.synthesize).not.toHaveBeenCalled();
+      } finally {
+        await f.cleanup();
+      }
+    });
+  });
   it('plays prepared source spans during generation, keeps stable voices, and reuses analysis for another voice pool', async () => {
     await withPostgresSchema(harness!, 'speaker_full', async (pool) => {
       const f = await setup(pool, 2);

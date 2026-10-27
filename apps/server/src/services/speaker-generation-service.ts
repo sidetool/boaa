@@ -139,9 +139,10 @@ export class SpeakerGenerationService {
   async list(bookId: string): Promise<SpeakerGenerationJob[]> {
     const rows = (
       await this.pool.query(
-        `select a.*,r.next_chapter,r.chapter_ids as context_ids,r.stage,
+        `select a.*,r.next_chapter,r.chapter_ids as context_ids,r.stage,c.title as analysis_chapter_title,
       coalesce((select jsonb_agg(distinct i.chapter_id) from saved_audiobook_items i where i.audiobook_id=a.id and i.status='ready'),'[]') ready_ids
       from saved_audiobooks a join speaker_generation_runs r on r.audiobook_id=a.id join library_books b on b.id=a.book_id
+      left join chapters c on c.id=(r.chapter_ids->>r.next_chapter) and c.book_id=a.book_id
       where a.book_id=$1 and a.user_id=$2 and b.user_id=$2 and b.deleted_at is null order by a.created_at desc limit 50`,
         [bookId, this.owner],
       )
@@ -151,6 +152,8 @@ export class SpeakerGenerationService {
       id: r.id,
       bookId: r.book_id,
       chapterIds: r.settings.chapterIds,
+      chapterCount: r.settings.chapterIds.length,
+      itemCount: r.total_items,
       title: r.title,
       status: r.status,
       completedItems: r.completed_items,
@@ -165,6 +168,19 @@ export class SpeakerGenerationService {
       contextChapterCount: r.context_ids.length - r.settings.chapterIds.length,
       readyChapterIds: r.ready_ids,
       castVoiceIds: Object.keys(r.settings.cast?.models ?? {}),
+      planningComplete: r.planning_complete,
+      retryAt: r.status === 'queued' && r.retry_at ? r.retry_at.toISOString() : undefined,
+      analysisProgress: {
+        chapterCount: r.context_ids.length,
+        currentChapter:
+          ['attribution', 'identity', 'casting'].includes(r.stage) && r.next_chapter < r.context_ids.length
+            ? {
+                number: r.next_chapter + 1,
+                title: r.analysis_chapter_title ?? '',
+                contextOnly: !r.settings.chapterIds.includes(r.context_ids[r.next_chapter]),
+              }
+            : undefined,
+      },
     }));
   }
   async estimate(bookId: string, input: SpeakerGenerationInput) {

@@ -30,6 +30,14 @@ export interface SpeakerGenerationJob extends SavedAudiobook {
   contextChapterCount: number;
   readyChapterIds: string[];
   castVoiceIds?: string[];
+  /** Includes earlier chapters needed to identify recurring characters. */
+  analysisProgress?: {
+    chapterCount: number;
+    currentChapter?: { number: number; title: string; contextOnly: boolean };
+  };
+  /** False means itemCount covers only the chapters planned so far. */
+  planningComplete?: boolean;
+  retryAt?: string;
 }
 export interface SpeakerGenerationPort {
   preferences(signal?: AbortSignal): Promise<SpeakerGenerationPreferences | undefined>;

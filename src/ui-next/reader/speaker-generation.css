@@ -113,6 +113,50 @@
   background: var(--un-accent);
 }
 
+.un-cast-activity {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  min-width: 0;
+  color: var(--un-text-2);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.un-cast-activity > svg {
+  flex: none;
+  margin-top: 2px;
+  color: var(--un-accent-2);
+}
+
+.un-cast-activity > span {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.un-cast-activity b {
+  color: var(--un-text);
+}
+.un-cast-activity small {
+  font-size: 12px;
+}
+
+.un-cast-activity .un-spin {
+  animation: un-cast-working 0.9s linear infinite;
+}
+@keyframes un-cast-working {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .un-cast-activity .un-spin {
+    animation: none;
+  }
+}
+
 /* Analysis model form: its selects match the filter inputs beside them instead of the browser default. */
 .un-speaker-engine-form select {
   width: 100%;
