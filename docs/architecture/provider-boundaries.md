@@ -472,8 +472,10 @@ BOAA는 암호화된 `speaker_engines` 연결을 통해 OpenAI 호환 chat compl
 
 실행: 기존 compose 명령에 `-f compose.speaker-engine.yaml`을 추가하고 해당 서비스만 시작한다.
 `SPEAKER_ENGINE_TOKEN`은 24자 이상의 무작위 값으로 설정한다. 듣기 → 화자별 미리 생성하기 →
-연결 관리에서 분석 서비스 주소 `http://speaker-engine:8095`, 같은 서비스 토큰, 별도의 모델 API
-주소/모델 ID/키를 입력한다. 로컬 모델은 API 키 없이도 사용할 수 있다. 호스트 실행은
+연결 관리에서 별도의 모델 API 주소/모델 ID/키를 입력한다. 기본 분석 서비스 주소
+`http://speaker-engine:8095`는 API/worker에 전달된 배포 토큰으로 자동 인증하므로 서비스 토큰 칸을
+비워 둔다. 다른 주소에는 배포 토큰을 보내지 않으며 별도의 서비스 토큰을 입력한다.
+로컬 모델은 API 키 없이도 사용할 수 있다. 호스트 실행은
 `node apps/speaker-engine/build.mjs` 후 `SPEAKER_ENGINE_TOKEN=… node apps/speaker-engine/dist/index.mjs`다.
 서비스는 내부 포트만 열고 원문·모델 응답을 오류나 로그에 넣지 않는다. 기본 compose/TTS는 바꾸지 않는다.
 

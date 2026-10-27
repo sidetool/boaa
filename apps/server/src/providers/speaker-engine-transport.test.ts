@@ -22,6 +22,33 @@ const request = {
   schema: { type: 'OBJECT' },
 };
 describe('speaker model transport', () => {
+  it('uses the deployment token only for the exact default engine and lets explicit credentials override it', async () => {
+    const fetchImpl = vi.fn(async () => Response.json({ protocol: SPEAKER_ENGINE_PROTOCOL, engineVersion: 'v' }));
+    const t = new SpeakerEngineTransport(
+      { fetchImpl, lookup: async () => [{ address: '192.168.1.10', family: 4 }] },
+      'managed-internal-token',
+    );
+    const signal = new AbortController().signal;
+    const local = { ...config, engineUrl: 'http://speaker-engine:8095', engineToken: undefined };
+    await t.capabilities(local, signal);
+    await t.capabilities({ ...local, engineToken: 'explicit-token' }, signal);
+    for (const engineUrl of [
+      'http://other.test:8095',
+      'http://speaker-engine:8095/path',
+      'https://speaker-engine:8095',
+    ])
+      await t.capabilities({ ...local, engineUrl }, signal);
+    await t.models({ ...local, apiKey: undefined }, signal);
+    const headers = fetchImpl.mock.calls.map((call) => new Headers((call as unknown as [URL, RequestInit])[1].headers));
+    expect(headers.map((h) => h.get('Authorization'))).toEqual([
+      'Bearer managed-internal-token',
+      'Bearer explicit-token',
+      null,
+      null,
+      null,
+      null,
+    ]);
+  });
   it('uses selected OpenAI-compatible model and explicit budget dialect without sending model keys to the engine', async () => {
     const fetchImpl = vi.fn(async () =>
       Response.json({ choices: [{ finish_reason: 'stop', message: { content: '{"ok":true}' } }] }),

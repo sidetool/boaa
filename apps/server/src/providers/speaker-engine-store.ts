@@ -20,7 +20,7 @@ export class SpeakerEngineStore {
     private pool: pg.Pool,
     private config: ServerConfig,
     private env: NodeJS.ProcessEnv = process.env,
-    readonly transport = new SpeakerEngineTransport(),
+    readonly transport = new SpeakerEngineTransport({}, env.SPEAKER_ENGINE_TOKEN),
   ) {}
   private aad(id: string) {
     return `${this.config.defaultUserId}:speaker-engine:${id}`;

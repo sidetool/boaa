@@ -13,7 +13,10 @@ const object = (v: unknown): Record<string, unknown> =>
 
 /** Both destinations are explicitly administrator-approved; each request is pinned and cannot redirect. */
 export class SpeakerEngineTransport {
-  constructor(private network: LocalEndpointEgressOptions = {}) {}
+  constructor(
+    private network: LocalEndpointEgressOptions = {},
+    private managedEngineToken = '',
+  ) {}
   private async json(
     url: string,
     signal: AbortSignal,
@@ -68,7 +71,9 @@ export class SpeakerEngineTransport {
     }
   }
   private engineHeaders(v: SpeakerEngineInput): Record<string, string> {
-    return v.engineToken ? { Authorization: `Bearer ${v.engineToken}` } : {};
+    // The deployment secret belongs only to our internal service, never to a model or custom engine URL.
+    const token = v.engineToken || (v.engineUrl === 'http://speaker-engine:8095' ? this.managedEngineToken : '');
+    return token ? { Authorization: `Bearer ${token}` } : {};
   }
   private modelHeaders(v: SpeakerEngineInput): Record<string, string> {
     return v.apiKey

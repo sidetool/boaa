@@ -1,5 +1,11 @@
 # Optional stateless speaker analysis. No LLM credentials or source files are mounted here.
 services:
+  api:
+    environment:
+      SPEAKER_ENGINE_TOKEN: ${SPEAKER_ENGINE_TOKEN:?Set a random token of at least 24 characters}
+  worker:
+    environment:
+      SPEAKER_ENGINE_TOKEN: ${SPEAKER_ENGINE_TOKEN:?Set a random token of at least 24 characters}
   speaker-engine:
     build:
       context: .
