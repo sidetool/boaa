@@ -127,6 +127,24 @@ test('failed download, incompatible migration and active work do not stop the ol
     assert.ok(!f.calls.includes('stop'));
   }
 });
+test('retention runs only after a verified commit and never rolls back for cleanup failure', async (t) => {
+  const f = await fixture(t);
+  f.deployment.pruneBackups = async () => {
+    assert.equal((await readJson(path.join(f.root, 'journal.json'))).phase, 'complete');
+    assert.equal(f.deployment.current.version, '1.1.0');
+    f.calls.push('retention');
+    throw new Error('disk cleanup unavailable');
+  };
+  await f.updater.perform({ action: 'update' });
+  assert.equal(f.calls.at(-1), 'retention');
+  assert.equal(f.updater.state.phase, 'complete');
+  assert.equal((await readJson(path.join(f.root, 'backup-retention-last.json'))).error, 'backup_retention_failed');
+  const failed = await fixture(t);
+  failed.deployment.pruneBackups = async () => assert.fail('must not prune a failed update');
+  failed.faults.health = true;
+  await failed.updater.perform({ action: 'update' });
+  assert.equal(failed.deployment.current.version, '1.0.0');
+});
 test('unhealthy update restores the previous image combination without restoring old DB contents', async (t) => {
   const f = await fixture(t);
   f.faults.health = true;

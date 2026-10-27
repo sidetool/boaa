@@ -8,6 +8,7 @@ import path from 'node:path';
 import { atomicJson, readJson } from './files.mjs';
 import { releaseVersion } from './feed.mjs';
 import { TTS_ENDPOINT, TTS_MODEL_ID, TTS_MODEL_REVISION } from './tts-component.mjs';
+import { pruneBackups } from './backup-retention.mjs';
 
 const execute = promisify(execFile);
 export const CORE = ['api', 'worker', 'web'];
@@ -467,6 +468,9 @@ export class DockerDeployment {
     await atomicJson(path.join(this.directory, 'current.json'), state);
     this.current = state;
     this.config = await readJson(state.config);
+  }
+  async pruneBackups(protect = []) {
+    return pruneBackups(this.directory, protect);
   }
 }
 

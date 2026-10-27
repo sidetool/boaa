@@ -333,6 +333,17 @@ export class ServerUpdater {
   async journal(transaction, phase) {
     transaction.phase = phase;
     await atomicJson(path.join(this.root, 'journal.json'), transaction);
+    if (phase === 'complete' && this.deployment.pruneBackups) {
+      try {
+        await this.deployment.pruneBackups([transaction.operation?.id]);
+      } catch {
+        // Cleanup failure must never roll back an already verified deployment or delete recovery data.
+        await atomicJson(path.join(this.root, 'backup-retention-last.json'), {
+          at: new Date().toISOString(),
+          error: 'backup_retention_failed',
+        }).catch(() => {});
+      }
+    }
   }
   async rollback(transaction) {
     await this.startLease();

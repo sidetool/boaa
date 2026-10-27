@@ -270,6 +270,17 @@ Do not put a Windows host path in that variable.
 
 ## Backup and restore
 
+Managed updater recovery snapshots in `/state/backups` are trimmed only after a successfully verified deployment.
+The default policy keeps the newest three within an 8 GiB budget. `/state/backup-retention.json` can set
+`keep`, `maxBytes` and a `pins` array of snapshot directory IDs. The newest complete recovery point, pinned IDs
+and the current operation's snapshot are never deleted to meet the budget; `backup-retention-last.json` reports
+an over-budget condition when those alone exceed it. Unknown/incomplete directories, symlinks and special files
+are skipped. Failed or unfinished recovery transactions do not trigger pruning. This retention applies only to
+managed DB/server-data snapshots, not media volumes, user exports, external migration backups or Docker images.
+Before retiring historical snapshots, preserve the migration boundary required by the installation's recovery
+procedure. Historical operation notes may refer to retired snapshots; the retention policy/result is authoritative
+for availability. Cleanup errors retain backups and cannot roll back a successful deployment.
+
 The application backup archive preserves reader/library content but intentionally excludes provider secrets/settings
 and hosted TTS audio cache. A recoverable server backup therefore needs a tested combination of:
 
@@ -357,7 +368,6 @@ The storage settings card separates current BOAA file usage from the total/avail
 `STORAGE_MIN_FREE_BYTES` defaults to 256 MiB. Raw assets, imported/restored files, TTS audio and object copies check the available space before writing when the actual storage filesystem is configured. A failed configured probe stops the write rather than assuming sufficient space. The existing temporary-upload space check remains separate. This is an advisory check, not an atomic reservation: other services and simultaneous writers can consume capacity after the check. It does not enforce a BOAA quota or replace the filesystem's own limits.
 
 The usage breakdown deduplicates object keys and groups current files into documents (TXT/EPUB/PDF), images (including comic archives, pages and covers), audio and other files. Classification follows stored file types rather than the content genre; embedded EPUB content is not separately estimated. Retained TTS files with known sizes are included; missing legacy audio size records are reported as unmeasured. Browser catalog-cache payload size is shown separately from server disk usage, and excludes browser HTTP cache overhead and in-memory covers. Byte displays use IEC units (MiB/GiB).
-
 
 ### Building a hosted web hotfix outside Docker
 
