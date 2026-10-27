@@ -15,6 +15,8 @@ export interface SpeakerEngineInput {
   maxOutputTokens: number;
   tokenLimitParameter?: 'max_tokens' | 'max_completion_tokens';
   reasoning?: 'low' | 'medium' | 'high';
+  /** Opt-in native-text PDF input for Gemini/Vertex; omitted keeps the existing text path. */
+  inputFormat?: 'pdf';
   paid: boolean;
   enabled: boolean;
 }

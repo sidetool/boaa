@@ -88,6 +88,44 @@ const chooseJson = (text: string) =>
       .props.onChange({ currentTarget: { files: [{ size: text.length, text: async () => text }], value: 'selected' } }),
   );
 
+describe('PDF input option', () => {
+  it.each(['gemini', 'vertex'] as const)(
+    'preserves %s PDF selection across save/reopen and omits it for OpenAI',
+    async (protocol) => {
+      const engine = {
+        ...saved,
+        protocol,
+        inputFormat: 'pdf' as const,
+        projectId: 'fixture-project',
+        location: 'global',
+        hasServiceAccount: true,
+      };
+      const { p } = await setup([engine]);
+      act(() => button('집 PC 모델 수정').props.onClick());
+      expect(text()).toContain('PDF로 압축해서 보내기');
+      expect(readDraft(draftFrom(engine), engine).input.inputFormat).toBe('pdf');
+      await submit();
+      expect(p.save.mock.calls[0]![0].inputFormat).toBe('pdf');
+      act(() => button('집 PC 모델 수정').props.onClick());
+      check('PDF로 압축해서 보내기', false);
+      await submit();
+      expect(p.save.mock.calls[1]![0]).not.toHaveProperty('inputFormat');
+      act(() => button('집 PC 모델 수정').props.onClick());
+      check('PDF로 압축해서 보내기', true);
+      act(() => button('OpenAI 호환').props.onClick());
+      expect(text()).not.toContain('PDF로 압축해서 보내기');
+      expect(readDraft({ ...draftFrom(engine), protocol: 'openai' }, engine).input).not.toHaveProperty('inputFormat');
+    },
+  );
+  it('leaves existing text-mode connections unchanged by default', () => {
+    for (const protocol of ['gemini', 'vertex', 'openai'] as const) {
+      const engine = { ...saved, protocol };
+      expect(draftFrom(engine).pdfInput).toBe(false);
+      expect(readDraft(draftFrom(engine), engine).input).not.toHaveProperty('inputFormat');
+    }
+  });
+});
+
 describe('Vertex connection editor', () => {
   it('uploads JSON, fills project, sends selected purpose/model/reasoning and keeps keys out of the rendered page', async () => {
     const { p } = await setup();

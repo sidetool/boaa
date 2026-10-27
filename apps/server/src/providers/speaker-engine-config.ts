@@ -31,6 +31,8 @@ export function normalizeSpeakerEngine(input: unknown, probe = false): SpeakerEn
   const v = input as SpeakerEngineInput;
   if (v.purpose !== undefined && !['analysis', 'casting'].includes(v.purpose))
     throw connectionError('모델 용도를 확인해 주세요.');
+  if (v.inputFormat !== undefined && (v.inputFormat !== 'pdf' || !['gemini', 'vertex'].includes(v.protocol)))
+    throw connectionError('PDF 입력은 Gemini 또는 Vertex AI 연결에서만 사용할 수 있어요.');
   if (v.tokenLimitParameter !== undefined && !['max_tokens', 'max_completion_tokens'].includes(v.tokenLimitParameter))
     throw connectionError('출력 한도 방식을 확인해 주세요.');
   if (
@@ -67,6 +69,7 @@ export function normalizeSpeakerEngine(input: unknown, probe = false): SpeakerEn
     name: text(v.name, 80) || u.hostname,
     engineUrl: speakerUrl(v.engineUrl),
     protocol: v.protocol,
+    ...(v.inputFormat ? { inputFormat: v.inputFormat } : {}),
     ...vertex,
     url,
     modelId: text(v.modelId, 200, !probe),

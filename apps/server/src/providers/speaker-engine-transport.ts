@@ -8,6 +8,7 @@ import { requestLocalEndpoint, type LocalEndpointEgressOptions } from './local-e
 import { ttsHttpError } from './tts-http-error.js';
 import { connectionError } from './tts-connection-config.js';
 import { vertexBaseUrl } from '../../../../src/providers/vertex-connection';
+import { speakerInputPdf } from './speaker-input-pdf.js';
 import { SpeakerVertexAuth } from './speaker-vertex-auth.js';
 
 const object = (v: unknown): Record<string, unknown> =>
@@ -202,7 +203,24 @@ export class SpeakerEngineTransport {
     signal: AbortSignal,
     instructionText: string,
   ): Promise<string> {
+    signal.throwIfAborted();
     const gemini = v.protocol !== 'openai';
+    if (v.inputFormat && (!gemini || v.inputFormat !== 'pdf'))
+      throw connectionError('PDF 입력은 Gemini 또는 Vertex AI 연결에서만 사용할 수 있어요.');
+    const inputParts =
+      v.inputFormat === 'pdf'
+        ? [
+            {
+              inlineData: {
+                mimeType: 'application/pdf',
+                data: (await speakerInputPdf(request.prompt, signal)).toString('base64'),
+              },
+            },
+            {
+              text: 'Use the native text of the attached PDF as the complete user request. PDF layout line wrapping is not a change to the source. Preserve every supplied ID, quote and source position. Follow the system instruction and return the requested JSON.',
+            },
+          ]
+        : [{ text: request.prompt }];
     const instruction = instructionText + ' Return only JSON matching this schema: ' + JSON.stringify(request.schema);
     const base = v.protocol === 'vertex' ? vertexBaseUrl(v.projectId ?? '', v.location ?? 'global') : v.url;
     const url = gemini
@@ -211,7 +229,7 @@ export class SpeakerEngineTransport {
     const body = gemini
       ? {
           systemInstruction: { parts: [{ text: instruction }] },
-          contents: [{ role: 'user', parts: [{ text: request.prompt }] }],
+          contents: [{ role: 'user', parts: inputParts }],
           generationConfig: {
             responseMimeType: 'application/json',
             maxOutputTokens: v.maxOutputTokens,

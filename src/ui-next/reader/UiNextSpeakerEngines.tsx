@@ -147,6 +147,7 @@ function Engines({ port, onChanged }: UiNextSpeakerEnginesProps) {
         | 'serviceAccountJson'
         | 'projectId'
         | 'location'
+        | 'pdfInput'
       >
     >,
   ) => {
@@ -356,7 +357,7 @@ function Engines({ port, onChanged }: UiNextSpeakerEnginesProps) {
             onChange={(protocol) => {
               setFileReading(false);
               setFound(undefined);
-              patchTarget({ protocol, serviceAccountJson: '' });
+              patchTarget({ protocol, serviceAccountJson: '', ...(protocol === 'openai' ? { pdfInput: false } : {}) });
             }}
           />
           <p className="un-filter-help">{hint.note}</p>
@@ -442,6 +443,19 @@ function Engines({ port, onChanged }: UiNextSpeakerEnginesProps) {
             <p className="un-filter-help is-error" role="note">
               주소가 바뀌어 저장된 API 키는 새 주소로 보내지 않아요. 새 키를 넣거나 저장된 키 지우기를 고르세요.
             </p>
+          )}
+
+          {draft.protocol !== 'openai' && (
+            <label className="un-filter-check">
+              <input type="checkbox" checked={draft.pdfInput} onChange={(e) => patch({ pdfInput: e.target.checked })} />
+              <span>
+                PDF로 압축해서 보내기
+                <small className="un-filter-help">
+                  입력 내용을 요약 없이 텍스트 PDF로 보내요. 입력 토큰 비용을 줄일 수 있지만 모델마다 절감 폭과 판정
+                  품질이 달라요. PDF를 지원하는 모델에서 사용하세요.
+                </small>
+              </span>
+            </label>
           )}
 
           <div className="un-tts-conn-probe">

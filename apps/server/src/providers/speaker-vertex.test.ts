@@ -118,6 +118,20 @@ describe('Vertex speaker connections', () => {
     await t.capabilities(config, signal());
     expect(fetchImpl).toHaveBeenCalledTimes(3);
   });
+  it('sends PDF input through Vertex with OAuth and without a duplicate source-text part', async () => {
+    const { t, fetchImpl } = network((url, init) => {
+      if (url.includes('oauth2.')) return Response.json({ access_token: 'pdf-token', expires_in: 3600 });
+      expect(url).toContain('/projects/fixture-project/locations/global/publishers/google/models/');
+      expect(new Headers(init.headers).get('Authorization')).toBe('Bearer pdf-token');
+      const parts = JSON.parse(String(init.body)).contents[0].parts;
+      expect(parts[0].inlineData.mimeType).toBe('application/pdf');
+      expect(Buffer.from(parts[0].inlineData.data, 'base64').subarray(0, 8).toString()).toBe('%PDF-1.7');
+      expect(JSON.stringify(parts)).not.toContain('Neutral text');
+      return output();
+    });
+    expect(await generate(t, { ...config, purpose: 'casting', inputFormat: 'pdf' })).toBe('{"ok":true}');
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
   it('reads bounded official model pages and retains direct model IDs without a hardcoded list', async () => {
     let pages = 0;
     const { t } = network((url, init) => {

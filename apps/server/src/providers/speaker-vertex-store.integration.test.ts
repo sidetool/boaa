@@ -39,6 +39,7 @@ it.skipIf(!harness)(
       });
       const saved = await store.save({
         protocol: 'vertex',
+        inputFormat: 'pdf',
         name: 'Private',
         purpose: 'casting',
         engineUrl: 'http://speaker-engine:8095',
@@ -54,6 +55,11 @@ it.skipIf(!harness)(
       expect(JSON.stringify(await store.list())).not.toContain('private_key');
       const edited = await store.save({ ...saved, name: 'Renamed' }, saved.id);
       expect(edited.revision).toBe(saved.revision);
+      expect((await make('owner').loadCasting(saved.id)).inputFormat).toBe('pdf');
+      const text = await store.save({ ...edited, inputFormat: undefined }, saved.id);
+      expect(text.revision).toBe(saved.revision);
+      expect((await make('owner').loadCasting(saved.id)).inputFormat).toBeUndefined();
+      await store.save(edited, saved.id);
       expect(JSON.parse((await make('owner').loadCasting(saved.id)).serviceAccountJson!).private_key).toBe(key);
       await store.save({ ...edited, enabled: false }, saved.id);
       await store.save({ ...edited, enabled: true }, saved.id);
@@ -61,7 +67,7 @@ it.skipIf(!harness)(
       await expect(make('other').load(saved.id)).rejects.toMatchObject({ statusCode: 404 });
       expect(await make('other').list()).toEqual([]);
       await store.save(
-        { ...edited, protocol: 'openai', url: 'https://custom.invalid/v1', apiKey: 'new-key' },
+        { ...edited, inputFormat: undefined, protocol: 'openai', url: 'https://custom.invalid/v1', apiKey: 'new-key' },
         saved.id,
       );
       expect(await store.load(saved.id)).not.toHaveProperty('serviceAccountJson');

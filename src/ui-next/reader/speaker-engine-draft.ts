@@ -59,6 +59,7 @@ export interface Draft {
   clearToken: boolean;
   maxOutputTokens: string;
   reasoning: Reasoning | '';
+  pdfInput: boolean;
   /** OpenAI-compatible only: which request field carries the output limit. */
   tokenLimitParameter: TokenLimitParameter;
   paid: boolean;
@@ -81,6 +82,7 @@ export const emptyDraft = (): Draft => ({
   clearToken: false,
   maxOutputTokens: String(SPEAKER_ENGINE_OUTPUT.default),
   reasoning: '',
+  pdfInput: false,
   tokenLimitParameter: 'max_tokens',
   // A local model is free, but assuming a charge keeps the consent step until the person says otherwise.
   paid: true,
@@ -103,6 +105,7 @@ export const draftFrom = (engine: SpeakerEngine): Draft => ({
   clearToken: false,
   maxOutputTokens: String(engine.maxOutputTokens),
   reasoning: engine.reasoning ?? '',
+  pdfInput: engine.inputFormat === 'pdf',
   tokenLimitParameter: engine.tokenLimitParameter ?? 'max_tokens',
   paid: engine.paid,
   enabled: engine.enabled,
@@ -196,6 +199,7 @@ export function readDraft(draft: Draft, current?: SpeakerEngine) {
         ? { apiKey }
         : {}),
     modelId: draft.modelId.trim(),
+    ...(draft.protocol !== 'openai' && draft.pdfInput ? { inputFormat: 'pdf' as const } : {}),
     maxOutputTokens: maxOutputTokens ?? SPEAKER_ENGINE_OUTPUT.default,
     ...(draft.reasoning ? { reasoning: draft.reasoning } : {}),
     // The compatible default is left implicit, so opening and saving an older model changes nothing.
