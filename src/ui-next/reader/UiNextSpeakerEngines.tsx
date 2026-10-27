@@ -2,6 +2,7 @@ import { Pencil, Plus, RefreshCw, Search, Trash2 } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import type { SpeakerEngine, SpeakerEngineDiscovery, SpeakerEnginesPort } from '../../providers/speaker-engine';
 import { cx, Segmented, Switch } from '../components/primitives';
+import SpeakerVertexFields from './SpeakerVertexFields';
 import {
   DEFAULT_SPEAKER_ENGINE_URL,
   draftFrom,
@@ -32,7 +33,7 @@ const message = (error: unknown, fallback: string) =>
 const aborted = (error: unknown) => error instanceof DOMException && error.name === 'AbortError';
 const abortError = () => new DOMException('Aborted', 'AbortError');
 
-const PROTOCOL_LABEL: Record<Protocol, string> = { openai: 'OpenAI 호환', gemini: 'Gemini' };
+const PROTOCOL_LABEL: Record<Protocol, string> = { openai: 'OpenAI 호환', gemini: 'Gemini', vertex: 'Vertex AI' };
 const TOKEN_LIMIT_LABEL: Record<TokenLimitParameter, string> = {
   max_tokens: 'max_tokens · 호환형',
   max_completion_tokens: 'max_completion_tokens · 최신 OpenAI',
@@ -69,6 +70,7 @@ function Engines({ port, onChanged }: UiNextSpeakerEnginesProps) {
   const [probeState, setProbeState] = useState<{ busy?: boolean; error?: string; done?: string }>({});
   const [saveError, setSaveError] = useState<string>();
   const [busy, setBusy] = useState(false);
+  const [fileReading, setFileReading] = useState(false);
   const [confirmRemove, setConfirmRemove] = useState(false);
   const [togglingId, setTogglingId] = useState<string>();
   const controllers = useRef(new Set<AbortController>());
@@ -133,7 +135,18 @@ function Engines({ port, onChanged }: UiNextSpeakerEnginesProps) {
     next: Partial<
       Pick<
         Draft,
-        'purpose' | 'protocol' | 'url' | 'apiKey' | 'clearKey' | 'engineUrl' | 'engineToken' | 'clearToken' | 'modelId'
+        | 'purpose'
+        | 'protocol'
+        | 'url'
+        | 'apiKey'
+        | 'clearKey'
+        | 'engineUrl'
+        | 'engineToken'
+        | 'clearToken'
+        | 'modelId'
+        | 'serviceAccountJson'
+        | 'projectId'
+        | 'location'
       >
     >,
   ) => {
@@ -152,11 +165,13 @@ function Engines({ port, onChanged }: UiNextSpeakerEnginesProps) {
     setProbeState({});
     setSaveError(undefined);
     setConfirmRemove(false);
+    setFileReading(false);
   };
   const open = (engine?: SpeakerEngine) => reset(engine?.id ?? '', engine ? draftFrom(engine) : emptyDraft());
   const close = () => reset(undefined, emptyDraft());
 
   const probe = async () => {
+    if (fileReading) return;
     if (probeProblem) return setProbeState({ error: probeProblem });
     stopProbe();
     const controller = new AbortController();
@@ -182,7 +197,7 @@ function Engines({ port, onChanged }: UiNextSpeakerEnginesProps) {
   };
 
   const save = async () => {
-    if (busy) return;
+    if (busy || fileReading) return;
     if (saveProblem) return setSaveError(saveProblem);
     stopProbe();
     setProbeState({});
@@ -232,7 +247,14 @@ function Engines({ port, onChanged }: UiNextSpeakerEnginesProps) {
     let saved: SpeakerEngine;
     try {
       // No apiKey or engineToken: the stored secrets stay as they are.
-      const { id, hasApiKey: _key, hasEngineToken: _token, revision: _revision, ...rest } = engine;
+      const {
+        id,
+        hasApiKey: _key,
+        hasEngineToken: _token,
+        hasServiceAccount: _json,
+        revision: _revision,
+        ...rest
+      } = engine;
       saved = await run((signal) => port.save({ ...rest, enabled }, signal, id));
     } catch (error) {
       if (aborted(error)) return;
@@ -329,8 +351,13 @@ function Engines({ port, onChanged }: UiNextSpeakerEnginesProps) {
             options={[
               { value: 'openai', label: PROTOCOL_LABEL.openai },
               { value: 'gemini', label: PROTOCOL_LABEL.gemini },
+              { value: 'vertex', label: PROTOCOL_LABEL.vertex },
             ]}
-            onChange={(protocol) => patchTarget({ protocol })}
+            onChange={(protocol) => {
+              setFileReading(false);
+              setFound(undefined);
+              patchTarget({ protocol, serviceAccountJson: '' });
+            }}
           />
           <p className="un-filter-help">{hint.note}</p>
 
@@ -354,34 +381,54 @@ function Engines({ port, onChanged }: UiNextSpeakerEnginesProps) {
                 onChange={(event) => patch({ name: event.target.value })}
               />
             </label>
-            <label className="is-wide">
-              <span>모델 API 주소</span>
-              <input
-                value={draft.url}
-                inputMode="url"
-                autoCapitalize="off"
-                autoCorrect="off"
-                spellCheck={false}
-                placeholder={hint.url}
-                maxLength={SPEAKER_ENGINE_FIELD_MAX.url}
-                onChange={(event) => patchTarget({ url: event.target.value })}
+            {draft.protocol === 'vertex' ? (
+              <SpeakerVertexFields
+                key={editing}
+                draft={draft}
+                stored={!!current?.hasServiceAccount}
+                patch={patchTarget}
+                onReading={(value) => {
+                  setFileReading(value);
+                  if (value) {
+                    stopProbe();
+                    setProbeState({});
+                  }
+                }}
               />
-            </label>
-            <label className="is-wide">
-              <span>API 키 (선택)</span>
-              <input
-                type="password"
-                value={draft.apiKey}
-                autoComplete="new-password"
-                placeholder={
-                  current?.hasApiKey && !draft.clearKey && !decisions.apiKey ? '저장된 키 유지 · 바꿀 때만 입력' : ''
-                }
-                maxLength={SPEAKER_ENGINE_FIELD_MAX.apiKey}
-                onChange={(event) => patchTarget({ apiKey: event.target.value, clearKey: false })}
-              />
-            </label>
+            ) : (
+              <>
+                <label className="is-wide">
+                  <span>모델 API 주소</span>
+                  <input
+                    value={draft.url}
+                    inputMode="url"
+                    autoCapitalize="off"
+                    autoCorrect="off"
+                    spellCheck={false}
+                    placeholder={hint.url}
+                    maxLength={SPEAKER_ENGINE_FIELD_MAX.url}
+                    onChange={(event) => patchTarget({ url: event.target.value })}
+                  />
+                </label>
+                <label className="is-wide">
+                  <span>API 키 (선택)</span>
+                  <input
+                    type="password"
+                    value={draft.apiKey}
+                    autoComplete="new-password"
+                    placeholder={
+                      current?.hasApiKey && !draft.clearKey && !decisions.apiKey
+                        ? '저장된 키 유지 · 바꿀 때만 입력'
+                        : ''
+                    }
+                    maxLength={SPEAKER_ENGINE_FIELD_MAX.apiKey}
+                    onChange={(event) => patchTarget({ apiKey: event.target.value, clearKey: false })}
+                  />
+                </label>
+              </>
+            )}
           </div>
-          {current?.hasApiKey && (
+          {draft.protocol !== 'vertex' && current?.hasApiKey && (
             <label className="un-filter-check">
               <input
                 type="checkbox"
@@ -401,7 +448,9 @@ function Engines({ port, onChanged }: UiNextSpeakerEnginesProps) {
             <button
               type="button"
               className="un-btn is-ghost is-sm"
-              disabled={!hostName(draft.url) || probeState.busy}
+              disabled={
+                (draft.protocol === 'vertex' ? !!probeProblem : !hostName(draft.url)) || probeState.busy || fileReading
+              }
               aria-busy={probeState.busy || undefined}
               onClick={() => void probe()}
             >
@@ -606,7 +655,12 @@ function Engines({ port, onChanged }: UiNextSpeakerEnginesProps) {
               <button type="button" className="un-btn is-ghost is-sm" disabled={busy} onClick={close}>
                 취소
               </button>
-              <button type="submit" className="un-btn is-primary is-sm" disabled={busy} aria-busy={busy || undefined}>
+              <button
+                type="submit"
+                className="un-btn is-primary is-sm"
+                disabled={busy || fileReading}
+                aria-busy={busy || fileReading || undefined}
+              >
                 {busy ? '저장 중' : '저장'}
               </button>
             </span>

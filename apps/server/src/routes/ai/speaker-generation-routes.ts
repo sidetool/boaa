@@ -37,7 +37,7 @@ export async function registerSpeakerGenerationRoutes(
           '/api/tts/speaker-engines' +
           (['update', 'delete', 'probeSaved'].includes(op) ? '/:id' : '') +
           (op.startsWith('probe') ? '/probe' : ''),
-        bodyLimit: 32768,
+        bodyLimit: 160 * 1024,
         handler: async (req, reply) => {
           if (op === 'list') return { engines: await service.engines.list() };
           if (op === 'delete') {

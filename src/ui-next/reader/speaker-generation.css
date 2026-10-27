@@ -141,3 +141,15 @@
 .un-speaker-engine-form select:disabled {
   opacity: 0.5;
 }
+
+.un-speaker-json {
+  display: grid;
+  min-width: 0;
+  gap: 6px;
+}
+
+.un-speaker-json > span {
+  color: var(--un-text-2);
+  font-size: 12px;
+  font-weight: 600;
+}

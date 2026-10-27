@@ -4,9 +4,13 @@ export interface SpeakerEngineInput {
   name: string;
   engineUrl: string;
   engineToken?: string;
-  protocol: 'openai' | 'gemini';
+  protocol: 'openai' | 'gemini' | 'vertex';
   url: string;
   apiKey?: string;
+  /** Vertex credentials are write-only, encrypted with the connection. Omitted keeps the saved key. */
+  serviceAccountJson?: string;
+  projectId?: string;
+  location?: string;
   modelId: string;
   maxOutputTokens: number;
   tokenLimitParameter?: 'max_tokens' | 'max_completion_tokens';
@@ -14,10 +18,11 @@ export interface SpeakerEngineInput {
   paid: boolean;
   enabled: boolean;
 }
-export interface SpeakerEngine extends Omit<SpeakerEngineInput, 'apiKey' | 'engineToken'> {
+export interface SpeakerEngine extends Omit<SpeakerEngineInput, 'apiKey' | 'engineToken' | 'serviceAccountJson'> {
   id: string;
   hasApiKey: boolean;
   hasEngineToken: boolean;
+  hasServiceAccount?: boolean;
   revision: string;
 }
 export interface SpeakerEngineDiscovery {

@@ -31,8 +31,15 @@ export class SpeakerEngineStore {
     );
   }
   private view(row: Row): SpeakerEngine {
-    const { apiKey, engineToken, ...v } = this.decode(row);
-    return { ...v, id: row.id, hasApiKey: !!apiKey, hasEngineToken: !!engineToken, revision: speakerRevision(v) };
+    const { apiKey, engineToken, serviceAccountJson, ...v } = this.decode(row);
+    return {
+      ...v,
+      id: row.id,
+      hasApiKey: !!apiKey,
+      hasEngineToken: !!engineToken,
+      ...(v.protocol === 'vertex' ? { hasServiceAccount: !!serviceAccountJson } : {}),
+      revision: speakerRevision(v),
+    };
   }
   private async row(id: string, db: Pick<pg.Pool, 'query'> = this.pool): Promise<Row> {
     if (!/^[a-f0-9-]{36}$/i.test(id)) throw connectionError('분석 연결을 찾을 수 없어요.', 404);
@@ -68,11 +75,13 @@ export class SpeakerEngineStore {
     return v;
   }
   private merge(v: SpeakerEngineInput, old: SpeakerEngineInput) {
+    if (v.protocol === 'vertex' && old.protocol === 'vertex' && v.serviceAccountJson === undefined)
+      v = { ...v, serviceAccountJson: old.serviceAccountJson };
     for (const [key, address] of [
       ['apiKey', 'url'],
       ['engineToken', 'engineUrl'],
     ] as const) {
-      if (v[key] === undefined && old[key]) {
+      if ((key !== 'apiKey' || v.protocol !== 'vertex') && v[key] === undefined && old[key]) {
         if (new URL(v[address]).origin !== new URL(old[address]).origin)
           throw connectionError('서버 주소가 바뀌었어요. 해당 키를 다시 입력하거나 지워 주세요.');
         v = { ...v, [key]: old[key] };

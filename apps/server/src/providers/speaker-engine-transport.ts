@@ -7,12 +7,15 @@ import {
 import { requestLocalEndpoint, type LocalEndpointEgressOptions } from './local-endpoint-egress-policy.js';
 import { ttsHttpError } from './tts-http-error.js';
 import { connectionError } from './tts-connection-config.js';
+import { vertexBaseUrl } from '../../../../src/providers/vertex-connection';
+import { SpeakerVertexAuth } from './speaker-vertex-auth.js';
 
 const object = (v: unknown): Record<string, unknown> =>
   v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : {};
 
 /** Both destinations are explicitly administrator-approved; each request is pinned and cannot redirect. */
 export class SpeakerEngineTransport {
+  private vertex = new SpeakerVertexAuth();
   constructor(
     private network: LocalEndpointEgressOptions = {},
     private managedEngineToken = '',
@@ -32,8 +35,18 @@ export class SpeakerEngineTransport {
         {
           method: body === undefined ? 'GET' : 'POST',
           signal,
-          headers: { ...headers, ...(body === undefined ? {} : { 'Content-Type': 'application/json' }) },
-          ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+          headers: {
+            ...headers,
+            ...(body === undefined
+              ? {}
+              : {
+                  'Content-Type':
+                    body instanceof URLSearchParams ? 'application/x-www-form-urlencoded' : 'application/json',
+                }),
+          },
+          ...(body === undefined
+            ? {}
+            : { body: body instanceof URLSearchParams ? body.toString() : JSON.stringify(body) }),
         },
         { ...this.network, allowedHosts: [new URL(url).hostname], maxResponseBytes: max },
       );
@@ -75,7 +88,11 @@ export class SpeakerEngineTransport {
     const token = v.engineToken || (v.engineUrl === 'http://speaker-engine:8095' ? this.managedEngineToken : '');
     return token ? { Authorization: `Bearer ${token}` } : {};
   }
-  private modelHeaders(v: SpeakerEngineInput): Record<string, string> {
+  private async modelHeaders(v: SpeakerEngineInput, signal: AbortSignal): Promise<Record<string, string>> {
+    if (v.protocol === 'vertex')
+      return this.vertex.headers(v, signal, (body) =>
+        this.json('https://oauth2.googleapis.com/token', signal, {}, body, false, 16384),
+      );
     return v.apiKey
       ? v.protocol === 'gemini'
         ? { 'x-goog-api-key': v.apiKey }
@@ -94,7 +111,41 @@ export class SpeakerEngineTransport {
     return { engineVersion: r.engineVersion as string };
   }
   async models(v: SpeakerEngineInput, signal: AbortSignal): Promise<string[]> {
-    const r = await this.json(v.url + '/models', signal, this.modelHeaders(v), undefined, true, 256 * 1024);
+    const headers = await this.modelHeaders(v, signal);
+    if (v.protocol === 'vertex') {
+      const models = new Set<string>();
+      let page = '';
+      for (let i = 0; i < 3; i++) {
+        const query = new URLSearchParams({
+          pageSize: '100',
+          fields: 'publisherModels(name),nextPageToken',
+          ...(page ? { pageToken: page } : {}),
+        });
+        const r = await this.json(
+          'https://aiplatform.googleapis.com/v1beta1/publishers/google/models?' + query,
+          signal,
+          headers,
+          undefined,
+          true,
+          256 * 1024,
+        );
+        for (const row of Array.isArray(r.publisherModels) ? r.publisherModels : []) {
+          const name = object(row).name;
+          if (typeof name === 'string' && /^publishers\/google\/models\/[A-Za-z0-9._-]{1,200}$/.test(name))
+            models.add(name.split('/').at(-1)!);
+        }
+        if (
+          typeof r.nextPageToken !== 'string' ||
+          !r.nextPageToken ||
+          r.nextPageToken.length > 2048 ||
+          models.size >= 256
+        )
+          break;
+        page = r.nextPageToken;
+      }
+      return [...models].slice(0, 256);
+    }
+    const r = await this.json(v.url + '/models', signal, headers, undefined, true, 256 * 1024);
     const items = v.protocol === 'gemini' ? r.models : r.data;
     return Array.isArray(items)
       ? ([
@@ -151,10 +202,11 @@ export class SpeakerEngineTransport {
     signal: AbortSignal,
     instructionText: string,
   ): Promise<string> {
-    const gemini = v.protocol === 'gemini';
+    const gemini = v.protocol !== 'openai';
     const instruction = instructionText + ' Return only JSON matching this schema: ' + JSON.stringify(request.schema);
+    const base = v.protocol === 'vertex' ? vertexBaseUrl(v.projectId ?? '', v.location ?? 'global') : v.url;
     const url = gemini
-      ? `${v.url}/models/${encodeURIComponent(v.modelId.replace(/^models\//, ''))}:generateContent`
+      ? `${base}/models/${encodeURIComponent(v.modelId.replace(/^models\//, ''))}:generateContent`
       : v.url + '/chat/completions';
     const body = gemini
       ? {
@@ -176,7 +228,7 @@ export class SpeakerEngineTransport {
           stream: false,
           ...(v.reasoning ? { reasoning_effort: v.reasoning } : {}),
         };
-    const r = await this.json(url, signal, this.modelHeaders(v), body);
+    const r = await this.json(url, signal, await this.modelHeaders(v, signal), body);
     const candidates = gemini ? r.candidates : r.choices;
     const candidate = object(Array.isArray(candidates) ? candidates[0] : undefined);
     const finish = gemini ? candidate.finishReason : candidate.finish_reason;

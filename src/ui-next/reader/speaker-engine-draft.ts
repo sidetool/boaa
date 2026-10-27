@@ -1,4 +1,10 @@
 import type { SpeakerEngine, SpeakerEngineInput } from '../../providers/speaker-engine';
+import {
+  inspectVertexJson,
+  vertexBaseUrl,
+  vertexLocationValid,
+  vertexProjectValid,
+} from '../../providers/vertex-connection';
 
 export type Protocol = SpeakerEngineInput['protocol'];
 export type Reasoning = NonNullable<SpeakerEngineInput['reasoning']>;
@@ -29,6 +35,11 @@ export const PROTOCOL_HINT: Record<Protocol, { url: string; model: string; note:
     model: 'Gemini 모델 ID',
     note: 'Gemini API 주소와 API 키를 넣어요.',
   },
+  vertex: {
+    url: '',
+    model: 'Vertex AI 모델 ID',
+    note: 'Google Cloud 서비스 계정 JSON으로 연결해요. 프로젝트와 리전에 맞는 주소는 자동으로 사용해요.',
+  },
 };
 
 export interface Draft {
@@ -40,6 +51,9 @@ export interface Draft {
   /** Typed secrets live only in component state; never written to browser storage. */
   apiKey: string;
   clearKey: boolean;
+  serviceAccountJson: string;
+  projectId: string;
+  location: string;
   engineUrl: string;
   engineToken: string;
   clearToken: boolean;
@@ -59,6 +73,9 @@ export const emptyDraft = (): Draft => ({
   modelId: '',
   apiKey: '',
   clearKey: false,
+  serviceAccountJson: '',
+  projectId: '',
+  location: 'global',
   engineUrl: DEFAULT_SPEAKER_ENGINE_URL,
   engineToken: '',
   clearToken: false,
@@ -78,6 +95,9 @@ export const draftFrom = (engine: SpeakerEngine): Draft => ({
   modelId: engine.modelId,
   apiKey: '',
   clearKey: false,
+  serviceAccountJson: '',
+  projectId: engine.projectId ?? '',
+  location: engine.location ?? 'global',
   engineUrl: engine.engineUrl,
   engineToken: '',
   clearToken: false,
@@ -111,7 +131,11 @@ const movedOrigin = (next: string, saved: string) => {
 export function secretDecisions(draft: Draft, current?: SpeakerEngine) {
   return {
     apiKey: Boolean(
-      current?.hasApiKey && !draft.apiKey.trim() && !draft.clearKey && movedOrigin(draft.url, current.url),
+      draft.protocol !== 'vertex' &&
+      current?.hasApiKey &&
+      !draft.apiKey.trim() &&
+      !draft.clearKey &&
+      movedOrigin(draft.url, current.url),
     ),
     engineToken: Boolean(
       current?.hasEngineToken &&
@@ -134,6 +158,24 @@ const secret = (typed: string, clear: boolean) => (typed.trim() ? typed.trim() :
 
 /** What the draft would send, plus the first reason checking or saving cannot go ahead. */
 export function readDraft(draft: Draft, current?: SpeakerEngine) {
+  const vertex = draft.protocol === 'vertex';
+  let vertexProblem: string | undefined;
+  let vertexUrl = '';
+  if (vertex) {
+    const inspected = draft.serviceAccountJson ? inspectVertexJson(draft.serviceAccountJson) : undefined;
+    vertexProblem =
+      inspected && 'error' in inspected
+        ? inspected.error
+        : !draft.serviceAccountJson && !current?.hasServiceAccount
+          ? '서비스 계정 JSON 키 파일을 골라 주세요.'
+          : !vertexProjectValid(draft.projectId.trim())
+            ? '프로젝트 ID를 확인해 주세요.'
+            : !vertexLocationValid(draft.location.trim())
+              ? '리전을 확인해 주세요. 예: global, us-central1'
+              : undefined;
+    if (vertexProjectValid(draft.projectId.trim()) && vertexLocationValid(draft.location.trim()))
+      vertexUrl = vertexBaseUrl(draft.projectId.trim(), draft.location.trim());
+  }
   const apiKey = secret(draft.apiKey, draft.clearKey);
   const engineToken = secret(draft.engineToken, draft.clearToken);
   const maxOutputTokens = outputTokens(draft.maxOutputTokens);
@@ -143,8 +185,16 @@ export function readDraft(draft: Draft, current?: SpeakerEngine) {
     engineUrl: draft.engineUrl.trim(),
     ...(engineToken !== undefined ? { engineToken } : {}),
     protocol: draft.protocol,
-    url: draft.url.trim(),
-    ...(apiKey !== undefined ? { apiKey } : {}),
+    url: vertex ? vertexUrl : draft.url.trim(),
+    ...(vertex
+      ? {
+          projectId: draft.projectId.trim(),
+          location: draft.location.trim(),
+          ...(draft.serviceAccountJson ? { serviceAccountJson: draft.serviceAccountJson } : {}),
+        }
+      : apiKey !== undefined
+        ? { apiKey }
+        : {}),
     modelId: draft.modelId.trim(),
     maxOutputTokens: maxOutputTokens ?? SPEAKER_ENGINE_OUTPUT.default,
     ...(draft.reasoning ? { reasoning: draft.reasoning } : {}),
@@ -157,15 +207,17 @@ export function readDraft(draft: Draft, current?: SpeakerEngine) {
     enabled: draft.enabled,
   };
   const decisions = secretDecisions(draft, current);
-  const probeProblem = !parseUrl(draft.url)
-    ? '모델 API 주소는 http:// 또는 https://로 시작해야 해요.'
-    : !parseUrl(draft.engineUrl)
-      ? '분석 서비스 주소는 http:// 또는 https://로 시작해야 해요.'
-      : decisions.apiKey
-        ? '모델 API 주소가 바뀌어 저장된 API 키를 쓸 수 없어요. 새 키를 넣거나 저장된 키 지우기를 고르세요.'
-        : decisions.engineToken
-          ? '분석 서비스 주소가 바뀌어 저장된 토큰을 쓸 수 없어요. 새 토큰을 넣거나 저장된 토큰 지우기를 고르세요.'
-          : undefined;
+  const probeProblem =
+    vertexProblem ??
+    (!vertex && !parseUrl(draft.url)
+      ? '모델 API 주소는 http:// 또는 https://로 시작해야 해요.'
+      : !parseUrl(draft.engineUrl)
+        ? '분석 서비스 주소는 http:// 또는 https://로 시작해야 해요.'
+        : decisions.apiKey
+          ? '모델 API 주소가 바뀌어 저장된 API 키를 쓸 수 없어요. 새 키를 넣거나 저장된 키 지우기를 고르세요.'
+          : decisions.engineToken
+            ? '분석 서비스 주소가 바뀌어 저장된 토큰을 쓸 수 없어요. 새 토큰을 넣거나 저장된 토큰 지우기를 고르세요.'
+            : undefined);
   const saveProblem =
     probeProblem ??
     (!input.modelId

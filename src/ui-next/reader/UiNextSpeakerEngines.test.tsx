@@ -27,15 +27,19 @@ const saved: SpeakerEngine = {
 function port(list: SpeakerEngine[] = []) {
   return {
     list: vi.fn(async () => list),
-    probe: vi.fn(async () => ({ engineVersion: '1', models: ['model-a', 'model-b'] })),
+    probe: vi.fn<SpeakerEnginesPort['probe']>(async () => ({ engineVersion: '1', models: ['model-a', 'model-b'] })),
     save: vi.fn(async (input: Parameters<SpeakerEnginesPort['save']>[0], _signal?: AbortSignal, id?: string) => {
-      const { apiKey, engineToken, ...rest } = input;
+      const { apiKey, engineToken, serviceAccountJson, ...rest } = input;
       return {
         ...saved,
         ...rest,
         id: id ?? 'new',
         hasApiKey: apiKey === undefined ? saved.hasApiKey : Boolean(apiKey),
         hasEngineToken: engineToken === undefined ? saved.hasEngineToken : Boolean(engineToken),
+        hasServiceAccount:
+          serviceAccountJson === undefined
+            ? list.find((v) => v.id === id)?.hasServiceAccount
+            : Boolean(serviceAccountJson),
       };
     }),
     remove: vi.fn(async () => {}),
@@ -71,6 +75,104 @@ const check = (label: string, checked: boolean) =>
       .props.onChange({ target: { checked } }),
   );
 const submit = () => act(async () => root.root.findByType('form').props.onSubmit({ preventDefault() {} }));
+const accountJson = JSON.stringify({
+  type: 'service_account',
+  project_id: 'fixture-project',
+  client_email: 'fixture@fixture-project.iam.gserviceaccount.com',
+  private_key: 'test UI shape only',
+});
+const chooseJson = (text: string) =>
+  act(async () =>
+    root.root
+      .findByProps({ type: 'file' })
+      .props.onChange({ currentTarget: { files: [{ size: text.length, text: async () => text }], value: 'selected' } }),
+  );
+
+describe('Vertex connection editor', () => {
+  it('uploads JSON, fills project, sends selected purpose/model/reasoning and keeps keys out of the rendered page', async () => {
+    const { p } = await setup();
+    act(() => button('모델 추가').props.onClick());
+    act(() => button('Vertex AI').props.onClick());
+    await submit();
+    expect(p.save).not.toHaveBeenCalled();
+    await chooseJson(accountJson);
+    expect(field('프로젝트 ID').props.value).toBe('fixture-project');
+    expect(field('리전').props.value).toBe('global');
+    type('모델 용도', 'casting');
+    type('모델 ID', 'selected-vertex-model');
+    type('추론 강도', 'high');
+    type('리전', 'us-central1');
+    expect(text()).not.toContain('test UI shape only');
+    expect(root.root.findAllByType('label').some((label) => flat(label).startsWith('API 키 (선택)'))).toBe(false);
+    await act(async () => button('연결 확인').props.onClick());
+    expect(p.probe.mock.calls[0]![0]).toMatchObject({
+      protocol: 'vertex',
+      purpose: 'casting',
+      projectId: 'fixture-project',
+      location: 'us-central1',
+      serviceAccountJson: accountJson,
+    });
+    await submit();
+    expect(p.save.mock.calls[0]![0]).toMatchObject({
+      protocol: 'vertex',
+      reasoning: 'high',
+      modelId: 'selected-vertex-model',
+    });
+    expect(p.save.mock.calls[0]![0]).not.toHaveProperty('apiKey');
+  });
+  it('reopens and toggles saved Vertex credentials without requesting or resending JSON', async () => {
+    const vertex: SpeakerEngine = {
+      ...saved,
+      protocol: 'vertex',
+      projectId: 'fixture-project',
+      location: 'global',
+      hasApiKey: false,
+      hasEngineToken: false,
+      hasServiceAccount: true,
+    };
+    const { p } = await setup([vertex]);
+    await act(async () => button('집 PC 모델 사용').props.onClick());
+    expect(p.save.mock.calls[0]![0]).not.toHaveProperty('serviceAccountJson');
+    act(() => button('집 PC 모델 수정').props.onClick());
+    expect(text()).toContain('저장된 JSON을 사용해요');
+    type('이름', '별칭만 변경');
+    await submit();
+    expect(p.save.mock.calls[1]![0]).not.toHaveProperty('serviceAccountJson');
+    expect(p.save.mock.calls[1]![0].modelId).toBe(vertex.modelId);
+  });
+  it('rejects invalid JSON and discards a late file read after switching protocol', async () => {
+    const { p } = await setup();
+    act(() => button('모델 추가').props.onClick());
+    act(() => button('Vertex AI').props.onClick());
+    await chooseJson('{bad');
+    expect(text()).toContain('JSON 형식');
+    let resolve!: (v: string) => void;
+    act(() =>
+      root.root.findByProps({ type: 'file' }).props.onChange({
+        currentTarget: {
+          files: [
+            {
+              size: 100,
+              text: () =>
+                new Promise<string>((r) => {
+                  resolve = r;
+                }),
+            },
+          ],
+          value: 'selected',
+        },
+      }),
+    );
+    await submit();
+    expect(p.save).not.toHaveBeenCalled();
+    act(() => button('Gemini').props.onClick());
+    await act(async () => resolve(accountJson));
+    type('모델 API 주소', 'https://generativelanguage.googleapis.com');
+    type('모델 ID', 'selected-model');
+    await submit();
+    expect(p.save.mock.calls[0]![0]).not.toHaveProperty('serviceAccountJson');
+  });
+});
 
 describe('speaker engine draft', () => {
   it('keeps omitted secrets, clears on request, and refuses to send them to a moved origin', () => {

@@ -1,6 +1,8 @@
 import type { SpeakerEngineInput } from '../../../../src/providers/speaker-engine';
 import { structuredIntegrityHash } from '@boaa/text-core/hash';
 import { connectionError } from './tts-connection-config.js';
+import { parseGoogleServiceAccount } from './google-service-account.js';
+import { vertexBaseUrl } from '../../../../src/providers/vertex-connection';
 export function speakerUrl(value: unknown): string {
   if (typeof value !== 'string' || value.length > 2048) throw connectionError('서버 주소를 확인해 주세요.');
   let u: URL;
@@ -32,7 +34,7 @@ export function normalizeSpeakerEngine(input: unknown, probe = false): SpeakerEn
   if (v.tokenLimitParameter !== undefined && !['max_tokens', 'max_completion_tokens'].includes(v.tokenLimitParameter))
     throw connectionError('출력 한도 방식을 확인해 주세요.');
   if (
-    !['openai', 'gemini'].includes(v.protocol) ||
+    !['openai', 'gemini', 'vertex'].includes(v.protocol) ||
     typeof v.enabled !== 'boolean' ||
     typeof v.paid !== 'boolean' ||
     !Number.isInteger(v.maxOutputTokens) ||
@@ -41,7 +43,22 @@ export function normalizeSpeakerEngine(input: unknown, probe = false): SpeakerEn
     (v.reasoning !== undefined && !['low', 'medium', 'high'].includes(v.reasoning))
   )
     throw connectionError('모델 설정을 확인해 주세요.');
-  let url = speakerUrl(v.url);
+  let vertex: Pick<SpeakerEngineInput, 'serviceAccountJson' | 'projectId' | 'location'> = {};
+  if (v.protocol === 'vertex') {
+    try {
+      if (v.serviceAccountJson !== undefined && typeof v.serviceAccountJson !== 'string') throw new Error();
+      const account = v.serviceAccountJson ? parseGoogleServiceAccount(v.serviceAccountJson) : undefined;
+      vertex = {
+        projectId: text(v.projectId ?? account?.project_id ?? '', 63, true),
+        location: text(v.location ?? 'global', 63, true),
+        ...(v.serviceAccountJson !== undefined ? { serviceAccountJson: account ? JSON.stringify(account) : '' } : {}),
+      };
+      vertexBaseUrl(vertex.projectId!, vertex.location!);
+    } catch {
+      throw connectionError('서비스 계정 JSON, 프로젝트 ID와 리전을 확인해 주세요.');
+    }
+  }
+  let url = v.protocol === 'vertex' ? vertexBaseUrl(vertex.projectId!, vertex.location!) : speakerUrl(v.url);
   url = url.replace(/\/chat\/completions$/, '');
   const u = new URL(url);
   if (u.pathname === '/' || !u.pathname) url += v.protocol === 'openai' ? '/v1' : '/v1beta';
@@ -50,6 +67,7 @@ export function normalizeSpeakerEngine(input: unknown, probe = false): SpeakerEn
     name: text(v.name, 80) || u.hostname,
     engineUrl: speakerUrl(v.engineUrl),
     protocol: v.protocol,
+    ...vertex,
     url,
     modelId: text(v.modelId, 200, !probe),
     maxOutputTokens: v.maxOutputTokens,
@@ -57,7 +75,7 @@ export function normalizeSpeakerEngine(input: unknown, probe = false): SpeakerEn
     reasoning: v.reasoning,
     enabled: v.enabled,
     paid: v.paid,
-    ...(v.apiKey !== undefined ? { apiKey: text(v.apiKey, 4096) } : {}),
+    ...(v.protocol !== 'vertex' && v.apiKey !== undefined ? { apiKey: text(v.apiKey, 4096) } : {}),
     ...(v.engineToken !== undefined ? { engineToken: text(v.engineToken, 4096) } : {}),
   };
 }
