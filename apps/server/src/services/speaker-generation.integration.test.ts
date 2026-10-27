@@ -16,28 +16,30 @@ import { AudiobookService } from './audiobook-service.js';
 import { AudiobookAudioStore } from './audiobook-audio.js';
 import { SpeakerGenerationService } from './speaker-generation-service.js';
 import { SpeakerEngineStore } from '../providers/speaker-engine-store.js';
+import { connectionError } from '../providers/tts-connection-config';
 import { SpeakerEngineTransport } from '../providers/speaker-engine-transport.js';
 import { classifyPlainTTSFailure, parsePlainTTSRules } from '../routes/ai/plain-tts-routes.js';
 import { registerSpeakerGenerationRoutes } from '../routes/ai/speaker-generation-routes.js';
 import { loadConfig } from '../config.js';
-import { step, ENGINE_VERSION } from '../../../speaker-engine/src/engine';
+import { step, attributionStep, ENGINE_VERSION } from '../../../speaker-engine/src/engine';
 import { attribution, identity } from '../../../speaker-engine/src/test-fixtures';
 import {
   SPEAKER_ENGINE_PROTOCOL,
   type SpeakerEngineStep,
   type SpeakerEngineResult,
 } from '../../../../src/providers/speaker-engine-protocol';
+import { attributionKey } from './speaker-attribution-preparation';
 import type { SpeakerGenerationInput } from '../../../../src/providers/speaker-generation';
 
 const harness = await startPostgresIntegrationHarness();
 afterAll(async () => {
   await harness?.stop();
 }, POSTGRES_HARNESS_CLEANUP_TIMEOUT_MS);
-async function setup(pool: pg.Pool, concurrency: 1 | 2 = 1) {
+async function setup(pool: pg.Pool, concurrency: 1 | 2 = 1, chapterIds = ['c1', 'c2']) {
   await pool.query(`create table users(id text primary key);create table library_books(id text primary key,user_id text,title text,format text,language text,active_content_revision_id text,deleted_at timestamptz);
  create table chapters(id text primary key,book_id text,title text,chapter_index int);create table paragraph_search(book_id text,chapter_id text,paragraph_id text,paragraph_index int,paragraph jsonb,text text);
  create table self_host_accounts(user_id text,role text,status text);insert into users values('owner'),('other');insert into library_books values('book','owner','Fixture','txt','ko','rev',null);insert into self_host_accounts values('owner','admin','active');
- insert into chapters values('c1','book','First',1),('c2','book','Second',2);`);
+ `);
   for (const name of [
     '0065_saved_audiobooks.sql',
     '0067_audiobook_retry.sql',
@@ -45,7 +47,12 @@ async function setup(pool: pg.Pool, concurrency: 1 | 2 = 1) {
     '0069_voice_library.sql',
   ])
     await pool.query(await readFile(new URL('../db/migrations/' + name, import.meta.url), 'utf8'));
-  for (const id of ['c1', 'c2']) {
+  for (const [index, id] of chapterIds.entries()) {
+    await pool.query("insert into chapters values($1,'book',$2,$3)", [
+      id,
+      ['First', 'Second', 'Third', 'Fourth'][index],
+      index + 1,
+    ]);
     const p = {
       id: id + '-p',
       novelId: 'book',
@@ -80,8 +87,10 @@ async function setup(pool: pg.Pool, concurrency: 1 | 2 = 1) {
     undefined,
     async () => concurrency,
   );
-  let last!: SpeakerEngineStep;
-  let request!: Extract<SpeakerEngineResult, { kind: 'request' }>;
+  type ModelContext = { input: SpeakerEngineStep; request: Extract<SpeakerEngineResult, { kind: 'request' }> };
+  const contexts = new Map<string, ModelContext>();
+  const modelCalls: ModelContext[] = [];
+  let attributionPreparation = true;
   let failAccept = false;
   let limited = false;
   const requests: { url: string; headers: Headers; body: unknown }[] = [];
@@ -90,18 +99,25 @@ async function setup(pool: pg.Pool, concurrency: 1 | 2 = 1) {
     const body = init?.body ? JSON.parse(String(init.body)) : undefined;
     requests.push({ url: address, headers: new Headers(init?.headers), body });
     if (address.endsWith('/v1/capabilities'))
-      return Response.json({ protocol: SPEAKER_ENGINE_PROTOCOL, engineVersion: ENGINE_VERSION });
-    if (address.endsWith('/v1/step')) {
+      return Response.json({
+        protocol: SPEAKER_ENGINE_PROTOCOL,
+        engineVersion: ENGINE_VERSION,
+        attributionPreparation,
+      });
+    if (address.endsWith('/v1/step') || address.endsWith('/v1/attribution')) {
       if (failAccept && body.response) {
         failAccept = false;
         return new Response('temporary', { status: 503 });
       }
-      last = body;
-      const out = step(last);
-      if (out.kind === 'request') request = out;
+      const out = address.endsWith('/v1/attribution') ? attributionStep(body) : step(body);
+      if (out.kind === 'request') contexts.set(out.prompt, { input: body, request: out });
       return Response.json(out);
     }
     if (address.endsWith('/chat/completions')) {
+      const context = contexts.get(body.messages.at(-1).content);
+      if (!context) throw Error('missing model context');
+      modelCalls.push(context);
+      const { input: last, request } = context;
       if (limited) {
         limited = false;
         return new Response('', { status: 429, headers: { 'Retry-After': '60' } });
@@ -138,7 +154,7 @@ async function setup(pool: pg.Pool, concurrency: 1 | 2 = 1) {
   }));
   const service = new SpeakerGenerationService(pool, 'owner', engines, audio, catalog, synthesize);
   const input: SpeakerGenerationInput = {
-    chapterIds: ['c1', 'c2'],
+    chapterIds: [...chapterIds],
     engineId: engine.id,
     narratorVoiceId: 'n',
     characterVoiceIds: ['a'],
@@ -166,6 +182,15 @@ async function setup(pool: pg.Pool, concurrency: 1 | 2 = 1) {
     synthesize,
     requests,
     fetchImpl,
+    modelCalls,
+    context: (request: Extract<SpeakerEngineResult, { kind: 'request' }>) => {
+      const context = contexts.get(request.prompt);
+      if (!context) throw Error('missing model context');
+      return context;
+    },
+    setCapability: (value: boolean) => {
+      attributionPreparation = value;
+    },
     input,
     create,
     until,
@@ -275,7 +300,15 @@ async function setup(pool: pg.Pool, concurrency: 1 | 2 = 1) {
         expect((await f.audio.resolve(job.id, 0)).data).toEqual(saved.data);
         expect(f.synthesize.mock.calls.length).toBe(count);
         await f.until(async () => (await f.service.list('book'))[0].status === 'completed');
-        expect(f.synthesize.mock.calls.map((c) => c[1])).toEqual(['n', 'a', 'n', 'n', 'a', 'n']);
+        expect(f.synthesize.mock.calls).toHaveLength(6);
+        expect(
+          (
+            await pool.query(
+              "select request->>'voiceId' voice from saved_audiobook_items where audiobook_id=$1 order by ordinal",
+              [job.id],
+            )
+          ).rows.map((r) => r.voice),
+        ).toEqual(['n', 'a', 'n', 'n', 'a', 'n']);
         const modelCalls = () => f.requests.filter((r) => r.url.endsWith('/chat/completions')).length;
         expect(modelCalls()).toBe(4);
         const second = await f.create({ ...f.input, characterVoiceIds: ['b'] });
@@ -283,7 +316,15 @@ async function setup(pool: pg.Pool, concurrency: 1 | 2 = 1) {
           async () => (await f.service.list('book')).find((j) => j.id === second.id)?.status === 'completed',
         );
         expect(modelCalls()).toBe(4);
-        expect(f.synthesize.mock.calls.slice(6).map((c) => c[1])).toEqual(['n', 'b', 'n', 'n', 'b', 'n']);
+        expect(f.synthesize.mock.calls.slice(6)).toHaveLength(6);
+        expect(
+          (
+            await pool.query(
+              "select request->>'voiceId' voice from saved_audiobook_items where audiobook_id=$1 order by ordinal",
+              [second.id],
+            )
+          ).rows.map((r) => r.voice),
+        ).toEqual(['n', 'b', 'n', 'n', 'b', 'n']);
         for (const r of f.requests.filter((r) => r.url.startsWith('http://engine.test')))
           expect(r.headers.get('authorization')).toBe('Bearer fixture-engine-token-12345678');
         expect(
@@ -627,4 +668,587 @@ async function setup(pool: pg.Pool, concurrency: 1 | 2 = 1) {
       }
     });
   });
+});
+
+function gate() {
+  let resolve!: () => void;
+  const promise = new Promise<void>((r) => {
+    resolve = r;
+  });
+  return { promise, resolve };
+}
+
+(harness ? describe : describe.skip)('parallel A preparation and sequential identity persistence', () => {
+  it('dispatches B1 while A2 is held within total concurrency 2, shares cache and preserves it until the final voice variant is removed', async () => {
+    await withPostgresSchema(harness!, 'speaker_parallel_order', async (pool) => {
+      const f = await setup(pool);
+      const gates = { c1: gate(), c2: gate() };
+      const entered: string[] = [];
+      let active = 0;
+      let peak = 0;
+      const original = f.engines.transport.generate.bind(f.engines.transport);
+      const generate = vi.spyOn(f.engines.transport, 'generate').mockImplementation(async (...args) => {
+        const { input, request } = f.context(args[1]);
+        active++;
+        peak = Math.max(peak, active);
+        try {
+          if (request.stage === 'attribution') {
+            entered.push(input.source.chapter.id);
+            await gates[input.source.chapter.id as keyof typeof gates].promise;
+          }
+          return await original(...args);
+        } finally {
+          active--;
+        }
+      });
+      let pending: Promise<boolean> | undefined;
+      try {
+        const configured = await f.engines.save({ ...f.engine, analysisConcurrency: 2 }, f.engine.id);
+        const job = await f.create();
+        await f.audio.tick();
+        expect(f.modelCalls).toHaveLength(0);
+        let settled = false;
+        pending = f.audio.tick().finally(() => {
+          settled = true;
+        });
+        await vi.waitFor(() => expect(entered).toHaveLength(2));
+        expect(new Set(entered)).toEqual(new Set(['c1', 'c2']));
+        expect(peak).toBe(2);
+        gates.c1.resolve();
+        await vi.waitFor(async () =>
+          expect((await pool.query('select next_chapter from speaker_generation_runs')).rows[0].next_chapter).toBe(1),
+        );
+        // This records the actual model HTTP request, not merely a prepared B prompt.
+        expect(
+          f.modelCalls.filter((c) => c.request.stage === 'identity').map((c) => c.input.source.chapter.id),
+        ).toEqual(['c1']);
+        expect(active).toBe(1);
+        expect(settled).toBe(false);
+        const analysisKey = (await pool.query('select analysis_key from speaker_generation_runs')).rows[0].analysis_key;
+        const lock = `speaker:owner:book:${analysisKey}`;
+        expect(
+          (await pool.query('select pg_try_advisory_xact_lock(hashtextextended($1,0)) locked', [lock])).rows[0].locked,
+        ).toBe(false);
+        expect(f.synthesize).not.toHaveBeenCalled();
+        gates.c2.resolve();
+        await pending;
+        expect(
+          (await pool.query('select pg_try_advisory_xact_lock(hashtextextended($1,0)) locked', [lock])).rows[0].locked,
+        ).toBe(true);
+        expect(peak).toBe(2);
+        await f.until(async () => (await f.audio.get(job.id)).status === 'completed');
+        expect(
+          f.modelCalls.filter((c) => c.request.stage === 'identity').map((c) => c.input.source.chapter.id),
+        ).toEqual(['c1', 'c2']);
+        const prior = f.modelCalls.find((c) => c.request.stage === 'identity' && c.input.source.chapter.id === 'c2')!
+          .input.ledger as { entries: unknown[] };
+        expect(prior.entries).toHaveLength(1);
+        const calls = generate.mock.calls.length;
+        const assignments = (
+          await pool.query('select assignments from speaker_generation_runs where audiobook_id=$1', [job.id])
+        ).rows[0].assignments;
+        const changed = await f.engines.save(
+          { ...configured, analysisConcurrency: 1, rateLimitRetries: 0 },
+          f.engine.id,
+        );
+        expect(changed).toMatchObject({ revision: configured.revision, rateLimitRetries: 0, hasApiKey: true });
+        expect((await f.engines.list())[0]).toMatchObject({ analysisConcurrency: 1, rateLimitRetries: 0 });
+        const variant = await f.create({ ...f.input, characterVoiceIds: ['b'] });
+        await f.until(async () => (await f.audio.get(variant.id)).status === 'completed');
+        expect(generate).toHaveBeenCalledTimes(calls);
+        expect(
+          (await pool.query('select assignments from speaker_generation_runs where audiobook_id=$1', [job.id])).rows[0]
+            .assignments,
+        ).toEqual(assignments);
+        expect((await pool.query('select count(*)::int n from speaker_analysis')).rows[0].n).toBe(4);
+        await f.service.remove(job.id);
+        expect((await pool.query('select count(*)::int n from speaker_analysis')).rows[0].n).toBe(4);
+        await f.service.remove(variant.id);
+        expect((await pool.query('select count(*)::int n from speaker_analysis')).rows[0].n).toBe(0);
+      } finally {
+        gates.c1.resolve();
+        gates.c2.resolve();
+        await pending;
+        generate.mockRestore();
+        await f.cleanup();
+      }
+    });
+  });
+
+  it('dispatches ordered B1 and B2 while A3 is held with a total cap of 3 and no replacement A4', async () => {
+    await withPostgresSchema(harness!, 'speaker_priority_three', async (pool) => {
+      const f = await setup(pool, 1, ['c1', 'c2', 'c3', 'c4']);
+      const held = { c1: gate(), c2: gate(), c3: gate(), c4: gate() };
+      const b1 = gate();
+      const entered: string[] = [];
+      const startedB: string[] = [];
+      let active = 0;
+      let peak = 0;
+      let activeB = 0;
+      let peakB = 0;
+      let settled = false;
+      const original = f.engines.transport.generate.bind(f.engines.transport);
+      const generate = vi.spyOn(f.engines.transport, 'generate').mockImplementation(async (...args) => {
+        const { input, request } = f.context(args[1]);
+        const id = input.source.chapter.id;
+        active++;
+        peak = Math.max(peak, active);
+        if (request.stage === 'identity') {
+          activeB++;
+          peakB = Math.max(peakB, activeB);
+          startedB.push(id);
+        }
+        try {
+          if (request.stage === 'attribution') {
+            entered.push(id);
+            await held[id as keyof typeof held].promise;
+          }
+          const response = await original(...args);
+          if (request.stage === 'identity' && id === 'c1') await b1.promise;
+          return response;
+        } finally {
+          active--;
+          if (request.stage === 'identity') activeB--;
+        }
+      });
+      let pending: Promise<boolean> | undefined;
+      try {
+        await f.engines.save({ ...f.engine, analysisConcurrency: 3 }, f.engine.id);
+        const job = await f.create();
+        await f.audio.tick();
+        expect(f.modelCalls).toHaveLength(0);
+        pending = f.audio.tick().finally(() => {
+          settled = true;
+        });
+        await vi.waitFor(() => expect(entered).toHaveLength(3));
+        expect(new Set(entered)).toEqual(new Set(['c1', 'c2', 'c3']));
+        held.c1.resolve();
+        await vi.waitFor(() =>
+          expect(
+            f.modelCalls.filter((c) => c.request.stage === 'identity').map((c) => c.input.source.chapter.id),
+          ).toEqual(['c1']),
+        );
+        expect(active).toBe(3);
+        held.c2.resolve();
+        const key = attributionKey(
+          (await pool.query('select analysis_key from speaker_generation_runs')).rows[0].analysis_key,
+        );
+        await vi.waitFor(async () =>
+          expect(
+            (await pool.query("select result from speaker_analysis where analysis_key=$1 and chapter_id='c2'", [key]))
+              .rows[0].result,
+          ).not.toBeNull(),
+        );
+        expect(startedB).toEqual(['c1']);
+        b1.resolve();
+        await vi.waitFor(async () =>
+          expect((await pool.query('select next_chapter from speaker_generation_runs')).rows[0].next_chapter).toBe(2),
+        );
+        expect(
+          f.modelCalls.filter((c) => c.request.stage === 'identity').map((c) => c.input.source.chapter.id),
+        ).toEqual(['c1', 'c2']);
+        expect(
+          f.modelCalls.find((c) => c.request.stage === 'identity' && c.input.source.chapter.id === 'c2')!.input.ledger,
+        ).toMatchObject({ throughChapterIndex: 1, entries: [expect.anything()] });
+        expect(peak).toBe(3);
+        expect(peakB).toBe(1);
+        expect(active).toBe(1);
+        expect(settled).toBe(false);
+        expect(entered).not.toContain('c4');
+        expect(f.synthesize).not.toHaveBeenCalled();
+        expect(
+          (
+            await pool.query(
+              "select count(*)::int n from saved_audiobook_items where audiobook_id=$1 and status<>'ready'",
+              [job.id],
+            )
+          ).rows[0].n,
+        ).toBe(6);
+        held.c3.resolve();
+        await pending;
+        expect(startedB).toEqual(['c1', 'c2', 'c3']);
+        expect(entered).not.toContain('c4');
+        expect((await pool.query('select next_chapter from speaker_generation_runs')).rows[0].next_chapter).toBe(3);
+        held.c4.resolve();
+        await f.until(async () => (await f.audio.get(job.id)).status === 'completed');
+        expect(startedB).toEqual(['c1', 'c2', 'c3', 'c4']);
+        expect(entered).toHaveLength(4);
+        expect(peak).toBe(3);
+        expect(peakB).toBe(1);
+      } finally {
+        Object.values(held).forEach((g) => g.resolve());
+        b1.resolve();
+        await pending;
+        generate.mockRestore();
+        await f.cleanup();
+      }
+    });
+  });
+
+  it.each(['pause', 'B429'] as const)(
+    'stops new dispatch after %s while A2 is held, saves in-flight success and resumes without replay',
+    async (stop) => {
+      await withPostgresSchema(harness!, 'speaker_priority_stop', async (pool) => {
+        const f = await setup(pool);
+        const heldA2 = gate();
+        const heldB1 = gate();
+        const b1Limited = gate();
+        const enteredA: string[] = [];
+        const observedSignals: AbortSignal[] = [];
+        let limited = false;
+        let settled = false;
+        const original = f.engines.transport.generate.bind(f.engines.transport);
+        const generate = vi.spyOn(f.engines.transport, 'generate').mockImplementation(async (...args) => {
+          const { input, request } = f.context(args[1]);
+          const id = input.source.chapter.id;
+          observedSignals.push(args[2]);
+          if (request.stage === 'attribution') {
+            enteredA.push(id);
+            if (id === 'c2') await heldA2.promise;
+          }
+          if (stop === 'B429' && request.stage === 'identity' && id === 'c1' && !limited) {
+            limited = true;
+            f.setLimit();
+            try {
+              return await original(...args);
+            } finally {
+              b1Limited.resolve();
+            }
+          }
+          const response = await original(...args);
+          if (request.stage === 'identity' && id === 'c1') await heldB1.promise;
+          return response;
+        });
+        let pending: Promise<boolean> | undefined;
+        try {
+          await f.engines.save({ ...f.engine, analysisConcurrency: 2, rateLimitRetries: 0 }, f.engine.id);
+          const job = await f.create();
+          await f.audio.tick();
+          pending = f.audio.tick().finally(() => {
+            settled = true;
+          });
+          await vi.waitFor(() =>
+            expect(
+              f.modelCalls.filter((c) => c.request.stage === 'identity').map((c) => c.input.source.chapter.id),
+            ).toEqual(['c1']),
+          );
+          if (stop === 'pause') {
+            await f.audio.control(job.id, 'pause');
+            expect(observedSignals.every((signal) => !signal.aborted)).toBe(true);
+            heldB1.resolve();
+            await vi.waitFor(async () =>
+              expect(
+                (
+                  await pool.query(
+                    "select model_response from speaker_analysis where chapter_id='c1' and analysis_key=(select analysis_key from speaker_generation_runs) ",
+                  )
+                ).rows[0].model_response,
+              ).not.toBeNull(),
+            );
+          } else {
+            await b1Limited.promise;
+            heldB1.resolve();
+            await vi.waitFor(async () =>
+              expect(
+                (
+                  await pool.query(
+                    "select dispatching from speaker_analysis where chapter_id='c1' and analysis_key=(select analysis_key from speaker_generation_runs) ",
+                  )
+                ).rows[0].dispatching,
+              ).toBe(false),
+            );
+          }
+          expect(enteredA).toHaveLength(2);
+          expect(settled).toBe(false);
+          expect((await pool.query('select next_chapter from speaker_generation_runs')).rows[0].next_chapter).toBe(0);
+          const calls = generate.mock.calls.length;
+          expect(calls).toBe(3);
+          const key = (await pool.query('select analysis_key from speaker_generation_runs')).rows[0].analysis_key;
+          const lock = `speaker:owner:book:${key}`;
+          expect(
+            (await pool.query('select pg_try_advisory_xact_lock(hashtextextended($1,0)) locked', [lock])).rows[0]
+              .locked,
+          ).toBe(false);
+          heldA2.resolve();
+          await pending;
+          expect(generate).toHaveBeenCalledTimes(calls);
+          expect((await f.audio.get(job.id)).status).toBe(stop === 'pause' ? 'paused' : 'failed');
+          expect(
+            (
+              await pool.query(
+                "select model_response,result,dispatching from speaker_analysis where chapter_id='c2' and analysis_key=$1",
+                [attributionKey(key)],
+              )
+            ).rows[0],
+          ).toMatchObject({ model_response: expect.stringContaining('NEW_1'), result: null, dispatching: false });
+          expect(
+            (await pool.query('select pg_try_advisory_xact_lock(hashtextextended($1,0)) locked', [lock])).rows[0]
+              .locked,
+          ).toBe(true);
+          await f.engines.save({ ...f.engine, analysisConcurrency: 1, rateLimitRetries: 0 }, f.engine.id);
+          await f.audio.control(job.id, 'resume', true);
+          await f.until(async () => (await f.audio.get(job.id)).status === 'completed');
+          expect(
+            f.modelCalls
+              .filter((c) => c.request.stage === 'attribution')
+              .map((c) => c.input.source.chapter.id)
+              .sort(),
+          ).toEqual(['c1', 'c2']);
+          expect(
+            f.modelCalls.filter((c) => c.request.stage === 'identity').map((c) => c.input.source.chapter.id),
+          ).toEqual(stop === 'pause' ? ['c1', 'c2'] : ['c1', 'c1', 'c2']);
+          expect(
+            f.modelCalls.find((c) => c.request.stage === 'identity' && c.input.source.chapter.id === 'c2')!.input
+              .ledger,
+          ).toMatchObject({ throughChapterIndex: 1 });
+        } finally {
+          heldA2.resolve();
+          heldB1.resolve();
+          await pending;
+          generate.mockRestore();
+          await f.cleanup();
+        }
+      });
+    },
+  );
+
+  it.each(['429', 'timeout', 'abort'] as const)(
+    'settles siblings and saves a completed paid response before surfacing %s, then resumes after lowering concurrency to 1 without duplicating success',
+    async (failure) => {
+      await withPostgresSchema(harness!, 'speaker_parallel_failure', async (pool) => {
+        const f = await setup(pool);
+        const held = gate();
+        let entered = 0;
+        let settled = false;
+        let failOnce = true;
+        const attempts: string[] = [];
+        const original = f.engines.transport.generate.bind(f.engines.transport);
+        const generate = vi.spyOn(f.engines.transport, 'generate').mockImplementation(async (...args) => {
+          const { input, request } = f.context(args[1]);
+          if (request.stage === 'attribution') {
+            const chapter = input.source.chapter.id;
+            attempts.push(chapter);
+            entered++;
+            if (chapter === 'c1') await held.promise;
+            if (chapter === 'c2' && failOnce) {
+              failOnce = false;
+              if (failure === '429')
+                throw Object.assign(connectionError('fixture rate limited', 429), { retryAfterSeconds: 60 });
+              if (failure === 'timeout') throw connectionError('fixture timeout', 502);
+              throw new DOMException('fixture abort', 'AbortError');
+            }
+          }
+          return original(...args);
+        });
+        let pending: Promise<boolean> | undefined;
+        try {
+          await f.engines.save({ ...f.engine, analysisConcurrency: 2, rateLimitRetries: 2 }, f.engine.id);
+          const job = await f.create();
+          await f.audio.tick();
+          pending = f.audio.tick().finally(() => {
+            settled = true;
+          });
+          await vi.waitFor(() => expect(entered).toBe(2));
+          expect(settled).toBe(false);
+          held.resolve();
+          await pending;
+          const key = attributionKey(
+            (await pool.query('select analysis_key from speaker_generation_runs')).rows[0].analysis_key,
+          );
+          const rows = (
+            await pool.query(
+              'select chapter_id,model_response,dispatching,result from speaker_analysis where analysis_key=$1 order by chapter_id',
+              [key],
+            )
+          ).rows;
+          expect(rows[0]).toMatchObject({
+            chapter_id: 'c1',
+            model_response: expect.stringContaining('NEW_1'),
+            dispatching: false,
+            result: null,
+          });
+          expect(rows[1]).toMatchObject({ chapter_id: 'c2', model_response: null, dispatching: failure !== '429' });
+          const failed = await f.audio.get(job.id);
+          expect(failed.status).toBe(failure === '429' ? 'queued' : 'failed');
+          const count = generate.mock.calls.length;
+          await f.audio.tick();
+          expect(generate).toHaveBeenCalledTimes(count);
+          // The successful sibling still has an unparsed paid A response when settings change.
+          const configured = await f.engines.save(
+            { ...f.engine, analysisConcurrency: 1, rateLimitRetries: 2 },
+            f.engine.id,
+          );
+          expect(configured).toMatchObject({ analysisConcurrency: 1, revision: f.engine.revision });
+          if (failure === '429')
+            await pool.query("update saved_audiobooks set retry_at=now()-interval '1 second' where id=$1", [job.id]);
+          else await f.audio.control(job.id, 'resume', true);
+          await f.until(async () => (await f.audio.get(job.id)).status === 'completed');
+          expect(attempts.filter((c) => c === 'c1')).toHaveLength(1);
+          expect(attempts.filter((c) => c === 'c2')).toHaveLength(2);
+          expect(
+            f.modelCalls.filter((c) => c.request.stage === 'identity').map((c) => c.input.source.chapter.id),
+          ).toEqual(['c1', 'c2']);
+        } finally {
+          held.resolve();
+          await pending;
+          generate.mockRestore();
+          await f.cleanup();
+        }
+      });
+    },
+  );
+
+  it.each([0, 2, undefined])(
+    'applies %s extra 429 retries to B, retains ready audio, and resumes after exhaustion',
+    async (limit) => {
+      await withPostgresSchema(harness!, 'speaker_retry_limit', async (pool) => {
+        const f = await setup(pool);
+        let limits = true;
+        let failures = 0;
+        const original = f.engines.transport.generate.bind(f.engines.transport);
+        const generate = vi.spyOn(f.engines.transport, 'generate').mockImplementation(async (...args) => {
+          const { input, request } = f.context(args[1]);
+          if (limits && request.stage === 'identity' && input.source.chapter.id === 'c2') {
+            failures++;
+            throw Object.assign(connectionError('fixture rate limited', 429), { retryAfterSeconds: 1 });
+          }
+          return original(...args);
+        });
+        try {
+          await f.engines.save({ ...f.engine, rateLimitRetries: limit }, f.engine.id);
+          const job = await f.create();
+          await f.until(async () => failures === 1);
+          const ready = (
+            await pool.query("select ordinal from saved_audiobook_items where audiobook_id=$1 and status='ready'", [
+              job.id,
+            ])
+          ).rows;
+          expect(ready).toHaveLength(3);
+          const target = limit === undefined ? 4 : limit + 1;
+          for (let n = 1; n < target; n++) {
+            expect((await f.audio.get(job.id)).status).toBe('queued');
+            await pool.query("update saved_audiobooks set retry_at=now()-interval '1 second' where id=$1", [job.id]);
+            await f.audio.tick();
+          }
+          expect(failures).toBe(target);
+          const state = (
+            await pool.query(
+              'select status,retry_at,rate_limit_attempts,error_message from saved_audiobooks where id=$1',
+              [job.id],
+            )
+          ).rows[0];
+          expect(state.status).toBe(limit === undefined ? 'queued' : 'failed');
+          expect(state.rate_limit_attempts).toBe(limit ?? target);
+          if (limit !== undefined) {
+            expect(state.retry_at).toBeNull();
+            expect(state.error_message).toContain('이어');
+          }
+          expect(
+            (
+              await pool.query("select ordinal from saved_audiobook_items where audiobook_id=$1 and status='ready'", [
+                job.id,
+              ])
+            ).rows,
+          ).toEqual(ready);
+          limits = false;
+          if (limit === undefined)
+            await pool.query("update saved_audiobooks set retry_at=now()-interval '1 second' where id=$1", [job.id]);
+          else await f.audio.control(job.id, 'resume', true);
+          await f.until(async () => (await f.audio.get(job.id)).status === 'completed');
+          expect(failures).toBe(target);
+          expect(
+            (await pool.query('select rate_limit_attempts from saved_audiobooks where id=$1', [job.id])).rows[0]
+              .rate_limit_attempts,
+          ).toBe(0);
+        } finally {
+          generate.mockRestore();
+          await f.cleanup();
+        }
+      });
+    },
+  );
+
+  it('fails an unknown A capability before any paid model dispatch and preserves a legacy serial A when concurrency changes', async () => {
+    await withPostgresSchema(harness!, 'speaker_parallel_capability', async (pool) => {
+      const f = await setup(pool);
+      try {
+        await f.engines.save({ ...f.engine, analysisConcurrency: 2 }, f.engine.id);
+        f.setCapability(false);
+        const job = await f.create();
+        await f.audio.tick();
+        expect((await f.audio.get(job.id)).status).toBe('failed');
+        expect(f.modelCalls).toHaveLength(0);
+        await f.engines.save({ ...f.engine, analysisConcurrency: 1 }, f.engine.id);
+        await f.audio.control(job.id, 'resume', true);
+        await f.audio.tick();
+        await f.audio.tick();
+        expect(f.modelCalls).toHaveLength(1);
+        expect(f.modelCalls[0].request.stage).toBe('attribution');
+        await f.engines.save({ ...f.engine, analysisConcurrency: 2 }, f.engine.id);
+        f.setCapability(true);
+        await f.until(async () => (await f.audio.get(job.id)).status === 'completed');
+        expect(
+          f.modelCalls.filter((c) => c.request.stage === 'attribution' && c.input.source.chapter.id === 'c1'),
+        ).toHaveLength(1);
+        const key = attributionKey(
+          (await pool.query('select analysis_key from speaker_generation_runs')).rows[0].analysis_key,
+        );
+        expect(
+          (await pool.query("select 1 from speaker_analysis where analysis_key=$1 and chapter_id='c1'", [key]))
+            .rowCount,
+        ).toBe(0);
+      } finally {
+        await f.cleanup();
+      }
+    });
+  });
+
+  it.each(['source', 'owner', 'engine'] as const)(
+    'fences parallel A response saves after an in-flight %s change',
+    async (change) => {
+      await withPostgresSchema(harness!, 'speaker_parallel_fence', async (pool) => {
+        const f = await setup(pool);
+        const held = gate();
+        let entered = 0;
+        const original = f.engines.transport.generate.bind(f.engines.transport);
+        const generate = vi.spyOn(f.engines.transport, 'generate').mockImplementation(async (...args) => {
+          entered++;
+          await held.promise;
+          return original(...args);
+        });
+        let pending: Promise<boolean> | undefined;
+        try {
+          await f.engines.save({ ...f.engine, analysisConcurrency: 2 }, f.engine.id);
+          const job = await f.create();
+          await f.audio.tick();
+          pending = f.audio.tick();
+          await vi.waitFor(() => expect(entered).toBe(2));
+          if (change === 'source')
+            await pool.query("update library_books set active_content_revision_id='changed' where id='book'");
+          if (change === 'owner') await pool.query("update library_books set user_id='other' where id='book'");
+          if (change === 'engine')
+            await f.engines.save({ ...f.engine, modelId: 'changed', analysisConcurrency: 2 }, f.engine.id);
+          held.resolve();
+          await pending;
+          expect((await pool.query('select status from saved_audiobooks where id=$1', [job.id])).rows[0].status).toBe(
+            'failed',
+          );
+          expect(
+            (
+              await pool.query(
+                'select count(*)::int n from speaker_analysis where model_response is not null or result is not null',
+              )
+            ).rows[0].n,
+          ).toBe(0);
+          expect((await pool.query('select next_chapter from speaker_generation_runs')).rows[0].next_chapter).toBe(0);
+          expect(f.synthesize).not.toHaveBeenCalled();
+        } finally {
+          held.resolve();
+          await pending;
+          generate.mockRestore();
+          await f.cleanup();
+        }
+      });
+    },
+  );
 });

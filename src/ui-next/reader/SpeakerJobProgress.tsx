@@ -18,6 +18,7 @@ export default function SpeakerJobProgress({ item }: { item: SpeakerGenerationJo
   const analyzing = ['attribution', 'identity', 'casting'].includes(item.stage);
   const total = item.analysisProgress?.chapterCount ?? item.chapterCount + item.contextChapterCount;
   const current = item.analysisProgress?.currentChapter;
+  const attributed = item.analysisProgress?.attributionCompleted;
   const retryTime = item.retryAt ? Date.parse(item.retryAt) : NaN;
   const retrying = item.status === 'queued' && Number.isFinite(retryTime);
   const ready = item.readyChapterIds.length;
@@ -81,6 +82,12 @@ export default function SpeakerJobProgress({ item }: { item: SpeakerGenerationJo
       )}
       {item.status !== 'completed' && audioBar && (
         <Progress value={item.completedItems / item.itemCount} label="생성 진행" />
+      )}
+      {/* Parallel attribution can run ahead of the ordered identity step; text only, so the bar keeps one meaning. */}
+      {attributed !== undefined && total > 0 && item.status !== 'completed' && (
+        <small className="un-book-meta">
+          화자 찾기 완료 {formatCount(attributed)} / {formatCount(total)}회차
+        </small>
       )}
       <small className="un-book-meta">
         {total > 0

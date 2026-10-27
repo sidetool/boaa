@@ -3,6 +3,8 @@ import {
   SPEAKER_ENGINE_PROTOCOL,
   type SpeakerEngineStep,
   type SpeakerEngineResult,
+  type SpeakerAttributionStep,
+  type SpeakerAttributionResult,
 } from '../../../../src/providers/speaker-engine-protocol';
 import { requestLocalEndpoint, type LocalEndpointEgressOptions } from './local-endpoint-egress-policy.js';
 import { ttsHttpError } from './tts-http-error.js';
@@ -100,7 +102,10 @@ export class SpeakerEngineTransport {
         : { Authorization: `Bearer ${v.apiKey}` }
       : {};
   }
-  async capabilities(v: SpeakerEngineInput, signal: AbortSignal) {
+  async capabilities(
+    v: SpeakerEngineInput,
+    signal: AbortSignal,
+  ): Promise<{ engineVersion: string; attributionPreparation?: boolean }> {
     const r = await this.json(v.engineUrl + '/v1/capabilities', signal, this.engineHeaders(v), undefined, false, 16384);
     if (
       r.protocol !== SPEAKER_ENGINE_PROTOCOL ||
@@ -109,7 +114,7 @@ export class SpeakerEngineTransport {
       r.engineVersion.length > 160
     )
       throw connectionError('이 분석 엔진 버전은 연결할 수 없어요.', 409);
-    return { engineVersion: r.engineVersion as string };
+    return { engineVersion: r.engineVersion as string, attributionPreparation: r.attributionPreparation === true };
   }
   async models(v: SpeakerEngineInput, signal: AbortSignal): Promise<string[]> {
     const headers = await this.modelHeaders(v, signal);
@@ -184,6 +189,32 @@ export class SpeakerEngineTransport {
     )
       return r as unknown as SpeakerEngineResult;
     throw connectionError('분석 결과를 확인하지 못했어요. 엔진 버전을 확인해 주세요.', 502);
+  }
+  async attribution(
+    v: SpeakerEngineInput,
+    input: SpeakerAttributionStep,
+    signal: AbortSignal,
+  ): Promise<SpeakerAttributionResult> {
+    const r = await this.json(
+      v.engineUrl + '/v1/attribution',
+      signal,
+      this.engineHeaders(v),
+      input,
+      false,
+      16 * 1024 * 1024,
+    );
+    if (r.kind === 'attributed' && r.checkpoint && typeof r.checkpoint === 'object')
+      return r as unknown as SpeakerAttributionResult;
+    if (
+      r.kind === 'request' &&
+      r.stage === 'attribution' &&
+      typeof r.prompt === 'string' &&
+      r.prompt.length <= 500000 &&
+      r.schema &&
+      r.checkpoint
+    )
+      return r as unknown as SpeakerAttributionResult;
+    throw connectionError('화자 찾기 응답 형식이 올바르지 않아요.', 502);
   }
   async generate(
     v: SpeakerEngineInput,

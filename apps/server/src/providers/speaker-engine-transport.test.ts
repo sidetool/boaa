@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { SpeakerEngineTransport } from './speaker-engine-transport';
-import { normalizeSpeakerEngine, speakerRevision } from './speaker-engine-config';
+import { normalizeSpeakerEngine, speakerRevision, castingRevision } from './speaker-engine-config';
 import { SPEAKER_ENGINE_PROTOCOL } from '../../../../src/providers/speaker-engine-protocol';
 const config = normalizeSpeakerEngine({
   name: 'Fixture',
@@ -112,5 +112,26 @@ describe('speaker model transport', () => {
       retryAfterSeconds: expect.any(Number),
     });
     expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('analysis execution settings', () => {
+  it('preserves explicit zero and bounds while keeping execution choices outside semantic revisions', () => {
+    expect(normalizeSpeakerEngine(config)).not.toHaveProperty('analysisConcurrency');
+    expect(normalizeSpeakerEngine(config)).not.toHaveProperty('rateLimitRetries');
+    for (const analysisConcurrency of [1, 8]) {
+      for (const rateLimitRetries of [0, 100]) {
+        const value = normalizeSpeakerEngine({ ...config, analysisConcurrency, rateLimitRetries });
+        expect(value).toMatchObject({ analysisConcurrency, rateLimitRetries });
+        expect(speakerRevision(value)).toBe(speakerRevision(config));
+        expect(castingRevision(value)).toBe(castingRevision(config));
+      }
+    }
+    for (const [key, invalid] of [
+      ['analysisConcurrency', [0, 9, 1.5, '2', null]],
+      ['rateLimitRetries', [-1, 101, 1.5, '0', null]],
+    ] as const) {
+      for (const value of invalid) expect(() => normalizeSpeakerEngine({ ...config, [key]: value })).toThrow();
+    }
   });
 });

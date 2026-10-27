@@ -6,6 +6,8 @@ import {
   type SpeakerEngineResult,
   type SpeakerEngineSource,
   type SpeakerChapter,
+  type SpeakerAttributionStep,
+  type SpeakerAttributionResult,
 } from '../../../src/providers/speaker-engine-protocol';
 import * as a from './preset35/chapter-context-speaker';
 import * as b from './preset35/sequential-identity-core';
@@ -124,7 +126,47 @@ export function prepare(source: SpeakerEngineSource): a.PreparedChapterSpeakerRu
   };
 }
 
-/** One model request at a time. BOAA durably saves each accepted step and owns retries and credentials. */
+type AttributionCheckpoint = { fingerprint: string; outputs: a.SpeakerChapterLabelV1[] };
+function attributionState(prepared: a.PreparedChapterSpeakerRun, value?: unknown): AttributionCheckpoint {
+  const fingerprint = structuredIntegrityHash({ engine: ENGINE_VERSION, attribution: prepared.input.fingerprint });
+  const state = (value ?? { fingerprint, outputs: [] }) as AttributionCheckpoint;
+  const units = prepared.initialStrategy === 'chunked' ? prepared.fallbackUnits : [prepared.fullUnit];
+  if (state.fingerprint !== fingerprint || !Array.isArray(state.outputs) || state.outputs.length > units.length)
+    throw new Error('attribution_scope_changed');
+  return state;
+}
+
+/** Independent A work can run across chapters. Identity/lorebook work is deliberately excluded. */
+export function attributionStep(input: SpeakerAttributionStep): SpeakerAttributionResult {
+  if (input.protocol !== SPEAKER_ENGINE_PROTOCOL) throw new Error('unsupported_protocol');
+  const prepared = prepare(input.source);
+  const state = attributionState(prepared, input.checkpoint);
+  const units = prepared.initialStrategy === 'chunked' ? prepared.fallbackUnits : [prepared.fullUnit];
+  let outputs = state.outputs;
+  if (input.response !== undefined) {
+    const unit = units[outputs.length];
+    if (!unit || !prepared.input.targets.length) throw new Error('unexpected_attribution_response');
+    outputs = [
+      ...outputs,
+      a.validateChapterSpeakerWire({ prepared, unit, wire: a.parseChapterSpeakerWire(input.response) }),
+    ];
+  }
+  const checkpoint = { ...state, outputs };
+  if (prepared.input.targets.length && outputs.length < units.length) {
+    const request = a.buildChapterSpeakerRequest({ prepared, unit: units[outputs.length] });
+    return {
+      kind: 'request',
+      stage: 'attribution',
+      checkpoint,
+      prompt: request.prompt,
+      schema: request.responseSchema,
+    };
+  }
+  a.combineChapterSpeakerLabels({ prepared, outputs });
+  return { kind: 'attributed', checkpoint };
+}
+
+/** One sequential identity step. BOAA durably saves each accepted step and owns retries and credentials. */
 export function step(input: SpeakerEngineStep): SpeakerEngineResult {
   if (input.protocol !== SPEAKER_ENGINE_PROTOCOL) throw new Error('unsupported_protocol');
   const prepared = prepare(input.source);
@@ -137,7 +179,7 @@ export function step(input: SpeakerEngineStep): SpeakerEngineResult {
     version: ENGINE_VERSION,
     fingerprint,
     phase: 'attribution',
-    outputs: [],
+    outputs: input.attribution === undefined ? [] : attributionState(prepared, input.attribution).outputs,
   }) as Checkpoint;
   if (
     checkpoint.version !== ENGINE_VERSION ||

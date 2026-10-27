@@ -29,6 +29,13 @@ export function normalizeSpeakerEngine(input: unknown, probe = false): SpeakerEn
   if (!input || typeof input !== 'object' || Array.isArray(input))
     throw connectionError('분석 연결 설정을 확인해 주세요.');
   const v = input as SpeakerEngineInput;
+  if (
+    (v.analysisConcurrency !== undefined &&
+      (!Number.isInteger(v.analysisConcurrency) || v.analysisConcurrency < 1 || v.analysisConcurrency > 8)) ||
+    (v.rateLimitRetries !== undefined &&
+      (!Number.isInteger(v.rateLimitRetries) || v.rateLimitRetries < 0 || v.rateLimitRetries > 100))
+  )
+    throw connectionError('동시 분석 수는 1~8, 요청 제한 재시도 횟수는 0~100으로 입력해 주세요.');
   if (v.purpose !== undefined && !['analysis', 'casting'].includes(v.purpose))
     throw connectionError('모델 용도를 확인해 주세요.');
   if (v.inputFormat !== undefined && (v.inputFormat !== 'pdf' || !['gemini', 'vertex'].includes(v.protocol)))
@@ -70,6 +77,8 @@ export function normalizeSpeakerEngine(input: unknown, probe = false): SpeakerEn
     engineUrl: speakerUrl(v.engineUrl),
     protocol: v.protocol,
     ...(v.inputFormat ? { inputFormat: v.inputFormat } : {}),
+    ...(v.analysisConcurrency !== undefined ? { analysisConcurrency: v.analysisConcurrency } : {}),
+    ...(v.rateLimitRetries !== undefined ? { rateLimitRetries: v.rateLimitRetries } : {}),
     ...vertex,
     url,
     modelId: text(v.modelId, 200, !probe),

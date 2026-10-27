@@ -10,6 +10,7 @@ import { audiobookError } from './audiobook-plan.js';
 import { AudiobookService } from './audiobook-service.js';
 import { SpeakerEngineStore } from '../providers/speaker-engine-store.js';
 import type { SpeakerVoiceCasting } from './speaker-voice-casting.js';
+import { attributionKey, prepareAttributionBatch } from './speaker-attribution-preparation.js';
 import {
   speakerPlan,
   loadSpeakerChapter,
@@ -30,6 +31,7 @@ interface Run {
   stage: SpeakerGenerationJob['stage'];
   ledger?: unknown;
   assignments: Record<string, string>;
+  rate_limit_attempts: number;
 }
 export class SpeakerGenerationService {
   constructor(
@@ -131,9 +133,9 @@ export class SpeakerGenerationService {
     await this.audio.remove(id);
     // Other voice variants may still depend on these reusable analysis artifacts.
     await this.pool.query(
-      `delete from speaker_analysis s where s.user_id=$1 and s.book_id=$2 and s.analysis_key=$3
-      and not exists(select 1 from speaker_generation_runs r join saved_audiobooks a on a.id=r.audiobook_id where a.user_id=s.user_id and a.book_id=s.book_id and r.analysis_key=s.analysis_key)`,
-      [this.owner, run.book_id, run.analysis_key],
+      `delete from speaker_analysis s where s.user_id=$1 and s.book_id=$2 and s.analysis_key=any($4::text[])
+      and not exists(select 1 from speaker_generation_runs r join saved_audiobooks a on a.id=r.audiobook_id where a.user_id=s.user_id and a.book_id=s.book_id and r.analysis_key=$3)`,
+      [this.owner, run.book_id, run.analysis_key, [run.analysis_key, attributionKey(run.analysis_key)]],
     );
   }
   async list(bookId: string): Promise<SpeakerGenerationJob[]> {
@@ -147,6 +149,15 @@ export class SpeakerGenerationService {
         [bookId, this.owner],
       )
     ).rows;
+    const prepared = rows.length
+      ? (
+          await this.pool.query(
+            `select analysis_key,array_agg(chapter_id) ids from speaker_analysis
+      where user_id=$1 and book_id=$2 and analysis_key=any($3::text[]) and result->>'kind'='attributed' group by analysis_key`,
+            [this.owner, bookId, rows.map((r) => attributionKey(r.analysis_key))],
+          )
+        ).rows
+      : [];
     return rows.map((r) => ({
       ...r.estimate,
       id: r.id,
@@ -172,6 +183,16 @@ export class SpeakerGenerationService {
       retryAt: r.status === 'queued' && r.retry_at ? r.retry_at.toISOString() : undefined,
       analysisProgress: {
         chapterCount: r.context_ids.length,
+        ...(prepared.some((p) => p.analysis_key === attributionKey(r.analysis_key))
+          ? {
+              attributionCompleted: new Set([
+                ...r.context_ids.slice(0, r.next_chapter),
+                ...prepared
+                  .find((p) => p.analysis_key === attributionKey(r.analysis_key))
+                  .ids.filter((id: string) => r.context_ids.includes(id)),
+              ]).size,
+            }
+          : {}),
         currentChapter:
           ['attribution', 'identity', 'casting'].includes(r.stage) && r.next_chapter < r.context_ids.length
             ? {
@@ -214,8 +235,8 @@ export class SpeakerGenerationService {
         throw audiobookError(409, '분석 요청이 마무리되고 있어요. 잠시 후 이어 만들어 주세요.');
       await client.query(
         `update speaker_analysis set dispatching=false,bytes=case when response_rejected then octet_length(coalesce(checkpoint::text,''))+octet_length(coalesce(result::text,'')) else bytes end,model_response=case when response_rejected then null else model_response end,response_rejected=false
-        where user_id=$1 and book_id=$2 and analysis_key=$3 and result is null`,
-        [this.owner, run.book_id, run.analysis_key],
+        where user_id=$1 and book_id=$2 and analysis_key=any($3::text[]) and result is null`,
+        [this.owner, run.book_id, [run.analysis_key, attributionKey(run.analysis_key)]],
       );
       await client.query(
         'update speaker_voice_decisions set dispatching=false,response=case when rejected then null else response end,rejected=false where audiobook_id=$1',
@@ -237,14 +258,6 @@ export class SpeakerGenerationService {
   async advance(id: string, signal: AbortSignal) {
     const run = await this.run(id);
     await this.authority(run);
-    if (
-      (
-        await this.pool.query("select 1 from saved_audiobook_items where audiobook_id=$1 and status<>'ready' limit 1", [
-          id,
-        ])
-      ).rowCount
-    )
-      return;
     if (run.next_chapter >= run.chapter_ids.length) {
       await this.pool.query('update saved_audiobooks set planning_complete=true where id=$1', [id]);
       return;
@@ -256,114 +269,204 @@ export class SpeakerGenerationService {
       locked = (await client.query('select pg_try_advisory_lock(hashtextextended($1,0)) locked', [lock])).rows[0]
         .locked;
       if (!locked) return;
-      const chapterId = run.chapter_ids[run.next_chapter];
-      const loaded = await loadSpeakerChapter(this.pool, this.owner, run.book_id, chapterId, run.next_chapter + 1);
-      const all = (
-        await this.pool.query('select id from chapters where book_id=$1 order by chapter_index,id', [run.book_id])
-      ).rows;
-      const side = async (n: number) =>
-        n >= 0 && n < all.length
-          ? (await loadSpeakerChapter(this.pool, this.owner, run.book_id, all[n].id, n + 1)).chapter
-          : undefined;
-      const source = {
-        scope: run.book_id,
-        revision: run.content_revision ?? structuredIntegrityHash(run.book_id),
-        chapter: loaded.chapter,
-        previous: await side(run.next_chapter - 1),
-        next: await side(run.next_chapter + 1),
-      };
-      const inputHash = structuredIntegrityHash({ source, ledger: run.ledger ?? null });
-      const args = [this.owner, run.book_id, run.analysis_key, chapterId];
-      await client.query(
-        'insert into speaker_analysis(user_id,book_id,analysis_key,chapter_id,input_hash) values($1,$2,$3,$4,$5) on conflict do nothing',
-        [...args, inputHash],
-      );
-      const state = (
-        await client.query(
-          'select * from speaker_analysis where user_id=$1 and book_id=$2 and analysis_key=$3 and chapter_id=$4',
-          args,
-        )
-      ).rows[0];
-      if (state.input_hash !== inputHash)
-        throw audiobookError(409, '이전 회차의 분석 기록이 달라졌어요. 새 작업으로 만들어 주세요.');
-      if (state.result) {
-        await this.acceptChapter(run, loaded, state.result, signal);
-        return;
-      }
-      const config = run.settings.cast!;
-      const engine = await this.engines.load(config.engineId, config.engineRevision);
-      const deadline = AbortSignal.any([signal, AbortSignal.timeout(180_000)]);
-      const caps = await this.engines.transport.capabilities(engine, deadline);
-      if (caps.engineVersion !== config.engineVersion)
-        throw audiobookError(409, '분석 엔진 버전이 바뀌었어요. 기존 결과를 보관하고 새 작업으로 시작해 주세요.');
-      const request = state.checkpoint as Extract<SpeakerEngineResult, { kind: 'request' }> | null;
-      await client.query('update saved_audiobooks set current_chapter_title=$2 where id=$1', [
-        id,
-        loaded.chapter.title,
-      ]);
-      if (!request || state.model_response !== null) {
-        let result: SpeakerEngineResult;
-        try {
-          result = await this.engines.transport.step(
-            engine,
-            {
-              protocol: SPEAKER_ENGINE_PROTOCOL,
-              source,
-              ledger: run.ledger ?? undefined,
-              checkpoint: request?.checkpoint,
-              response: state.model_response ?? undefined,
-            },
-            deadline,
-          );
-        } catch (e) {
-          if (state.model_response !== null && (e as { upstreamStatus?: number }).upstreamStatus === 422)
-            await client.query(
-              'update speaker_analysis set response_rejected=true where user_id=$1 and book_id=$2 and analysis_key=$3 and chapter_id=$4',
-              args,
-            );
-          throw e;
-        }
+      await this.advanceChapter(run, client, signal, true, async () => {
         signal.throwIfAborted();
-        await this.saveAnalysis(
-          run,
-          args,
-          {
-            checkpoint: result.kind === 'request' ? result : undefined,
-            result: result.kind === 'complete' ? result : undefined,
-          },
-          result.kind === 'request' ? result.stage : 'audio',
-        );
-      } else {
-        if (state.dispatching) throw audiobookError(409, '중단된 분석 요청이 있어요. 이어 만들기를 눌러 주세요.');
-        await client.query('update speaker_generation_runs set stage=$2 where audiobook_id=$1', [id, request.stage]);
-        signal.throwIfAborted();
-        const used = Number(
-          (await client.query('select coalesce(sum(bytes),0) n from speaker_analysis where user_id=$1', [this.owner]))
-            .rows[0].n,
-        );
-        if (used + 2 * 1024 * 1024 > 512 * 1024 * 1024 || Number(state.bytes) + 2 * 1024 * 1024 > 16 * 1024 * 1024)
-          throw audiobookError(413, '분석 응답을 저장할 공간이 부족해요. 필요 없는 생성 작업을 삭제해 주세요.');
-        await client.query(
-          'update speaker_analysis set dispatching=true where user_id=$1 and book_id=$2 and analysis_key=$3 and chapter_id=$4',
-          args,
-        );
-        let response: string;
-        try {
-          response = await this.engines.transport.generate(engine, request, deadline);
-        } catch (e) {
-          if ((e as { statusCode?: number }).statusCode === 429)
-            await client.query(
-              'update speaker_analysis set dispatching=false where user_id=$1 and book_id=$2 and analysis_key=$3 and chapter_id=$4',
-              args,
-            );
-          throw e;
-        }
-        // Save completed model output even if the user paused; acceptance happens only after ownership validation.
-        await this.saveAnalysis(run, args, { response });
-      }
+        return (await this.run(id)).status === 'running';
+      });
     } finally {
       if (locked) await client.query('select pg_advisory_unlock(hashtextextended($1,0))', [lock]);
       client.release();
+    }
+  }
+  private async advanceChapter(
+    run: Run,
+    client: pg.PoolClient,
+    signal: AbortSignal,
+    prepare: boolean,
+    active: () => Promise<boolean>,
+  ) {
+    if (!(await active())) return;
+    await this.authority(run);
+    const id = run.id;
+    const chapterId = run.chapter_ids[run.next_chapter];
+    const loaded = await loadSpeakerChapter(this.pool, this.owner, run.book_id, chapterId, run.next_chapter + 1);
+    const all = (
+      await this.pool.query('select id from chapters where book_id=$1 order by chapter_index,id', [run.book_id])
+    ).rows;
+    const side = async (n: number) =>
+      n >= 0 && n < all.length
+        ? (await loadSpeakerChapter(this.pool, this.owner, run.book_id, all[n].id, n + 1)).chapter
+        : undefined;
+    const source = {
+      scope: run.book_id,
+      revision: run.content_revision ?? structuredIntegrityHash(run.book_id),
+      chapter: loaded.chapter,
+      previous: await side(run.next_chapter - 1),
+      next: await side(run.next_chapter + 1),
+    };
+    const inputHash = structuredIntegrityHash({ source, ledger: run.ledger ?? null });
+    const args = [this.owner, run.book_id, run.analysis_key, chapterId];
+    await client.query(
+      'insert into speaker_analysis(user_id,book_id,analysis_key,chapter_id,input_hash) values($1,$2,$3,$4,$5) on conflict do nothing',
+      [...args, inputHash],
+    );
+    const state = (
+      await client.query(
+        'select * from speaker_analysis where user_id=$1 and book_id=$2 and analysis_key=$3 and chapter_id=$4',
+        args,
+      )
+    ).rows[0];
+    if (state.input_hash !== inputHash)
+      throw audiobookError(409, '이전 회차의 분석 기록이 달라졌어요. 새 작업으로 만들어 주세요.');
+    if (state.result) {
+      await this.acceptChapter(run, loaded, state.result, signal);
+      return;
+    }
+    const config = run.settings.cast!;
+    const engine = await this.engines.load(config.engineId, config.engineRevision);
+    const deadline = AbortSignal.any([signal, AbortSignal.timeout(180_000)]);
+    const caps = await this.engines.transport.capabilities(engine, deadline);
+    if (caps.engineVersion !== config.engineVersion)
+      throw audiobookError(409, '분석 엔진 버전이 바뀌었어요. 기존 결과를 보관하고 새 작업으로 시작해 주세요.');
+    const request = state.checkpoint as Extract<SpeakerEngineResult, { kind: 'request' }> | null;
+    let attribution: unknown;
+    if (!request && state.model_response === null) {
+      const preparedArgs = [this.owner, run.book_id, attributionKey(run.analysis_key), chapterId];
+      const readPrepared = async () =>
+        (
+          await client.query(
+            'select input_hash,result from speaker_analysis where user_id=$1 and book_id=$2 and analysis_key=$3 and chapter_id=$4',
+            preparedArgs,
+          )
+        ).rows[0];
+      const prepared = await readPrepared();
+      // Lowering concurrency must finish an existing A checkpoint, not send its paid request again serially.
+      if (prepare && !prepared?.result && ((engine.analysisConcurrency ?? 1) > 1 || prepared)) {
+        if (!caps.attributionPreparation)
+          throw audiobookError(
+            409,
+            '이 분석 서비스는 병렬 화자 찾기를 지원하지 않아요. 동시 분석 수를 1로 설정해 주세요.',
+          );
+        await client.query("update speaker_generation_runs set stage='attribution' where audiobook_id=$1", [id]);
+        const width = run.rate_limit_attempts > 0 ? 1 : (engine.analysisConcurrency ?? 1);
+        // One bounded batch at a time; do not delay an already prepared current chapter to prefetch more.
+        const candidates = run.chapter_ids.slice(run.next_chapter, run.next_chapter + width);
+        const existing = (
+          await client.query(
+            'select chapter_id from speaker_analysis where user_id=$1 and book_id=$2 and analysis_key=$3 and chapter_id=any($4::text[]) and (checkpoint is not null or result is not null or model_response is not null)',
+            [this.owner, run.book_id, run.analysis_key, candidates],
+          )
+        ).rows.map((r) => r.chapter_id);
+        await prepareAttributionBatch({
+          pool: this.pool,
+          owner: this.owner,
+          bookId: run.book_id,
+          analysisKey: run.analysis_key,
+          chapterIds: candidates,
+          identityOnly: existing,
+          engine,
+          transport: this.engines.transport,
+          signal,
+          active,
+          identity: async (chapterId, available) => {
+            for (let step = 0; step < 256; step++) {
+              if (!(await available())) return false;
+              const current = await this.run(id);
+              if (current.chapter_ids[current.next_chapter] !== chapterId)
+                return current.next_chapter > current.chapter_ids.indexOf(chapterId);
+              await this.advanceChapter(current, client, signal, false, available);
+            }
+            return false;
+          },
+          save: (args, patch) => this.saveAnalysis(run, args, patch),
+          source: async (target) => {
+            const index = run.chapter_ids.indexOf(target);
+            return {
+              ...source,
+              chapter: (await loadSpeakerChapter(this.pool, this.owner, run.book_id, target, index + 1)).chapter,
+              previous: await side(index - 1),
+              next: await side(index + 1),
+            };
+          },
+        });
+        return;
+      }
+      if (prepared?.result) {
+        if (prepared.input_hash !== structuredIntegrityHash(source))
+          throw audiobookError(409, '미리 분석한 회차의 본문이 변경됐어요.');
+        attribution = prepared.result.checkpoint;
+      }
+    }
+    await client.query('update saved_audiobooks set current_chapter_title=$2 where id=$1', [id, loaded.chapter.title]);
+    if (!request || state.model_response !== null) {
+      let result: SpeakerEngineResult;
+      try {
+        result = await this.engines.transport.step(
+          engine,
+          {
+            protocol: SPEAKER_ENGINE_PROTOCOL,
+            source,
+            ledger: run.ledger ?? undefined,
+            checkpoint: request?.checkpoint,
+            response: state.model_response ?? undefined,
+            attribution,
+          },
+          deadline,
+        );
+      } catch (e) {
+        if (state.model_response !== null && (e as { upstreamStatus?: number }).upstreamStatus === 422)
+          await client.query(
+            'update speaker_analysis set response_rejected=true where user_id=$1 and book_id=$2 and analysis_key=$3 and chapter_id=$4',
+            args,
+          );
+        throw e;
+      }
+      signal.throwIfAborted();
+      await this.saveAnalysis(
+        run,
+        args,
+        {
+          checkpoint: result.kind === 'request' ? result : undefined,
+          result: result.kind === 'complete' ? result : undefined,
+        },
+        result.kind === 'request' ? result.stage : 'audio',
+      );
+    } else {
+      if (state.dispatching) throw audiobookError(409, '중단된 분석 요청이 있어요. 이어 만들기를 눌러 주세요.');
+      await client.query('update speaker_generation_runs set stage=$2 where audiobook_id=$1', [id, request.stage]);
+      if (!(await active())) return;
+      const used = Number(
+        (await client.query('select coalesce(sum(bytes),0) n from speaker_analysis where user_id=$1', [this.owner]))
+          .rows[0].n,
+      );
+      if (used + 2 * 1024 * 1024 > 512 * 1024 * 1024 || Number(state.bytes) + 2 * 1024 * 1024 > 16 * 1024 * 1024)
+        throw audiobookError(413, '분석 응답을 저장할 공간이 부족해요. 필요 없는 생성 작업을 삭제해 주세요.');
+      await client.query(
+        'update speaker_analysis set dispatching=true where user_id=$1 and book_id=$2 and analysis_key=$3 and chapter_id=$4',
+        args,
+      );
+      let response: string;
+      try {
+        if (!(await active())) {
+          await client.query(
+            'update speaker_analysis set dispatching=false where user_id=$1 and book_id=$2 and analysis_key=$3 and chapter_id=$4',
+            args,
+          );
+          return;
+        }
+        response = await this.engines.transport.generate(engine, request, deadline);
+      } catch (e) {
+        if ((e as { statusCode?: number }).statusCode === 429) {
+          await client.query(
+            'update speaker_analysis set dispatching=false where user_id=$1 and book_id=$2 and analysis_key=$3 and chapter_id=$4',
+            args,
+          );
+          Object.assign(e as object, { analysisRetryLimit: engine.rateLimitRetries });
+        }
+        throw e;
+      }
+      // Save completed model output even if the user paused; acceptance happens only after ownership validation.
+      await this.saveAnalysis(run, args, { response });
     }
   }
   private async acceptChapter(

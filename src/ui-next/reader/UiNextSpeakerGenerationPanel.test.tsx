@@ -434,11 +434,30 @@ describe('UiNextSpeakerGenerationPanel jobs', () => {
     expect(text(root)).toContain('69개 중 2번째 회차');
     expect(text(root)).toContain('인물 파악을 위한 앞 회차');
     expect(text(root)).toContain('분석 완료 1 / 69회차');
+    expect(text(root)).not.toContain('화자 찾기 완료');
     expect(text(root)).toContain('음성 구간 수는 회차 분석 후 표시돼요.');
     expect(text(root)).not.toContain('0 / 0 구간');
     expect(text(root)).not.toContain('0 B');
     expect(root.findByProps({ 'aria-label': '회차 분석 진행' })).toBeDefined();
     expect(button(root, '본문에서 듣기').props.disabled).toBe(true);
+  });
+
+  it('shows parallel attribution ahead of fully analyzed chapters without a second bar', async () => {
+    const root = await mount(
+      controls({
+        port: port(async () => [
+          job({
+            stage: 'identity',
+            itemCount: 0,
+            analyzedChapters: 1,
+            analysisProgress: { chapterCount: 69, attributionCompleted: 5 },
+          }),
+        ]),
+      }),
+    );
+    expect(text(root)).toContain('화자 찾기 완료 5 / 69회차');
+    expect(text(root)).toContain('분석 완료 1 / 69회차');
+    expect(root.findAllByProps({ role: 'progressbar' })).toHaveLength(1);
   });
 
   it('shows scheduled rate-limit waiting without claiming the model is processing or repeating an old wait duration', async () => {

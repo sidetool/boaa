@@ -32,7 +32,12 @@ export interface SpeakerEngineStep {
   ledger?: unknown;
   checkpoint?: unknown;
   response?: string;
+  /** Source-scoped, validated A checkpoint; never contains sequential identity memory. */
+  attribution?: unknown;
 }
+export type SpeakerAttributionStep = Omit<SpeakerEngineStep, 'ledger' | 'attribution'>;
+export type SpeakerAttributionResult =
+  Extract<SpeakerEngineResult, { kind: 'request' }> | { kind: 'attributed'; checkpoint: unknown };
 export type SpeakerEngineResult =
   | {
       kind: 'request';

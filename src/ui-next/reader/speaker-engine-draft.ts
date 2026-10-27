@@ -14,6 +14,9 @@ export type TokenLimitParameter = NonNullable<SpeakerEngineInput['tokenLimitPara
 export const DEFAULT_SPEAKER_ENGINE_URL = 'http://speaker-engine:8095';
 
 export const SPEAKER_ENGINE_OUTPUT = { min: 1024, max: 32768, default: 24576 } as const;
+/** Total concurrent analysis requests (attribution + identity); 1 keeps the paid request rate unchanged until raised. */
+export const SPEAKER_ANALYSIS_CONCURRENCY = { min: 1, max: 8 } as const;
+export const SPEAKER_RATE_LIMIT_RETRIES = { min: 0, max: 100 } as const;
 
 /** Field lengths the server accepts. */
 export const SPEAKER_ENGINE_FIELD_MAX = {
@@ -62,6 +65,9 @@ export interface Draft {
   pdfInput: boolean;
   /** OpenAI-compatible only: which request field carries the output limit. */
   tokenLimitParameter: TokenLimitParameter;
+  analysisConcurrency: number;
+  /** '' keeps retrying after 429; '0' stops at the first one. */
+  rateLimitRetries: string;
   paid: boolean;
   enabled: boolean;
 }
@@ -84,6 +90,8 @@ export const emptyDraft = (): Draft => ({
   reasoning: '',
   pdfInput: false,
   tokenLimitParameter: 'max_tokens',
+  analysisConcurrency: 1,
+  rateLimitRetries: '',
   // A local model is free, but assuming a charge keeps the consent step until the person says otherwise.
   paid: true,
   enabled: true,
@@ -107,6 +115,8 @@ export const draftFrom = (engine: SpeakerEngine): Draft => ({
   reasoning: engine.reasoning ?? '',
   pdfInput: engine.inputFormat === 'pdf',
   tokenLimitParameter: engine.tokenLimitParameter ?? 'max_tokens',
+  analysisConcurrency: engine.analysisConcurrency ?? 1,
+  rateLimitRetries: engine.rateLimitRetries === undefined ? '' : String(engine.rateLimitRetries),
   paid: engine.paid,
   enabled: engine.enabled,
 });
@@ -156,6 +166,16 @@ const outputTokens = (value: string) => {
     : undefined;
 };
 
+const retryLimit = (value: string) => {
+  if (!value.trim()) return null;
+  const number = Number(value);
+  return Number.isInteger(number) &&
+    number >= SPEAKER_RATE_LIMIT_RETRIES.min &&
+    number <= SPEAKER_RATE_LIMIT_RETRIES.max
+    ? number
+    : undefined;
+};
+
 // Omitted keeps the stored secret; '' clears it.
 const secret = (typed: string, clear: boolean) => (typed.trim() ? typed.trim() : clear ? '' : undefined);
 
@@ -182,6 +202,13 @@ export function readDraft(draft: Draft, current?: SpeakerEngine) {
   const apiKey = secret(draft.apiKey, draft.clearKey);
   const engineToken = secret(draft.engineToken, draft.clearToken);
   const maxOutputTokens = outputTokens(draft.maxOutputTokens);
+  const analysis = draft.purpose === 'analysis';
+  // null = no cap (field left empty); undefined = not a valid count.
+  const retries = retryLimit(draft.rateLimitRetries);
+  const concurrencyValid =
+    Number.isInteger(draft.analysisConcurrency) &&
+    draft.analysisConcurrency >= SPEAKER_ANALYSIS_CONCURRENCY.min &&
+    draft.analysisConcurrency <= SPEAKER_ANALYSIS_CONCURRENCY.max;
   const input: SpeakerEngineInput = {
     ...(draft.purpose === 'casting' || current?.purpose ? { purpose: draft.purpose } : {}),
     name: draft.name.trim() || draft.modelId.trim() || hostName(draft.url) || '분석 모델',
@@ -207,6 +234,11 @@ export function readDraft(draft: Draft, current?: SpeakerEngine) {
     (draft.tokenLimitParameter !== 'max_tokens' || current?.tokenLimitParameter !== undefined)
       ? { tokenLimitParameter: draft.tokenLimitParameter }
       : {}),
+    // Execution limits apply to analysis only. Like the token field, an older model's implicit 1 stays implicit.
+    ...(analysis && (draft.analysisConcurrency !== 1 || current?.analysisConcurrency !== undefined)
+      ? { analysisConcurrency: draft.analysisConcurrency }
+      : {}),
+    ...(analysis && typeof retries === 'number' ? { rateLimitRetries: retries } : {}),
     paid: draft.paid,
     enabled: draft.enabled,
   };
@@ -228,6 +260,10 @@ export function readDraft(draft: Draft, current?: SpeakerEngine) {
       ? '모델 ID를 넣어 주세요.'
       : !maxOutputTokens
         ? `최대 출력 토큰은 ${SPEAKER_ENGINE_OUTPUT.min}~${SPEAKER_ENGINE_OUTPUT.max} 사이 정수로 넣어 주세요.`
-        : undefined);
+        : analysis && !concurrencyValid
+          ? `동시 분석 요청 수는 ${SPEAKER_ANALYSIS_CONCURRENCY.min}~${SPEAKER_ANALYSIS_CONCURRENCY.max}개 중에서 골라 주세요.`
+          : analysis && retries === undefined
+            ? `요청 제한 재시도 횟수는 ${SPEAKER_RATE_LIMIT_RETRIES.min}~${SPEAKER_RATE_LIMIT_RETRIES.max} 사이 정수로 넣거나, 계속 재시도하려면 비워 두세요.`
+            : undefined);
   return { input, decisions, probeProblem, saveProblem };
 }

@@ -33,6 +33,7 @@ export interface SpeakerGenerationJob extends SavedAudiobook {
   /** Includes earlier chapters needed to identify recurring characters. */
   analysisProgress?: {
     chapterCount: number;
+    attributionCompleted?: number;
     currentChapter?: { number: number; title: string; contextOnly: boolean };
   };
   /** False means itemCount covers only the chapters planned so far. */

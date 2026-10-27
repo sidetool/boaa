@@ -10,8 +10,10 @@ import {
   hostName,
   PROTOCOL_HINT,
   readDraft,
+  SPEAKER_ANALYSIS_CONCURRENCY,
   SPEAKER_ENGINE_FIELD_MAX,
   SPEAKER_ENGINE_OUTPUT,
+  SPEAKER_RATE_LIMIT_RETRIES,
   type Draft,
   type Protocol,
   type Reasoning,
@@ -273,7 +275,8 @@ function Engines({ port, onChanged }: UiNextSpeakerEnginesProps) {
     Boolean(current?.hasEngineToken) ||
     draft.maxOutputTokens !== String(SPEAKER_ENGINE_OUTPUT.default) ||
     Boolean(draft.reasoning) ||
-    (draft.protocol === 'openai' && draft.tokenLimitParameter !== 'max_tokens');
+    (draft.protocol === 'openai' && draft.tokenLimitParameter !== 'max_tokens') ||
+    (draft.purpose === 'analysis' && (draft.analysisConcurrency !== 1 || draft.rateLimitRetries.trim() !== ''));
 
   return (
     <section className="un-listen-group un-tts-conn" aria-label="분석 모델">
@@ -578,6 +581,39 @@ function Engines({ port, onChanged }: UiNextSpeakerEnginesProps) {
                   </select>
                 </label>
               )}
+              {draft.purpose === 'analysis' && (
+                <>
+                  <label>
+                    <span>동시 분석 요청 수</span>
+                    <select
+                      value={draft.analysisConcurrency}
+                      onChange={(event) => patch({ analysisConcurrency: Number(event.target.value) })}
+                    >
+                      {Array.from(
+                        { length: SPEAKER_ANALYSIS_CONCURRENCY.max - SPEAKER_ANALYSIS_CONCURRENCY.min + 1 },
+                        (_, index) => SPEAKER_ANALYSIS_CONCURRENCY.min + index,
+                      ).map((value) => (
+                        <option key={value} value={value}>
+                          {value === 1 ? '1개 (순서대로)' : `${value}개`}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label>
+                    <span>요청 제한 재시도 횟수</span>
+                    <input
+                      type="number"
+                      inputMode="numeric"
+                      min={SPEAKER_RATE_LIMIT_RETRIES.min}
+                      max={SPEAKER_RATE_LIMIT_RETRIES.max}
+                      step={1}
+                      value={draft.rateLimitRetries}
+                      placeholder="계속 재시도"
+                      onChange={(event) => patch({ rateLimitRetries: event.target.value })}
+                    />
+                  </label>
+                </>
+              )}
               <label className="is-wide" hidden={draft.purpose === 'casting'}>
                 <span>분석 서비스 주소</span>
                 <input
@@ -621,6 +657,14 @@ function Engines({ port, onChanged }: UiNextSpeakerEnginesProps) {
               <p className="un-filter-help is-error" role="note">
                 분석 서비스 주소가 바뀌어 저장된 토큰은 새 주소로 보내지 않아요. 새 토큰을 넣거나 저장된 토큰 지우기를
                 고르세요.
+              </p>
+            )}
+            {draft.purpose === 'analysis' && (
+              <p className="un-filter-help">
+                화자 찾기는 병렬로 진행하고, 준비된 회차의 인물 연결을 우선 처리해요. 전체 분석 요청은 설정한 수를 넘지
+                않아요. 1개면 순서대로 처리해요. 요청 수를 늘리면 요청 제한(429)에 더 자주 걸릴 수 있어요. 재시도 횟수를
+                비워 두면 요청 제한이 풀릴 때까지 계속 다시 시도하고, 0이면 첫 요청 제한에서 멈춰요. 시간 초과나 서버
+                오류는 자동으로 다시 시도하지 않으니 생성 목록에서 직접 이어 만들어 주세요.
               </p>
             )}
             <p className="un-filter-help">

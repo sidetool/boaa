@@ -621,6 +621,21 @@ export class AudiobookService {
       } catch (error) {
         await client.query('rollback');
         if (this.failure(error).status === 429) {
+          const retryLimit = (error as { analysisRetryLimit?: number }).analysisRetryLimit;
+          if (
+            Number.isInteger(retryLimit) &&
+            retryLimit! >= 0 &&
+            retryLimit! <= 100 &&
+            job.rate_limit_attempts >= retryLimit!
+          ) {
+            await client.query(
+              `update saved_audiobooks set status=case when status='pausing' then 'paused' else 'failed' end,
+              retry_at=null,error_message=case when status='pausing' then null else $2 end,updated_at=now()
+              where id=$1 and status in ('running','pausing')`,
+              [job.id, '분석 요청 제한의 자동 재시도 횟수를 모두 사용했어요. 설정을 확인한 뒤 이어 만들 수 있어요.'],
+            );
+            return false;
+          }
           const failure = error as { retryAfterSeconds?: number; payload?: { retryAfterSeconds?: number } };
           const hint = failure.retryAfterSeconds ?? failure.payload?.retryAfterSeconds;
           const backoff = Math.min(300, 10 * 2 ** Math.min(job.rate_limit_attempts, 5));
@@ -631,7 +646,7 @@ export class AudiobookService {
           await client.query(
             `update saved_audiobooks set
             status=case when status='pausing' then 'paused' else 'queued' end,
-            retry_at=now()+($2 * interval '1 second'),rate_limit_attempts=least(rate_limit_attempts+1,30),
+            retry_at=now()+($2 * interval '1 second'),rate_limit_attempts=least(rate_limit_attempts+1,100),
             error_message=case when status='pausing' then null else $3 end,updated_at=now()
             where id=$1 and status in ('running','pausing')`,
             [job.id, seconds, `음성 제공자 요청 제한으로 대기 중 · ${Math.ceil(seconds)}초 후 자동으로 이어 만들어요.`],

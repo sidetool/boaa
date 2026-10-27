@@ -17,6 +17,10 @@ export interface SpeakerEngineInput {
   reasoning?: 'low' | 'medium' | 'high';
   /** Opt-in native-text PDF input for Gemini/Vertex; omitted keeps the existing text path. */
   inputFormat?: 'pdf';
+  /** Total concurrent analysis requests (attribution + priority ordered identity). Omitted = 1. */
+  analysisConcurrency?: number;
+  /** Extra automatic attempts after 429. Omitted = keep retrying; 0 disables automatic retry. */
+  rateLimitRetries?: number;
   paid: boolean;
   enabled: boolean;
 }

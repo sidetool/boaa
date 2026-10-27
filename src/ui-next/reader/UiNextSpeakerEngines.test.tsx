@@ -1,7 +1,7 @@
 import { act, create, type ReactTestInstance, type ReactTestRenderer } from 'react-test-renderer';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { SpeakerEngine, SpeakerEnginesPort } from '../../providers/speaker-engine';
-import { DEFAULT_SPEAKER_ENGINE_URL, draftFrom, readDraft } from './speaker-engine-draft';
+import { DEFAULT_SPEAKER_ENGINE_URL, draftFrom, emptyDraft, readDraft } from './speaker-engine-draft';
 import UiNextSpeakerEngines from './UiNextSpeakerEngines';
 
 let root: ReactTestRenderer;
@@ -251,6 +251,30 @@ describe('speaker engine draft', () => {
     const stored = { ...saved, tokenLimitParameter: 'max_tokens' as const };
     expect(readDraft(draftFrom(stored), stored).input.tokenLimitParameter).toBe('max_tokens');
   });
+
+  it('keeps analysis limits implicit for older models, sends retry 0, and drops the cap when cleared', () => {
+    const old = draftFrom(saved);
+    expect(old.analysisConcurrency).toBe(1);
+    expect(old.rateLimitRetries).toBe('');
+    expect(readDraft(old, saved).input).not.toHaveProperty('analysisConcurrency');
+    expect(readDraft(old, saved).input).not.toHaveProperty('rateLimitRetries');
+    expect(readDraft(emptyDraft()).input).not.toHaveProperty('analysisConcurrency');
+    const tuned = { ...saved, analysisConcurrency: 3, rateLimitRetries: 0 };
+    const draft = draftFrom(tuned);
+    expect(draft.rateLimitRetries).toBe('0');
+    expect(readDraft(draft, tuned).input).toMatchObject({ analysisConcurrency: 3, rateLimitRetries: 0 });
+    // Lowering back to 1 is sent explicitly; clearing the retry field removes the cap.
+    const back = readDraft({ ...draft, analysisConcurrency: 1, rateLimitRetries: '' }, tuned);
+    expect(back.input.analysisConcurrency).toBe(1);
+    expect(back.input).not.toHaveProperty('rateLimitRetries');
+    expect(readDraft({ ...draft, rateLimitRetries: '101' }, tuned).saveProblem).toContain('요청 제한 재시도 횟수');
+    expect(readDraft({ ...draft, rateLimitRetries: '1.5' }, tuned).saveProblem).toContain('요청 제한 재시도 횟수');
+    // Casting never uses these limits.
+    const casting = readDraft({ ...draft, purpose: 'casting', rateLimitRetries: '101' }, tuned);
+    expect(casting.input).not.toHaveProperty('analysisConcurrency');
+    expect(casting.input).not.toHaveProperty('rateLimitRetries');
+    expect(casting.saveProblem).toBeUndefined();
+  });
 });
 
 describe('UiNextSpeakerEngines', () => {
@@ -322,5 +346,28 @@ describe('UiNextSpeakerEngines', () => {
     expect(sent).not.toHaveProperty('apiKey');
     expect(sent).not.toHaveProperty('engineToken');
     expect(p.save.mock.calls[0]![2]).toBe('e1');
+  });
+
+  it('edits analysis limits under advanced settings and keeps them when turned off', async () => {
+    const tuned = { ...saved, analysisConcurrency: 2, rateLimitRetries: 0 };
+    const { p } = await setup([tuned]);
+    act(() => button('집 PC 모델 수정').props.onClick());
+    expect(root.root.findByType('details').props.open).toBe(true);
+    expect(field('요청 제한 재시도 횟수').props.value).toBe('0');
+    await type('동시 분석 요청 수', '4');
+    await type('요청 제한 재시도 횟수', '');
+    expect(field('요청 제한 재시도 횟수').props.placeholder).toBe('계속 재시도');
+    await submit();
+    expect(p.save.mock.calls[0]![0].analysisConcurrency).toBe(4);
+    expect(p.save.mock.calls[0]![0]).not.toHaveProperty('rateLimitRetries');
+    await act(async () => button('집 PC 모델 사용').props.onClick());
+    expect(p.save.mock.calls[1]![0]).toMatchObject({ enabled: false, analysisConcurrency: 4 });
+  });
+
+  it('hides analysis limits for a casting model', async () => {
+    await setup([{ ...saved, purpose: 'casting' }]);
+    act(() => button('집 PC 모델 수정').props.onClick());
+    expect(text()).not.toContain('동시 분석 요청 수');
+    expect(text()).not.toContain('요청 제한 재시도 횟수');
   });
 });

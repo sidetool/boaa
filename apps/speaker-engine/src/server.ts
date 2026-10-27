@@ -1,6 +1,6 @@
 import http from 'node:http';
 import { timingSafeEqual } from 'node:crypto';
-import { step, ENGINE_VERSION } from './engine';
+import { step, attributionStep, ENGINE_VERSION } from './engine';
 import { SPEAKER_ENGINE_PROTOCOL } from '../../../src/providers/speaker-engine-protocol';
 
 export function createSpeakerEngineServer(token: string) {
@@ -21,11 +21,12 @@ export function createSpeakerEngineServer(token: string) {
           protocol: SPEAKER_ENGINE_PROTOCOL,
           engineVersion: ENGINE_VERSION,
           maxChapterCharacters: 120000,
+          attributionPreparation: true,
         }),
       );
       return;
     }
-    if (req.method !== 'POST' || req.url !== '/v1/step') {
+    if (req.method !== 'POST' || !['/v1/step', '/v1/attribution'].includes(req.url ?? '')) {
       res.writeHead(404);
       res.end('{}');
       return;
@@ -43,7 +44,8 @@ export function createSpeakerEngineServer(token: string) {
         }
         chunks.push(chunk);
       }
-      const output = step(JSON.parse(Buffer.concat(chunks).toString('utf8')));
+      const input = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+      const output = req.url === '/v1/attribution' ? attributionStep(input) : step(input);
       const text = JSON.stringify(output);
       if (Buffer.byteLength(text) > 16 * 1024 * 1024) throw new Error('state_too_large');
       res.end(text);
