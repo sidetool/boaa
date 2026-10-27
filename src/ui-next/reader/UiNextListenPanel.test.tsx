@@ -5,6 +5,9 @@ import TTSAddonPanel, { type TTSAddonPanelProps } from '../../features/tts/TTSAd
 import { DEFAULT_TTS_PLAYBACK_SETTINGS } from '../../providers/tts-playback-settings';
 import UiNextListenPanel from './UiNextListenPanel';
 import UiNextTTSConnections from './UiNextTTSConnections';
+import UiNextSpeakerEngines from './UiNextSpeakerEngines';
+import UiNextSpeakerGenerationPanel from './UiNextSpeakerGenerationPanel';
+import type { TTSSpeakerGenerationControls } from '../../providers/speaker-generation';
 import { usePlainTTS } from '../../features/tts/usePlainTTS';
 import { useTTSExecutionController } from '../../features/tts/useTTSExecutionController';
 import { buildPlainTTSBatch } from '../../providers/plain-tts';
@@ -702,5 +705,56 @@ describe('UiNextListenPanel optional server narration', () => {
     click(button(root, '서버 설정 열기'));
     expect(props.openServerSettings).toHaveBeenCalledOnce();
     expect(props.changePlaybackSettings).not.toHaveBeenCalled();
+  });
+});
+
+describe('UiNextListenPanel 화자별 미리 생성하기', () => {
+  const speakerGeneration = (): TTSSpeakerGenerationControls => ({
+    key: 'account-1:novel-1',
+    port: {
+      preferences: vi.fn(() => new Promise<never>(() => {})),
+      savePreferences: vi.fn(),
+      list: vi.fn(() => new Promise<never>(() => {})),
+      estimate: vi.fn(),
+      create: vi.fn(),
+      control: vi.fn(),
+      remove: vi.fn(),
+    },
+    engines: { list: vi.fn(() => new Promise<never>(() => {})), probe: vi.fn(), save: vi.fn(), remove: vi.fn() },
+    chapters: [{ id: 'c1', title: '1화' }],
+    currentChapterId: 'c1',
+    rules: [],
+    footnotePlayback: 'skip',
+    listen: vi.fn(),
+    refreshVoices: vi.fn(),
+  });
+
+  it('is offered only when wired, beside the ordinary 미리 생성하기', () => {
+    const without = mount();
+    expect(text(without.root.findByProps({ 'aria-label': '더 많은 청취 설정' }))).not.toContain('화자별 미리 생성하기');
+    act(() => renderer!.unmount());
+    const { root } = mount(fixture({ speakerGeneration: speakerGeneration() }));
+    click(button(root.findByProps({ 'aria-label': '더 많은 청취 설정' }), /^화자별 미리 생성하기/));
+    expect(text(root.findByProps({ className: 'un-listen-page-title' }))).toBe('화자별 미리 생성하기');
+    expect(root.findByType(UiNextSpeakerGenerationPanel)).toBeDefined();
+    click(button(root, '듣기'));
+    expect(button(root, '재생')).toBeDefined();
+  });
+
+  it('opens analysis models over the page, keeping it mounted, and reloads its list on change', () => {
+    const controls = speakerGeneration();
+    const { root } = mount(fixture({ speakerGeneration: controls }));
+    click(button(root.findByProps({ 'aria-label': '더 많은 청취 설정' }), /^화자별 미리 생성하기/));
+    const panel = root.findByType(UiNextSpeakerGenerationPanel);
+    act(() => panel.props.onManageEngines());
+    expect(text(root.findByProps({ className: 'un-listen-page-title' }))).toBe('분석 모델 연결');
+    const editor = root.findByType(UiNextSpeakerEngines);
+    expect(editor.props.port).toBe(controls.engines);
+    expect(root.findByType(UiNextSpeakerGenerationPanel)).toBe(panel);
+    act(() => editor.props.onChanged());
+    expect(panel.props.enginesRevision).toBe(1);
+    click(button(root, '화자별 미리 생성하기'));
+    expect(text(root.findByProps({ className: 'un-listen-page-title' }))).toBe('화자별 미리 생성하기');
+    expect(root.findAllByType(UiNextSpeakerEngines)).toHaveLength(0);
   });
 });

@@ -1,3 +1,5 @@
+import { createSpeakerEnginesPort, createSpeakerGenerationPort } from './services/remote/speaker-generation-client';
+import type { SavedAudiobook } from './providers/plain-audiobook';
 import { preparedNarrationSession, preparedNarrationJump } from './providers/prepared-narration';
 import type { PreparedNarration } from './providers/plain-audiobook';
 import { RemoteFileManager } from './external-sources/remote-files/remote-file-manager';
@@ -2716,6 +2718,18 @@ export default function App() {
         : undefined,
     [canUseProviders, readerRuntime, providerApiClient, selectedNovel?.id],
   );
+  const speakerEngines = useMemo(() => {
+    void ttsAccountScope;
+    return canUseProviders && readerRuntime.mode === 'remote' && providerApiClient
+      ? createSpeakerEnginesPort(providerApiClient)
+      : undefined;
+  }, [canUseProviders, readerRuntime.mode, providerApiClient, ttsAccountScope]);
+  const speakerGenerationPort = useMemo(() => {
+    void ttsAccountScope;
+    return audiobookPort && providerApiClient && selectedNovel?.id
+      ? createSpeakerGenerationPort(providerApiClient, selectedNovel.id)
+      : undefined;
+  }, [audiobookPort, providerApiClient, selectedNovel?.id, ttsAccountScope]);
   const [preparedChoice, setPreparedChoice] = useState<{ owner: object; id: string; label: string }>();
   const preparedChoiceRef = useRef(preparedChoice);
   preparedChoiceRef.current = preparedChoice;
@@ -2723,6 +2737,28 @@ export default function App() {
   const preparedPlanRef = useRef<{ owner: object; plan: PreparedNarration }>();
   const plainMode = !!activePrepared || ttsPlaybackSettings.mode !== 'cast';
   const plainServerSelected = !!activePrepared || (plainMode && ttsPlaybackSettings.voiceSource === 'server');
+  const listenPreparedNarration = async (item: SavedAudiobook) => {
+    if (!selectedNovel) return;
+
+    const target =
+      chapters.find((c) => c.id === currentChapter?.id && item.chapterIds?.includes(c.id)) ??
+      chapters.find((c) => c.id === item.chapterIds?.[0]);
+    if (!target) throw new Error('미리 만든 음성의 회차를 찾지 못했어요.');
+    stopTTS();
+    plainTTS.stopPreview();
+    stopProviderSamples();
+    const selection = { owner: ttsSessionOwner, id: item.id, label: item.voiceLabel };
+    preparedChoiceRef.current = selection;
+    setPreparedChoice(selection);
+    setAddonOpen(false);
+    bookPlaybackCoordinator.schedule({
+      bookId: selectedNovel.id,
+      chapterId: target.id,
+      startIndex: target.id === currentChapter?.id ? (ttsIndex ?? readerScreenHandle.getLocation()?.ttsIndex ?? 0) : 0,
+    });
+    if (target.id !== currentChapter?.id)
+      await bookWorkspace.openChapter(target, { novel: selectedNovel, initialMode: 'listen' });
+  };
   const plainTTS = usePlainTTS({
     prepared: audiobookPort,
     owner: ttsSessionOwner,
@@ -5948,6 +5984,35 @@ export default function App() {
                   void plainTTS.refresh();
                 }}
                 openServerSettings={openServerSettings}
+                speakerGeneration={
+                  speakerGenerationPort &&
+                  speakerEngines &&
+                  spokenFilters.ready &&
+                  ['txt', 'markdown', 'epub'].includes(selectedNovel.format ?? 'txt')
+                    ? {
+                        key: JSON.stringify([readerRuntime.session?.epoch, ttsAccountScope, selectedNovel.id]),
+                        port: speakerGenerationPort,
+                        engines: speakerEngines,
+                        chapters: [...chapters]
+                          .sort((a, b) => a.index - b.index)
+                          .map(({ id, title }) => ({ id, title })),
+                        currentChapterId: currentChapter.id,
+                        voices: plainTTS.catalog,
+                        narratorVoiceId: ttsPlaybackSettings.serverVoiceId || plainTTS.catalog?.defaultVoiceId,
+                        rules: spokenTextRules,
+                        footnotePlayback: ttsPlaybackSettings.footnotePlayback,
+                        refreshVoices: plainTTS.refresh,
+                        listen: async (item) => {
+                          const ready = item.readyChapterIds;
+                          const target = ready.includes(currentChapter.id)
+                            ? currentChapter.id
+                            : chapters.find((c) => ready.includes(c.id))?.id;
+                          if (!target) throw new Error('아직 준비된 음성이 없어요.');
+                          await listenPreparedNarration({ ...item, chapterIds: [target] });
+                        },
+                      }
+                    : undefined
+                }
                 audiobook={
                   audiobookPort && ['txt', 'markdown', 'epub'].includes(selectedNovel.format ?? 'txt')
                     ? {
@@ -5976,29 +6041,7 @@ export default function App() {
                             : undefined,
                         rate: ttsPlaybackSettings.rate,
                         volume: ttsPlaybackSettings.volume,
-                        listen: async (item) => {
-                          const target =
-                            chapters.find((c) => c.id === currentChapter?.id && item.chapterIds?.includes(c.id)) ??
-                            chapters.find((c) => c.id === item.chapterIds?.[0]);
-                          if (!target) throw new Error('미리 만든 음성의 회차를 찾지 못했어요.');
-                          stopTTS();
-                          plainTTS.stopPreview();
-                          stopProviderSamples();
-                          const selection = { owner: ttsSessionOwner, id: item.id, label: item.voiceLabel };
-                          preparedChoiceRef.current = selection;
-                          setPreparedChoice(selection);
-                          setAddonOpen(false);
-                          bookPlaybackCoordinator.schedule({
-                            bookId: selectedNovel.id,
-                            chapterId: target.id,
-                            startIndex:
-                              target.id === currentChapter?.id
-                                ? (ttsIndex ?? readerScreenHandle.getLocation()?.ttsIndex ?? 0)
-                                : 0,
-                          });
-                          if (target.id !== currentChapter?.id)
-                            await bookWorkspace.openChapter(target, { novel: selectedNovel, initialMode: 'listen' });
-                        },
+                        listen: listenPreparedNarration,
                       }
                     : undefined
                 }

@@ -1,3 +1,6 @@
+import { SpeakerEngineStore } from '../../providers/speaker-engine-store.js';
+import { SpeakerGenerationService } from '../../services/speaker-generation-service.js';
+import { registerSpeakerGenerationRoutes } from './speaker-generation-routes.js';
 import type { PlainTTSModel } from '../../../../../src/providers/plain-tts';
 import { TTSConnectionError } from '../../providers/tts-connection-config.js';
 import type { AudiobookService } from '../../services/audiobook-service.js';
@@ -556,8 +559,8 @@ export async function registerPlainTTSRoutes(
       },
     );
   }
-  if (retained)
-    return await registerAudiobookRoutes(app, pool, config, {
+  if (retained) {
+    const service = await registerAudiobookRoutes(app, pool, config, {
       audioStore: retained,
       background: options.audiobookBackground,
       catalog,
@@ -580,6 +583,31 @@ export async function registerPlainTTSRoutes(
           ? { status: error.status, message: error.message }
           : classifyPlainTTSFailure(error),
     });
+    const speaker = new SpeakerGenerationService(
+      pool,
+      config.defaultUserId,
+      new SpeakerEngineStore(pool, config, env),
+      service,
+      catalog,
+      async (text, voiceId, expected, key, regenerate) => {
+        const current = (await sources()).find((s) => s.id === expected.providerId);
+        if (!current || structuredIntegrityHash(sourceModel(current)) !== structuredIntegrityHash(expected))
+          throw new PlainTTSError(
+            409,
+            '이 음성을 만들던 모델의 설정이 바뀌었어요. 이미 만든 음성은 계속 들을 수 있어요.',
+          );
+        const selected = (await voices(current)).find((v) => voiceKey(current, v.id) === voiceId);
+        if (!selected) throw new PlainTTSError(409, '배정한 목소리를 찾지 못했어요.');
+        const audio = await synthesize(key, text, selected.id, 1, current, regenerate, 120_000);
+        const after = (await sources()).find((s) => s.id === expected.providerId);
+        if (!after || structuredIntegrityHash(sourceModel(after)) !== structuredIntegrityHash(expected))
+          throw new PlainTTSError(409, '생성 중 모델 연결이 바뀌었어요.');
+        return { ...audio, key };
+      },
+    );
+    await registerSpeakerGenerationRoutes(app, pool, config, speaker, service, parsePlainTTSRules);
+    return service;
+  }
 }
 
 class PlainTTSError extends Error {

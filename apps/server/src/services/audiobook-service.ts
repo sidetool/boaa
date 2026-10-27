@@ -44,6 +44,12 @@ function view(row: JobRow): SavedAudiobook {
 }
 
 export class AudiobookService {
+  speaker?: {
+    advance(id: string, signal: AbortSignal): Promise<void>;
+    reader(id: string, chapterId: string): Promise<PreparedNarration>;
+    render(id: string, ordinal: number, regenerate: boolean): Promise<SavedAudio>;
+    resume(id: string): Promise<void>;
+  };
   private active?: { id: string; abort: AbortController };
   private lastCleanup = 0;
   private closing = false;
@@ -84,7 +90,7 @@ export class AudiobookService {
     return (
       await this.pool.query(
         `select a.* from saved_audiobooks a join library_books b on b.id=a.book_id
-      where a.book_id=$1 and a.user_id=$2 and b.user_id=$2 and b.deleted_at is null order by a.created_at desc limit 50`,
+      where a.book_id=$1 and a.user_id=$2 and b.user_id=$2 and b.deleted_at is null and not(a.settings ? 'cast') order by a.created_at desc limit 50`,
         [bookId, this.owner],
       )
     ).rows.map(view);
@@ -112,13 +118,17 @@ export class AudiobookService {
         `select a.* from saved_audiobooks a join library_books b on b.id=a.book_id
       where a.book_id=$1 and a.user_id=$2 and b.user_id=$2 and b.deleted_at is null and a.status<>'deleting'
       and a.content_revision is not distinct from b.active_content_revision_id
-      and exists(select 1 from saved_audiobook_items i where i.audiobook_id=a.id and i.chapter_id=$3)
+      and (exists(select 1 from saved_audiobook_items i where i.audiobook_id=a.id and i.chapter_id=$3) or (a.settings ? 'cast' and a.settings->'chapterIds' ? $3))
       and ($4::text is null or a.id::text=$4) and ($4::text is not null or a.settings->>'voiceId'=$5)
       order by a.created_at desc limit 1`,
         [bookId, this.owner, chapterId, choice.id ?? null, choice.voiceId ?? null],
       )
     ).rows[0] as JobRow | undefined;
     if (!row) return;
+    if (row.settings.cast) {
+      if (!this.speaker) throw audiobookError(503, '화자별 음성 연결을 준비 중이에요.');
+      return this.speaker.reader(row.id, chapterId);
+    }
     const plan = await planAudiobook(this.pool, this.owner, bookId, { ...row.settings, chapterIds: [chapterId] });
     const saved = (
       await this.pool.query(
@@ -154,6 +164,7 @@ export class AudiobookService {
     };
   }
   private async model(job: JobRow) {
+    if (job.settings.cast) return undefined;
     if (job.settings.model || !this.resolveModel) return job.settings.model;
     // Older plans did not store model identity. Prove it from their existing audio key (or unchanged catalog).
     const probe = (
@@ -265,11 +276,14 @@ export class AudiobookService {
         );
         await client.query('commit');
         try {
-          audio = await this.render(
-            item.chapter_id,
-            { ...item.request, rules: job.settings.rules, ...(regenerate ? { regenerate: true } : {}) },
-            model,
-          );
+          audio = job.settings.cast
+            ? await (this.speaker?.render(job.id, ordinal, regenerate) ??
+                Promise.reject(audiobookError(503, '화자별 생성 연결을 확인해 주세요.')))
+            : await this.render(
+                item.chapter_id,
+                { ...item.request, rules: job.settings.rules, ...(regenerate ? { regenerate: true } : {}) },
+                model,
+              );
         } catch (error) {
           await client.query('update saved_audiobook_items set status=$3 where audiobook_id=$1 and ordinal=$2', [
             job.id,
@@ -279,6 +293,7 @@ export class AudiobookService {
           throw error;
         }
       }
+      if (!audio) throw audiobookError(502, '생성된 음성을 받지 못했어요.');
       await client.query('begin');
       const current = (
         await client.query(
@@ -296,7 +311,7 @@ export class AudiobookService {
       );
       await client.query(
         `update saved_audiobooks a set completed_items=x.n,bytes=x.bytes,
-        status=case when x.n=a.total_items then 'completed' else a.status end,updated_at=now()
+        status=case when x.n=a.total_items and a.planning_complete then 'completed' else a.status end,updated_at=now()
         from (select count(*)::int n,coalesce(sum(bytes),0) bytes from saved_audiobook_items where audiobook_id=$1 and status='ready') x where a.id=$1`,
         [job.id],
       );
@@ -347,8 +362,8 @@ export class AudiobookService {
       const id = randomUUID();
       const row = (
         await client.query(
-          `insert into saved_audiobooks(id,user_id,book_id,content_revision,fingerprint,title,settings,estimate,status,total_items)
-        values($1,$2,$3,$4,$5,$6,$7,$8,'queued',$9) returning *`,
+          `insert into saved_audiobooks(id,user_id,book_id,content_revision,fingerprint,title,settings,estimate,status,total_items,planning_complete)
+        values($1,$2,$3,$4,$5,$6,$7,$8,'queued',$9,$10) returning *`,
           [
             id,
             this.owner,
@@ -359,10 +374,16 @@ export class AudiobookService {
             plan.settings,
             plan.estimate,
             plan.items.length,
+            plan.planningComplete !== false,
           ],
         )
       ).rows[0];
       // Send bounded batches to PostgreSQL; requests contain source hashes, never raw book text.
+      if (plan.speakerRun)
+        await client.query(
+          'insert into speaker_generation_runs(audiobook_id,analysis_key,chapter_ids) values($1,$2,$3)',
+          [id, plan.speakerRun.analysisKey, JSON.stringify(plan.speakerRun.chapterIds)],
+        );
       for (let start = 0; start < plan.items.length; start += 250) {
         const rows = plan.items.slice(start, start + 250).map((item, index) => ({
           ordinal: start + index,
@@ -395,8 +416,10 @@ export class AudiobookService {
         where id=$1 and user_id=$2 and status in ('queued','running')`,
         [id, this.owner],
       );
-      if (this.active?.id === id) this.active.abort.abort();
+      // Preserve the response to a paid analysis already in flight; pause before the next step.
+      if (this.active?.id === id && !job.settings.cast) this.active.abort.abort();
     } else if (action === 'resume') {
+      if (job.settings.cast) await this.speaker?.resume(id);
       const client = await this.pool.connect();
       try {
         await client.query('begin');
@@ -520,6 +543,10 @@ export class AudiobookService {
       const abort = new AbortController();
       this.active = { id: job.id, abort };
       try {
+        if (job.settings.cast) {
+          if (!this.speaker) throw audiobookError(503, '화자별 생성 연결을 확인해 주세요.');
+          await this.speaker.advance(job.id, abort.signal);
+        }
         const item = (
           await client.query(
             "select * from saved_audiobook_items where audiobook_id=$1 and status<>'ready' order by ordinal limit 1",
@@ -528,7 +555,7 @@ export class AudiobookService {
         ).rows[0];
         if (!item) {
           await client.query(
-            "update saved_audiobooks set status='completed',error_message=null where id=$1 and completed_items=total_items",
+            "update saved_audiobooks set status=case when status='pausing' then 'paused' when planning_complete and completed_items=total_items then 'completed' else 'queued' end,error_message=null,retry_at=null,rate_limit_attempts=0,updated_at=now() where id=$1 and status in ('running','pausing')",
             [job.id],
           );
           return;

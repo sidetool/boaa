@@ -1,0 +1,22 @@
+# Optional stateless speaker analysis. No LLM credentials or source files are mounted here.
+services:
+  speaker-engine:
+    build:
+      context: .
+      dockerfile: deploy/speaker-engine.Dockerfile
+    environment:
+      SPEAKER_ENGINE_TOKEN: ${SPEAKER_ENGINE_TOKEN:?Set a random token of at least 24 characters}
+    expose: ['8095']
+    read_only: true
+    init: true
+    restart: unless-stopped
+    stop_grace_period: 15s
+    security_opt: ['no-new-privileges:true']
+    cap_drop: [ALL]
+    mem_limit: 512m
+    cpus: 1
+    logging:
+      driver: json-file
+      options:
+        max-size: '5m'
+        max-file: '2'

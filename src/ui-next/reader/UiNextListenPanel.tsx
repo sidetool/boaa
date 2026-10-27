@@ -23,6 +23,7 @@ import {
   Square,
   Trash2,
   Users,
+  UsersRound,
   Volume2,
 } from 'lucide-react';
 import { useEffect, useState, type ReactNode } from 'react';
@@ -34,13 +35,15 @@ import ProviderSettingsPanel from '../../features/providers/ProviderSettingsPane
 import { SettingsSlider } from '../../features/reader-settings/SettingsSlider';
 import TTSAddonPanel, { type TTSAddonPanelProps } from '../../features/tts/TTSAddonPanel';
 import UiNextAudiobookPanel from './UiNextAudiobookPanel';
+import UiNextSpeakerEngines from './UiNextSpeakerEngines';
+import UiNextSpeakerGenerationPanel from './UiNextSpeakerGenerationPanel';
 import UiNextSpokenTextFilters from './UiNextSpokenTextFilters';
 import UiNextTTSConnections from './UiNextTTSConnections';
 import type { TTSVoice } from '../../providers/tts';
 import { cx, Segmented, Switch } from '../components/primitives';
 import './listen.css';
 
-type Page = 'main' | 'details' | 'advanced' | 'engines' | 'filters' | 'audiobook';
+type Page = 'main' | 'details' | 'advanced' | 'engines' | 'filters' | 'audiobook' | 'speaker' | 'speakerEngines';
 // Plain catalog entries may name the engine they run on; ids stay opaque and are saved as-is.
 type EngineVoice = TTSVoice & { providerId?: string; providerName?: string; modelId?: string; paid?: boolean };
 interface EngineStatus {
@@ -57,6 +60,8 @@ const PAGE_TITLE: Record<Exclude<Page, 'main'>, string> = {
   engines: 'TTS 엔진 연결',
   filters: '발음·문자 필터',
   audiobook: '미리 생성하기',
+  speaker: '화자별 미리 생성하기',
+  speakerEngines: '분석 모델 연결',
 };
 type SleepValue = TTSPlaybackSettings['sleepTimerDefault'];
 type SkipKind = 'skip_line' | 'skip_prefix' | 'skip_suffix';
@@ -114,6 +119,8 @@ export default function UiNextListenPanel(props: TTSAddonPanelProps) {
   // Server voices and per-speaker casting run on server providers; members listen with this device's voices.
   const providers = useSelfHostCapability('useProviders');
   const [page, setPage] = useState<Page>('main');
+  // The analysis model page opens over 화자별 미리 생성하기, which stays mounted to keep its choices.
+  const [speakerEnginesRevision, setSpeakerEnginesRevision] = useState(0);
   const settings = props.playbackSettings;
   const plainMode = !providers || settings.mode !== 'cast';
   const { changePlaybackSettings } = props;
@@ -174,7 +181,9 @@ export default function UiNextListenPanel(props: TTSAddonPanelProps) {
     if (props.spokenPreviewRequest?.text.trim()) setPage('advanced');
   }, [props.spokenPreviewRequest]);
 
+  const speakerGeneration = !localStatic && providers ? props.speakerGeneration : undefined;
   if (page !== 'main') {
+    const parent: Page = page === 'speakerEngines' ? 'speaker' : 'main';
     return (
       <div className="un-listen">
         <button
@@ -183,14 +192,30 @@ export default function UiNextListenPanel(props: TTSAddonPanelProps) {
           onClick={() => {
             // Engine keys or models may have changed; reload the voice list the player picks from.
             if (page === 'engines') props.refreshPlainVoices?.();
-            setPage('main');
+            setPage(parent);
           }}
         >
           <ChevronLeft size={20} aria-hidden="true" />
-          듣기
+          {parent === 'main' ? '듣기' : PAGE_TITLE[parent]}
         </button>
         <h3 className="un-listen-page-title">{PAGE_TITLE[page]}</h3>
-        {page === 'details' ? (
+        {(page === 'speaker' || page === 'speakerEngines') && speakerGeneration ? (
+          <>
+            <div hidden={page !== 'speaker'}>
+              <UiNextSpeakerGenerationPanel
+                controls={speakerGeneration}
+                enginesRevision={speakerEnginesRevision}
+                onManageEngines={() => setPage('speakerEngines')}
+              />
+            </div>
+            {page === 'speakerEngines' && (
+              <UiNextSpeakerEngines
+                port={speakerGeneration.engines}
+                onChanged={() => setSpeakerEnginesRevision((value) => value + 1)}
+              />
+            )}
+          </>
+        ) : page === 'details' ? (
           <ListenDetails {...props} serverPlain={serverPlain} />
         ) : page === 'filters' && props.saveSpokenTextFilter ? (
           <UiNextSpokenTextFilters
@@ -619,6 +644,14 @@ export default function UiNextListenPanel(props: TTSAddonPanelProps) {
         ) : (
           <p className="un-listen-note">
             인물마다 다른 목소리로 읽어요. 목소리는 아래 <b>화자·고급 설정</b>에서 고를 수 있어요.
+            {speakerGeneration && (
+              <>
+                {' '}
+                <button type="button" className="un-listen-link" onClick={() => setPage('speaker')}>
+                  화자별로 미리 만들기
+                </button>
+              </>
+            )}
           </p>
         )}
       </Group>
@@ -645,6 +678,16 @@ export default function UiNextListenPanel(props: TTSAddonPanelProps) {
             <span>
               <b>미리 생성하기</b>
               <small>음성을 미리 만들어 두고 기다림 없이 듣기</small>
+            </span>
+            <ChevronRight size={18} aria-hidden="true" />
+          </button>
+        )}
+        {speakerGeneration && (
+          <button type="button" onClick={() => setPage('speaker')}>
+            <UsersRound size={19} aria-hidden="true" />
+            <span>
+              <b>화자별 미리 생성하기</b>
+              <small>인물마다 다른 목소리로 미리 만들어 두기 · 실험 기능</small>
             </span>
             <ChevronRight size={18} aria-hidden="true" />
           </button>

@@ -21,6 +21,7 @@ import type { TTSStatus, TTSVoice } from '../../providers/tts';
 import type { PlainTTSVoices } from '../../providers/plain-tts';
 import type { TTSConnectionsPort } from '../../providers/tts-connections';
 import type { AudiobookInput, AudiobookPort, SavedAudiobook } from '../../providers/plain-audiobook';
+import type { TTSSpeakerGenerationControls } from '../../providers/speaker-generation';
 import { voiceApprovalForProfile, type VoiceProductStateV1, type VoiceSampleKind } from '../../providers/voice-product';
 import type { RemoteProviderJob, RemoteProviderSettings } from '../../services/remote/remote-api-client';
 import type { HostedTTSOfflineCacheStatus } from '../../storage/hosted-tts-offline-cache';
@@ -126,6 +127,8 @@ export interface TTSAddonPanelProps {
   };
   readonly bookCharacterCount: number;
   readonly audiobook?: TTSAudiobookControls;
+  /** 화자별 미리 생성하기: server-side speaker analysis and per-character narration for the open book. */
+  readonly speakerGeneration?: TTSSpeakerGenerationControls;
   readonly preparedVoiceLabel?: string;
   /** Show only the speaker and advanced section, without the panel's own intro, tabs and status. */
   readonly view?: 'advanced';

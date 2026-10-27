@@ -1,0 +1,10 @@
+This optional service adapts the Apache-2.0 preset35 reference package dated 2026-10-27.
+Reference archive SHA-256: eeab53ccc98f2194755b90f6a6a3523e3f8146235985a017cc0e73951cb6c57e
+Reference source revision: 25a7a094d4c227626c3f8bab2de9fceccebd69f2
+
+Only attribution prompts/validation, adjacent context, and sequential identity reduction
+are retained under src/preset35. Research runners, credentials, artifact exporters,
+cost tables, original-file reparsing and frozen model execution are not included.
+Imports use BOAA's shared source utilities. Model policy text is provider-neutral.
+The service adapter accepts BOAA source coordinates and produces versioned checkpoints.
+See the repository LICENSE for Apache-2.0 terms.

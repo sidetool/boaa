@@ -24,6 +24,8 @@ export interface AudiobookPlanItem {
   playable: PlayableTtsSegment;
 }
 export interface AudiobookPlan {
+  planningComplete?: boolean;
+  speakerRun?: { analysisKey: string; chapterIds: string[] };
   bookId: string;
   title: string;
   revision: string | null;

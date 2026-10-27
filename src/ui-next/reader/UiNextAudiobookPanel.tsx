@@ -8,10 +8,10 @@ import type {
   SavedAudiobook,
 } from '../../providers/plain-audiobook';
 import { formatBytes, formatCount } from '../../utils/format';
-import { cx, Progress, Segmented } from '../components/primitives';
+import { cx, Progress } from '../components/primitives';
+import { ChapterScopeFields, chapterScopeSummary, useChapterScope } from './chapter-scope';
 import './audiobook.css';
 
-type Scope = 'current' | 'range' | 'all';
 type Confirm = { id: string; action: 'resume' | 'remove' };
 
 const POLL_MS = 4000;
@@ -88,19 +88,8 @@ function AudiobookBody({ controls }: { controls: TTSAudiobookControls }) {
   }, [busy, listed, refresh]);
 
   // ───────── new audiobook ─────────
-  const currentIndex = chapters.findIndex((chapter) => chapter.id === currentChapterId);
-  const [chosenScope, setScope] = useState<Scope>(currentIndex >= 0 ? 'current' : 'all');
-  const scope: Scope = chosenScope === 'current' && currentIndex < 0 ? 'all' : chosenScope;
-  const [from, setFrom] = useState(Math.max(0, currentIndex));
-  const [to, setTo] = useState(Math.max(0, currentIndex));
-  const selected =
-    scope === 'all'
-      ? chapters
-      : scope === 'range'
-        ? chapters.slice(Math.min(from, to), Math.max(from, to) + 1)
-        : currentIndex >= 0
-          ? [chapters[currentIndex]]
-          : [];
+  const range = useChapterScope(chapters, currentChapterId);
+  const { selected } = range;
   const input: AudiobookInput | undefined =
     generation && selected.length ? { ...generation, chapterIds: selected.map((chapter) => chapter.id) } : undefined;
   const inputKey = input ? JSON.stringify(input) : '';
@@ -206,49 +195,9 @@ function AudiobookBody({ controls }: { controls: TTSAudiobookControls }) {
         </div>
         {generation && (
           <>
-            <Segmented
-              label="만들 범위"
-              value={scope}
-              options={[
-                ...(currentIndex >= 0 ? [{ value: 'current' as const, label: '이 화' }] : []),
-                { value: 'range', label: '범위' },
-                { value: 'all', label: '전체' },
-              ]}
-              onChange={setScope}
-            />
-            {scope === 'range' && (
-              <div className="un-book-range">
-                <ChapterSelect
-                  label="시작 회차"
-                  chapters={chapters}
-                  value={from}
-                  onChange={(next) => {
-                    setFrom(next);
-                    if (next > to) setTo(next);
-                  }}
-                />
-                <span aria-hidden="true">~</span>
-                <ChapterSelect
-                  label="끝 회차"
-                  chapters={chapters}
-                  value={to}
-                  onChange={(next) => {
-                    setTo(next);
-                    if (next < from) setFrom(next);
-                  }}
-                />
-              </div>
-            )}
+            <ChapterScopeFields state={range} />
             <p className="un-book-note">
-              만들 범위:{' '}
-              <b>
-                {scope === 'current' && selected[0]
-                  ? selected[0].title || '현재 회차'
-                  : scope === 'all'
-                    ? `전체 ${formatCount(chapters.length)}개 회차`
-                    : `${formatCount(selected.length)}개 회차`}
-              </b>
-              . 현재 듣기 설정으로 음성을 미리 만들어요.
+              만들 범위: <b>{chapterScopeSummary(range)}</b>. 현재 듣기 설정으로 음성을 미리 만들어요.
             </p>
           </>
         )}
@@ -380,28 +329,6 @@ function AudiobookBody({ controls }: { controls: TTSAudiobookControls }) {
         )}
       </section>
     </div>
-  );
-}
-
-function ChapterSelect({
-  label,
-  chapters,
-  value,
-  onChange,
-}: {
-  label: string;
-  chapters: TTSAudiobookControls['chapters'];
-  value: number;
-  onChange: (index: number) => void;
-}) {
-  return (
-    <select aria-label={label} value={value} onChange={(event) => onChange(Number(event.target.value))}>
-      {chapters.map((chapter, index) => (
-        <option key={chapter.id} value={index}>
-          {chapter.title || `${index + 1}화`}
-        </option>
-      ))}
-    </select>
   );
 }
 

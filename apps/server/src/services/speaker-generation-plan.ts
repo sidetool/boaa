@@ -1,0 +1,294 @@
+import type pg from 'pg';
+import type { Paragraph, SpokenTextRule } from '@boaa/contracts';
+import { structuredIntegrityHash, textIntegrityHash } from '@boaa/text-core/hash';
+import {
+  buildPlainTTSItems,
+  plainTTSParagraphHash,
+  type PlainTTSModel,
+  type PlainTTSRequest,
+  type PlainTTSVoices,
+} from '../../../../src/providers/plain-tts';
+import type { SpeakerGenerationInput, SpeakerGenerationEstimate } from '../../../../src/providers/speaker-generation';
+import type { SpeakerChapter, SpeakerLabel, SpeakerIdentity } from '../../../../src/providers/speaker-engine-protocol';
+import type { AudiobookPlan } from './audiobook-plan.js';
+import { audiobookError } from './audiobook-plan.js';
+import type { SpeakerEngineStore } from '../providers/speaker-engine-store.js';
+import { speakerRevision } from '../providers/speaker-engine-config.js';
+import type { PlayableTtsSegment } from '../../../../src/providers/tts-playback';
+
+export interface CastRequest extends Omit<PlainTTSRequest, 'rules'> {
+  cast: {
+    start: number;
+    end: number;
+    part: number;
+    speakerId: string;
+    label: string;
+    language?: string;
+    model: PlainTTSModel;
+  };
+}
+export async function speakerPlan(
+  pool: pg.Pool,
+  owner: string,
+  bookId: string,
+  input: SpeakerGenerationInput,
+  catalog: PlainTTSVoices,
+  engines: SpeakerEngineStore,
+): Promise<{ plan: AudiobookPlan; estimate: SpeakerGenerationEstimate }> {
+  if (
+    !input ||
+    !Array.isArray(input.chapterIds) ||
+    !input.chapterIds.length ||
+    input.chapterIds.length > 500 ||
+    new Set(input.chapterIds).size !== input.chapterIds.length ||
+    input.chapterIds.some((id) => typeof id !== 'string' || id.length > 256) ||
+    typeof input.engineId !== 'string' ||
+    typeof input.narratorVoiceId !== 'string' ||
+    !Array.isArray(input.characterVoiceIds) ||
+    !input.characterVoiceIds.length ||
+    input.characterVoiceIds.length > 32 ||
+    input.characterVoiceIds.some((id) => typeof id !== 'string') ||
+    new Set(input.characterVoiceIds).size !== input.characterVoiceIds.length ||
+    !['skip', 'immediate', 'end_of_chapter'].includes(input.footnotePlayback)
+  )
+    throw audiobookError(400, '생성 범위와 목소리를 확인해 주세요.');
+  const book = (
+    await pool.query('select * from library_books where id=$1 and user_id=$2 and deleted_at is null', [bookId, owner])
+  ).rows[0];
+  if (!book || !['txt', 'markdown', 'epub'].includes(book.format))
+    throw audiobookError(404, '텍스트 작품을 찾을 수 없어요.');
+  const chapters = (
+    await pool.query('select id,title,chapter_index from chapters where book_id=$1 order by chapter_index,id', [bookId])
+  ).rows;
+  const selected = chapters.filter((c) => input.chapterIds.includes(c.id));
+  if (selected.length !== input.chapterIds.length) throw audiobookError(409, '회차 목록이 변경됐어요.');
+  const last = chapters.findIndex((c) => c.id === selected[selected.length - 1].id);
+  if (last >= 500) throw audiobookError(413, '실험 기능은 앞에서부터 500회차까지 분석할 수 있어요.');
+  const context = chapters.slice(0, last + 1);
+  const size = (
+    await pool.query(
+      'select chapter_id,sum(length(text))::bigint n,count(*)::int p from paragraph_search where book_id=$1 and chapter_id=any($2::text[]) group by chapter_id',
+      [bookId, context.map((c) => c.id)],
+    )
+  ).rows;
+  if (size.length !== context.length || size.some((r) => Number(r.n) > 120000 || r.p > 10000))
+    throw audiobookError(413, '본문이 없거나 한 회차가 너무 커서 분석할 수 없어요.');
+  const analysisCharacters = size.reduce((n, r) => n + Number(r.n), 0);
+  const characters = size.filter((r) => input.chapterIds.includes(r.chapter_id)).reduce((n, r) => n + Number(r.n), 0);
+  if (analysisCharacters > 20_000_000) throw audiobookError(413, '한 번에 분석할 범위를 줄여 주세요.');
+  const voiceIds = [...new Set([input.narratorVoiceId, ...input.characterVoiceIds])];
+  const voices = voiceIds.map((id) => catalog.voices.find((v) => v.id === id));
+  if (voices.some((v) => !v?.model) || !catalog.available)
+    throw audiobookError(409, '선택한 서버 목소리를 다시 확인해 주세요.');
+  const engine = await engines.load(input.engineId);
+  const capabilities = await engines.transport.capabilities(engine, AbortSignal.timeout(15000));
+  const analysisKey = structuredIntegrityHash({
+    book: bookId,
+    revision: book.active_content_revision_id,
+    engine: speakerRevision(engine),
+    version: capabilities.engineVersion,
+  });
+  const models = Object.fromEntries(voices.map((v) => [v!.id, v!.model!]));
+  const settings = {
+    chapterIds: selected.map((c) => c.id),
+    voiceId: input.narratorVoiceId,
+    modelRevision: catalog.revision!,
+    chunking: 'paragraph' as const,
+    rules: input.rules,
+    footnotePlayback: input.footnotePlayback,
+    cast: {
+      language: book.language ?? undefined,
+      engineId: input.engineId,
+      engineRevision: speakerRevision(engine),
+      engineVersion: capabilities.engineVersion,
+      characterVoiceIds: input.characterVoiceIds,
+      models,
+    },
+  };
+  const fingerprint = structuredIntegrityHash({
+    book: bookId,
+    revision: book.active_content_revision_id,
+    analysisKey,
+    settings: { ...settings, modelRevision: undefined },
+  });
+  const estimate: SpeakerGenerationEstimate = {
+    fingerprint,
+    chapterCount: selected.length,
+    contextChapterCount: context.length - selected.length,
+    characters,
+    modelLabel: engine.modelId,
+    voiceLabel: '화자별 목소리',
+    paid: engine.paid || voices.some((v) => v!.paid),
+  };
+  return {
+    estimate,
+    plan: {
+      bookId,
+      title: book.title,
+      revision: book.active_content_revision_id,
+      settings,
+      planningComplete: false,
+      speakerRun: { analysisKey, chapterIds: context.map((c) => c.id) },
+      items: [],
+      estimate: {
+        ...estimate,
+        itemCount: 0,
+        providerName: engine.name,
+        firstChapterTitle: selected[0].title,
+        lastChapterTitle: selected[selected.length - 1].title,
+      },
+    },
+  };
+}
+export async function loadSpeakerChapter(
+  pool: Pick<pg.Pool, 'query'>,
+  owner: string,
+  bookId: string,
+  chapterId: string,
+  index: number,
+): Promise<{ chapter: SpeakerChapter; paragraphs: Paragraph[] }> {
+  const row = (
+    await pool.query(
+      'select c.title from chapters c join library_books b on b.id=c.book_id where c.id=$1 and b.id=$2 and b.user_id=$3 and b.deleted_at is null',
+      [chapterId, bookId, owner],
+    )
+  ).rows[0];
+  if (!row) throw audiobookError(409, '회차가 변경됐어요.');
+  const rows = (
+    await pool.query(
+      'select paragraph_id,paragraph_index,paragraph,text from paragraph_search where book_id=$1 and chapter_id=$2 order by paragraph_index limit 10001',
+      [bookId, chapterId],
+    )
+  ).rows;
+  if (!rows.length || rows.length > 10000 || rows.reduce((n, r) => n + r.text.length, 0) > 120000)
+    throw audiobookError(413, '본문 크기를 확인해 주세요.');
+  const paragraphs = rows.map((r) => ({
+    ...r.paragraph,
+    id: r.paragraph_id,
+    index: r.paragraph_index,
+    text: r.text,
+    chapterId,
+    novelId: bookId,
+  })) as Paragraph[];
+  return {
+    chapter: {
+      id: chapterId,
+      index,
+      title: row.title,
+      paragraphs: paragraphs.map((p) => ({ id: p.id, index: p.index, text: p.text })),
+    },
+    paragraphs,
+  };
+}
+function sourceSlice(p: Paragraph, start: number, end: number): Paragraph {
+  return {
+    ...p,
+    text: p.text.slice(start, end),
+    inlineSemantics: p.inlineSemantics
+      ?.filter((s) => s.start >= start && s.end <= end)
+      .map((s) => ({ ...s, start: s.start - start, end: s.end - start })),
+  };
+}
+export function castPlayable(
+  paragraph: Paragraph,
+  request: CastRequest,
+  rules: readonly SpokenTextRule[],
+): PlayableTtsSegment {
+  const c = request.cast;
+  if (
+    !c ||
+    ![c.start, c.end, c.part].every(Number.isSafeInteger) ||
+    c.start < 0 ||
+    c.end <= c.start ||
+    c.end > paragraph.text.length ||
+    c.part < 0 ||
+    plainTTSParagraphHash(paragraph) !== request.paragraphHash
+  )
+    throw audiobookError(409, '화자별 낭독 위치가 본문과 일치하지 않아요.');
+  const parts = buildPlainTTSItems({
+    paragraph: sourceSlice(paragraph, c.start, c.end),
+    language: c.language,
+    rules,
+    chunking: 'batch',
+    batchCharacters: 700,
+    rate: 1,
+  });
+  const item = parts[c.part];
+  if (!item || item.spokenTextFingerprint !== request.chunkHash)
+    throw audiobookError(409, '화자별 낭독 문장이 변경됐어요.');
+  return {
+    ...item,
+    speakerId: c.speakerId,
+    speakerLabel: c.label,
+    sourceRanges: item.sourceRanges.map((r) => ({
+      ...r,
+      startOffset: r.startOffset + c.start,
+      endOffset: r.endOffset + c.start,
+    })),
+    spokenTextSpans: item.spokenTextSpans?.map((s) => ({
+      ...s,
+      sourceStart: s.sourceStart + c.start,
+      sourceEnd: s.sourceEnd + c.start,
+    })),
+  };
+}
+/** Validate every range and fill all unlabelled narration; an uncertain label never drops the sentence. */
+export function castRequests(
+  paragraphs: readonly Paragraph[],
+  labels: readonly SpeakerLabel[],
+  identities: readonly SpeakerIdentity[],
+  assignments: Record<string, string>,
+  settings: AudiobookPlan['settings'],
+): CastRequest[] {
+  const cast = settings.cast!;
+  if (labels.some((l) => !paragraphs.some((p) => p.id === l.paragraphId)))
+    throw audiobookError(502, '분석 결과에 다른 문단이 포함됐어요.');
+  const names = new Map(identities.map((i) => [i.id, i.name]));
+  const requests: CastRequest[] = [];
+  for (const paragraph of paragraphs) {
+    const ranges = labels.filter((l) => l.paragraphId === paragraph.id).sort((a, b) => a.startOffset - b.startOffset);
+    let cursor = 0;
+    const append = (start: number, end: number, speakerId: string, label: string) => {
+      if (end <= start) return;
+      const voiceId = speakerId === 'narrator' ? settings.voiceId : assignments[speakerId];
+      if (!voiceId || !cast.models[voiceId]) throw audiobookError(409, '배정한 목소리를 확인해 주세요.');
+      const parts = buildPlainTTSItems({
+        paragraph: sourceSlice(paragraph, start, end),
+        language: cast.language,
+        rules: settings.rules,
+        chunking: 'batch',
+        batchCharacters: 700,
+        rate: 1,
+      });
+      parts.forEach((part, i) =>
+        requests.push({
+          voiceId,
+          rate: 1,
+          modelRevision: settings.modelRevision,
+          paragraphId: paragraph.id,
+          paragraphHash: plainTTSParagraphHash(paragraph),
+          chunkHash: part.spokenTextFingerprint!,
+          chunking: 'paragraph',
+          cast: { start, end, part: i, speakerId, label, language: cast.language, model: cast.models[voiceId] },
+        }),
+      );
+    };
+    for (const l of ranges) {
+      if (
+        !Number.isSafeInteger(l.startOffset) ||
+        !Number.isSafeInteger(l.endOffset) ||
+        l.startOffset < cursor ||
+        l.endOffset <= l.startOffset ||
+        l.endOffset > paragraph.text.length ||
+        textIntegrityHash(paragraph.text.slice(l.startOffset, l.endOffset)) !== l.textHash
+      )
+        throw audiobookError(502, '분석 결과의 본문 위치가 올바르지 않아요.');
+      append(cursor, l.startOffset, 'narrator', '내레이터');
+      const id = l.reviewRequired || !names.has(l.speakerId) ? 'narrator' : l.speakerId;
+      append(l.startOffset, l.endOffset, id, names.get(id) ?? '내레이터');
+      cursor = l.endOffset;
+    }
+    append(cursor, paragraph.text.length, 'narrator', '내레이터');
+  }
+  return requests;
+}

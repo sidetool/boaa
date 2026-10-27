@@ -1,9 +1,12 @@
 import type { SpokenTextRule, TTSFootnotePlaybackPolicy } from '../domain/types';
 import type { PlainTTSModel } from './plain-tts';
 import type { PlayableTtsSegment } from './tts-playback';
+import type { SpeakerGenerationSettings } from './speaker-generation';
 
 /** Ordinary narration saved on the account's server, independently of disposable caches. */
 export interface AudiobookInput {
+  /** Trusted server plan only. Ordinary creation routes never accept this field. */
+  cast?: SpeakerGenerationSettings;
   chapterIds: string[];
   voiceId: string;
   modelRevision: string;
