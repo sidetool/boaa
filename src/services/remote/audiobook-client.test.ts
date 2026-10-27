@@ -35,7 +35,14 @@ describe('saved audiobook transport', () => {
     const port = createAudiobookPort({ request, requestBlob } as unknown as RemoteApiClient, 'book');
     const controller = new AbortController();
     expect(await port.audio('saved', 2, controller.signal)).toBe(blob);
-    expect(requestBlob).toHaveBeenCalledWith('/audiobooks/saved/audio/2', { signal: controller.signal }, 60000);
+    expect(requestBlob).toHaveBeenCalledWith(
+      '/audiobooks/saved/audio/2',
+      { signal: controller.signal },
+      30000,
+      undefined,
+      undefined,
+      true,
+    );
     expect(request).not.toHaveBeenCalled();
   });
 });

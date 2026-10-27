@@ -141,6 +141,7 @@ export async function registerPlainTTSRoutes(
     rate: number,
     source: PlainTTSSource,
     regenerate = false,
+    timeoutMs = 45_000,
   ): Promise<Audio> {
     const current = pending.get(key);
     if (current && (!regenerate || regenerating.has(key))) return current;
@@ -205,6 +206,7 @@ export async function registerPlainTTSRoutes(
             Math.ceil((cooldown.until - Date.now()) / 1000),
           );
         let result;
+        const generationSignal = AbortSignal.timeout(timeoutMs);
         try {
           result = await adapter.synthesize({
             text,
@@ -212,13 +214,19 @@ export async function registerPlainTTSRoutes(
             speed: rate,
             format: 'wav',
             providerOptions: { ...providerOptions, voice: voiceId },
-            signal: AbortSignal.timeout(45_000),
+            signal: generationSignal,
           });
           if ((cooldowns.get(source.id)?.until ?? 0) <= Date.now()) cooldowns.delete(source.id);
         } catch (error) {
+          // Some adapters turn deadline cancellation into AbortError. Preserve the real timeout reason.
+          generationSignal.throwIfAborted();
           if (classifyPlainTTSFailure(error).status === 429) {
             const failures = Math.min(3, (cooldowns.get(source.id)?.failures ?? 0) + 1);
-            const seconds = 10 * 2 ** (failures - 1);
+            const hint = (error as { retryAfterSeconds?: number }).retryAfterSeconds;
+            const seconds = Math.max(
+              10 * 2 ** (failures - 1),
+              typeof hint === 'number' && Number.isFinite(hint) ? Math.min(86400, hint) : 0,
+            );
             cooldowns.set(source.id, { failures, until: Date.now() + seconds * 1000 });
             app.log.warn({ event: 'plain_tts_failed', errorCategory: 'tts_rate_limited', upstreamStatus: 429 });
             throw new PlainTTSError(
@@ -496,6 +504,7 @@ export async function registerPlainTTSRoutes(
     sample = false,
     onProvider?: (id: string) => void,
     expected?: PlainTTSModel,
+    timeoutMs = 45_000,
   ) {
     const { key, text, selectedVoice, rate, source, verify } = await prepare(
       chapterId,
@@ -504,7 +513,7 @@ export async function registerPlainTTSRoutes(
       onProvider,
       expected,
     );
-    const audio = await synthesize(key, text, selectedVoice.id, rate, source, body.regenerate === true);
+    const audio = await synthesize(key, text, selectedVoice.id, rate, source, body.regenerate === true, timeoutMs);
     // Ownership and revision may change while inference runs.
     await verify();
     return { ...audio, key };
@@ -553,7 +562,8 @@ export async function registerPlainTTSRoutes(
       background: options.audiobookBackground,
       catalog,
       render: (chapterId, request, model) =>
-        render(chapterId, request as unknown as Record<string, unknown>, false, undefined, model),
+        // Preparing ahead can wait longer than interactive narration; still one bounded request, never a replay.
+        render(chapterId, request as unknown as Record<string, unknown>, false, undefined, model, 120_000),
       resolveModel: async (settings, probe) =>
         (
           await prepare(

@@ -48,6 +48,7 @@ async function setup(pool: pg.Pool) {
     insert into chapters values('c1','book','First',1),('c2','book','Second',2);
     insert into self_host_accounts values('owner','admin','active');`);
   await pool.query(await readFile(new URL('../db/migrations/0065_saved_audiobooks.sql', import.meta.url), 'utf8'));
+  await pool.query(await readFile(new URL('../db/migrations/0067_audiobook_retry.sql', import.meta.url), 'utf8'));
   for (const chapterId of ['c1', 'c2'])
     for (let index = 1; index <= 2; index++) {
       const paragraph = {
@@ -163,6 +164,7 @@ async function setup(pool: pg.Pool) {
         listVoices: async () => [{ id: 'voice', label: 'Recorded voice', lang: 'ko' }],
         synthesize,
       } as TTSSynthesisProvider;
+      const deadline = vi.spyOn(AbortSignal, 'timeout');
       let model = 'stable';
       let revision = 'old';
       let extra = false;
@@ -217,6 +219,7 @@ async function setup(pool: pg.Pool) {
           revision: 'stable',
         });
         await service.tick();
+        expect(deadline).toHaveBeenCalledWith(120_000);
         revision = 'unrelated-settings-timestamp';
         extra = true;
         await service.tick();
@@ -235,6 +238,7 @@ async function setup(pool: pg.Pool) {
         expect(synthesize).toHaveBeenCalledTimes(2);
         expect((await app.inject(`/api/books/other/audiobooks/reader?chapterId=c1&id=${job.id}`)).json()).toEqual({});
       } finally {
+        deadline.mockRestore();
         await app.close();
         await f.cleanup();
       }
@@ -408,6 +412,12 @@ async function setup(pool: pg.Pool) {
           Object.assign(new Error('fixture rate limit'), { status: 429, retryAfterSeconds: 1 }),
         );
         await f.service.tick();
+        expect(f.render).toHaveBeenCalledTimes(1);
+        expect((await f.service.list('book'))[0]).toMatchObject({ completedItems: 0, status: 'queued' });
+        await f.service.tick();
+        expect(f.render).toHaveBeenCalledTimes(1);
+        await pool.query("update saved_audiobooks set retry_at=now()-interval '1 second' where id=$1", [job.id]);
+        await f.service.tick();
         expect(f.render).toHaveBeenCalledTimes(2);
         expect(f.render.mock.calls[0]).toEqual(f.render.mock.calls[1]);
         expect((await f.service.list('book'))[0]).toMatchObject({ completedItems: 1, status: 'queued' });
@@ -418,6 +428,47 @@ async function setup(pool: pg.Pool) {
           status: 'failed',
           error: expect.stringContaining('저장 공간'),
         });
+      } finally {
+        await f.cleanup();
+      }
+    });
+  });
+  it('persists repeated rate-limit waits across fresh services, honors retry-after and stops on user pause', async () => {
+    await withPostgresSchema(harness!, 'audiobook_cooldown', async (pool) => {
+      const f = await setup(pool);
+      try {
+        const plan = await f.service.plan('book', settings);
+        const job = await f.service.create(plan, plan.estimate.fingerprint, true);
+        f.render.mockRejectedValue(Object.assign(new Error('limited'), { status: 429, retryAfterSeconds: 600 }));
+        for (let attempt = 1; attempt <= 5; attempt++) {
+          const service = new AudiobookService(pool, 'owner', f.store, catalog, f.render, classifyPlainTTSFailure);
+          await service.tick();
+          const row = (
+            await pool.query(
+              'select status,rate_limit_attempts,extract(epoch from retry_at-now()) as wait from saved_audiobooks where id=$1',
+              [job.id],
+            )
+          ).rows[0];
+          expect(row.status).toBe('queued');
+          expect(row.rate_limit_attempts).toBe(attempt);
+          expect(Number(row.wait)).toBeGreaterThan(590);
+          await service.tick();
+          expect(f.render).toHaveBeenCalledTimes(attempt);
+          await pool.query("update saved_audiobooks set retry_at=now()-interval '1 second' where id=$1", [job.id]);
+        }
+        await f.service.control(job.id, 'pause');
+        await f.service.tick();
+        expect(f.render).toHaveBeenCalledTimes(5);
+        expect((await f.service.list('book'))[0].status).toBe('paused');
+        await f.service.control(job.id, 'resume', true);
+        f.render.mockResolvedValue({ data: Buffer.from('RIFF'), contentType: 'audio/wav', key: 'fixture' });
+        await f.service.tick();
+        const row = (
+          await pool.query('select retry_at,rate_limit_attempts,completed_items from saved_audiobooks where id=$1', [
+            job.id,
+          ])
+        ).rows[0];
+        expect(row).toMatchObject({ retry_at: null, rate_limit_attempts: 0, completed_items: 1 });
       } finally {
         await f.cleanup();
       }

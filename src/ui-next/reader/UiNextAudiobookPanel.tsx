@@ -458,7 +458,10 @@ function SavedItem({
         {item.status === 'pausing' ? ' · 지금 구간을 마치면 멈춰요' : ''}
       </small>
       {(item.error || error) && (
-        <p className="un-book-error" role="alert">
+        <p
+          className={!error && item.status === 'queued' ? 'un-book-meta' : 'un-book-error'}
+          role={!error && item.status === 'queued' ? 'status' : 'alert'}
+        >
           <AlertCircle size={15} aria-hidden="true" />
           {error ?? item.error}
         </p>

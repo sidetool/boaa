@@ -1,3 +1,4 @@
+import { requestSavedAudioWithRetry } from '../../providers/plain-tts-retry';
 import type {
   AudiobookEstimate,
   AudiobookPort,
@@ -34,7 +35,7 @@ export function createAudiobookPort(client: RemoteApiClient, bookId: string): Au
             body: JSON.stringify({ regenerate: !!regenerate }),
             signal,
           },
-          120_000,
+          150_000,
         )
       ).blob,
     estimate: (input, signal) => post<AudiobookEstimate>(`${path}/estimate`, input, signal),
@@ -45,7 +46,11 @@ export function createAudiobookPort(client: RemoteApiClient, bookId: string): Au
       await client.request(item(id), { method: 'DELETE' });
     },
     audio: async (id, index, signal) =>
-      (await client.requestBlob(`${item(id)}/audio/${index}`, { signal }, 60_000)).blob,
+      requestSavedAudioWithRetry(
+        async () =>
+          (await client.requestBlob(`${item(id)}/audio/${index}`, { signal }, 30_000, undefined, undefined, true)).blob,
+        signal ?? new AbortController().signal,
+      ),
     progress: async (id, index) => {
       const write = positions.then(() => post(`${item(id)}/progress`, { index }));
       positions = write.catch(() => undefined);

@@ -284,7 +284,8 @@ it('uses prepared items with the normal audio controller despite different curre
     synthesizePlainTTS: ordinary,
   } as unknown as Input['client'];
   const resolve = vi.fn(async () => new Blob(['recorded']));
-  const port = { resolve } as unknown as NonNullable<Input['prepared']>;
+  const audio = vi.fn(async () => new Blob(['saved']));
+  const port = { resolve, audio } as unknown as NonNullable<Input['prepared']>;
   const progress = vi.fn();
   const playAudio = vi.fn(async (_blob: Blob, _session: number, update?: (fraction: number) => void) => {
     update?.(0.7);
@@ -344,8 +345,9 @@ it('uses prepared items with the normal audio controller despite different curre
     await act(async () => {
       await hook.play(playable, paragraph, 2, progress);
     });
-    expect(resolve).toHaveBeenCalledTimes(1);
-    expect(resolve).toHaveBeenCalledWith('job', 3, false, expect.any(AbortSignal));
+    expect(audio).toHaveBeenCalledTimes(1);
+    expect(audio).toHaveBeenCalledWith('job', 3, expect.any(AbortSignal));
+    expect(resolve).not.toHaveBeenCalled();
     expect(ordinary).not.toHaveBeenCalled();
     expect(progress).toHaveBeenCalledWith(0.7);
     expect(hook.retryTarget()).toEqual({ index: 0, fingerprint: ttsQueueItemFingerprint(playable) });
@@ -353,7 +355,7 @@ it('uses prepared items with the normal audio controller despite different curre
       await hook.play(playable, paragraph, 3, undefined, { prepared: vi.fn() });
     });
     expect(resolve).toHaveBeenLastCalledWith('job', 3, true, expect.any(AbortSignal));
-    expect(resolve).toHaveBeenCalledTimes(2);
+    expect(resolve).toHaveBeenCalledTimes(1);
     owner = {};
     await act(async () => {
       root.update(<Harness changed />);

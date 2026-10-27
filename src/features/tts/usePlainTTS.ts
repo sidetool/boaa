@@ -1,3 +1,4 @@
+import { loadPreparedAudio } from './prepared-audio-load';
 import { PlainTTSSessionCache, waitForPlainTTSAudio } from '../../providers/plain-tts-session-cache';
 import { requestPlainTTSWithRetry } from '../../providers/plain-tts-retry';
 import { ttsQueueItemFingerprint } from '../../providers/tts-playback-resume';
@@ -188,7 +189,10 @@ export function usePlainTTS(input: {
                 chapter: paragraph.chapterId,
                 scope: scopeFor(),
                 positions: playable.plainBatchPositions?.map((p) => p.paragraphIndex) ?? [],
-                fetch: (signal) => input.prepared!.resolve(item.id, item.ordinal, !!regeneration, signal),
+                fetch: (signal) =>
+                  regeneration
+                    ? input.prepared!.resolve(item.id, item.ordinal, true, signal)
+                    : loadPreparedAudio(input.prepared!, item, signal),
               }),
               operation.controller.signal,
             ),
@@ -277,7 +281,7 @@ export function usePlainTTS(input: {
           chapter: paragraph.chapterId,
           scope: scopeFor(),
           positions: playable.plainBatchPositions?.map((p) => p.paragraphIndex) ?? [],
-          fetch: (signal) => input.prepared!.resolve(item.id, item.ordinal, false, signal),
+          fetch: (signal) => loadPreparedAudio(input.prepared!, item, signal),
         });
       } catch {
         /* Foreground reports the error. */

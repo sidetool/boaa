@@ -188,6 +188,26 @@ describe('connection synthesis', () => {
     await expect(provider.synthesize({ ...input, signal: abort.signal })).rejects.toThrow();
     expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
+  it('does not replay already generated split parts after a later part is rate limited', async () => {
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        new Response(new Uint8Array(wavFromPcm16(Buffer.from([1, 0]), 24000)), {
+          headers: { 'Content-Type': 'audio/wav' },
+        }),
+      )
+      .mockResolvedValue(new Response('', { status: 429, headers: { 'Retry-After': '120' } }));
+    const provider = new ConnectionTTSProvider(
+      'connection-fixture',
+      { ...config, maxInputCharacters: 7 },
+      async () => {},
+      { fetchImpl },
+    );
+    await expect(provider.synthesize({ ...input, text: 'One sentence. Another sentence.' })).rejects.toMatchObject({
+      statusCode: 502,
+    });
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
   it('rejects incompatible or truncated audio rather than concatenating corrupt containers', () => {
     expect(() => joinConnectionWav([Buffer.from('not audio')])).toThrow();
     expect(() =>

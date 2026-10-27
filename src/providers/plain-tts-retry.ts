@@ -39,3 +39,31 @@ function waitForRetry(ms: number, signal: AbortSignal): Promise<void> {
     signal.addEventListener('abort', abort, { once: true });
   });
 }
+
+/** GET-only saved audio: retry transient transport failures without ever invoking synthesis. */
+export async function requestSavedAudioWithRetry<T>(
+  request: () => Promise<T>,
+  signal: AbortSignal,
+  wait: (ms: number, signal: AbortSignal) => Promise<void> = waitForRetry,
+): Promise<T> {
+  for (let attempt = 0; ; attempt++) {
+    signal.throwIfAborted();
+    try {
+      return await request();
+    } catch (error) {
+      signal.throwIfAborted();
+      const failure = error as { status?: number; name?: string; payload?: { retryAfterSeconds?: number } };
+      const transient =
+        [408, 429, 502, 503, 504].includes(failure?.status ?? 0) ||
+        error instanceof TypeError ||
+        failure?.name === 'RemoteApiRequestTimeoutError';
+      if (!transient || attempt >= 3) throw error;
+      const hint = failure?.payload?.retryAfterSeconds;
+      const delay =
+        typeof hint === 'number' && Number.isFinite(hint)
+          ? Math.max(500, Math.min(60000, hint * 1000))
+          : 500 * 2 ** attempt;
+      await wait(delay, signal);
+    }
+  }
+}

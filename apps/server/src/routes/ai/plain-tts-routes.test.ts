@@ -626,3 +626,30 @@ it('logs only diagnostic metadata for incomplete audio', async () => {
     providerCompletion: 'MAX_TOKENS',
   });
 });
+
+it('keeps interactive generation bounded and reports deadline expiry as timeout, not user cancellation', async () => {
+  const f = await fixture();
+  const expired = new AbortController();
+  expired.abort(new DOMException('deadline', 'TimeoutError'));
+  const timeout = vi.spyOn(AbortSignal, 'timeout').mockReturnValue(expired.signal);
+  try {
+    f.synthesize.mockRejectedValue(new DOMException('adapter aborted', 'AbortError'));
+    const response = await f.request();
+    expect(timeout).toHaveBeenCalledWith(45_000);
+    expect(response.statusCode).toBe(504);
+    expect(response.json().code).toBe('tts_timeout');
+    expect(f.synthesize).toHaveBeenCalledTimes(1);
+  } finally {
+    timeout.mockRestore();
+  }
+});
+
+it('honors a longer provider Retry-After without dispatching again during cooldown', async () => {
+  const f = await fixture();
+  f.synthesize.mockRejectedValue({ status: 429, retryAfterSeconds: 600 });
+  expect((await f.request()).json().retryAfterSeconds).toBe(600);
+  const second = await f.request();
+  expect(second.statusCode).toBe(429);
+  expect(second.json().retryAfterSeconds).toBeGreaterThan(590);
+  expect(f.synthesize).toHaveBeenCalledTimes(1);
+});

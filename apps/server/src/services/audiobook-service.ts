@@ -2,7 +2,6 @@ import { randomUUID } from 'node:crypto';
 import type pg from 'pg';
 import type { AudiobookInput, SavedAudiobook, PreparedNarration } from '../../../../src/providers/plain-audiobook';
 import type { PlainTTSRequest, PlainTTSVoices, PlainTTSModel } from '../../../../src/providers/plain-tts';
-import { requestPlainTTSWithRetry } from '../../../../src/providers/plain-tts-retry';
 import { AudiobookAudioStore, type SavedAudio } from './audiobook-audio.js';
 import { audiobookError, planAudiobook, type AudiobookPlan } from './audiobook-plan.js';
 
@@ -18,6 +17,7 @@ type JobRow = {
   estimate: SavedAudiobook;
   status: SavedAudiobook['status'];
   completed_items: number;
+  rate_limit_attempts: number;
   bytes: string;
   playback_index: number;
   current_chapter_title?: string;
@@ -402,7 +402,7 @@ export class AudiobookService {
         await client.query('begin');
         const row = (
           await client.query(
-            `update saved_audiobooks set status='queued',error_message=null,updated_at=now()
+            `update saved_audiobooks set status='queued',error_message=null,retry_at=null,rate_limit_attempts=0,updated_at=now()
           where id=$1 and user_id=$2 and status in ('paused','failed') returning id`,
             [id, this.owner],
           )
@@ -508,7 +508,7 @@ export class AudiobookService {
       const job = (
         await client.query(
           `update saved_audiobooks set status='running',error_message=null,updated_at=now()
-        where id=(select id from saved_audiobooks where user_id=$1 and status='queued' order by updated_at,id limit 1) and status='queued' returning *`,
+        where id=(select id from saved_audiobooks where user_id=$1 and status='queued' and (retry_at is null or retry_at<=now()) order by updated_at,id limit 1) and status='queued' returning *`,
           [this.owner],
         )
       ).rows[0] as JobRow | undefined;
@@ -547,45 +547,36 @@ export class AudiobookService {
           item.chapter_title,
         ]);
         // Reuse a fully saved file left by a crash between atomic rename and the DB commit.
-        await requestPlainTTSWithRetry(
-          async () => {
-            const current = (await client.query('select status from saved_audiobooks where id=$1', [job.id])).rows[0];
-            if (current?.status !== 'running') {
-              abort.abort();
-              abort.signal.throwIfAborted();
-            }
-            try {
-              return await this.ensureItem(job, item.ordinal);
-            } catch (error) {
-              const retry = error as { status?: number; retryAfterSeconds?: number };
-              if (retry?.status === 429 && typeof retry.retryAfterSeconds === 'number')
-                throw Object.assign(new Error('음성 제공자의 요청 제한이 풀리기를 기다리고 있습니다.'), {
-                  status: 429,
-                  payload: { retryAfterSeconds: retry.retryAfterSeconds },
-                });
-              throw error;
-            }
-          },
-          {
-            signal: abort.signal,
-            onWait: (seconds) => {
-              void this.pool
-                .query("update saved_audiobooks set error_message=$2 where id=$1 and status='running'", [
-                  job.id,
-                  `음성 제공자 대기 중 · ${Math.ceil(seconds)}초 후 다시 시도`,
-                ])
-                .catch(() => {});
-            },
-          },
-        );
+        abort.signal.throwIfAborted();
+        const current = (await client.query('select status from saved_audiobooks where id=$1', [job.id])).rows[0];
+        if (current?.status !== 'running') throw new DOMException('Stopped', 'AbortError');
+        await this.ensureItem(job, item.ordinal);
         await client.query(
-          `update saved_audiobooks set error_message=null,
+          `update saved_audiobooks set error_message=null,retry_at=null,rate_limit_attempts=0,
           status=case when status='pausing' then 'paused' else 'queued' end,updated_at=now()
           where id=$1 and status in ('running','pausing')`,
           [job.id],
         );
       } catch (error) {
         await client.query('rollback');
+        if (this.failure(error).status === 429) {
+          const failure = error as { retryAfterSeconds?: number; payload?: { retryAfterSeconds?: number } };
+          const hint = failure.retryAfterSeconds ?? failure.payload?.retryAfterSeconds;
+          const backoff = Math.min(300, 10 * 2 ** Math.min(job.rate_limit_attempts, 5));
+          const seconds = Math.max(
+            backoff,
+            typeof hint === 'number' && Number.isFinite(hint) ? Math.min(86400, hint) : 0,
+          );
+          await client.query(
+            `update saved_audiobooks set
+            status=case when status='pausing' then 'paused' else 'queued' end,
+            retry_at=now()+($2 * interval '1 second'),rate_limit_attempts=least(rate_limit_attempts+1,30),
+            error_message=case when status='pausing' then null else $3 end,updated_at=now()
+            where id=$1 and status in ('running','pausing')`,
+            [job.id, seconds, `음성 제공자 요청 제한으로 대기 중 · ${Math.ceil(seconds)}초 후 자동으로 이어 만들어요.`],
+          );
+          return;
+        }
         const message = (error as { statusCode?: number }).statusCode
           ? (error as Error).message
           : this.failure(error).message;

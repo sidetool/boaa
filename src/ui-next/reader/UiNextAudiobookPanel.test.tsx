@@ -276,3 +276,10 @@ describe('UiNextAudiobookPanel reader playback', () => {
     expect(hasButton(renderer!.root, '본문에서 듣기')).toBe(false);
   });
 });
+
+it('shows automatic rate-limit waiting as status rather than a failed generation alert', async () => {
+  const message = '음성 제공자 요청 제한으로 대기 중 · 60초 후 자동으로 이어 만들어요.';
+  const root = await mount(controls({ port: port(async () => [saved({ status: 'queued', error: message })]) }));
+  expect(root.findAll((node) => node.props.role === 'status').some((node) => text(node).includes(message))).toBe(true);
+  expect(root.findAll((node) => node.props.role === 'alert').some((node) => text(node).includes(message))).toBe(false);
+});

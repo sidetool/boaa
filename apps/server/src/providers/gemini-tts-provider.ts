@@ -1,3 +1,4 @@
+import { ttsHttpError } from './tts-http-error.js';
 import { interactionAudioResponse } from './gemini-audio-response.js';
 import { wavFromPcm16 } from './tts-audio.js';
 import { GEMINI_VOICES, namedVoices } from './tts-voices.js';
@@ -86,7 +87,7 @@ export class GeminiTTSProvider implements TTSSynthesisProvider {
     if (!response.ok) {
       // Preserve status for cooldown/retry without retaining provider text or credentials.
       await response.body?.cancel().catch(() => undefined);
-      throw Object.assign(new Error(`Gemini TTS request failed with ${response.status}`), { status: response.status });
+      throw ttsHttpError(`Gemini TTS request failed with ${response.status}`, response);
     }
     const json = await response.json().catch(() => undefined);
     const { buffer: pcm } = interactionAudioResponse(json);

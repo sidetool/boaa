@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { requestPlainTTSWithRetry } from './plain-tts-retry';
+import { requestPlainTTSWithRetry, requestSavedAudioWithRetry } from './plain-tts-retry';
 describe('ordinary TTS retry', () => {
   it('keeps the same request while waiting for a bounded provider cooldown', async () => {
     const request = vi
@@ -35,4 +35,37 @@ describe('ordinary TTS retry', () => {
     await expect(requestPlainTTSWithRetry(request, { signal: abort.signal, onWait })).rejects.toBeDefined();
     expect(request).toHaveBeenCalledTimes(1);
   });
+});
+
+it('retries saved-audio reads after transport errors but never permission, missing files or cancellation', async () => {
+  const signal = new AbortController().signal;
+  const request = vi
+    .fn()
+    .mockRejectedValueOnce(new TypeError('network'))
+    .mockRejectedValueOnce({ status: 503 })
+    .mockResolvedValue('saved');
+  const wait = vi.fn(async () => {});
+  expect(await requestSavedAudioWithRetry(request, signal, wait)).toBe('saved');
+  expect(wait.mock.calls).toEqual([
+    [500, signal],
+    [1000, signal],
+  ]);
+  for (const status of [401, 403, 404, 409, 410]) {
+    const read = vi.fn().mockRejectedValue({ status });
+    await expect(requestSavedAudioWithRetry(read, signal, wait)).rejects.toMatchObject({ status });
+    expect(read).toHaveBeenCalledTimes(1);
+  }
+  const abort = new AbortController();
+  const read = vi.fn().mockRejectedValue({ status: 502 });
+  await expect(
+    requestSavedAudioWithRetry(read, abort.signal, async () => {
+      abort.abort();
+    }),
+  ).rejects.toBeDefined();
+  expect(read).toHaveBeenCalledTimes(1);
+});
+it('bounds saved-audio retry attempts including timeouts', async () => {
+  const read = vi.fn().mockRejectedValue({ name: 'RemoteApiRequestTimeoutError' });
+  await expect(requestSavedAudioWithRetry(read, new AbortController().signal, async () => {})).rejects.toBeDefined();
+  expect(read).toHaveBeenCalledTimes(4);
 });

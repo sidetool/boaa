@@ -39,7 +39,17 @@ export class ConnectionTTSProvider implements TTSSynthesisProvider {
     for (const text of parts) {
       input.signal?.throwIfAborted();
       await this.checkCurrent();
-      const result = await this.adapter.synthesize({ ...input, text, format: 'wav' });
+      let result: TTSSynthesisResult;
+      try {
+        result = await this.adapter.synthesize({ ...input, text, format: 'wav' });
+      } catch (error) {
+        if (results.length && (error as { status?: number })?.status === 429)
+          throw connectionError(
+            '나뉜 음성의 일부를 만든 뒤 요청 제한에 도달했어요. 중복 생성을 막기 위해 멈췄습니다. 이어 만들면 앞부분이 다시 생성될 수 있어요.',
+            502,
+          );
+        throw error;
+      }
       await this.checkCurrent();
       bytes += result.audio.byteLength;
       if (!result.audio.byteLength || bytes > 32 * 1024 * 1024)

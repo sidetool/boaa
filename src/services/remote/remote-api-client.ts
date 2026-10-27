@@ -471,6 +471,7 @@ export class RemoteApiClient {
     init: RequestInit,
     requestedTimeoutMs?: number,
     consumeResponse?: (response: Response) => Promise<void>,
+    timeoutIncludesBody = false,
   ): Promise<Response> {
     const timeoutMs = Math.max(
       1,
@@ -493,8 +494,8 @@ export class RemoteApiClient {
         signal: controller.signal,
       });
       // Keep caller cancellation connected until the response body has been consumed.
-      // The existing request timeout still covers response headers only.
-      globalThis.clearTimeout(timer);
+      // Bounded audio reads opt into a deadline covering the complete download.
+      if (!timeoutIncludesBody) globalThis.clearTimeout(timer);
       await consumeResponse?.(response);
       this.options.session?.signal.throwIfAborted();
       return response;
@@ -538,6 +539,7 @@ export class RemoteApiClient {
     timeoutMs?: number,
     onProgress?: TaskProgressCallback,
     validateResponse?: (response: Response) => void,
+    timeoutIncludesBody = false,
   ): Promise<{ blob: Blob; headers: Headers; status: number }> {
     const authToken = this.options.getAuthToken?.()?.trim();
     let blob!: Blob;
@@ -583,6 +585,7 @@ export class RemoteApiClient {
         blob = await new Response(observed, { headers: download.headers }).blob();
         onProgress({ phase: 'verifying' });
       },
+      timeoutIncludesBody,
     );
     return { blob, headers: response.headers, status: response.status };
   }
