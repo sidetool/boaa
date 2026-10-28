@@ -29,6 +29,8 @@ const TIMBRE_WORDS = [
   ['인상', ['따뜻한', '차분한', '밝은', '냉정한', '위엄 있는', '장난스러운']],
   ['말투', ['느긋한', '또렷한', '빠른']],
 ] as const;
+/** Gemini 3.8 voice design keeps stable traits in the voice; per-line acting goes to 음성 다시 만들기. */
+const GEMINI_38 = new Set(['gemini-3.8-flash-tts', 'gemini-3.8-flash-lite-tts']);
 const timbreWords = (value: string) =>
   value
     .split(/[,，、]/)
@@ -601,7 +603,7 @@ function VoiceEditor({
             maxLength={2000}
             placeholder={
               design
-                ? '예: 따뜻하고 낮은 음색. 서두르지 않고 명료하게 말하는 성인 목소리.'
+                ? '예: 30대 여성, 낮고 따뜻한 중저음, 표준어 억양, 또박또박 천천히 말함.'
                 : '예: 서두르지 않고 명료하게 말해요.\n어울리는 인물: 노련한 기사, 침착한 해설자\n어울리지 않는 인물: 어린아이'
             }
             onChange={(e) => {
@@ -613,6 +615,12 @@ function VoiceEditor({
             {description.length}/2000
             {!design && ' · 직접 들은 느낌과 어울리는 인물을 적으면 배정에 도움이 돼요.'}
           </small>
+          {design && GEMINI_38.has(modelId.trim()) && (
+            <small className="un-book-note">
+              Gemini 3.8: 성별·나이대·음색·억양·말하는 습관처럼 늘 유지할 특징을 적어요. 장면마다 바뀌는 감정은 여기
+              말고 ‘음성 다시 만들기’의 연기 지시로 따로 줘요.
+            </small>
+          )}
         </label>
         <label className="un-cast-field">
           <span>언어</span>

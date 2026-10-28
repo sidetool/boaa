@@ -11,8 +11,24 @@ import UiNextSpeakerRevoice from './UiNextSpeakerRevoice';
 // Neutral synthetic fixtures only.
 const voices: PlainTTSVoice[] = [
   { id: 'a1', lang: 'ko', label: '목소리 1', providerId: 'tts-a', providerName: '엔진 A' },
-  { id: 'a2', lang: 'ko', label: '목소리 2', providerId: 'tts-g', providerName: '엔진 G', instructionsSupported: true },
-  { id: 'a3', lang: 'ko', label: '목소리 3', providerId: 'tts-g', providerName: '엔진 G', instructionsSupported: true },
+  {
+    id: 'a2',
+    lang: 'ko',
+    label: '목소리 2',
+    providerId: 'tts-g',
+    providerName: '엔진 G',
+    instructionsSupported: true,
+    modelId: 'other-instruct-tts',
+  },
+  {
+    id: 'a3',
+    lang: 'ko',
+    label: '목소리 3',
+    providerId: 'tts-g',
+    providerName: '엔진 G',
+    instructionsSupported: true,
+    modelId: 'gemini-3.8-flash-lite-tts',
+  },
   { id: 'b1', lang: 'ko', label: '외부 1', providerId: 'tts-b', providerName: '엔진 B', paid: true },
 ];
 const source = (overrides: Partial<SpeakerRevoiceSource> = {}): SpeakerRevoiceSource => ({
@@ -114,6 +130,17 @@ describe('UiNextSpeakerRevoice audio-only variant', () => {
     });
     expect(port.castings).not.toHaveBeenCalled();
     expect(port.assign).not.toHaveBeenCalled();
+  });
+
+  it('appends optional acting examples and shows Gemini 3.8 guidance only for that model', async () => {
+    const root = await mount(fixture());
+    expect(text(root)).not.toContain('Gemini 3.8');
+    await click(button(root, '지친 듯'));
+    expect(byLabel(root, '인물 1 연기 지시')[0].props.value).toBe('차분하게, 지친 듯');
+    expect(button(root, '지친 듯').props.disabled).toBe(true);
+    await change(byLabel(root, '인물 1 새 목소리')[0], 'a3');
+    expect(text(root)).toContain('Gemini 3.8: 이 인물의 대사를');
+    expect(byLabel(root, '내레이터 연기 예시')).toHaveLength(0);
   });
 
   it('needs paid consent, creates once per click and reloads the list without resending an unclear failure', async () => {

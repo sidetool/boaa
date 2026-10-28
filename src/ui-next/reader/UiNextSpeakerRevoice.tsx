@@ -10,8 +10,15 @@ import type {
 } from '../../providers/speaker-generation';
 import type { LibraryVoice } from '../../providers/voice-library';
 import { formatCount } from '../../utils/format';
+import { cx } from '../components/primitives';
 
 type Draft = Record<string, { voiceId: string; instructions: string }>;
+/** Short delivery cues; they never change who the voice sounds like. */
+const ACTING_EXAMPLES = ['조용히 속삭이듯', '지친 듯', '긴장해서 빠르게', '단호하고 차갑게', '밝고 들뜬', '울먹이며'];
+/** Gemini 3.8 TTS takes per-line style separately from the stored voice; guidance is shown only for these. */
+const GEMINI_38 = new Set(['gemini-3.8-flash-tts', 'gemini-3.8-flash-lite-tts']);
+const isGemini38 = (voice?: PlainTTSVoice) =>
+  voice?.instructionsSupported === true && GEMINI_38.has(voice.modelId ?? voice.model?.modelId ?? '');
 const STOPPED: readonly SpeakerGenerationJob['status'][] = ['paused', 'failed', 'completed'];
 const message = (error: unknown, fallback: string) =>
   error instanceof Error && error.message && error.name !== 'AbortError' ? error.message : fallback;
@@ -248,19 +255,45 @@ export default function UiNextSpeakerRevoice({
                         </select>
                       </label>
                       {supported ? (
-                        <label className="un-cast-field">
-                          <span>
-                            연기 지시<small>선택</small>
-                          </span>
-                          <textarea
-                            aria-label={`${v.name} 연기 지시`}
-                            rows={2}
-                            maxLength={2000}
-                            value={d.instructions}
-                            placeholder="예: 낮게 가라앉은 목소리로, 서두르지 말고 단호하게"
-                            onChange={(e) => edit(v.speakerId, { instructions: e.target.value })}
-                          />
-                        </label>
+                        <>
+                          <label className="un-cast-field">
+                            <span>
+                              연기 지시<small>선택</small>
+                            </span>
+                            <textarea
+                              aria-label={`${v.name} 연기 지시`}
+                              rows={2}
+                              maxLength={2000}
+                              value={d.instructions}
+                              placeholder="예: 지친 듯 조용히, 끝으로 갈수록 단호하게"
+                              onChange={(e) => edit(v.speakerId, { instructions: e.target.value })}
+                            />
+                          </label>
+                          <div className="un-chip-row" role="group" aria-label={`${v.name} 연기 예시`}>
+                            {ACTING_EXAMPLES.map((cue) => {
+                              const added = d.instructions.includes(cue);
+                              const next = d.instructions.trim() ? `${d.instructions.trimEnd()}, ${cue}` : cue;
+                              return (
+                                <button
+                                  key={cue}
+                                  type="button"
+                                  className={cx('un-chip', added && 'is-active')}
+                                  disabled={added || next.length > 2000}
+                                  onClick={() => edit(v.speakerId, { instructions: next })}
+                                >
+                                  {cue}
+                                </button>
+                              );
+                            })}
+                          </div>
+                          {isGemini38(chosen) && (
+                            <small className="un-book-note">
+                              Gemini 3.8: 이 인물의 대사를 어떤 감정·속도로 읽을지 짧게 적어요. 성별·나이·음색은 고른
+                              목소리에서 정해지고 지시로 바뀌지 않아요. 다른 목소리가 필요하면 위에서 고르거나 보관함의
+                              ‘설명으로 만들기’를 사용해요.
+                            </small>
+                          )}
+                        </>
                       ) : (
                         d.instructions.trim() && (
                           <small className="un-book-note">

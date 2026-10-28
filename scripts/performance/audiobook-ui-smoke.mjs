@@ -31,7 +31,7 @@ const port=createAudiobookPort(client,'book');
 const systemTTS={pause(){},resume(){},stop(){}};
 const owner={};
 const reviewVoices=[{id:'a',label:'기본 목소리',lang:'ko',providerName:'검증 엔진'},
- {id:'b',label:'아주 긴 이름을 가진 두 번째 목소리',lang:'ko',providerName:'검증 엔진',instructionsSupported:true,paid:true}];
+ {id:'b',label:'아주 긴 이름을 가진 두 번째 목소리',lang:'ko',providerName:'검증 엔진',modelId:'gemini-3.8-flash-tts',instructionsSupported:true,paid:true}];
 let reviewRows=[{id:'row',voiceId:'a',alias:'차분한 목소리',timbre:'낮은, 부드러운',description:'차분한 인물에게 어울려요.',language:'ko',enabled:true,providerId:'fixture',providerVoiceId:'a',model:{providerId:'fixture',modelId:'fixture-model',revision:'1'},origin:'catalog',available:true,sampleAvailable:false}];
 const reviewCalls=[]; window.reviewCalls=reviewCalls;
 const reviewPort={list:async()=>({voices:reviewRows,designers:[]}),save:async(v,s,id)=>{reviewRows=[{...reviewRows[0],...v}];reviewCalls.push({kind:'save',id,value:v});return reviewRows[0];}};
@@ -305,6 +305,21 @@ try {
       await page.getByText(/아직 분석하지 않은 나머지 회차/).waitFor();
       await page.locator('select').nth(1).selectOption('b');
       await page.locator('textarea').fill('차분하고 또렷하게, 서두르지 않고 말해 주세요.');
+      await page.getByText(/Gemini 3.8: 이 인물의 대사/).waitFor();
+      const cue = page.getByRole('button', { name: '지친 듯', exact: true });
+      await cue.click();
+      assert.equal(await cue.isDisabled(), true);
+      const chipStyle = await cue.evaluate((el) => ({
+        color: getComputedStyle(el).color,
+        background: getComputedStyle(el).backgroundColor,
+      }));
+      assert.notEqual(chipStyle.color, chipStyle.background);
+      assert.deepEqual(
+        await page
+          .locator('.un-revoice .un-chip-row')
+          .evaluateAll((els) => els.filter((el) => el.scrollWidth > el.clientWidth + 1).map((el) => el.textContent)),
+        [],
+      );
       assert.deepEqual(
         await page
           .locator('.un-revoice-row label > span')
@@ -328,7 +343,7 @@ try {
       const creates = await page.evaluate(() => window.reviewCalls.filter((c) => c.kind === 'create'));
       assert.equal(creates.length, 1);
       assert.equal(creates[0].confirmPaid, true);
-      assert.equal(creates[0].input.voices[1].instructions, '차분하고 또렷하게, 서두르지 않고 말해 주세요.');
+      assert.equal(creates[0].input.voices[1].instructions, '차분하고 또렷하게, 서두르지 않고 말해 주세요., 지친 듯');
       checks.push(
         `${width}: metadata editing, bounded fields/chips, partial revoice source, separate instructions, consent and one create`,
       );

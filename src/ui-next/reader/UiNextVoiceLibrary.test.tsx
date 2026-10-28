@@ -210,6 +210,19 @@ describe('UiNextVoiceLibrary owned edits and design requests', () => {
     expect(chip('라벨 필요').props['aria-pressed']).toBe(true);
   });
 
+  it('explains Gemini 3.8 voice design only for that design model', async () => {
+    const f = fixture();
+    f.port.list.mockResolvedValue({
+      voices: [],
+      designers: [{ id: 'designer', name: '합성 TTS', modelId: 'gemini-3.8-flash-tts', paid: true }],
+    });
+    const root = await mount(f.port);
+    await click(button(root, '설명으로 만들기'));
+    expect(text(root)).toContain('Gemini 3.8: 성별·나이대');
+    await change(field(root, '목소리 제작 모델 ID'), 'other-design-model');
+    expect(text(root)).not.toContain('Gemini 3.8');
+  });
+
   it('requires paid opt-in, suppresses a double click, reuses the request ID on retry and renews it after edits', async () => {
     const f = fixture();
     const root = await mount(f.port);
