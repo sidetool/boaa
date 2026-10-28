@@ -1,5 +1,8 @@
 import { preparedNarrationSession } from '../../../../src/providers/prepared-narration';
 import { runTTSPlaybackSession } from '../../../../src/providers/tts-playback-session-runner';
+import { VoiceLibraryStore } from './voice-library-store';
+import type { SpeakerVoiceCasting } from './speaker-voice-casting';
+import type { PlainTTSVoices } from '../../../../src/providers/plain-tts';
 import { loadSpeakerChapter } from './speaker-generation-plan';
 import { afterAll, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
@@ -30,7 +33,7 @@ import {
 } from '../../../../src/providers/speaker-engine-protocol';
 import { attributionKey } from './speaker-attribution-preparation';
 import { planSpeakerRevoice } from './speaker-revoice-plan';
-import type { SpeakerGenerationInput } from '../../../../src/providers/speaker-generation';
+import type { SpeakerGenerationInput, SpeakerRevoiceInput } from '../../../../src/providers/speaker-generation';
 
 const harness = await startPostgresIntegrationHarness();
 afterAll(async () => {
@@ -65,7 +68,7 @@ async function setup(pool: pg.Pool, concurrency: 1 | 2 = 1, chapterIds = ['c1', 
   }
   const directory = await mkdtemp(path.join(tmpdir(), 'boaa-speaker-test-'));
   const config = { ...loadConfig({ DEFAULT_USER_ID: 'owner' }), dataDir: directory };
-  const catalog = async () => ({
+  const catalog = vi.fn(async (): Promise<PlainTTSVoices> => ({
     available: true,
     revision: 'catalog',
     voices: ['n', 'a', 'b'].map((id) => ({
@@ -76,7 +79,7 @@ async function setup(pool: pg.Pool, concurrency: 1 | 2 = 1, chapterIds = ['c1', 
       paid: id === 'b',
       instructionsSupported: id === 'b',
     })),
-  });
+  }));
   const audio = new AudiobookService(
     pool,
     'owner',
@@ -149,11 +152,20 @@ async function setup(pool: pg.Pool, concurrency: 1 | 2 = 1, chapterIds = ['c1', 
     paid: true,
     enabled: true,
   });
-  const synthesize = vi.fn(async (text: string, voiceId: string, _model: unknown, key: string) => ({
-    data: Buffer.from(text + '|' + voiceId),
-    contentType: 'audio/wav',
-    key,
-  }));
+  const synthesize = vi.fn(
+    async (
+      text: string,
+      voiceId: string,
+      _model: unknown,
+      key: string,
+      _regenerate = false,
+      instructions?: string,
+    ) => ({
+      data: Buffer.from(text + '|' + voiceId + (instructions ? '|' + instructions : '')),
+      contentType: 'audio/wav',
+      key,
+    }),
+  );
   const service = new SpeakerGenerationService(pool, 'owner', engines, audio, catalog, synthesize);
   const input: SpeakerGenerationInput = {
     chapterIds: [...chapterIds],
@@ -1394,4 +1406,372 @@ function gate() {
       });
     },
   );
+});
+
+async function revoiceChoices(f: Awaited<ReturnType<typeof setup>>, id: string): Promise<SpeakerRevoiceInput> {
+  return {
+    voices: (await f.service.revoiceSource('book', id)).voices.map((v) => ({
+      speakerId: v.speakerId,
+      voiceId: v.speakerId === 'narrator' ? v.voiceId : 'b',
+    })),
+  };
+}
+
+(harness ? describe : describe.skip)('audio-only revoice of immutable captured speaker plans', () => {
+  it('creates a separate idempotent paid variant without engines or casting and preserves original audio and unchanged cache keys', async () => {
+    await withPostgresSchema(harness!, 'speaker_revoice_immutable', async (pool) => {
+      const f = await setup(pool);
+      try {
+        const original = await f.create();
+        await f.until(async () => (await f.audio.get(original.id)).status === 'completed');
+        const originalJob = (
+          await pool.query('select to_jsonb(a) job from saved_audiobooks a where id=$1', [original.id])
+        ).rows[0].job;
+        const originalItems = (
+          await pool.query('select * from saved_audiobook_items where audiobook_id=$1 order by ordinal', [original.id])
+        ).rows;
+        const originalAudio = (await f.audio.audio(original.id, 1)).data;
+        const analysis = (await pool.query('select * from speaker_analysis order by analysis_key,chapter_id')).rows;
+        const oldRun = (await pool.query('select * from speaker_generation_runs where audiobook_id=$1', [original.id]))
+          .rows[0];
+        await f.engines.remove(f.engine.id);
+        const noAnalysis = vi
+          .spyOn(f.engines.transport, 'generate')
+          .mockRejectedValue(Error('analysis forbidden during revoice'));
+        const noCasting = vi.fn(async () => {
+          throw Error('casting forbidden during revoice');
+        });
+        const service = new SpeakerGenerationService(pool, 'owner', f.engines, f.audio, f.catalog, f.synthesize, {
+          select: noCasting,
+        } as unknown as SpeakerVoiceCasting);
+        const callsBefore = f.requests.length;
+        f.catalog.mockResolvedValue({
+          ...(await f.catalog()),
+          voices: (await f.catalog()).voices.map((v) => ({ ...v, paid: v.id === 'b' })),
+        });
+        const input = await revoiceChoices(f, original.id);
+        expect(input.voices.some((v) => v.speakerId === 'narrator')).toBe(true);
+        const estimate = await service.estimateRevoice('book', original.id, input);
+        expect(estimate).toMatchObject({ paid: true, itemCount: 6, chapterCount: 2 });
+        await expect(service.revoice('book', original.id, input, estimate.fingerprint, false)).rejects.toMatchObject({
+          statusCode: 400,
+        });
+        await expect(service.revoice('book', original.id, input, 'stale-fingerprint', true)).rejects.toMatchObject({
+          statusCode: 409,
+        });
+        const [variant, duplicate] = await Promise.all([
+          service.revoice('book', original.id, input, estimate.fingerprint, true),
+          service.revoice('book', original.id, input, estimate.fingerprint, true),
+        ]);
+        expect(variant.id).not.toBe(original.id);
+        expect(duplicate.id).toBe(variant.id);
+        expect(variant).toMatchObject({ revoiceFrom: original.id, planningComplete: true, itemCount: 6 });
+        const seeded = (await pool.query('select * from speaker_generation_runs where audiobook_id=$1', [variant.id]))
+          .rows[0];
+        expect(seeded).toMatchObject({
+          analysis_key: oldRun.analysis_key,
+          chapter_ids: oldRun.chapter_ids,
+          next_chapter: 2,
+          ledger: oldRun.ledger,
+          stage: 'audio',
+        });
+        await f.until(async () => (await f.audio.get(variant.id)).status === 'completed');
+        expect(noAnalysis).not.toHaveBeenCalled();
+        expect(noCasting).not.toHaveBeenCalled();
+        expect(f.requests).toHaveLength(callsBefore);
+        expect((await pool.query('select * from speaker_analysis order by analysis_key,chapter_id')).rows).toEqual(
+          analysis,
+        );
+        const items = (
+          await pool.query('select * from saved_audiobook_items where audiobook_id=$1 order by ordinal', [variant.id])
+        ).rows;
+        for (const [index, item] of items.entries()) {
+          const old = originalItems[index];
+          expect(item.request.paragraphHash).toBe(old.request.paragraphHash);
+          expect(item.request.chunkHash).toBe(old.request.chunkHash);
+          expect(item.request.cast).toEqual(old.request.cast);
+          if (old.request.cast.speakerId === 'narrator') {
+            expect(item.request).toEqual(old.request);
+            expect(item.cache_key).toBe(old.cache_key);
+          } else {
+            expect(item.request.voiceId).toBe('b');
+            expect(item.cache_key).not.toBe(old.cache_key);
+          }
+        }
+        expect(
+          (await f.audio.reader('book', 'c1', { id: variant.id }))!.items.map((i) => i.playable.sourceRanges),
+        ).toEqual((await f.audio.reader('book', 'c1', { id: original.id }))!.items.map((i) => i.playable.sourceRanges));
+        expect(
+          (await pool.query('select to_jsonb(a) job from saved_audiobooks a where id=$1', [original.id])).rows[0].job,
+        ).toEqual(originalJob);
+        expect(
+          (
+            await pool.query('select * from saved_audiobook_items where audiobook_id=$1 order by ordinal', [
+              original.id,
+            ])
+          ).rows,
+        ).toEqual(originalItems);
+        expect((await f.audio.audio(original.id, 1)).data).toEqual(originalAudio);
+        expect((await f.audio.audio(variant.id, 1)).data).not.toEqual(originalAudio);
+        expect((await pool.query('select count(*)::int n from saved_audiobooks')).rows[0].n).toBe(2);
+      } finally {
+        await f.cleanup();
+      }
+    });
+  });
+
+  it.each(['paused', 'failed'] as const)(
+    'revoices only captured chapters of a %s partial plan and never analyzes the remaining chapter',
+    async (status) => {
+      await withPostgresSchema(harness!, 'speaker_revoice_partial', async (pool) => {
+        const f = await setup(pool);
+        try {
+          const original = await f.create();
+          await f.until(
+            async () =>
+              (
+                await pool.query('select next_chapter from speaker_generation_runs where audiobook_id=$1', [
+                  original.id,
+                ])
+              ).rows[0].next_chapter === 1,
+          );
+          await pool.query('update saved_audiobooks set status=$2 where id=$1', [original.id, status]);
+          const captured = (
+            await pool.query('select request from saved_audiobook_items where audiobook_id=$1 order by ordinal', [
+              original.id,
+            ])
+          ).rows;
+          const calls = f.requests.length;
+          await f.engines.remove(f.engine.id);
+          const input = await revoiceChoices(f, original.id);
+          const estimate = await f.service.estimateRevoice('book', original.id, input);
+          expect(estimate).toMatchObject({ itemCount: 3, chapterCount: 1 });
+          const variant = await f.service.revoice('book', original.id, input, estimate.fingerprint, true);
+          expect(variant).toMatchObject({ chapterIds: ['c1'], planningComplete: true });
+          expect(
+            (
+              await pool.query('select chapter_ids,next_chapter from speaker_generation_runs where audiobook_id=$1', [
+                variant.id,
+              ])
+            ).rows[0],
+          ).toEqual({ chapter_ids: ['c1'], next_chapter: 1 });
+          await f.until(async () => (await f.audio.get(variant.id)).status === 'completed');
+          expect(f.requests).toHaveLength(calls);
+          expect(
+            (await pool.query('select status,planning_complete from saved_audiobooks where id=$1', [original.id]))
+              .rows[0],
+          ).toEqual({ status, planning_complete: false });
+          expect(
+            (
+              await pool.query('select request from saved_audiobook_items where audiobook_id=$1 order by ordinal', [
+                original.id,
+              ])
+            ).rows,
+          ).toEqual(captured);
+          expect(
+            (
+              await pool.query('select distinct chapter_id from saved_audiobook_items where audiobook_id=$1', [
+                variant.id,
+              ])
+            ).rows,
+          ).toEqual([{ chapter_id: 'c1' }]);
+        } finally {
+          await f.cleanup();
+        }
+      });
+    },
+  );
+
+  it('pins per-character instructions in transport and cache identity while preserving source text and voice-only ranges', async () => {
+    await withPostgresSchema(harness!, 'speaker_revoice_instructions', async (pool) => {
+      const f = await setup(pool, 1, ['c1']);
+      try {
+        const original = await f.create();
+        await f.until(async () => (await f.audio.get(original.id)).status === 'completed');
+        const input = await revoiceChoices(f, original.id);
+        const character = input.voices.find((v) => v.speakerId !== 'narrator')!;
+        const directions = '차분하게 읽되 마지막 말은 단호하게 말하세요.\n본문은 바꾸지 마세요.';
+        character.instructions = directions;
+        const estimate = await f.service.estimateRevoice('book', original.id, input);
+        const variant = await f.service.revoice('book', original.id, input, estimate.fingerprint, true);
+        const oldRequests = (
+          await pool.query('select request from saved_audiobook_items where audiobook_id=$1 order by ordinal', [
+            original.id,
+          ])
+        ).rows;
+        const items = (
+          await pool.query('select ordinal,request from saved_audiobook_items where audiobook_id=$1 order by ordinal', [
+            variant.id,
+          ])
+        ).rows;
+        const item = items.find((i) => i.request.cast.speakerId === character.speakerId)!;
+        const old = oldRequests[item.ordinal].request;
+        expect(item.request.cast).toMatchObject({
+          instructions: directions,
+          start: old.cast.start,
+          end: old.cast.end,
+          part: old.cast.part,
+          speakerId: old.cast.speakerId,
+        });
+        expect(item.request).toMatchObject({ paragraphHash: old.paragraphHash, chunkHash: old.chunkHash });
+        f.synthesize.mockClear();
+        const audio = await f.audio.resolve(variant.id, item.ordinal);
+        expect(f.synthesize).toHaveBeenCalledExactlyOnceWith(
+          expect.any(String),
+          'b',
+          item.request.cast.model,
+          audio.key,
+          false,
+          directions,
+        );
+        expect(f.synthesize.mock.calls[0][0]).not.toContain(directions);
+        character.instructions = '낮고 조용하게 읽으세요.';
+        const changed = await f.service.estimateRevoice('book', original.id, input);
+        expect(changed.fingerprint).not.toBe(estimate.fingerprint);
+        const second = await f.service.revoice('book', original.id, input, changed.fingerprint, true);
+        const changedAudio = await f.audio.resolve(second.id, item.ordinal);
+        expect(changedAudio.key).not.toBe(audio.key);
+        expect(await f.service.revoiceSource('book', variant.id).catch(() => undefined)).toBeUndefined(); // queued variants must first be stopped
+        await f.audio.control(variant.id, 'pause');
+        expect(
+          (await f.service.revoiceSource('book', variant.id)).voices.find((v) => v.speakerId === character.speakerId)
+            ?.instructions,
+        ).toBe(directions);
+      } finally {
+        await f.cleanup();
+      }
+    });
+  });
+
+  it('rejects incomplete, duplicate, unknown and unsupported voice maps and stale captured source hashes', async () => {
+    await withPostgresSchema(harness!, 'speaker_revoice_validation', async (pool) => {
+      const f = await setup(pool, 1, ['c1']);
+      try {
+        const original = await f.create();
+        await f.until(async () => (await f.audio.get(original.id)).status === 'completed');
+        const input = await revoiceChoices(f, original.id);
+        const character = input.voices.find((v) => v.speakerId !== 'narrator')!;
+        const originalMap = {
+          voices: (await f.service.revoiceSource('book', original.id)).voices.map(({ speakerId, voiceId }) => ({
+            speakerId,
+            voiceId,
+          })),
+        };
+        const malformed = [
+          { voices: [character] },
+          { voices: [character, character] },
+          {
+            voices: input.voices.map((v) => (v.speakerId === character.speakerId ? { ...v, speakerId: 'foreign' } : v)),
+          },
+          { voices: input.voices.map((v) => ({ ...v, voiceId: 'missing' })) },
+          {
+            voices: input.voices.map((v) =>
+              v.speakerId === character.speakerId ? { ...v, voiceId: 'a', instructions: '연기 지시' } : v,
+            ),
+          },
+          { voices: input.voices.map((v) => ({ ...v, instructions: 'x'.repeat(2001) })) },
+          { voices: input.voices.map((v) => ({ ...v, instructions: 'bad\u0000control' })) },
+          originalMap,
+        ];
+        for (const bad of malformed)
+          await expect(f.service.estimateRevoice('book', original.id, bad)).rejects.toBeDefined();
+        const full = {
+          voices: input.voices.map((v) =>
+            v.speakerId === character.speakerId ? { ...v, instructions: 'x'.repeat(2000) } : v,
+          ),
+        };
+        await expect(f.service.estimateRevoice('book', original.id, full)).resolves.toMatchObject({ itemCount: 3 });
+        await pool.query(
+          "update paragraph_search set paragraph=jsonb_set(paragraph,'{text}',to_jsonb('바뀐 본문입니다.'::text)),text='바뀐 본문입니다.' where chapter_id='c1'",
+        );
+        await expect(f.service.estimateRevoice('book', original.id, input)).rejects.toMatchObject({ statusCode: 409 });
+        expect((await pool.query('select count(*)::int n from saved_audiobooks')).rows[0].n).toBe(1);
+      } finally {
+        await f.cleanup();
+      }
+    });
+  });
+
+  it.each(['owner', 'revision', 'source-status', 'account'] as const)(
+    'fences a %s change committed after planning and before immutable variant creation',
+    async (change) => {
+      await withPostgresSchema(harness!, 'speaker_revoice_fence', async (pool) => {
+        const f = await setup(pool, 1, ['c1']);
+        let restoreCreate: (() => void) | undefined;
+        try {
+          const original = await f.create();
+          await f.until(async () => (await f.audio.get(original.id)).status === 'completed');
+          const input = await revoiceChoices(f, original.id);
+          const estimate = await f.service.estimateRevoice('book', original.id, input);
+          const actualCreate = f.audio.create.bind(f.audio);
+          const create = vi.spyOn(f.audio, 'create').mockImplementationOnce(async (...args) => {
+            if (change === 'owner') await pool.query("update library_books set user_id='other' where id='book'");
+            if (change === 'revision')
+              await pool.query("update library_books set active_content_revision_id='changed' where id='book'");
+            if (change === 'source-status')
+              await pool.query("update saved_audiobooks set status='queued' where id=$1", [original.id]);
+            if (change === 'account')
+              await pool.query("update self_host_accounts set role='member' where user_id='owner'");
+            return actualCreate(...args);
+          });
+          restoreCreate = () => create.mockRestore();
+          await expect(f.service.revoice('book', original.id, input, estimate.fingerprint, true)).rejects.toMatchObject(
+            { statusCode: 409 },
+          );
+          expect((await pool.query('select count(*)::int n from saved_audiobooks')).rows[0].n).toBe(1);
+        } finally {
+          restoreCreate?.();
+          await f.cleanup();
+        }
+      });
+    },
+  );
+
+  it('returns 409 for duplicate library creation without replacing existing metadata and still permits explicit editing', async () => {
+    await withPostgresSchema(harness!, 'speaker_revoice_library', async (pool) => {
+      const f = await setup(pool);
+      try {
+        const source = {
+          id: 'fixture',
+          name: 'Fixture',
+          modelId: 'same',
+          revision: 'stable',
+          synthesisRevision: 'stable',
+          paid: false,
+          legacyIds: true,
+          createProvider: async () => {
+            throw Error('metadata edits must not synthesize');
+          },
+        };
+        const catalog = await f.catalog();
+        f.catalog.mockResolvedValue({
+          ...catalog,
+          voices: catalog.voices.map((voice) => ({ ...voice, providerId: source.id })),
+        });
+        const library = new VoiceLibraryStore(pool, 'owner', async () => [source], f.catalog);
+        const metadata = {
+          voiceId: 'a',
+          alias: '원래 이름',
+          timbre: '맑음',
+          description: '원래 설명',
+          language: 'ko',
+          enabled: true,
+        };
+        const original = await library.save(metadata);
+        await expect(
+          library.save({ ...metadata, alias: '덮어쓴 이름', description: '중복 요청' }),
+        ).rejects.toMatchObject({ statusCode: 409 });
+        const saved = (await pool.query('select id,metadata from tts_voice_library where id=$1', [original.id]))
+          .rows[0];
+        expect(saved).toMatchObject({
+          id: original.id,
+          metadata: { alias: metadata.alias, description: metadata.description },
+        });
+        expect((await library.save({ ...metadata, alias: '명시적 수정' }, original.id)).alias).toBe('명시적 수정');
+        expect((await pool.query('select count(*)::int n from tts_voice_library')).rows[0].n).toBe(1);
+      } finally {
+        await f.cleanup();
+      }
+    });
+  });
 });

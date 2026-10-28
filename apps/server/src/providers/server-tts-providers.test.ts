@@ -541,3 +541,44 @@ describe('ordinary external TTS compatibility', () => {
     expect(audio.audio.byteLength).toBe(48);
   });
 });
+
+it('transports character directions separately from verbatim text and advertises only instruction-capable OpenAI models', async () => {
+  const text = '이 문장만 그대로 읽으세요.';
+  const instructions = '처음은 낮게, 마지막은 또렷하고 단호하게 말하세요.';
+  const modernFetch = vi.fn(
+    async () => new Response(new Uint8Array([1, 2]), { headers: { 'content-type': 'audio/wav' } }),
+  );
+  const modern = new OpenAITTSProvider({ apiKey: 'fixture', modelId: 'gpt-4o-mini-tts', fetchImpl: modernFetch });
+  await modern.synthesize({ text, voiceProfile, providerOptions: { prompt: instructions, instructions } });
+  expect(modern.supportsInstructions).toBe(true);
+  expect(JSON.parse(String((modernFetch.mock.calls[0] as unknown as [unknown, RequestInit])[1].body))).toMatchObject({
+    input: text,
+    instructions,
+  });
+  const legacyFetch = vi.fn(async () => new Response(new Uint8Array([1, 2])));
+  const legacy = new OpenAITTSProvider({ apiKey: 'fixture', modelId: 'tts-1-hd', fetchImpl: legacyFetch });
+  await legacy.synthesize({ text, voiceProfile, providerOptions: { instructions } });
+  expect(legacy.supportsInstructions).toBe(false);
+  const legacyBody = JSON.parse(String((legacyFetch.mock.calls[0] as unknown as [unknown, RequestInit])[1].body));
+  expect(legacyBody.input).toBe(text);
+  expect(legacyBody).not.toHaveProperty('instructions');
+  const geminiFetch = vi.fn(async () =>
+    Response.json({
+      steps: [
+        { type: 'model_output', content: [{ type: 'audio', data: Buffer.from([1, 0, 2, 0]).toString('base64') }] },
+      ],
+    }),
+  );
+  const gemini = new GeminiTTSProvider({
+    apiKey: 'fixture',
+    modelId: 'gemini-3.8-flash-lite-tts',
+    fetchImpl: geminiFetch,
+  });
+  await gemini.synthesize({ text, voiceProfile, providerOptions: { prompt: instructions, instructions } });
+  const geminiBody = JSON.parse(String((geminiFetch.mock.calls[0] as unknown as [unknown, RequestInit])[1].body));
+  expect(gemini.supportsInstructions).toBe(true);
+  expect(geminiBody.input[0].content[0]).toMatchObject({
+    text,
+    annotations: [{ type: 'speech_metadata', style: instructions }],
+  });
+});
