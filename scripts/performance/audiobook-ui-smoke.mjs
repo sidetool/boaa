@@ -45,7 +45,8 @@ const analysis=[{id:'e1',name:'분석 A',modelId:'model-a',enabled:true,paid:tru
 const speakerPort={preferences:async()=>JSON.parse(sessionStorage.prefs||'null')??undefined,
  savePreferences:async(v)=>{sessionStorage.prefs=JSON.stringify(v);reviewCalls.push({kind:'prefs',value:v});},
  list:async()=>[],remove:async()=>{},control:async()=>({}),create:async()=>({}),
- estimate:async(input)=>{reviewCalls.push({kind:'speakerEstimate',input});return {fingerprint:'s',chapterCount:1,contextChapterCount:0,characters:900,modelLabel:'분석 A',voiceLabel:'연기 1',paid:true};}};
+ estimate:async(input)=>{reviewCalls.push({kind:'speakerEstimate',input});return {fingerprint:'s',chapterCount:1,contextChapterCount:0,characters:900,modelLabel:'분석 A',voiceLabel:'연기 1',paid:true,
+  ...(input.casting?.designMode?{selectionModelLabel:'선정 A',maxDesignedVoices:input.casting.maxDesignedVoices}:{})};}};
 // Natural voice creation (&design): a selection connection and a verified design connection.
 const design=q.has('design');
 const selectors=[{id:'c1',name:'선정 A',modelId:'select-a',enabled:true,paid:true,purpose:'casting',revision:'1'}];
@@ -380,19 +381,30 @@ try {
           (n) => [...document.querySelectorAll('button')].some((b) => b.textContent.trim() === n && !b.disabled),
           name,
         );
+      // The sheet scrolls inside the dialog; expand it to its content so the whole flow is captured at this width.
+      const sheetShot = async (name) => {
+        const dialog = page.getByRole('dialog');
+        const height = await dialog.evaluate((el) => {
+          const scroller = [el, ...el.querySelectorAll('*')].find((n) => n.scrollHeight > n.clientHeight + 4);
+          return Math.max(900, (scroller?.scrollHeight ?? 0) + 200);
+        });
+        await page.setViewportSize({ width, height });
+        await page.screenshot({ path: `${artifacts}/${name}.png`, fullPage: true });
+        await page.setViewportSize({ width, height: 900 });
+      };
       const lastCall = (kind) => page.evaluate((k) => window.reviewCalls.filter((c) => c.kind === k).at(-1), kind);
       const actingToggle = () => page.getByRole('checkbox', { name: /장면에 맞춰 감정/ });
       const overflowing = () =>
         page
-          .locator('.un-cast-field > span, .un-book-ack > span')
+          .locator('.un-cast-field > span, .un-book-ack > span, .un-choice-text, .un-cast-roles dd')
           .evaluateAll((els) => els.filter((el) => el.scrollWidth > el.clientWidth + 1).map((el) => el.textContent));
 
       // New generation: on by default for capable voices without saving, explicit off saved and restored.
       await page.goto(`http://127.0.0.1:${port}/?review=acting`);
-      await enabled('분석 범위 확인');
+      await enabled('생성 전 확인');
       assert.equal(await actingToggle().isChecked(), true);
       assert.equal(await lastCall('prefs'), undefined);
-      await page.getByRole('button', { name: '분석 범위 확인', exact: true }).click();
+      await page.getByRole('button', { name: '생성 전 확인', exact: true }).click();
       await page.getByRole('button', { name: '생성 시작', exact: true }).waitFor();
       assert.equal((await lastCall('speakerEstimate')).input.autoActing, true);
       await bounded();
@@ -402,20 +414,20 @@ try {
       await page.waitForFunction(() => window.reviewCalls.some((c) => c.kind === 'prefs'));
       assert.equal((await lastCall('prefs')).value.autoActing, false);
       await page.reload();
-      await enabled('분석 범위 확인');
+      await enabled('생성 전 확인');
       assert.equal(await actingToggle().isChecked(), false);
-      await page.getByRole('button', { name: '분석 범위 확인', exact: true }).click();
+      await page.getByRole('button', { name: '생성 전 확인', exact: true }).click();
       await page.getByRole('button', { name: '생성 시작', exact: true }).waitFor();
       assert.equal((await lastCall('speakerEstimate')).input.autoActing, false);
 
       // Ordinary voices with no saved choice: off and disabled, no blocking message, flag left out.
       await page.evaluate(() => sessionStorage.clear());
       await page.goto(`http://127.0.0.1:${port}/?review=acting&narrator=x1`);
-      await enabled('분석 범위 확인');
+      await enabled('생성 전 확인');
       assert.equal(await actingToggle().isChecked(), false);
       assert.equal(await actingToggle().isDisabled(), true);
       assert.equal(await page.getByText('자동 연기를 지원하지 않는 목소리가 있어요').count(), 0);
-      await page.getByRole('button', { name: '분석 범위 확인', exact: true }).click();
+      await page.getByRole('button', { name: '생성 전 확인', exact: true }).click();
       await page.getByRole('button', { name: '생성 시작', exact: true }).waitFor();
       assert.equal('autoActing' in (await lastCall('speakerEstimate')).input, false);
 
@@ -446,15 +458,23 @@ try {
       // Natural voice creation: an explicit mode with selection model, design connection and budget, no names to fill.
       await page.evaluate(() => sessionStorage.clear());
       await page.goto(`http://127.0.0.1:${port}/?review=acting&design`);
-      await enabled('분석 범위 확인');
+      await enabled('생성 전 확인');
       const castingSelect = (name) => page.getByRole('combobox', { name, exact: true });
-      assert.equal(await castingSelect('인물 목소리 정하기').inputValue(), 'order');
-      await castingSelect('인물 목소리 정하기').selectOption('create');
+      const modes = page.getByRole('radiogroup', { name: '인물 목소리 정하기', exact: true });
+      assert.equal(await modes.getByRole('radio', { name: /순서대로 나누기/ }).isChecked(), true);
+      // Choice cards are tapped as a whole, title and description included.
+      await modes.getByText('인물마다 새로 만들기', { exact: true }).click();
+      assert.equal(await modes.getByRole('radio', { name: /인물마다 새로 만들기/ }).isChecked(), true);
       assert.equal(await castingSelect('목소리 선정 모델').inputValue(), 'c1');
       assert.equal(await castingSelect('목소리 제작 연결').inputValue(), 'd1');
-      await castingSelect('새로 만들 목소리').selectOption('3');
-      await page.getByText(/엑스트라·대체용 목소리/).waitFor();
-      await page.getByRole('button', { name: '분석 범위 확인', exact: true }).click();
+      await page.getByRole('button', { name: '새로 만들 목소리 줄이기', exact: true }).click();
+      await page.getByText('새 목소리 · 최대 3명', { exact: true }).waitFor();
+      await page
+        .getByText(/엑스트라·대체용 목소리/)
+        .first()
+        .waitFor();
+      assert.equal(await page.getByRole('textbox', { name: /모델 ID/ }).count(), 0);
+      await page.getByRole('button', { name: '생성 전 확인', exact: true }).click();
       await page.getByRole('button', { name: '생성 시작', exact: true }).waitFor();
       assert.deepEqual((await lastCall('speakerEstimate')).input.casting, {
         engineId: 'c1',
@@ -467,14 +487,17 @@ try {
       await bounded();
       assert.deepEqual(await overflowing(), []);
       await page.screenshot({ path: `${artifacts}/design-${width}.png` });
+      await sheetShot(`design-full-${width}`);
 
       // Re-voicing with new character voices on top of the automatic acting default.
       await page.goto(`http://127.0.0.1:${port}/?review=revoice&acting&design`);
       await page.getByText('음성 다시 만들기', { exact: true }).click();
-      await castingSelect('인물 목소리').waitFor();
-      assert.equal(await castingSelect('인물 목소리').inputValue(), 'keep');
-      await castingSelect('인물 목소리').selectOption('create');
+      const recast = page.getByRole('radiogroup', { name: '인물 목소리', exact: true });
+      await recast.waitFor();
+      assert.equal(await recast.getByRole('radio', { name: /지금 목소리 그대로/ }).isChecked(), true);
+      await recast.getByText('인물마다 새로 만들기', { exact: true }).click();
       assert.equal(await castingSelect('목소리 선정 모델').inputValue(), 'c1');
+      await page.getByText('새 목소리 · 최대 4명', { exact: true }).waitFor();
       await page.getByRole('button', { name: '다시 만들 범위 확인', exact: true }).click();
       const designCreate = page.getByRole('button', { name: '새 음성 만들기', exact: true });
       await designCreate.waitFor();
@@ -488,6 +511,7 @@ try {
         [],
       );
       await page.screenshot({ path: `${artifacts}/revoice-design-${width}.png` });
+      await sheetShot(`revoice-design-full-${width}`);
       await designCreate.click();
       await page.getByText(/새 음성 작업을 만들었어요/).waitFor();
       const designed = (await lastCall('create')).input;

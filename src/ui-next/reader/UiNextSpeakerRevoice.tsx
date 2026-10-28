@@ -12,7 +12,7 @@ import type {
 import type { LibraryVoice, SpeakerCastingOptions, VoiceDesignProvider } from '../../providers/voice-library';
 import { formatCount } from '../../utils/format';
 import { cx } from '../components/primitives';
-import { VoiceDesignFields } from './UiNextCastingOptions';
+import { CastingRoles, ChoiceCards, designerFor, VoiceDesignFields, voiceDesigners } from './UiNextCastingOptions';
 
 type Draft = Record<string, { voiceId: string; instructions: string }>;
 type ActingMode = NonNullable<SpeakerRevoiceInput['acting']>['mode'];
@@ -120,7 +120,8 @@ export default function UiNextSpeakerRevoice({
   const hinted = analysisEngines?.some((e) => e.id === source?.actingEngineId) ? source?.actingEngineId : undefined;
   const actingEngineId = actingEngineChoice ?? hinted;
   const actingEngine = analysisEngines?.find((e) => e.id === actingEngineId);
-  const canRecast = selectionEngines.some((e) => e.enabled) && !!designers?.length;
+  const usableDesigners = voiceDesigners(designers);
+  const canRecast = selectionEngines.some((e) => e.enabled) && usableDesigners.length > 0;
   const recasting = recastOn && recast ? recast : undefined;
   const toggleRecast = (on: boolean) => {
     setCreated(false);
@@ -130,8 +131,8 @@ export default function UiNextSpeakerRevoice({
         engineId: selectionEngines.find((e) => e.enabled)?.id,
         autoDesign: true,
         designMode: 'characters',
-        designProviderId: designers?.[0]?.id,
-        designModelId: designers?.[0]?.modelId,
+        designProviderId: usableDesigners[0]?.id,
+        designModelId: usableDesigners[0]?.modelId,
         maxDesignedVoices: 4,
       });
   };
@@ -198,13 +199,11 @@ export default function UiNextSpeakerRevoice({
             ? '고른 분석 모델이 꺼져 있어요.'
             : recasting && !selectionEngines.some((e) => e.id === recasting.engineId && e.enabled)
               ? '목소리 선정 모델을 골라 주세요.'
-              : recasting && !designers?.some((d) => d.id === recasting.designProviderId)
+              : recasting && !designerFor(recasting, designers ?? [])
                 ? '목소리 제작 연결을 다시 골라 주세요.'
-                : recasting && !recasting.designModelId?.trim()
-                  ? '목소리 제작 모델 ID를 입력해 주세요.'
-                  : changes === 0 && actingMode === 'preserve' && !recasting
-                    ? '바꿀 목소리나 연기를 고르면 확인할 수 있어요.'
-                    : undefined;
+                : changes === 0 && actingMode === 'preserve' && !recasting
+                  ? '바꿀 목소리나 연기를 고르면 확인할 수 있어요.'
+                  : undefined;
   const inputKey = input ? JSON.stringify(input) : '';
   const fresh = estimate?.key === inputKey ? estimate.value : undefined;
   useEffect(() => {
@@ -312,23 +311,35 @@ export default function UiNextSpeakerRevoice({
               )}
               <fieldset className="un-revoice-fields" disabled={!stopped || !!working}>
                 <div className="un-revoice-row">
-                  <label className="un-cast-field">
-                    <span>인물 목소리</span>
-                    <select
-                      aria-label="인물 목소리"
-                      value={recastOn ? 'create' : 'keep'}
-                      onChange={(e) => toggleRecast(e.target.value === 'create')}
-                    >
-                      <option value="keep">지금 목소리 그대로</option>
-                      <option value="create" disabled={!recastOn && !canRecast}>
-                        인물마다 새 목소리 만들기{canRecast || recastOn ? '' : ' · 선정 모델과 제작 연결 필요'}
-                      </option>
-                    </select>
-                  </label>
+                  <span className="un-revoice-label">인물 목소리</span>
+                  <ChoiceCards
+                    label="인물 목소리"
+                    value={recastOn ? 'create' : 'keep'}
+                    onChange={(next) => toggleRecast(next === 'create')}
+                    options={[
+                      {
+                        value: 'keep',
+                        title: '지금 목소리 그대로',
+                        tag: '모델 요청 없음',
+                        body: '아래에서 인물별로 직접 바꿀 수 있어요.',
+                      },
+                      {
+                        value: 'create',
+                        title: '인물마다 새로 만들기',
+                        tag: '선정 모델 + 제작',
+                        body: '이 작업의 원문으로 선정 모델이 인물의 목소리 특징을 정리하면 Gemini 3.8 Flash TTS가 새 목소리를 만들어요.',
+                        disabled: !canRecast,
+                        reason:
+                          '목소리 선정 모델과 Gemini 3.8 Flash TTS(gemini-3.8-flash-tts) 연결이 있어야 해요. BOAA의 이 기능은 이 모델에서만 지원해요.',
+                      },
+                    ]}
+                  />
                   {recasting && (
-                    <>
+                    <div className="un-cast-mode">
                       <label className="un-cast-field">
-                        <span>목소리 선정 모델</span>
+                        <span>
+                          목소리 선정 모델<small>본문을 읽는 언어 모델</small>
+                        </span>
                         <select
                           aria-label="목소리 선정 모델"
                           value={recasting.engineId ?? ''}
@@ -352,15 +363,12 @@ export default function UiNextSpeakerRevoice({
                         disabled={false}
                         onChange={patchRecast}
                       />
-                    </>
+                      <CastingRoles budget={recasting.maxDesignedVoices} revoice />
+                      <small className="un-book-note">
+                        새 작업 안에서만 바뀌어요. 원래 음성과 작품의 인물 배정, 화자 분석은 그대로예요.
+                      </small>
+                    </div>
                   )}
-                  <small className="un-book-note">
-                    {recasting
-                      ? '원래 분석의 원문을 바탕으로 선정 모델이 주요·조연 인물의 고정 특징을 정리하고 새 목소리를 만들어요. 내레이터와 아래에서 목소리를 직접 바꾼 인물은 그대로이고, 엑스트라·불확실한 인물과 최대 개수를 넘는 인물은 지금 목소리를 써요. 원래 작업과 작품 배정은 바뀌지 않아요.'
-                      : canRecast
-                        ? '아래에서 인물별 목소리를 바꾸거나, 원문을 바탕으로 인물마다 새 목소리를 만들 수 있어요.'
-                        : '인물마다 새 목소리를 만들려면 목소리 선정 모델과 목소리 제작을 지원하는 Gemini 3.8 Flash TTS 연결이 필요해요.'}
-                  </small>
                 </div>
                 {showActing && (
                   <div className="un-revoice-row">
@@ -547,7 +555,7 @@ export default function UiNextSpeakerRevoice({
                   {(fresh.selectionModelLabel || !!fresh.maxDesignedVoices) && (
                     <p className="un-book-voice">
                       목소리 선정 <b>{fresh.selectionModelLabel ?? '선정 모델'}</b>
-                      {fresh.maxDesignedVoices ? ` · 최대 ${fresh.maxDesignedVoices}개 제작` : ''}
+                      {fresh.maxDesignedVoices ? ` · 최대 ${fresh.maxDesignedVoices}명 새 목소리` : ''}
                     </p>
                   )}
                   {fresh.actingAnalysis && (

@@ -279,3 +279,321 @@
   display: block;
   margin-top: 4px;
 }
+
+/* ───────── 인물 목소리: choice cards, the chosen mode's settings and who gets which voice ───────── */
+.un-cast-head-links {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 4px 14px;
+  font-size: 13px;
+}
+
+.un-choice-group {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.un-choice {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  min-width: 0;
+  padding: 13px 14px;
+  border: 1px solid var(--un-line);
+  border-radius: 14px;
+  background: var(--un-bg-2);
+  cursor: pointer;
+  transition:
+    border-color 0.16s var(--un-ease),
+    background-color 0.16s var(--un-ease);
+}
+
+.un-choice:hover:not(.is-off) {
+  border-color: var(--un-line-2);
+}
+
+.un-choice.is-on {
+  border-color: rgb(91 140 255 / 55%);
+  background: linear-gradient(var(--un-accent-soft), var(--un-accent-soft)), var(--un-bg-2);
+}
+
+.un-choice.is-off {
+  cursor: default;
+}
+
+.un-choice.is-off .un-choice-title,
+.un-choice.is-off .un-choice-text > small:not(.un-choice-reason) {
+  opacity: 0.5;
+}
+
+.un-choice input {
+  flex: none;
+  display: grid;
+  place-content: center;
+  width: 18px;
+  height: 18px;
+  margin: 2px 0 0;
+  border: 1.5px solid var(--un-line-2);
+  border-radius: 50%;
+  background: transparent;
+  appearance: none;
+}
+
+.un-choice input::before {
+  content: '';
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--un-accent);
+  transform: scale(0);
+  transition: transform 0.14s var(--un-ease);
+}
+
+.un-choice input:checked {
+  border-color: var(--un-accent);
+}
+
+.un-choice input:checked::before {
+  transform: scale(1);
+}
+
+.un-choice input:focus-visible {
+  outline: 2px solid var(--un-accent);
+  outline-offset: 3px;
+}
+
+.un-choice-text {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.un-choice-title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 8px;
+}
+
+.un-choice-title b {
+  color: var(--un-text);
+  font-size: 14.5px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+.un-choice-tag {
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: rgb(255 255 255 / 7%);
+  color: var(--un-text-3);
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.un-choice.is-on .un-choice-tag {
+  background: rgb(91 140 255 / 18%);
+  color: var(--un-accent-2);
+}
+
+.un-choice-text > small {
+  color: var(--un-text-2);
+  font-size: 12.5px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.un-choice-text > small.un-choice-reason {
+  color: #f5b84b;
+}
+
+/* The chosen mode's own settings sit together under the cards. */
+.un-cast-mode {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 14px;
+  min-width: 0;
+  padding: 14px;
+  border-radius: 14px;
+  background: var(--un-bg-2);
+}
+
+.un-cast-mode select {
+  background: var(--un-bg-3);
+}
+
+.un-cast-mode .un-cast-options > summary {
+  padding: 0;
+}
+
+.un-stepper {
+  display: grid;
+  grid-template-columns: 40px minmax(0, 1fr) 40px;
+  align-items: center;
+  height: 40px;
+  overflow: hidden;
+  border-radius: 10px;
+  background: var(--un-bg-3);
+}
+
+.un-stepper button {
+  display: grid;
+  place-items: center;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--un-text);
+  cursor: pointer;
+}
+
+.un-stepper button:disabled {
+  color: var(--un-text-3);
+  opacity: 0.5;
+  cursor: default;
+}
+
+.un-stepper button:focus-visible {
+  outline: 2px solid var(--un-accent);
+  outline-offset: -2px;
+}
+
+.un-stepper output {
+  color: var(--un-text-2);
+  font-size: 14px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.un-stepper output b {
+  color: var(--un-text);
+  font-size: 16px;
+  font-weight: 750;
+}
+
+.un-cast-roles {
+  display: grid;
+  gap: 0;
+  margin: 0;
+  overflow: hidden;
+  border: 1px solid var(--un-line);
+  border-radius: 12px;
+}
+
+.un-cast-roles > div {
+  display: grid;
+  grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
+  gap: 10px;
+  padding: 9px 12px;
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+
+.un-cast-roles > div + div {
+  border-top: 1px solid var(--un-line);
+}
+
+.un-cast-roles dt {
+  color: var(--un-text-3);
+  overflow-wrap: anywhere;
+}
+
+.un-cast-roles dd {
+  margin: 0;
+  color: var(--un-text-2);
+  overflow-wrap: anywhere;
+}
+
+.un-cast-roles > .is-new dt,
+.un-cast-roles > .is-new dd {
+  color: var(--un-accent-2);
+  font-weight: 650;
+}
+
+/* Collapsed voice list: its count and names read at a glance. */
+.un-cast-pool-box > summary {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  list-style-position: inside;
+}
+
+.un-cast-pool-box > summary > span {
+  display: inline;
+  color: var(--un-text);
+  font-size: 13.5px;
+  font-weight: 650;
+}
+
+.un-cast-pool-box > summary > small {
+  overflow: hidden;
+  color: var(--un-text-3);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.un-cast-pool-box[open] > summary > small {
+  display: none;
+}
+
+/* What this job will call, one line per model. */
+.un-cast-plan {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.un-cast-plan li {
+  display: grid;
+  grid-template-columns: 6.5em minmax(0, 1fr);
+  gap: 10px;
+  font-size: 13px;
+}
+
+.un-cast-plan span {
+  color: var(--un-text-3);
+}
+
+.un-cast-plan b {
+  color: var(--un-text);
+  font-weight: 650;
+  overflow-wrap: anywhere;
+}
+
+.un-revoice-label {
+  color: var(--un-text-2);
+  font-size: 12.5px;
+  font-weight: 650;
+}
+
+.un-revoice .un-cast-mode {
+  background: var(--un-bg-3);
+}
+
+.un-revoice .un-cast-mode :is(select, .un-stepper) {
+  background: rgb(255 255 255 / 6%);
+}
+
+.un-revoice .un-choice {
+  background: var(--un-bg-3);
+}
+
+.un-revoice .un-choice.is-on {
+  background: linear-gradient(var(--un-accent-soft), var(--un-accent-soft)), var(--un-bg-3);
+}
+
+/* An optional setting, not a cost warning: neutral surface instead of the amber consent box. */
+.un-cast .un-book-ack.un-cast-toggle {
+  background: var(--un-bg-2);
+}
+
+.un-cast .un-book-ack.un-cast-toggle input {
+  accent-color: var(--un-accent);
+}

@@ -15,7 +15,7 @@ import { cx } from '../components/primitives';
 import SpeakerJobProgress from './SpeakerJobProgress';
 import { ChapterScopeFields, chapterScopeSummary, useChapterScope } from './chapter-scope';
 import { speakerPreferenceQueue } from './speaker-generation-preferences';
-import UiNextCastingOptions, { castingMode } from './UiNextCastingOptions';
+import UiNextCastingOptions, { castingMode, designerFor, validBudget, voiceDesigners } from './UiNextCastingOptions';
 import UiNextBookVoices from './UiNextBookVoices';
 import UiNextSpeakerRevoice from './UiNextSpeakerRevoice';
 import type { SpeakerCastingOptions, LibraryVoice, VoiceDesignProvider } from '../../providers/voice-library';
@@ -250,14 +250,18 @@ function Body({
   };
   // Natural voice creation needs a listed design connection and model; a vanished one is never swapped.
   const naturalVoices = castingMode(castingChoice) === 'create';
+  const designer = library && designerFor(castingChoice, library.designers);
   const designProblem =
-    !naturalVoices || !library
+    !naturalVoices || !library || designer
       ? undefined
-      : !library?.designers.some((d) => d.id === castingChoice?.designProviderId)
+      : castingChoice?.designProviderId && voiceDesigners(library.designers).length
         ? '목소리 제작 연결을 다시 골라 주세요.'
-        : !castingChoice?.designModelId?.trim()
-          ? '목소리 제작 모델 ID를 입력해 주세요.'
-          : undefined;
+        : '목소리를 만들 Gemini 3.8 Flash TTS 연결을 골라 주세요.';
+  // A restored design choice may carry a 0 limit; the server refuses it, so it is asked for instead of sent.
+  const budgetProblem =
+    castingChoice?.autoDesign && castingMode(castingChoice) !== 'order' && !validBudget(castingChoice.maxDesignedVoices)
+      ? '새로 만들 목소리 수를 정해 주세요.'
+      : undefined;
   // Automatic acting is on by default when the narrator and pool all support it; an explicit off is kept.
   const actingUnsupported = [narratorId, ...pool].filter(
     (id) => voices.find((voice) => voice.id === id)?.autoActingSupported !== true,
@@ -295,7 +299,7 @@ function Body({
                           ? '만들 회차를 골라 주세요.'
                           : autoActing && !actingAvailable
                             ? '자동 연기를 지원하지 않는 목소리가 있어요. 자동 연기를 끄거나 목소리를 바꿔 주세요.'
-                            : designProblem;
+                            : (designProblem ?? budgetProblem);
   // Missing models or voices are already explained in their own section.
   const problemAbove = analysisEngines?.length === 0 || !catalog?.available || voices.length === 0;
   const input: SpeakerGenerationInput | undefined =
@@ -415,6 +419,80 @@ function Body({
 
   const voiceGroups = groupVoices(voices, providers);
   const missingPoolVoices = poolChoice?.filter((id) => !voices.some((voice) => voice.id === id)) ?? [];
+  const hasVoices = !!catalog?.available && voices.length > 0;
+  const mode = controls.voiceLibrary ? castingMode(castingChoice) : 'order';
+  // The same list means different things per mode; its name says which.
+  const poolTitle = mode === 'create' ? '엑스트라·대체용 목소리' : mode === 'pick' ? '후보 목소리' : '나눠 쓸 목소리';
+  const poolDescribed = pool.filter((id) => {
+    const saved = library?.voices.find((v) => v.voiceId === id);
+    return !!(
+      saved?.timbre.trim() ||
+      saved?.description.trim() ||
+      voices.find((v) => v.id === id)?.description?.trim()
+    );
+  }).length;
+  const poolNames = pool
+    .map((id) => library?.voices.find((v) => v.voiceId === id)?.alias || voices.find((v) => v.id === id)?.label || id)
+    .join(', ');
+  const poolPicker = hasVoices && (
+    <details className="un-cast-options un-cast-pool-box">
+      <summary>
+        <span>
+          {poolTitle} · {pool.length}개
+        </span>
+        {pool.length > 0 && <small>{poolNames}</small>}
+      </summary>
+      <div className="un-cast-field">
+        <span id="un-cast-pool">
+          {poolTitle} <small>{formatCount(pool.length)}개 선택</small>
+        </span>
+        {voiceGroups.map((group) => (
+          <div key={group.key} className="un-cast-pool">
+            {voiceGroups.length > 1 && <small>{group.label}</small>}
+            <div className="un-listen-chips" role="group" aria-labelledby="un-cast-pool">
+              {group.voices.map((voice) => {
+                const isNarrator = voice.id === narratorId;
+                const on = pool.includes(voice.id);
+                return (
+                  <button
+                    key={voice.id}
+                    type="button"
+                    aria-pressed={on}
+                    className={cx(on && 'is-active')}
+                    disabled={prefs === 'loading' || (down(voice) && !on) || (!on && pool.length >= 32)}
+                    onClick={() => togglePool(voice.id)}
+                  >
+                    {voice.label}
+                    {isNarrator ? ' · 내레이터' : voice.paid ? ' · 유료' : ''}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        ))}
+        {missingPoolVoices.length > 0 && (
+          <div className="un-listen-chips" role="group" aria-label="목록에 없는 인물 목소리">
+            {missingPoolVoices.map((id) => (
+              <button key={id} type="button" aria-pressed className="is-active" onClick={() => togglePool(id)}>
+                목록에 없음 · {id}
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+      <p className="un-book-note">
+        같은 작품에서 한 번 정한 인물 목소리는 다음 생성 작업에서도 그대로 써요.
+        {!poolIsDefault && (
+          <>
+            {' '}
+            <button type="button" className="un-listen-link" onClick={() => choose({ resetPool: true })}>
+              내레이터 엔진 목소리로 되돌리기
+            </button>
+          </>
+        )}
+      </p>
+    </details>
+  );
 
   return (
     <div className="un-book un-cast">
@@ -485,7 +563,7 @@ function Body({
 
       <section className="un-book-group" aria-labelledby="un-cast-voices">
         <div className="un-book-group-head">
-          <h3 id="un-cast-voices">TTS 목소리</h3>
+          <h3 id="un-cast-voices">내레이터</h3>
           <button
             type="button"
             className="un-icon-btn is-sm"
@@ -501,97 +579,36 @@ function Body({
           </p>
         ) : (
           <>
-            <label className="un-cast-field">
-              <span>내레이터</span>
-              <select
-                aria-label="내레이터 목소리"
-                value={narratorId}
-                disabled={prefs === 'loading'}
-                onChange={(event) => choose({ narratorVoiceId: event.target.value })}
-              >
-                {!narratorId && <option value="">목소리 고르기</option>}
-                {narratorMissing && <option value={narratorId}>목록에 없는 목소리 · {narratorId}</option>}
-                {voiceGroups.map((group) => (
-                  <optgroup key={group.key} label={group.label}>
-                    {group.voices.map((voice) => (
-                      <option key={voice.id} value={voice.id} disabled={down(voice) && voice.id !== narratorId}>
-                        {voice.label}
-                        {voice.paid ? ' · 유료 API' : ''}
-                        {down(voice) ? ' · 연결 안 됨' : ''}
-                      </option>
-                    ))}
-                  </optgroup>
-                ))}
-              </select>
-            </label>
-            <details className="un-cast-options">
-              <summary>
-                {naturalVoices ? '엑스트라·대체용 목소리' : '자동 배정에 쓸 목소리'} · {pool.length}개
-              </summary>
-              <div className="un-cast-field">
-                <span id="un-cast-pool">
-                  인물 목소리 <small>{formatCount(pool.length)}개 선택</small>
-                </span>
-                {voiceGroups.map((group) => (
-                  <div key={group.key} className="un-cast-pool">
-                    {voiceGroups.length > 1 && <small>{group.label}</small>}
-                    <div className="un-listen-chips" role="group" aria-labelledby="un-cast-pool">
-                      {group.voices.map((voice) => {
-                        const isNarrator = voice.id === narratorId;
-                        const on = pool.includes(voice.id);
-                        return (
-                          <button
-                            key={voice.id}
-                            type="button"
-                            aria-pressed={on}
-                            className={cx(on && 'is-active')}
-                            disabled={prefs === 'loading' || (down(voice) && !on) || (!on && pool.length >= 32)}
-                            onClick={() => togglePool(voice.id)}
-                          >
-                            {voice.label}
-                            {isNarrator ? ' · 내레이터' : voice.paid ? ' · 유료' : ''}
-                          </button>
-                        );
-                      })}
-                    </div>
-                  </div>
-                ))}
-                {missingPoolVoices.length > 0 && (
-                  <div className="un-listen-chips" role="group" aria-label="목록에 없는 인물 목소리">
-                    {missingPoolVoices.map((id) => (
-                      <button key={id} type="button" aria-pressed className="is-active" onClick={() => togglePool(id)}>
-                        목록에 없음 · {id}
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </div>
-            </details>
-            <p className="un-book-note">
-              같은 작품에서 한 번 정한 목소리는 다음 생성 작업에서도 사용해요. 원하는 목소리만 고르려면 목록을 펼쳐
-              주세요.
-              {!poolIsDefault && (
-                <>
-                  {' '}
-                  <button type="button" className="un-listen-link" onClick={() => choose({ resetPool: true })}>
-                    내레이터 엔진 목소리로 되돌리기
-                  </button>
-                </>
-              )}
-            </p>
+            <select
+              aria-label="내레이터 목소리"
+              value={narratorId}
+              disabled={prefs === 'loading'}
+              onChange={(event) => choose({ narratorVoiceId: event.target.value })}
+            >
+              {!narratorId && <option value="">목소리 고르기</option>}
+              {narratorMissing && <option value={narratorId}>목록에 없는 목소리 · {narratorId}</option>}
+              {voiceGroups.map((group) => (
+                <optgroup key={group.key} label={group.label}>
+                  {group.voices.map((voice) => (
+                    <option key={voice.id} value={voice.id} disabled={down(voice) && voice.id !== narratorId}>
+                      {voice.label}
+                      {voice.paid ? ' · 유료 API' : ''}
+                      {down(voice) ? ' · 연결 안 됨' : ''}
+                    </option>
+                  ))}
+                </optgroup>
+              ))}
+            </select>
+            <p className="un-book-note">지문과 누가 말하는지 확실하지 않은 문장을 읽어요.</p>
           </>
         )}
       </section>
 
-      {controls.voiceLibrary && (
+      {controls.voiceLibrary ? (
         <>
-          <div className="un-book-actions">
-            <button type="button" className="un-btn is-ghost is-sm" onClick={onManageVoices}>
-              목소리 보관함
-            </button>
-          </div>
           {libraryError && (
             <p className="un-book-error" role="alert">
+              <AlertCircle size={15} aria-hidden="true" />
               {libraryError}
             </p>
           )}
@@ -600,17 +617,31 @@ function Body({
             engines={engines?.filter((e) => e.purpose === 'casting') ?? []}
             designers={library?.designers ?? []}
             disabled={prefs === 'loading'}
+            pool={poolPicker}
+            poolDescribed={{ described: poolDescribed, total: pool.length }}
             onChange={(casting) => choose({ casting })}
             onManage={onManageEngines}
+            onLibrary={onManageVoices}
           />
         </>
+      ) : (
+        hasVoices && (
+          <section className="un-book-group" aria-label="인물 목소리">
+            <div className="un-book-group-head">
+              <h3>인물 목소리</h3>
+            </div>
+            {poolPicker}
+            <p className="un-book-note">고른 목소리를 인물에게 차례로 나눠요. 성별·나이·음색은 맞추지 않아요.</p>
+          </section>
+        )
       )}
 
       <section className="un-book-group" aria-labelledby="un-cast-acting">
         <div className="un-book-group-head">
-          <h3 id="un-cast-acting">자동 연기</h3>
+          <h3 id="un-cast-acting">장면 연기</h3>
+          <small>선택</small>
         </div>
-        <label className="un-book-ack">
+        <label className="un-book-ack un-cast-toggle">
           <input
             type="checkbox"
             checked={autoActing}
@@ -620,19 +651,18 @@ function Body({
           <span>
             장면에 맞춰 감정·말투·속도 표시
             <small className="un-book-note">
-              화자 분석 모델{engine ? ` (${engine.name})` : ''}이 화자를 찾으면서 대사마다 연기를 함께 표시해요. 따로
-              연결할 모델은 없지만 분석 응답이 길어져 요금이 조금 늘 수 있어요.
+              {actingAvailable
+                ? `인물의 목소리는 그대로 두고, 대사마다 어떻게 말할지만 정해요. 화자 분석 모델${engine ? `(${engine.name})` : ''}이 화자를 찾으면서 함께 표시해서 따로 연결할 모델은 없지만, 응답이 길어져 요금이 조금 늘 수 있어요.`
+                : `내레이터와 인물 목소리가 모두 자동 연기를 지원하는 TTS 연결일 때 켤 수 있어요. 지원하지 않는 목소리: ${actingUnsupported
+                    .slice(0, 3)
+                    .map((id) => voices.find((voice) => voice.id === id)?.label ?? id)
+                    .join(', ')}${actingUnsupported.length > 3 ? ` 외 ${actingUnsupported.length - 3}개` : ''}`}
             </small>
           </span>
         </label>
-        <p className="un-book-note">
-          {actingAvailable
-            ? `${actingChoice === undefined ? '지원하는 목소리라 기본으로 켜져 있어요. ' : ''}인물마다 정한 목소리는 그대로 두고 장면별 감정·속도만 바꿔요. 목소리를 고르거나 성별·나이·음색을 바꾸지는 않아요.`
-            : `내레이터와 인물 목소리가 모두 자동 연기를 지원하는 TTS 연결일 때 켤 수 있어요. 지원하지 않는 목소리: ${actingUnsupported
-                .slice(0, 3)
-                .map((id) => voices.find((voice) => voice.id === id)?.label ?? id)
-                .join(', ')}${actingUnsupported.length > 3 ? ` 외 ${actingUnsupported.length - 3}개` : ''}`}
-        </p>
+        {actingAvailable && actingChoice === undefined && (
+          <p className="un-book-note">지원하는 목소리라 기본으로 켜져 있어요.</p>
+        )}
       </section>
 
       <section className="un-book-group" aria-label="만들기">
@@ -669,31 +699,52 @@ function Body({
                 음성은 만들지 않아요.
               </p>
             )}
-            <p className="un-book-voice">
-              분석 모델 <b>{fresh.modelLabel}</b>
-            </p>
-            <p className="un-book-voice">
-              TTS 목소리 <b>{fresh.voiceLabel}</b>
-            </p>
-            {fresh.selectionModelLabel && (
-              <p className="un-book-voice">
-                목소리 선정 <b>{fresh.selectionModelLabel}</b>
-              </p>
-            )}
-            {input?.autoActing && (
-              <p className="un-book-voice">
-                자동 연기 <b>분석 모델이 함께 표시</b>
-              </p>
-            )}
+            <ul className="un-cast-plan" aria-label="이번 작업에서 쓰는 모델">
+              <li>
+                <span>화자 분석</span>
+                <b>{fresh.modelLabel}</b>
+              </li>
+              {fresh.selectionModelLabel && (
+                <li>
+                  <span>목소리 선정</span>
+                  <b>{fresh.selectionModelLabel}</b>
+                </li>
+              )}
+              {!!fresh.maxDesignedVoices && (
+                <li>
+                  <span>목소리 제작</span>
+                  <b>
+                    {designer?.name ?? 'Gemini 3.8 Flash TTS'} · 최대 {fresh.maxDesignedVoices}명
+                  </b>
+                </li>
+              )}
+              {input?.autoActing && (
+                <li>
+                  <span>장면 연기</span>
+                  <b>화자 분석과 함께</b>
+                </li>
+              )}
+              <li>
+                <span>음성 합성</span>
+                <b>{fresh.voiceLabel}</b>
+              </li>
+            </ul>
             {!!fresh.maxDesignedVoices && (
               <p className="un-book-note">
-                주요 인물에게 필요한 새 목소리를 최대 {fresh.maxDesignedVoices}개 만들어요. 목소리 제작 비용도 포함돼요.
+                {naturalVoices
+                  ? `주요·조연 인물에게 최대 ${fresh.maxDesignedVoices}개를 새로 만들어요. 직접 지정했거나 이미 새로 만든 목소리는 그대로 쓰고, 자동으로 배정됐던 기본 목소리는 새 목소리로 바꿔요.`
+                  : `선정 모델이 필요하다고 본 주요 인물에게만 최대 ${fresh.maxDesignedVoices}개까지 새로 만들어요.`}{' '}
+                만든 목소리마다 제작 요금이 들어요.
               </p>
             )}
             {fresh.paid && (
               <label className="un-book-ack">
                 <input type="checkbox" checked={paidAck} onChange={(event) => setPaidAck(event.target.checked)} />
-                <span>분석 모델이나 음성 서비스의 API 사용 요금이 발생할 수 있어요.</span>
+                <span>
+                  {fresh.maxDesignedVoices
+                    ? '분석·선정 모델, 목소리 제작과 음성 서비스의 API 사용 요금이 발생할 수 있어요.'
+                    : '분석 모델이나 음성 서비스의 API 사용 요금이 발생할 수 있어요.'}
+                </span>
               </label>
             )}
           </div>
@@ -733,7 +784,7 @@ function Body({
               disabled={!input || !!working}
               aria-busy={working === 'estimate' || undefined}
             >
-              {working === 'estimate' ? '확인하는 중' : '분석 범위 확인'}
+              {working === 'estimate' ? '확인하는 중' : '생성 전 확인'}
             </button>
           )}
         </div>

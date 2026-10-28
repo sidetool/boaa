@@ -60,7 +60,7 @@
 .un-cast-options .un-cast-field {
   margin-bottom: 12px;
 }
-.un-cast-options input:not([type='checkbox']) {
+.un-cast-options input:not([type='checkbox'], [type='radio']) {
   box-sizing: border-box;
   width: 100%;
   min-width: 0;

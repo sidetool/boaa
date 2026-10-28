@@ -8,6 +8,7 @@ import type {
   VoiceDesignProvider,
 } from '../../providers/voice-library';
 import { BrowserAudioSession } from '../../providers/browser-audio-session';
+import { voiceDesigners } from './UiNextCastingOptions';
 import { cx, Switch } from '../components/primitives';
 import './audiobook.css';
 import './listen.css';
@@ -78,7 +79,7 @@ export default function UiNextVoiceLibrary({
       const data = await port.list(signal);
       if (signal.aborted || version !== loadVersion.current) return;
       setRows(data.voices);
-      setDesigners(data.designers);
+      setDesigners(voiceDesigners(data.designers));
       setError(undefined);
     } catch (e) {
       if (!signal.aborted && version === loadVersion.current)
@@ -455,7 +456,7 @@ function VoiceEditor({
   const duplicate = !value && saved.has(voiceId);
   const valid =
     alias.trim() &&
-    (design ? designer && modelId.trim() && description.trim() && (!designer.paid || ack) : voiceId && !duplicate);
+    (design ? designer && modelId && description.trim() && (!designer.paid || ack) : voiceId && !duplicate);
   const catalogVoice = voices.find((v) => v.id === voiceId);
   const chosen = timbreWords(timbre);
   return (
@@ -499,20 +500,9 @@ function VoiceEditor({
                 ))}
               </select>
             </label>
-            <label className="un-cast-field">
-              <span>목소리 제작 모델 ID</span>
-              <input
-                value={modelId}
-                maxLength={200}
-                onChange={(e) => {
-                  setModelId(e.target.value);
-                  edit();
-                }}
-              />
-              <small className="un-book-note">
-                음성 제작을 지원하는 TTS 모델을 입력해요. 인물을 판단하는 언어 모델과는 달라요.
-              </small>
-            </label>
+            <small className="un-book-note">
+              제작 모델 <b>{modelId || '확인 필요'}</b> · 설명을 읽고 새 목소리를 만들어 보관해요.
+            </small>
           </>
         ) : (
           <label className="un-cast-field">
@@ -615,7 +605,7 @@ function VoiceEditor({
             {description.length}/2000
             {!design && ' · 직접 들은 느낌과 어울리는 인물을 적으면 배정에 도움이 돼요.'}
           </small>
-          {design && GEMINI_38.has(modelId.trim()) && (
+          {design && GEMINI_38.has(modelId) && (
             <small className="un-book-note">
               Gemini 3.8: 성별·나이대·음색·억양·말하는 습관처럼 늘 유지할 특징을 적어요. 장면마다 바뀌는 감정은 여기
               말고 ‘음성 다시 만들기’의 연기 지시로 따로 줘요.

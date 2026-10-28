@@ -271,16 +271,29 @@ describe('UiNextSpeakerRevoice audio-only variant', () => {
         .findAllByType('label')
         .find((l) => l.findAllByType('span').some((span) => text(span).startsWith(label)))!
         .find((n) => n.type === 'select' || n.type === 'input');
+    const radio = (root: ReactTestInstance, value: string) =>
+      root
+        .find((n) => n.props.role === 'radiogroup' && n.props['aria-label'] === '인물 목소리')
+        .find((n) => n.type === 'input' && n.props.value === value);
+    const pick = async (root: ReactTestInstance, value: string) => {
+      act(() => radio(root, value).props.onChange());
+      await flush();
+    };
     let root = await open(designers);
-    expect(byLabel(root, '인물 목소리')[0].props.value).toBe('keep');
+    expect(radio(root, 'keep').props.checked).toBe(true);
     expect(button(root, '다시 만들 범위 확인').props.disabled).toBe(true);
-    await change(byLabel(root, '인물 목소리')[0], 'create');
+    await pick(root, 'create');
     expect(field(root, '목소리 선정 모델').props.value).toBe('sel');
     expect(text(field(root, '목소리 선정 모델'))).not.toContain('분석 A');
-    await change(field(root, '새로 만들 목소리'), '2');
-    await change(byLabel(root, '인물 목소리')[0], 'keep');
-    await change(byLabel(root, '인물 목소리')[0], 'create');
-    expect(field(root, '새로 만들 목소리').props.value).toBe(2);
+    expect(text(root)).toContain('새 목소리 · 최대 4명');
+    expect(text(root)).toContain('작품에서 직접 지정한 인물');
+    const fewer = () => root.findByProps({ 'aria-label': '새로 만들 목소리 줄이기' });
+    await click(fewer());
+    await click(fewer());
+    await pick(root, 'keep');
+    expect(text(root)).not.toContain('새 목소리 · 최대');
+    await pick(root, 'create');
+    expect(text(root)).toContain('새 목소리 · 최대 2명');
     await click(button(root, '다시 만들 범위 확인'));
     expect(port.estimateRevoice.mock.lastCall![1].casting).toEqual({
       engineId: 'sel',
@@ -290,16 +303,17 @@ describe('UiNextSpeakerRevoice audio-only variant', () => {
       designModelId: 'gemini-3.8-flash-tts',
       maxDesignedVoices: 2,
     });
-    expect(text(root)).toContain('최대 2개 제작');
+    expect(text(root)).toContain('최대 2명 새 목소리');
     expect(text(root)).toContain('음성 서비스와 목소리 선정·제작의 API 사용 요금');
 
     act(() => renderer!.unmount());
     root = await open([]);
-    const createOption = byLabel(root, '인물 목소리')[0].findAll(
-      (n) => n.type === 'option' && n.props.value === 'create',
-    )[0];
-    expect(createOption.props.disabled).toBe(true);
-    expect(text(root)).toContain('목소리 제작을 지원하는 Gemini 3.8 Flash TTS 연결이 필요해요');
+    expect(radio(root, 'create').props.disabled).toBe(true);
+    expect(text(root)).toContain('목소리 선정 모델과 Gemini 3.8 Flash TTS(gemini-3.8-flash-tts) 연결이 있어야 해요');
+    act(() => renderer!.unmount());
+    // Flash-Lite may design elsewhere, but this product opens character creation only for Flash TTS.
+    root = await open([{ id: 'lite', name: 'Lite', modelId: 'gemini-3.8-flash-lite-tts', paid: true }]);
+    expect(radio(root, 'create').props.disabled).toBe(true);
   });
 
   it('keeps existing acting tags by default, can remove them, and folds manual directions until asked', async () => {

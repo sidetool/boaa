@@ -37,7 +37,7 @@ function fixture() {
   const port = {
     list: vi.fn<VoiceLibraryPort['list']>(async () => ({
       voices: rows,
-      designers: [{ id: 'designer', name: '합성 TTS', modelId: 'chosen-design-model', paid: true }],
+      designers: [{ id: 'designer', name: '합성 TTS', modelId: 'gemini-3.8-flash-tts', paid: true }],
     })),
     save: vi.fn<VoiceLibraryPort['save']>(async (input, _signal, id) => {
       const value = row({ ...input, id: id ?? 'new-row' });
@@ -210,17 +210,26 @@ describe('UiNextVoiceLibrary owned edits and design requests', () => {
     expect(chip('라벨 필요').props['aria-pressed']).toBe(true);
   });
 
-  it('explains Gemini 3.8 voice design only for that design model', async () => {
+  it('offers voice design only through Gemini 3.8 Flash TTS and shows its fixed model with guidance', async () => {
     const f = fixture();
+    f.port.list.mockResolvedValue({
+      voices: [],
+      designers: [{ id: 'lite', name: 'Lite TTS', modelId: 'gemini-3.8-flash-lite-tts', paid: true }],
+    });
+    let root = await mount(f.port);
+    expect(root.findAll((n) => n.type === 'button' && text(n).trim() === '설명으로 만들기')).toHaveLength(0);
+    act(() => renderer!.unmount());
+    renderer = undefined;
     f.port.list.mockResolvedValue({
       voices: [],
       designers: [{ id: 'designer', name: '합성 TTS', modelId: 'gemini-3.8-flash-tts', paid: true }],
     });
-    const root = await mount(f.port);
+    root = await mount(f.port);
     await click(button(root, '설명으로 만들기'));
     expect(text(root)).toContain('Gemini 3.8: 성별·나이대');
-    await change(field(root, '목소리 제작 모델 ID'), 'other-design-model');
-    expect(text(root)).not.toContain('Gemini 3.8');
+    expect(text(root)).toContain('제작 모델 gemini-3.8-flash-tts');
+    // The model is not typed: any other id would be rejected for voice design.
+    expect(root.findAll((n) => n.type === 'input' && n.props.value === 'gemini-3.8-flash-tts')).toHaveLength(0);
   });
 
   it('requires paid opt-in, suppresses a double click, reuses the request ID on retry and renews it after edits', async () => {
@@ -245,7 +254,7 @@ describe('UiNextVoiceLibrary owned edits and design requests', () => {
     const original = f.port.design.mock.calls[0][0];
     expect(original).toMatchObject({
       providerId: 'designer',
-      modelId: 'chosen-design-model',
+      modelId: 'gemini-3.8-flash-tts',
       confirmPaid: true,
       alias: '새 별칭',
       prompt: '차분한 원래 목소리',
