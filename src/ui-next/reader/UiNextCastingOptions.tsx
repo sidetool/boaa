@@ -39,7 +39,7 @@ export default function UiNextCastingOptions({
             patch({ engineId: e.target.value || undefined, ...(!e.target.value ? { autoDesign: false } : {}) })
           }
         >
-          <option value="">기본 자동 배정 · 추가 모델 요청 없음</option>
+          <option value="">순서대로 배정 · 모델 요청 없음</option>
           {missing && <option value={v.engineId}>목록에 없는 선정 모델</option>}
           {engines.map((e) => (
             <option key={e.id} value={e.id} disabled={!e.enabled}>
@@ -49,8 +49,9 @@ export default function UiNextCastingOptions({
         </select>
       </label>
       <p className="un-book-note">
-        화자 분석과 따로 고를 수 있어요. 선정 모델은 인물의 대사와 보관함의 음색·설명을 참고하고, 이미 정한 배정은 계속
-        사용해요.
+        {v.engineId
+          ? '화자 분석과 따로 고를 수 있어요. 선정 모델은 인물의 대사와 보관함의 음색·설명을 참고해 인물마다 계속 쓸 목소리를 고르고, 이미 정한 배정은 계속 사용해요.'
+          : '순서대로 배정은 고른 목소리를 차례로 나눌 뿐, 인물의 성별·나이·음색과 맞추지 않아요. 인물에 어울리는 목소리를 고르려면 목소리 선정 모델을 골라 주세요.'}
       </p>
       {(designers.length > 0 || v.autoDesign) && (
         <>

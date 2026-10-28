@@ -269,3 +269,13 @@
 .un-revoice .un-chip:disabled:not(.is-active) {
   opacity: 0.45;
 }
+
+.un-revoice .un-revoice-manual {
+  justify-self: start;
+}
+
+/* A checkbox title and its note sit on separate lines instead of running together. */
+.un-cast .un-book-ack > span > small {
+  display: block;
+  margin-top: 4px;
+}

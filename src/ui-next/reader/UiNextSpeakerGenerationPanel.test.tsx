@@ -255,6 +255,48 @@ describe('voice library casting choices', () => {
     );
   });
 
+  it('turns automatic acting on by default for capable voices, remembers an explicit off, and stays off for others', async () => {
+    const api = port();
+    const acting = catalog();
+    acting.voices = acting.voices.map((voice) =>
+      voice.providerId === 'tts-a' ? { ...voice, autoActingSupported: true } : voice,
+    );
+    const root = await mount(controls({ port: api, voices: acting }));
+    const toggle = () => castingField(root, '장면에 맞춰 감정·말투·속도 표시');
+    expect(toggle().props.checked).toBe(true);
+    expect(api.savePreferences).not.toHaveBeenCalled();
+    await click(button(root, '분석 범위 확인'));
+    expect(api.estimate).toHaveBeenLastCalledWith(
+      expect.objectContaining({ autoActing: true }),
+      expect.any(AbortSignal),
+    );
+
+    act(() => toggle().props.onChange({ target: { checked: false } }));
+    await flush();
+    expect(api.savePreferences).toHaveBeenLastCalledWith(expect.objectContaining({ autoActing: false }));
+    await click(button(root, '분석 범위 확인'));
+    expect(api.estimate).toHaveBeenLastCalledWith(
+      expect.objectContaining({ autoActing: false }),
+      expect.any(AbortSignal),
+    );
+
+    // An explicit on that later meets an unsupported voice is kept and blocks instead of switching off.
+    act(() => toggle().props.onChange({ target: { checked: true } }));
+    await flush();
+    await click(button(root, /^외부 1/));
+    expect(toggle().props.checked).toBe(true);
+    expect(text(root)).toContain('자동 연기를 지원하지 않는 목소리가 있어요');
+    expect(button(root, '분석 범위 확인').props.disabled).toBe(true);
+
+    act(() => renderer!.unmount());
+    const plain = port();
+    const other = await mount(controls({ port: plain }));
+    expect(castingField(other, '장면에 맞춰 감정·말투·속도 표시').props.checked).toBe(false);
+    expect(text(other)).not.toContain('자동 연기를 지원하지 않는 목소리가 있어요');
+    await click(button(other, '분석 범위 확인'));
+    expect(vi.mocked(plain.estimate).mock.lastCall![0]).not.toHaveProperty('autoActing');
+  });
+
   it('opens model and voice management without resetting the selected casting mode', async () => {
     const manageEngines = vi.fn(),
       manageVoices = vi.fn();
@@ -332,9 +374,7 @@ describe('UiNextSpeakerGenerationPanel creating', () => {
     expect(button(root, '생성 시작').props.disabled).toBe(true);
 
     act(() =>
-      root
-        .findAll((node) => node.type === 'input' && node.props.type === 'checkbox')[0]!
-        .props.onChange({ target: { checked: true } }),
+      castingField(root, '분석 모델이나 음성 서비스의 API 사용 요금').props.onChange({ target: { checked: true } }),
     );
     // Two clicks before the first reply lands still start one job.
     let release!: () => void;

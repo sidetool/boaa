@@ -39,6 +39,7 @@ const STEPS = [
   ['attribution', '화자 찾기'],
   ['identity', '인물 연결'],
   ['casting', '목소리 선정'],
+  ['performance', '연기 분석'],
   ['audio', '음성 만들기'],
 ] as const;
 const message = (error: unknown, fallback: string) =>
@@ -125,6 +126,7 @@ function Body({
   const [narratorChoice, setNarratorChoice] = useState(restored?.narratorVoiceId || undefined);
   const [poolChoice, setPoolChoice] = useState<readonly string[] | undefined>(restored?.characterVoiceIds);
   const [castingChoice, setCastingChoice] = useState<SpeakerCastingOptions | undefined>(restored?.casting);
+  const [actingChoice, setActingChoice] = useState<boolean | undefined>(restored?.autoActing);
   const [library, setLibrary] = useState<{ voices: LibraryVoice[]; designers: VoiceDesignProvider[] }>();
   const [libraryError, setLibraryError] = useState<string>();
   useEffect(() => {
@@ -159,6 +161,7 @@ function Body({
           setNarratorChoice((current) => current ?? (value.narratorVoiceId || undefined));
           setPoolChoice((current) => current ?? value.characterVoiceIds);
           setCastingChoice((current) => current ?? value.casting);
+          setActingChoice((current) => current ?? value.autoActing);
         }
         setPrefs('ready');
       },
@@ -232,6 +235,7 @@ function Body({
     if (next.narratorVoiceId !== undefined) setNarratorChoice(next.narratorVoiceId);
     if (next.characterVoiceIds !== undefined) setPoolChoice(next.characterVoiceIds);
     if (next.casting !== undefined) setCastingChoice(next.casting);
+    if (next.autoActing !== undefined) setActingChoice(next.autoActing);
     if (next.resetPool) setPoolChoice(undefined);
     if (prefs !== 'ready') return;
     setSaveFailed(false);
@@ -240,8 +244,16 @@ function Body({
       narratorVoiceId,
       characterVoiceIds,
       casting: next.casting ?? castingChoice,
+      // Only an explicit on/off is saved; no saved choice means "on whenever the voices support it".
+      ...((next.autoActing ?? actingChoice) !== undefined ? { autoActing: next.autoActing ?? actingChoice } : {}),
     });
   };
+  // Automatic acting is on by default when the narrator and pool all support it; an explicit off is kept.
+  const actingUnsupported = [narratorId, ...pool].filter(
+    (id) => voices.find((voice) => voice.id === id)?.autoActingSupported !== true,
+  );
+  const actingAvailable = Boolean(narratorId) && actingUnsupported.length === 0;
+  const autoActing = actingChoice ?? actingAvailable;
   const togglePool = (id: string) =>
     choose({ characterVoiceIds: pool.includes(id) ? pool.filter((item) => item !== id) : [...pool, id] });
 
@@ -271,7 +283,9 @@ function Body({
                         ? '인물 목소리를 하나 이상 골라 주세요.'
                         : range.selected.length === 0
                           ? '만들 회차를 골라 주세요.'
-                          : undefined;
+                          : autoActing && !actingAvailable
+                            ? '자동 연기를 지원하지 않는 목소리가 있어요. 자동 연기를 끄거나 목소리를 바꿔 주세요.'
+                            : undefined;
   // Missing models or voices are already explained in their own section.
   const problemAbove = analysisEngines?.length === 0 || !catalog?.available || voices.length === 0;
   const input: SpeakerGenerationInput | undefined =
@@ -287,6 +301,8 @@ function Body({
           narratorVoiceId: narratorId,
           characterVoiceIds: [...pool],
           ...(castingChoice ? { casting: castingChoice } : {}),
+          // The default for voices without support stays implicit; explicit choices are always sent.
+          ...(actingChoice !== undefined || autoActing ? { autoActing } : {}),
           rules: controls.rules,
           footnotePlayback: controls.footnotePlayback,
         }
@@ -578,6 +594,35 @@ function Body({
         </>
       )}
 
+      <section className="un-book-group" aria-labelledby="un-cast-acting">
+        <div className="un-book-group-head">
+          <h3 id="un-cast-acting">자동 연기</h3>
+        </div>
+        <label className="un-book-ack">
+          <input
+            type="checkbox"
+            checked={autoActing}
+            disabled={prefs === 'loading' || (!autoActing && !actingAvailable)}
+            onChange={(event) => choose({ autoActing: event.target.checked })}
+          />
+          <span>
+            장면에 맞춰 감정·말투·속도 표시
+            <small className="un-book-note">
+              화자 분석 모델{engine ? ` (${engine.name})` : ''}이 화자를 찾으면서 대사마다 연기를 함께 표시해요. 따로
+              연결할 모델은 없지만 분석 응답이 길어져 요금이 조금 늘 수 있어요.
+            </small>
+          </span>
+        </label>
+        <p className="un-book-note">
+          {actingAvailable
+            ? `${actingChoice === undefined ? '지원하는 목소리라 기본으로 켜져 있어요. ' : ''}인물마다 정한 목소리는 그대로 두고 장면별 감정·속도만 바꿔요. 목소리를 고르거나 성별·나이·음색을 바꾸지는 않아요.`
+            : `내레이터와 인물 목소리가 모두 자동 연기를 지원하는 TTS 연결일 때 켤 수 있어요. 지원하지 않는 목소리: ${actingUnsupported
+                .slice(0, 3)
+                .map((id) => voices.find((voice) => voice.id === id)?.label ?? id)
+                .join(', ')}${actingUnsupported.length > 3 ? ` 외 ${actingUnsupported.length - 3}개` : ''}`}
+        </p>
+      </section>
+
       <section className="un-book-group" aria-label="만들기">
         {problem && engines && !problemAbove && <p className="un-book-note is-box">{problem}</p>}
         {prefs === 'failed' && (
@@ -621,6 +666,11 @@ function Body({
             {fresh.selectionModelLabel && (
               <p className="un-book-voice">
                 목소리 선정 <b>{fresh.selectionModelLabel}</b>
+              </p>
+            )}
+            {input?.autoActing && (
+              <p className="un-book-voice">
+                자동 연기 <b>분석 모델이 함께 표시</b>
               </p>
             )}
             {!!fresh.maxDesignedVoices && (
@@ -715,6 +765,7 @@ function Body({
                     port={controls.port}
                     voices={voices}
                     library={library?.voices}
+                    engines={analysisEngines}
                     onCreated={() => void refresh()}
                   />
                 }
@@ -791,7 +842,9 @@ function JobItem({
   const ready = item.readyChapterIds.length;
   const playable = item.status !== 'deleting' && ready > 0;
   const remaining = Math.max(0, item.itemCount - item.completedItems);
-  const step = STEPS.findIndex(([stage]) => stage === item.stage);
+  // The job does not say whether it acts, so the acting step is listed only while it runs.
+  const steps = STEPS.filter(([stage]) => stage !== 'performance' || item.stage === 'performance');
+  const step = steps.findIndex(([stage]) => stage === item.stage);
   const showSteps = item.status !== 'completed' && item.stage !== 'complete';
 
   return (
@@ -808,7 +861,7 @@ function JobItem({
       </small>
       {showSteps && (
         <ol className="un-cast-steps" aria-label="진행 단계">
-          {STEPS.map(([stage, label], index) => (
+          {steps.map(([stage, label], index) => (
             <li
               key={stage}
               className={cx(index < step && 'is-done', index === step && 'is-current')}

@@ -47,7 +47,7 @@ function view(row: JobRow): SavedAudiobook {
 
 export class AudiobookService {
   speaker?: {
-    advance(id: string, signal: AbortSignal): Promise<void>;
+    advance(id: string, signal: AbortSignal): Promise<void | boolean>;
     reader(id: string, chapterId: string): Promise<PreparedNarration>;
     render(id: string, ordinal: number, regenerate: boolean): Promise<SavedAudio>;
     resume(id: string): Promise<void>;
@@ -590,7 +590,13 @@ export class AudiobookService {
       try {
         if (job.settings.cast) {
           if (!this.speaker) throw audiobookError(503, '화자별 생성 연결을 확인해 주세요.');
-          await this.speaker.advance(job.id, abort.signal);
+          if ((await this.speaker.advance(job.id, abort.signal)) === false) {
+            await client.query(
+              "update saved_audiobooks set status=case when status='pausing' then 'paused' else 'queued' end,updated_at=now() where id=$1 and status in ('running','pausing')",
+              [job.id],
+            );
+            return false;
+          }
         }
         // After a rate limit, probe with one request before restoring parallel work.
         const width = job.rate_limit_attempts > 0 ? 1 : await this.backgroundConcurrency(job.settings);

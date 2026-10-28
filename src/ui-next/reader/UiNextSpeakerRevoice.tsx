@@ -1,6 +1,7 @@
 import { AlertCircle } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import type { PlainTTSVoice } from '../../providers/plain-tts';
+import type { SpeakerEngine } from '../../providers/speaker-engine';
 import type {
   SpeakerGenerationJob,
   SpeakerGenerationPort,
@@ -13,6 +14,7 @@ import { formatCount } from '../../utils/format';
 import { cx } from '../components/primitives';
 
 type Draft = Record<string, { voiceId: string; instructions: string }>;
+type ActingMode = NonNullable<SpeakerRevoiceInput['acting']>['mode'];
 /** Short delivery cues; they never change who the voice sounds like. */
 const ACTING_EXAMPLES = ['조용히 속삭이듯', '지친 듯', '긴장해서 빠르게', '단호하고 차갑게', '밝고 들뜬', '울먹이며'];
 /** Gemini 3.8 TTS takes per-line style separately from the stored voice; guidance is shown only for these. */
@@ -25,18 +27,22 @@ const message = (error: unknown, fallback: string) =>
 
 /**
  * 음성 다시 만들기: a new audio-only job from this job's captured plan. It never edits the book's
- * assignments, never calls analysis or casting models, and keeps the old audio.
+ * assignments, never re-runs speaker finding, identity or casting, and keeps the old audio.
+ * Only an explicit 'auto' acting choice calls the chosen analysis model, for spans without acting tags.
  */
 export default function UiNextSpeakerRevoice({
   job,
   port,
   voices,
   library,
+  engines,
   onCreated,
 }: {
   job: SpeakerGenerationJob;
   port: SpeakerGenerationPort;
   voices: readonly PlainTTSVoice[];
+  /** Analysis connections; needed only to add automatic acting tags. */
+  engines?: readonly SpeakerEngine[];
   /** Labels only; descriptions are never sent as acting directions. */
   library?: readonly LibraryVoice[];
   /** Reloads the parent job list; it must not start playback. */
@@ -47,6 +53,11 @@ export default function UiNextSpeakerRevoice({
   const [sourceError, setSourceError] = useState<string>();
   const [attempt, setAttempt] = useState(0);
   const [draft, setDraft] = useState<Draft>({});
+  // Undefined until the person picks: the default follows the source (see defaultMode).
+  const [actingChoice, setActingChoice] = useState<ActingMode>();
+  const [actingEngineChoice, setActingEngineChoice] = useState<string>();
+  // Per-character manual directions stay folded until asked for or already written.
+  const [manual, setManual] = useState<ReadonlySet<string>>(new Set());
   const [estimate, setEstimate] = useState<{ key: string; value: SpeakerRevoiceEstimate }>();
   const [ack, setAck] = useState(false);
   const [working, setWorking] = useState<'estimate' | 'create'>();
@@ -95,7 +106,30 @@ export default function UiNextSpeakerRevoice({
   }, [open, available, port, job.id, job.itemCount, stopped, attempt]);
 
   const catalog = (id: string) => voices.find((v) => v.id === id);
+  // The original analysis model is only a hint: if it is gone, the person picks one.
+  const hinted = engines?.some((e) => e.id === source?.actingEngineId) ? source?.actingEngineId : undefined;
+  const actingEngineId = actingEngineChoice ?? hinted;
+  const actingEngine = engines?.find((e) => e.id === actingEngineId);
+  // Spans without tags; older sources omit it, so untagged means needed.
+  const needsActing = source ? (source.needsActing ?? !source.hasActing) : false;
+  const showActing = !!source?.hasActing || voices.some((v) => v.autoActingSupported === true);
+  const capturedSupported =
+    !!source?.voices.length && source.voices.every((v) => catalog(v.voiceId)?.autoActingSupported === true);
+  // Fill missing tags by default only when it can start as is: capable voices and the original analysis model.
+  const defaultMode: ActingMode =
+    showActing && needsActing && capturedSupported && engines?.find((e) => e.id === hinted)?.enabled
+      ? 'auto'
+      : 'preserve';
+  const actingMode = actingChoice ?? defaultMode;
   const input: SpeakerRevoiceInput | undefined = source && {
+    ...(actingMode === 'preserve'
+      ? {}
+      : {
+          acting: {
+            mode: actingMode,
+            ...(actingMode === 'auto' && actingEngineId ? { engineId: actingEngineId } : {}),
+          },
+        }),
     voices: source.voices.map((v) => {
       const d = draft[v.speakerId] ?? { voiceId: v.voiceId, instructions: v.instructions ?? '' };
       const text = d.instructions.trim();
@@ -117,13 +151,24 @@ export default function UiNextSpeakerRevoice({
   };
   const changes = source?.voices.filter((v) => changed(v.speakerId)).length ?? 0;
   const missing = input?.voices.some((v) => !catalog(v.voiceId));
+  // Automatic acting tags are applied only through voices the server marks as capable.
+  const acted = actingMode === 'auto' || (actingMode === 'preserve' && !!source?.hasActing);
+  const actingUnsupported = acted
+    ? (source?.voices ?? []).filter((v, index) => catalog(input!.voices[index].voiceId)?.autoActingSupported !== true)
+    : [];
   const problem = !stopped
     ? '만들기를 멈추거나 끝난 뒤 바꿀 수 있어요.'
     : missing
       ? '목록에 없는 목소리를 다른 목소리로 바꿔 주세요.'
-      : changes === 0
-        ? '바꿀 목소리나 연기 지시를 고르면 확인할 수 있어요.'
-        : undefined;
+      : actingUnsupported.length
+        ? `자동 연기를 지원하지 않는 목소리가 있어요 (${actingUnsupported.map((v) => v.name).join(', ')}). 목소리를 바꾸거나 자동 연기를 빼 주세요.`
+        : actingMode === 'auto' && needsActing && !actingEngine
+          ? '연기를 분석할 모델을 골라 주세요.'
+          : actingMode === 'auto' && needsActing && !actingEngine?.enabled
+            ? '고른 분석 모델이 꺼져 있어요.'
+            : changes === 0 && actingMode === 'preserve'
+              ? '바꿀 목소리나 연기를 고르면 확인할 수 있어요.'
+              : undefined;
   const inputKey = input ? JSON.stringify(input) : '';
   const fresh = estimate?.key === inputKey ? estimate.value : undefined;
   useEffect(() => {
@@ -133,6 +178,8 @@ export default function UiNextSpeakerRevoice({
   const edit = (speakerId: string, next: Partial<Draft[string]>) => {
     const captured = source?.voices.find((v) => v.speakerId === speakerId);
     setCreated(false);
+    // Clearing the text keeps the field open instead of folding it mid-edit.
+    if (next.instructions !== undefined) setManual((current) => new Set(current).add(speakerId));
     setDraft((current) => ({
       ...current,
       [speakerId]: {
@@ -200,8 +247,8 @@ export default function UiNextSpeakerRevoice({
       {open && (
         <>
           <p className="un-book-note">
-            이 작업에서 찾은 화자와 인물 연결을 그대로 쓰고 음성만 새 작업으로 만들어요. 분석·목소리 선정 모델은 다시
-            부르지 않고, 지금 음성과 작품의 인물 배정은 바뀌지 않아요.
+            이 작업에서 찾은 화자와 인물 연결을 그대로 쓰고 음성만 새 작업으로 만들어요. 화자 찾기·인물 연결·목소리
+            선정은 다시 하지 않고, 지금 음성과 작품의 인물 배정은 바뀌지 않아요.
           </p>
           {sourceError && (
             <div className="un-book-actions">
@@ -228,6 +275,69 @@ export default function UiNextSpeakerRevoice({
                 </p>
               )}
               <fieldset className="un-revoice-fields" disabled={!stopped || !!working}>
+                {showActing && (
+                  <div className="un-revoice-row">
+                    <label className="un-cast-field">
+                      <span>자동 연기</span>
+                      <select
+                        aria-label="자동 연기"
+                        value={actingMode}
+                        onChange={(e) => {
+                          setCreated(false);
+                          setActingChoice(e.target.value as ActingMode);
+                        }}
+                      >
+                        <option value="preserve">
+                          {source.hasActing ? '지금 연기 표시 그대로 쓰기' : '자동 연기 없이 만들기'}
+                        </option>
+                        {/* With every span tagged, filling gaps would be the same as keeping them. */}
+                        {(needsActing || actingMode === 'auto') && (
+                          <option value="auto">
+                            {source.hasActing ? '빠진 구간만 분석해 채우기' : '분석 모델로 연기 표시하기'}
+                          </option>
+                        )}
+                        {source.hasActing && <option value="off">자동 연기 빼기</option>}
+                      </select>
+                    </label>
+                    {actingMode === 'auto' && needsActing && (
+                      <label className="un-cast-field">
+                        <span>연기 분석 모델</span>
+                        <select
+                          aria-label="연기 분석 모델"
+                          value={actingEngineId ?? ''}
+                          onChange={(e) => {
+                            setCreated(false);
+                            setActingEngineChoice(e.target.value || undefined);
+                          }}
+                        >
+                          {!actingEngineId && <option value="">분석 모델 고르기</option>}
+                          {engines?.map((e) => (
+                            <option key={e.id} value={e.id} disabled={!e.enabled && e.id !== actingEngineId}>
+                              {e.name} · {e.modelId}
+                              {e.paid ? ' · 유료 API' : ''}
+                            </option>
+                          ))}
+                        </select>
+                        {engines && source.actingEngineId && !hinted && (
+                          <small className="un-book-note">원래 분석 모델을 찾을 수 없어요. 다시 골라 주세요.</small>
+                        )}
+                      </label>
+                    )}
+                    <small className="un-book-note">
+                      {actingMode === 'auto'
+                        ? needsActing
+                          ? '이미 있는 표시는 그대로 두고, 표시가 없는 구간만 고른 분석 모델로 감정·말투·속도를 채워요. 화자 찾기·인물 연결은 다시 하지 않아요. 분석 모델 요금이 추가될 수 있어요.'
+                          : '모든 구간에 이미 연기 표시가 있어 분석 모델을 부르지 않아요.'
+                        : actingMode === 'off'
+                          ? '자동 연기 표시를 빼고 만들어요. 분석 모델은 부르지 않아요.'
+                          : source.hasActing
+                            ? needsActing
+                              ? '원래 분석의 표시를 그대로 쓰고, 표시가 없는 구간은 연기 없이 만들어요. 분석 모델은 부르지 않아요.'
+                              : '원래 분석에서 표시한 감정·말투·속도를 그대로 써요. 분석 모델은 부르지 않아요.'
+                            : '이 작업에는 자동 연기 표시가 없어요. 분석 모델은 부르지 않고 고른 목소리로만 만들어요.'}
+                    </small>
+                  </div>
+                )}
                 {source.voices.map((v) => {
                   const d = draft[v.speakerId] ?? { voiceId: v.voiceId, instructions: v.instructions ?? '' };
                   const chosen = catalog(d.voiceId);
@@ -254,11 +364,19 @@ export default function UiNextSpeakerRevoice({
                           ))}
                         </select>
                       </label>
-                      {supported ? (
+                      {supported && !manual.has(v.speakerId) && !d.instructions.trim() ? (
+                        <button
+                          type="button"
+                          className="un-btn is-text is-sm un-revoice-manual"
+                          onClick={() => setManual((current) => new Set(current).add(v.speakerId))}
+                        >
+                          직접 연기 지시 추가
+                        </button>
+                      ) : supported ? (
                         <>
                           <label className="un-cast-field">
                             <span>
-                              연기 지시<small>선택</small>
+                              직접 연기 지시<small>선택 · 이 인물에만</small>
                             </span>
                             <textarea
                               aria-label={`${v.name} 연기 지시`}
@@ -308,8 +426,8 @@ export default function UiNextSpeakerRevoice({
               </fieldset>
               <p className="un-book-note">
                 {anySupported
-                  ? '연기 지시는 고른 목소리에 말투·감정을 더하는 합성 설정이에요. 보관함 설명은 자동으로 넣지 않으며, 바꾸면 해당 인물의 음성을 새로 만들어요.'
-                  : '연기 지시 칸은 지원하는 TTS 연결의 목소리를 고를 때만 보여요.'}
+                  ? '직접 연기 지시는 필요한 인물에만 더하는 선택 설정이에요. 보관함 설명이나 자동 연기 표시는 이 칸에 넣지 않으며, 바꾸면 해당 인물의 음성을 새로 만들어요.'
+                  : '직접 연기 지시 칸은 지원하는 TTS 연결의 목소리를 고를 때만 보여요.'}
               </p>
               {problem && <p className="un-book-note">{problem}</p>}
               {created && !fresh && (
@@ -333,10 +451,19 @@ export default function UiNextSpeakerRevoice({
                       <dd>{formatCount(fresh.characters)}</dd>
                     </div>
                   </dl>
+                  {fresh.actingAnalysis && (
+                    <p className="un-book-voice">
+                      연기 분석 <b>{actingEngine?.name ?? '분석 모델'}</b> · 표시가 없는 구간만
+                    </p>
+                  )}
                   {fresh.paid && (
                     <label className="un-book-ack">
                       <input type="checkbox" checked={ack} onChange={(e) => setAck(e.target.checked)} />
-                      <span>음성 서비스의 API 사용 요금이 발생할 수 있어요. 분석 모델은 부르지 않아요.</span>
+                      <span>
+                        {fresh.actingAnalysis
+                          ? '음성 서비스와 연기 분석 모델의 API 사용 요금이 발생할 수 있어요. 화자 찾기·인물 연결은 다시 하지 않아요.'
+                          : '음성 서비스의 API 사용 요금이 발생할 수 있어요. 분석 모델은 부르지 않아요.'}
+                      </span>
                     </label>
                   )}
                 </div>

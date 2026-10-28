@@ -1,3 +1,4 @@
+import type { SpeakerPerformance } from './tts-performance';
 /** Service-neutral boundary. Offsets refer to unchanged paragraph UTF-16 text, end exclusive. */
 export const SPEAKER_ENGINE_PROTOCOL = 'boaa-speaker-engine-v1';
 export interface SpeakerChapter {
@@ -20,6 +21,7 @@ export interface SpeakerLabel {
   textHash: string;
   speakerId: string;
   reviewRequired: boolean;
+  performance?: SpeakerPerformance;
 }
 export interface SpeakerIdentity {
   id: string;
@@ -34,6 +36,7 @@ export interface SpeakerEngineStep {
   response?: string;
   /** Source-scoped, validated A checkpoint; never contains sequential identity memory. */
   attribution?: unknown;
+  autoActing?: boolean;
 }
 export type SpeakerAttributionStep = Omit<SpeakerEngineStep, 'ledger' | 'attribution'>;
 export type SpeakerAttributionResult =

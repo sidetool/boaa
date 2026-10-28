@@ -23,6 +23,7 @@ const same = (a?: SpeakerGenerationPreferences, b?: SpeakerGenerationPreferences
     b &&
     a.engineId === b.engineId &&
     a.narratorVoiceId === b.narratorVoiceId &&
+    a.autoActing === b.autoActing &&
     JSON.stringify(a.casting) === JSON.stringify(b.casting) &&
     a.characterVoiceIds.length === b.characterVoiceIds.length &&
     a.characterVoiceIds.every((id, index) => id === b.characterVoiceIds[index]),

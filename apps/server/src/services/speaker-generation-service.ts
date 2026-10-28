@@ -1,4 +1,6 @@
 import type pg from 'pg';
+import { missingPerformance, preparePerformance } from './speaker-performance';
+import { performanceStyle } from '../../../../src/providers/tts-performance';
 import { structuredIntegrityHash } from '@boaa/text-core/hash';
 import type { AudiobookInput, PreparedNarration } from '../../../../src/providers/plain-audiobook';
 import type {
@@ -217,13 +219,18 @@ export class SpeakerGenerationService {
     ).estimate;
   }
   async revoiceSource(bookId: string, id: string) {
-    return revoiceSourceView((await loadRevoiceSource(this.pool, this.owner, bookId, id)).items);
+    const { source, items } = await loadRevoiceSource(this.pool, this.owner, bookId, id);
+    return {
+      ...revoiceSourceView(items),
+      actingEngineId: source.settings.cast?.actingEngine?.id ?? source.settings.cast?.engineId,
+    };
   }
   async estimateRevoice(bookId: string, id: string, input: SpeakerRevoiceInput) {
-    return (await planSpeakerRevoice(this.pool, this.owner, bookId, id, input, await this.catalog())).estimate;
+    return (await planSpeakerRevoice(this.pool, this.owner, bookId, id, input, await this.catalog(), this.engines))
+      .estimate;
   }
   async revoice(bookId: string, id: string, input: SpeakerRevoiceInput, fingerprint: string, paid: boolean) {
-    const plan = await planSpeakerRevoice(this.pool, this.owner, bookId, id, input, await this.catalog());
+    const plan = await planSpeakerRevoice(this.pool, this.owner, bookId, id, input, await this.catalog(), this.engines);
     const created = await this.audio.create(plan, fingerprint, paid);
     return (await this.list(bookId)).find((job) => job.id === created.id)!;
   }
@@ -242,7 +249,7 @@ export class SpeakerGenerationService {
   }
   async resume(id: string) {
     const run = await this.run(id);
-    if (run.settings.cast?.revoiceFrom) return;
+    if (run.settings.cast?.revoiceFrom && !run.settings.cast.autoActing) return;
     if (!['paused', 'failed'].includes(run.status)) return;
     const client = await this.pool.connect();
     try {
@@ -252,20 +259,22 @@ export class SpeakerGenerationService {
         !(await client.query('select pg_try_advisory_xact_lock(hashtextextended($1,0)) locked', [lock])).rows[0].locked
       )
         throw audiobookError(409, '분석 요청이 마무리되고 있어요. 잠시 후 이어 만들어 주세요.');
-      await client.query(
-        `update speaker_analysis set dispatching=false,bytes=case when response_rejected then octet_length(coalesce(checkpoint::text,''))+octet_length(coalesce(result::text,'')) else bytes end,model_response=case when response_rejected then null else model_response end,response_rejected=false
+      if (!run.settings.cast?.revoiceFrom)
+        await client.query(
+          `update speaker_analysis set dispatching=false,bytes=case when response_rejected then octet_length(coalesce(checkpoint::text,''))+octet_length(coalesce(result::text,'')) else bytes end,model_response=case when response_rejected then null else model_response end,response_rejected=false
         where user_id=$1 and book_id=$2 and analysis_key=any($3::text[]) and result is null`,
-        [this.owner, run.book_id, [run.analysis_key, attributionKey(run.analysis_key)]],
-      );
+          [this.owner, run.book_id, [run.analysis_key, attributionKey(run.analysis_key)]],
+        );
       await client.query(
         'update speaker_voice_decisions set dispatching=false,response=case when rejected then null else response end,rejected=false where audiobook_id=$1',
         [id],
       );
       // Only an explicit, already cost-confirmed resume may retry an ambiguous creation.
-      await client.query(
-        "update tts_voice_designs set status='retry' where user_id=$1 and request_id like $2 and status in ('dispatching','uncertain')",
-        [this.owner, `cast_${id.replaceAll('-', '')}_%`],
-      );
+      if (!run.settings.cast?.revoiceFrom)
+        await client.query(
+          "update tts_voice_designs set status='retry' where user_id=$1 and request_id like $2 and status in ('dispatching','uncertain')",
+          [this.owner, `cast_${id.replaceAll('-', '')}_%`],
+        );
       await client.query('commit');
     } catch (e) {
       await client.query('rollback');
@@ -277,7 +286,7 @@ export class SpeakerGenerationService {
   async advance(id: string, signal: AbortSignal) {
     const run = await this.run(id);
     await this.authority(run);
-    if (run.next_chapter >= run.chapter_ids.length) {
+    if (run.next_chapter >= run.chapter_ids.length && !run.settings.cast?.autoActing) {
       await this.pool.query('update saved_audiobooks set planning_complete=true where id=$1', [id]);
       return;
     }
@@ -287,11 +296,36 @@ export class SpeakerGenerationService {
     try {
       locked = (await client.query('select pg_try_advisory_lock(hashtextextended($1,0)) locked', [lock])).rows[0]
         .locked;
-      if (!locked) return;
-      await this.advanceChapter(run, client, signal, true, async () => {
-        signal.throwIfAborted();
-        return (await this.run(id)).status === 'running';
-      });
+      if (!locked) return false;
+      if (run.next_chapter < run.chapter_ids.length)
+        await this.advanceChapter(run, client, signal, true, async () => {
+          signal.throwIfAborted();
+          return (await this.run(id)).status === 'running';
+        });
+      const latest = await this.run(id);
+      if (latest.settings.cast?.autoActing && (await missingPerformance(this.pool, id))) {
+        // Ordered identity always finishes before a supplementary acting pass.
+        if (latest.next_chapter < latest.chapter_ids.length) return false;
+        await this.pool.query("update speaker_generation_runs set stage='performance' where audiobook_id=$1", [id]);
+        await this.pool.query('update saved_audiobooks set planning_complete=false where id=$1', [id]);
+        if (
+          !(await preparePerformance({
+            pool: this.pool,
+            owner: this.owner,
+            run: latest,
+            engines: this.engines,
+            catalog: this.catalog,
+            signal,
+            authority: (db, lock) => this.authority(latest, db, lock),
+          }))
+        )
+          return false;
+      }
+      if (latest.next_chapter >= latest.chapter_ids.length) {
+        await this.pool.query('update saved_audiobooks set planning_complete=true where id=$1', [id]);
+        await this.pool.query("update speaker_generation_runs set stage='audio' where audiobook_id=$1", [id]);
+      }
+      return true;
     } finally {
       if (locked) await client.query('select pg_advisory_unlock(hashtextextended($1,0))', [lock]);
       client.release();
@@ -382,6 +416,7 @@ export class SpeakerGenerationService {
           bookId: run.book_id,
           analysisKey: run.analysis_key,
           chapterIds: candidates,
+          autoActing: config.autoActing,
           identityOnly: existing,
           engine,
           transport: this.engines.transport,
@@ -429,6 +464,7 @@ export class SpeakerGenerationService {
             checkpoint: request?.checkpoint,
             response: state.model_response ?? undefined,
             attribution,
+            autoActing: config.autoActing,
           },
           deadline,
         );
@@ -539,6 +575,17 @@ export class SpeakerGenerationService {
           run.settings,
         )
       : [];
+    if (run.settings.cast?.autoActing && requests.length) {
+      const catalog = await this.catalog();
+      for (const request of requests) {
+        const voice = catalog.voices.find((v) => v.id === request.voiceId);
+        if (
+          !voice?.autoActingSupported ||
+          structuredIntegrityHash(voice.model) !== structuredIntegrityHash(request.cast.model)
+        )
+          throw audiobookError(409, '배정된 목소리가 자동 연기를 지원하지 않아요. 목소리 설정을 확인해 주세요.');
+      }
+    }
     const c = await this.pool.connect();
     try {
       await c.query('begin');
@@ -649,6 +696,13 @@ export class SpeakerGenerationService {
       run.chapter_ids.indexOf(row.chapter_id) + 1,
     );
     const request = row.request as CastRequest;
+    if (run.settings.cast?.autoActing && !request.cast.performance)
+      throw audiobookError(409, '연기 분석이 끝나면 이 음성을 만들 수 있어요.');
+    const effectiveInstructions = request.cast.instructions || performanceStyle(request.cast.performance);
+    const renderRequest = { ...request, cast: { ...request.cast } };
+    delete renderRequest.cast.performance;
+    if (effectiveInstructions) renderRequest.cast.instructions = effectiveInstructions;
+    else delete renderRequest.cast.instructions;
     const p = loaded.paragraphs.find((p) => p.id === request.paragraphId);
     if (!p) throw audiobookError(409, '본문이 변경됐어요.');
     const playable = castPlayable(p, request, run.settings.rules);
@@ -658,7 +712,7 @@ export class SpeakerGenerationService {
       book: run.book_id,
       revision: run.content_revision,
       chapter: row.chapter_id,
-      request,
+      request: renderRequest,
       text: playable.text,
     });
     const audio = await this.synthesize(
@@ -667,7 +721,7 @@ export class SpeakerGenerationService {
       request.cast.model,
       key,
       regenerate,
-      request.cast.instructions,
+      effectiveInstructions,
     );
     await this.authority(run);
     return audio;

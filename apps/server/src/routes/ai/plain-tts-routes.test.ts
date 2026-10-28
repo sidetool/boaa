@@ -653,3 +653,31 @@ it('honors a longer provider Retry-After without dispatching again during cooldo
   expect(second.json().retryAfterSeconds).toBeGreaterThan(590);
   expect(f.synthesize).toHaveBeenCalledTimes(1);
 });
+
+it('gates automatic acting on exact supported models and a verified instruction-capable adapter', async () => {
+  const f = await fixture({ TTS_PLAIN_ENABLED: 'false' }, async () => [
+    ...[
+      ['valid-flash', 'gemini-3.8-flash-tts', 'gemini-tts', true],
+      ['valid-lite', 'gemini-3.8-flash-lite-tts', 'gemini-vertex-tts', true],
+      ['fake-model', 'gemini-3.8-custom-tts', 'gemini-tts', true],
+      ['preview', 'gemini-3.8-flash-tts-preview', 'gemini-tts', true],
+      ['compatible', 'gemini-3.8-flash-tts', 'local-endpoint', true],
+      ['no-instructions', 'gemini-3.8-flash-tts', 'gemini-tts', false],
+    ].map(([id, modelId, providerId, supportsInstructions]) => ({
+      id: String(id),
+      name: String(id),
+      modelId: String(modelId),
+      revision: String(id),
+      paid: false,
+      createProvider: async () => ({
+        ...f.provider,
+        providerId: String(providerId),
+        supportsInstructions: supportsInstructions === true,
+      }),
+    })),
+  ]);
+  const catalog = (await f.app.inject('/api/tts/plain/voices')).json();
+  for (const voice of catalog.voices) expect(voice.autoActingSupported).toBe(voice.providerId.startsWith('valid-'));
+  expect(catalog.voices).toHaveLength(6);
+  expect(f.synthesize).not.toHaveBeenCalled();
+});

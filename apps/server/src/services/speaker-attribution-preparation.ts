@@ -19,6 +19,7 @@ export async function prepareAttributionBatch(options: {
   bookId: string;
   analysisKey: string;
   chapterIds: string[];
+  autoActing?: boolean;
   identityOnly: readonly string[];
   engine: SpeakerEngineInput;
   transport: SpeakerEngineTransport;
@@ -80,6 +81,7 @@ export async function prepareAttributionBatch(options: {
               engine,
               {
                 protocol: SPEAKER_ENGINE_PROTOCOL,
+                autoActing: options.autoActing,
                 source,
                 checkpoint: request?.checkpoint,
                 response: state.model_response ?? undefined,

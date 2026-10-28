@@ -22,6 +22,7 @@ export function createSpeakerEngineServer(token: string) {
           engineVersion: ENGINE_VERSION,
           maxChapterCharacters: 120000,
           attributionPreparation: true,
+          performanceAnnotations: true,
         }),
       );
       return;

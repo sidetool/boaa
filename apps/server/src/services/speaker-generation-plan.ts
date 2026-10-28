@@ -1,3 +1,9 @@
+import {
+  parsePerformance,
+  isGeminiActingModel,
+  NEUTRAL_PERFORMANCE,
+  type SpeakerPerformance,
+} from '../../../../src/providers/tts-performance';
 import type pg from 'pg';
 import type { Paragraph, SpokenTextRule } from '@boaa/contracts';
 import { structuredIntegrityHash, textIntegrityHash } from '@boaa/text-core/hash';
@@ -28,6 +34,7 @@ export interface CastRequest extends Omit<PlainTTSRequest, 'rules'> {
     language?: string;
     model: PlainTTSModel;
     instructions?: string;
+    performance?: SpeakerPerformance;
   };
 }
 export async function speakerPlan(
@@ -41,6 +48,7 @@ export async function speakerPlan(
 ): Promise<{ plan: AudiobookPlan; estimate: SpeakerGenerationEstimate }> {
   if (
     !input ||
+    (input.autoActing !== undefined && typeof input.autoActing !== 'boolean') ||
     !Array.isArray(input.chapterIds) ||
     !input.chapterIds.length ||
     input.chapterIds.length > 500 ||
@@ -84,6 +92,8 @@ export async function speakerPlan(
   const voices = voiceIds.map((id) => catalog.voices.find((v) => v.id === id));
   if (voices.some((v) => !v?.model) || !catalog.available)
     throw audiobookError(409, '선택한 서버 목소리를 다시 확인해 주세요.');
+  if (input.autoActing && voices.some((v) => v?.autoActingSupported !== true))
+    throw audiobookError(400, '자동 연출은 지원되는 Gemini 3.8 TTS 목소리로만 사용할 수 있어요.');
   const engine = await engines.load(input.engineId);
   if (engine.purpose === 'casting') throw audiobookError(400, '화자 분석에는 분석용 모델 연결을 골라 주세요.');
   const casting = normalizeCasting(input.casting);
@@ -97,7 +107,16 @@ export async function speakerPlan(
     ? catalog.voices.find((v) => v.providerId === casting.designProviderId)?.model
     : undefined;
   if (casting?.autoDesign && !designModel) throw audiobookError(409, '목소리를 만들 TTS 모델을 확인해 주세요.');
+  if (
+    input.autoActing &&
+    casting?.autoDesign &&
+    (!isGeminiActingModel(casting.designModelId) ||
+      !catalog.voices.some((v) => v.providerId === casting.designProviderId && v.autoActingSupported))
+  )
+    throw audiobookError(400, '자동 연기를 지원하는 Gemini 3.8 연결에서 새 목소리를 만들어 주세요.');
   const capabilities = await engines.transport.capabilities(engine, AbortSignal.timeout(15000));
+  if (input.autoActing && !capabilities.performanceAnnotations)
+    throw audiobookError(409, '화자 분석 서비스를 업데이트하면 자동 연출을 사용할 수 있어요.');
   const analysisKey = structuredIntegrityHash({
     book: bookId,
     revision: book.active_content_revision_id,
@@ -113,6 +132,9 @@ export async function speakerPlan(
     rules: input.rules,
     footnotePlayback: input.footnotePlayback,
     cast: {
+      ...(input.autoActing
+        ? { autoActing: true, actingEngine: { id: input.engineId, revision: speakerRevision(engine) } }
+        : {}),
       language: book.language ?? undefined,
       engineId: input.engineId,
       engineRevision: speakerRevision(engine),
@@ -277,7 +299,7 @@ export function castRequests(
   for (const paragraph of paragraphs) {
     const ranges = labels.filter((l) => l.paragraphId === paragraph.id).sort((a, b) => a.startOffset - b.startOffset);
     let cursor = 0;
-    const append = (start: number, end: number, speakerId: string, label: string) => {
+    const append = (start: number, end: number, speakerId: string, label: string, performance?: SpeakerPerformance) => {
       if (end <= start) return;
       const voiceId = speakerId === 'narrator' ? settings.voiceId : assignments[speakerId];
       if (!voiceId || !cast.models[voiceId]) throw audiobookError(409, '배정한 목소리를 확인해 주세요.');
@@ -298,7 +320,18 @@ export function castRequests(
           paragraphHash: plainTTSParagraphHash(paragraph),
           chunkHash: part.spokenTextFingerprint!,
           chunking: 'paragraph',
-          cast: { start, end, part: i, speakerId, label, language: cast.language, model: cast.models[voiceId] },
+          cast: {
+            start,
+            end,
+            part: i,
+            speakerId,
+            label,
+            language: cast.language,
+            model: cast.models[voiceId],
+            ...(cast.autoActing && (performance || speakerId === 'narrator')
+              ? { performance: parsePerformance(performance ?? NEUTRAL_PERFORMANCE) }
+              : {}),
+          },
         }),
       );
     };
@@ -314,7 +347,13 @@ export function castRequests(
         throw audiobookError(502, '분석 결과의 본문 위치가 올바르지 않아요.');
       append(cursor, l.startOffset, 'narrator', '내레이터');
       const id = l.reviewRequired || !names.has(l.speakerId) ? 'narrator' : l.speakerId;
-      append(l.startOffset, l.endOffset, id, names.get(id) ?? '내레이터');
+      append(
+        l.startOffset,
+        l.endOffset,
+        id,
+        names.get(id) ?? '내레이터',
+        id === 'narrator' ? NEUTRAL_PERFORMANCE : l.performance,
+      );
       cursor = l.endOffset;
     }
     append(cursor, paragraph.text.length, 'narrator', '내레이터');

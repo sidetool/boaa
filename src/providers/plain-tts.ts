@@ -13,6 +13,7 @@ export interface PlainTTSVoice extends TTSVoice {
   paid?: boolean;
   /** This configured adapter supports separate acting directions, not voice cloning. */
   instructionsSupported?: boolean;
+  autoActingSupported?: boolean;
   /** Identity of this synthesis model, independent of catalog order and connection credentials. */
   model?: PlainTTSModel;
 }

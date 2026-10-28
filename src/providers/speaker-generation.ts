@@ -10,6 +10,7 @@ export interface SpeakerGenerationInput {
   narratorVoiceId: string;
   characterVoiceIds: string[];
   casting?: SpeakerCastingOptions;
+  autoActing?: boolean;
   rules: AudiobookInput['rules'];
   footnotePlayback: AudiobookInput['footnotePlayback'];
 }
@@ -26,7 +27,7 @@ export interface SpeakerGenerationEstimate {
 }
 export interface SpeakerGenerationJob extends SavedAudiobook {
   revoiceFrom?: string;
-  stage: 'waiting' | 'attribution' | 'identity' | 'casting' | 'audio' | 'complete';
+  stage: 'waiting' | 'attribution' | 'identity' | 'casting' | 'performance' | 'audio' | 'complete';
   analyzedChapters: number;
   contextChapterCount: number;
   readyChapterIds: string[];
@@ -42,15 +43,20 @@ export interface SpeakerGenerationJob extends SavedAudiobook {
   retryAt?: string;
 }
 export interface SpeakerRevoiceInput {
+  acting?: { mode: 'preserve' | 'off' | 'auto'; engineId?: string };
   voices: { speakerId: string; voiceId: string; instructions?: string }[];
 }
 export interface SpeakerRevoiceSource {
+  hasActing?: boolean;
+  needsActing?: boolean;
+  actingEngineId?: string;
   chapterCount: number;
   itemCount: number;
   /** Captured on this job's planned audio, independent of later book-wide assignments. */
   voices: { speakerId: string; name: string; voiceId: string; instructions?: string; itemCount: number }[];
 }
 export interface SpeakerRevoiceEstimate {
+  actingAnalysis?: boolean;
   fingerprint: string;
   chapterCount: number;
   itemCount: number;
@@ -87,6 +93,7 @@ export interface SpeakerGenerationPreferences {
   narratorVoiceId: string;
   characterVoiceIds: string[];
   casting?: SpeakerCastingOptions;
+  autoActing?: boolean;
 }
 export interface TTSSpeakerGenerationControls {
   key: string;
@@ -107,6 +114,8 @@ export interface TTSSpeakerGenerationControls {
 export interface SpeakerGenerationSettings {
   /** Audio-only variant; all source-verified ranges were copied from this job. */
   revoiceFrom?: string;
+  autoActing?: boolean;
+  actingEngine?: { id: string; revision: string };
   language?: string;
   engineId: string;
   engineRevision: string;

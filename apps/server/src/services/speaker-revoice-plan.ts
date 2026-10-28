@@ -2,10 +2,16 @@ import type pg from 'pg';
 import { structuredIntegrityHash } from '@boaa/text-core/hash';
 import type { AudiobookInput } from '../../../../src/providers/plain-audiobook';
 import type { PlainTTSVoices } from '../../../../src/providers/plain-tts';
-import type { SpeakerRevoiceInput, SpeakerRevoiceSource } from '../../../../src/providers/speaker-generation';
+import type {
+  SpeakerRevoiceInput,
+  SpeakerRevoiceSource,
+  SpeakerRevoiceEstimate,
+} from '../../../../src/providers/speaker-generation';
 import { audiobookError, type AudiobookPlan } from './audiobook-plan.js';
 import { castPlayable, loadSpeakerChapter, type CastRequest } from './speaker-generation-plan.js';
 import { voiceText } from './voice-library-store.js';
+import type { SpeakerEngineStore } from '../providers/speaker-engine-store';
+import { speakerRevision } from '../providers/speaker-engine-config';
 
 interface Source {
   id: string;
@@ -75,6 +81,8 @@ export function revoiceSourceView(items: readonly Item[]): SpeakerRevoiceSource 
     });
   }
   return {
+    hasActing: items.some((i) => !!i.request.cast.performance),
+    needsActing: items.some((i) => !i.request.cast.performance),
     chapterCount: new Set(items.map((i) => i.chapter_id)).size,
     itemCount: items.length,
     voices: [...voices.values()],
@@ -88,9 +96,13 @@ export async function planSpeakerRevoice(
   id: string,
   input: SpeakerRevoiceInput,
   catalog: PlainTTSVoices,
-): Promise<AudiobookPlan> {
+  engines?: SpeakerEngineStore,
+): Promise<AudiobookPlan & { estimate: SpeakerRevoiceEstimate }> {
   const { source, items: captured } = await loadRevoiceSource(pool, owner, bookId, id);
   const view = revoiceSourceView(captured);
+  const mode = input?.acting?.mode ?? 'preserve';
+  if (!['preserve', 'off', 'auto'].includes(mode) || (input?.acting && typeof input.acting !== 'object'))
+    throw audiobookError(400, '자동 연기 설정을 확인해 주세요.');
   if (!input || !Array.isArray(input.voices) || input.voices.length !== view.voices.length || input.voices.length > 512)
     throw audiobookError(400, '내레이터와 인물의 목소리를 모두 골라 주세요.');
   const choices = new Map<string, { voiceId: string; instructions?: string }>();
@@ -109,6 +121,19 @@ export async function planSpeakerRevoice(
   }
   const selectedIds = [...new Set([...choices.values()].map((v) => v.voiceId))];
   const voices = selectedIds.map((id) => catalog.voices.find((v) => v.id === id)!);
+  if ((mode === 'auto' || (mode === 'preserve' && view.hasActing)) && voices.some((v) => !v.autoActingSupported))
+    throw audiobookError(400, '자동 연기를 끄거나 지원하는 목소리를 골라 주세요.');
+  const actingAnalysis = mode === 'auto' && view.needsActing === true;
+  let actingEngine: { id: string; revision: string } | undefined;
+  let actingPaid = false;
+  if (actingAnalysis) {
+    const engineId = voiceText(input.acting?.engineId, 128, true);
+    if (!engines) throw audiobookError(503, '연기 분석 연결을 확인해 주세요.');
+    const engine = await engines.load(engineId);
+    if (engine.purpose === 'casting') throw audiobookError(400, '화자 분석용 모델을 선택해 주세요.');
+    actingEngine = { id: engineId, revision: speakerRevision(engine) };
+    actingPaid = engine.paid;
+  }
   const models = Object.fromEntries(voices.map((v) => [v.id, v.model!]));
   const contextIds = source.chapter_ids.slice(0, source.next_chapter);
   const chapterIds = source.settings.chapterIds.filter((chapterId) => captured.some((i) => i.chapter_id === chapterId));
@@ -117,7 +142,7 @@ export async function planSpeakerRevoice(
   const items: AudiobookPlan['items'] = [];
   let characters = 0,
     bytes = 0,
-    changed = false;
+    changed = actingAnalysis;
   for (const chapterId of chapterIds) {
     const loaded = await loadSpeakerChapter(pool, owner, bookId, chapterId, contextIds.indexOf(chapterId) + 1);
     const paragraphs = new Map(loaded.paragraphs.map((p) => [p.id, p]));
@@ -130,6 +155,7 @@ export async function planSpeakerRevoice(
       };
       if (choice.instructions) request.cast.instructions = choice.instructions;
       else delete request.cast.instructions;
+      if (mode === 'off') delete request.cast.performance;
       const paragraph = paragraphs.get(request.paragraphId);
       if (!paragraph) throw audiobookError(409, '본문이 변경됐어요. 원래 음성의 본문을 확인해 주세요.');
       const playable = castPlayable(paragraph, request, source.settings.rules);
@@ -155,6 +181,7 @@ export async function planSpeakerRevoice(
     bookId,
     sourceId: id,
     revision: source.content_revision,
+    ...(actingEngine ? { actingEngine } : {}),
     items: items.map((i) => ({ chapterId: i.chapterId, request: i.request })),
   });
   const narrator = choices.get('narrator')?.voiceId ?? source.settings.voiceId;
@@ -162,7 +189,7 @@ export async function planSpeakerRevoice(
     bookId,
     title: source.title,
     revision: source.content_revision,
-    planningComplete: true,
+    planningComplete: !actingAnalysis,
     revoiceSource: { id, itemCount: captured.length, nextChapter: source.next_chapter },
     speakerRun: {
       analysisKey: source.analysis_key,
@@ -177,7 +204,14 @@ export async function planSpeakerRevoice(
       ...source.settings,
       chapterIds,
       voiceId: narrator,
-      cast: { ...source.settings.cast!, revoiceFrom: id, models, characterVoiceIds: selectedIds },
+      cast: {
+        ...source.settings.cast!,
+        autoActing: mode === 'auto',
+        actingEngine,
+        revoiceFrom: id,
+        models,
+        characterVoiceIds: selectedIds,
+      },
     },
     items,
     estimate: {
@@ -185,7 +219,8 @@ export async function planSpeakerRevoice(
       chapterCount: chapterIds.length,
       itemCount: items.length,
       characters,
-      paid: voices.some((v) => v.paid),
+      paid: actingPaid || voices.some((v) => v.paid),
+      ...(actingAnalysis ? { actingAnalysis: true } : {}),
       voiceLabel: '화자별 목소리',
       providerName: [...new Set(voices.map((v) => v.providerName || v.providerId || 'TTS'))].join(' · '),
       firstChapterTitle: items[0].chapterTitle,

@@ -26,6 +26,13 @@ import { registerSpeakerGenerationRoutes } from '../routes/ai/speaker-generation
 import { loadConfig } from '../config.js';
 import { step, attributionStep, ENGINE_VERSION } from '../../../speaker-engine/src/engine';
 import { attribution, identity } from '../../../speaker-engine/src/test-fixtures';
+import { prepare } from '../../../speaker-engine/src/engine';
+import {
+  NEUTRAL_PERFORMANCE,
+  PERFORMANCE_INSTRUCTION,
+  performanceStyle,
+  type SpeakerPerformance,
+} from '../../../../src/providers/tts-performance';
 import {
   SPEAKER_ENGINE_PROTOCOL,
   type SpeakerEngineStep,
@@ -108,6 +115,7 @@ async function setup(pool: pg.Pool, concurrency: 1 | 2 = 1, chapterIds = ['c1', 
         protocol: SPEAKER_ENGINE_PROTOCOL,
         engineVersion: ENGINE_VERSION,
         attributionPreparation,
+        performanceAnnotations: true,
       });
     if (address.endsWith('/v1/step') || address.endsWith('/v1/attribution')) {
       if (failAccept && body.response) {
@@ -129,7 +137,21 @@ async function setup(pool: pg.Pool, concurrency: 1 | 2 = 1, chapterIds = ['c1', 
       }
       const previous = (last.ledger as { entries?: { workSpeakerId: string }[] } | undefined)?.entries?.[0]
         ?.workSpeakerId;
-      const wire = request.stage === 'attribution' ? attribution(last.source) : identity(request, previous);
+      const base = attribution(last.source);
+      const wire =
+        request.stage === 'attribution'
+          ? {
+              ...base,
+              ...((request.checkpoint as { autoActing?: boolean }).autoActing
+                ? {
+                    performance: prepare(last.source).input.targets.map((target) => ({
+                      id: target.targetId,
+                      acting: ACTING_FIXTURE,
+                    })),
+                  }
+                : {}),
+            }
+          : identity(request, previous);
       return Response.json({ choices: [{ finish_reason: 'stop', message: { content: JSON.stringify(wire) } }] });
     }
     throw Error('unexpected network');
@@ -1774,4 +1796,370 @@ async function revoiceChoices(f: Awaited<ReturnType<typeof setup>>, id: string):
       }
     });
   });
+});
+
+const ACTING_FIXTURE: SpeakerPerformance = {
+  emotion: 'sad',
+  delivery: 'whispering',
+  pace: 'slow',
+  intensity: 'subtle',
+};
+type ActingFixture = Awaited<ReturnType<typeof setup>>;
+type ActingPacket = { chapter: string; targets: { id: string; speaker: string; text: string; context: string }[] };
+const actingResponse = (packet: ActingPacket) =>
+  JSON.stringify({
+    performance: packet.targets.map((t) => ({
+      id: t.id,
+      acting: t.speaker === '내레이터' ? NEUTRAL_PERFORMANCE : ACTING_FIXTURE,
+    })),
+  });
+async function actingFixture(pool: pg.Pool, chapters = ['c1']) {
+  const f = await setup(pool, 1, chapters);
+  const catalog = await f.catalog();
+  f.catalog.mockResolvedValue({
+    ...catalog,
+    voices: catalog.voices.map((voice) => ({ ...voice, instructionsSupported: true, autoActingSupported: true })),
+  });
+  const annotations: ActingPacket[] = [];
+  const original = f.engines.transport.generateJson.bind(f.engines.transport);
+  const generate = vi.spyOn(f.engines.transport, 'generateJson').mockImplementation(async (...args) => {
+    if (args[3] !== PERFORMANCE_INSTRUCTION) return original(...args);
+    const packet = JSON.parse(args[1].prompt) as ActingPacket;
+    annotations.push(packet);
+    return actingResponse(packet);
+  });
+  return { ...f, annotations, annotationSpy: generate };
+}
+async function actingVariant(f: ActingFixture, original: string) {
+  const view = await f.service.revoiceSource('book', original);
+  const input: SpeakerRevoiceInput = {
+    voices: view.voices.map((v) => ({ speakerId: v.speakerId, voiceId: v.voiceId })),
+    acting: { mode: 'auto', engineId: f.engine.id },
+  };
+  const estimate = await f.service.estimateRevoice('book', original, input);
+  return f.service.revoice('book', original, input, estimate.fingerprint, true);
+}
+
+(harness ? describe : describe.skip)('automatic acting durable generation', () => {
+  it('uses the same fresh A response without an annotation call and keeps analysis identities stable when disabled', async () => {
+    await withPostgresSchema(harness!, 'acting_fresh', async (pool) => {
+      const f = await actingFixture(pool, ['c1', 'c2']);
+      try {
+        await f.engines.save({ ...f.engine, analysisConcurrency: 2 }, f.engine.id);
+        const job = await f.create({ ...f.input, autoActing: true });
+        await f.until(async () => (await f.audio.get(job.id)).status === 'completed');
+        expect(f.modelCalls.map((c) => c.request.stage).sort()).toEqual([
+          'attribution',
+          'attribution',
+          'identity',
+          'identity',
+        ]);
+        expect(f.annotations).toHaveLength(0);
+        const items = (
+          await pool.query('select request from saved_audiobook_items where audiobook_id=$1 order by ordinal', [job.id])
+        ).rows;
+        expect(items.every((i) => !!i.request.cast.performance)).toBe(true);
+        expect(
+          items
+            .filter((i) => i.request.cast.speakerId !== 'narrator')
+            .every((i) => i.request.cast.performance.emotion === 'sad'),
+        ).toBe(true);
+        expect(f.synthesize.mock.calls.every((call) => !call[0].includes('whispering'))).toBe(true);
+        expect(f.synthesize.mock.calls.some((call) => call[5] === performanceStyle(ACTING_FIXTURE))).toBe(true);
+        const off = await f.create({ ...f.input, autoActing: false, characterVoiceIds: ['b'] });
+        await f.until(async () => (await f.audio.get(off.id)).status === 'completed');
+        expect(f.modelCalls).toHaveLength(4);
+        expect(f.annotations).toHaveLength(0);
+        const runs = (
+          await pool.query('select analysis_key from speaker_generation_runs where audiobook_id=any($1::uuid[])', [
+            [job.id, off.id],
+          ])
+        ).rows;
+        expect(new Set(runs.map((r) => r.analysis_key)).size).toBe(1);
+        expect(
+          (
+            await pool.query(
+              "select 1 from saved_audiobook_items where audiobook_id=$1 and request->'cast' ? 'performance'",
+              [off.id],
+            )
+          ).rowCount,
+        ).toBe(0);
+      } finally {
+        f.annotationSpy.mockRestore();
+        await f.cleanup();
+      }
+    });
+  });
+
+  it('reuses cached untagged A/B across modes and supplements only after the final ordered B', async () => {
+    await withPostgresSchema(harness!, 'acting_cached', async (pool) => {
+      const f = await actingFixture(pool, ['c1', 'c2']);
+      try {
+        const old = await f.create();
+        await f.until(async () => (await f.audio.get(old.id)).status === 'completed');
+        const before = (await pool.query('select * from speaker_analysis order by chapter_id,analysis_key')).rows;
+        const modelCalls = f.modelCalls.length;
+        const realGenerate = f.annotationSpy.getMockImplementation()!;
+        f.annotationSpy.mockImplementation(async (...args) => {
+          if (args[3] === PERFORMANCE_INSTRUCTION) {
+            expect(
+              (await pool.query('select next_chapter from speaker_generation_runs where audiobook_id<>$1', [old.id]))
+                .rows[0].next_chapter,
+            ).toBe(2);
+            expect(f.modelCalls).toHaveLength(modelCalls);
+          }
+          return realGenerate(...args);
+        });
+        const next = await f.create({ ...f.input, autoActing: true });
+        f.synthesize.mockClear();
+        await f.until(async () => (await f.audio.get(next.id)).status === 'completed');
+        expect(f.annotations).toHaveLength(2);
+        expect(f.annotations.map((a) => a.chapter)).toEqual(['First', 'Second']);
+        expect(f.annotations.every((a) => a.targets.length <= 32)).toBe(true);
+        expect(f.modelCalls).toHaveLength(modelCalls);
+        expect((await pool.query('select * from speaker_analysis order by chapter_id,analysis_key')).rows).toEqual(
+          before,
+        );
+        expect(
+          (
+            await pool.query(
+              "select count(*)::int n from saved_audiobook_items where audiobook_id=$1 and request->'cast' ? 'performance'",
+              [next.id],
+            )
+          ).rows[0].n,
+        ).toBe(6);
+        expect(
+          (
+            await pool.query(
+              'select count(*)::int n from speaker_voice_decisions where audiobook_id=$1 and decision_key like $2',
+              [next.id, 'acting:%'],
+            )
+          ).rows[0].n,
+        ).toBe(2);
+      } finally {
+        f.annotationSpy.mockRestore();
+        await f.cleanup();
+      }
+    });
+  });
+
+  it('annotates old revoice plans using only the selected new engine and includes that analysis in paid confirmation', async () => {
+    await withPostgresSchema(harness!, 'acting_revoice_legacy', async (pool) => {
+      const f = await actingFixture(pool);
+      try {
+        const old = await f.create();
+        await f.until(async () => (await f.audio.get(old.id)).status === 'completed');
+        const source = await f.service.revoiceSource('book', old.id);
+        expect(source).toMatchObject({ hasActing: false, needsActing: true });
+        const selected = await f.engines.save({ ...f.engine, name: 'Annotation only', modelId: 'annotation-only' });
+        await f.engines.remove(f.engine.id);
+        const input: SpeakerRevoiceInput = {
+          voices: source.voices.map((v) => ({ speakerId: v.speakerId, voiceId: v.voiceId })),
+          acting: { mode: 'auto' },
+        };
+        await expect(f.service.estimateRevoice('book', old.id, input)).rejects.toBeDefined();
+        input.acting!.engineId = selected.id;
+        const estimate = await f.service.estimateRevoice('book', old.id, input);
+        expect(estimate).toMatchObject({ actingAnalysis: true, paid: true });
+        await expect(f.service.revoice('book', old.id, input, estimate.fingerprint, false)).rejects.toMatchObject({
+          statusCode: 400,
+        });
+        const before = f.requests.length;
+        const job = await f.service.revoice('book', old.id, input, estimate.fingerprint, true);
+        await f.until(async () => (await f.audio.get(job.id)).status === 'completed');
+        expect(f.annotations).toHaveLength(1);
+        const annotation = f.annotationSpy.mock.calls.find((call) => call[3] === PERFORMANCE_INSTRUCTION)!;
+        expect(annotation[0].modelId).toBe('annotation-only');
+        expect(f.requests).toHaveLength(before);
+        expect((await f.audio.get(old.id)).status).toBe('completed');
+      } finally {
+        f.annotationSpy.mockRestore();
+        await f.cleanup();
+      }
+    });
+  });
+
+  it('preserves or drops saved tags without engines and hashes only effective manual or neutral directions', async () => {
+    await withPostgresSchema(harness!, 'acting_revoice_modes', async (pool) => {
+      const f = await actingFixture(pool);
+      try {
+        const source = await f.create({ ...f.input, autoActing: true });
+        await f.until(async () => (await f.audio.get(source.id)).status === 'completed');
+        const view = await f.service.revoiceSource('book', source.id);
+        expect(view).toMatchObject({ hasActing: true, needsActing: false });
+        await f.engines.remove(f.engine.id);
+        const input: SpeakerRevoiceInput = {
+          voices: view.voices.map((v) => ({
+            speakerId: v.speakerId,
+            voiceId: v.voiceId,
+            ...(v.speakerId === 'narrator' ? {} : { instructions: '수동 지시를 우선하세요.' }),
+          })),
+        };
+        const preservedEstimate = await f.service.estimateRevoice('book', source.id, input);
+        expect(preservedEstimate.actingAnalysis).toBeUndefined();
+        const preserved = await f.service.revoice('book', source.id, input, preservedEstimate.fingerprint, true);
+        const offInput: SpeakerRevoiceInput = { ...input, acting: { mode: 'off' } };
+        const offEstimate = await f.service.estimateRevoice('book', source.id, offInput);
+        const off = await f.service.revoice('book', source.id, offInput, offEstimate.fingerprint, true);
+        const requests = (
+          await pool.query('select ordinal,request from saved_audiobook_items where audiobook_id=$1 order by ordinal', [
+            preserved.id,
+          ])
+        ).rows;
+        for (const row of requests) {
+          const withTags = await f.service.render(preserved.id, row.ordinal, false);
+          const withoutTags = await f.service.render(off.id, row.ordinal, false);
+          expect(withTags.key).toBe(withoutTags.key);
+          if (row.request.cast.speakerId !== 'narrator')
+            expect(f.synthesize.mock.calls.at(-1)![5]).toBe('수동 지시를 우선하세요.');
+          else expect(f.synthesize.mock.calls.at(-1)![5]).toBeUndefined();
+        }
+        const allTagged: SpeakerRevoiceInput = {
+          voices: view.voices.map((v) => ({ speakerId: v.speakerId, voiceId: 'b' })),
+          acting: { mode: 'auto' },
+        };
+        const estimate = await f.service.estimateRevoice('book', source.id, allTagged);
+        expect(estimate.actingAnalysis).toBeUndefined();
+        const auto = await f.service.revoice('book', source.id, allTagged, estimate.fingerprint, true);
+        await f.until(async () => (await f.audio.get(auto.id)).status === 'completed');
+        expect(f.annotations).toHaveLength(0);
+        expect(
+          (
+            await pool.query(
+              "select 1 from saved_audiobook_items where audiobook_id=$1 and request->'cast' ? 'performance'",
+              [off.id],
+            )
+          ).rowCount,
+        ).toBe(0);
+      } finally {
+        f.annotationSpy.mockRestore();
+        await f.cleanup();
+      }
+    });
+  });
+
+  it.each(['pause', '429', 'uncertain', 'rejected'] as const)(
+    'persists annotation work through %s without replaying speaker analysis',
+    async (failure) => {
+      await withPostgresSchema(harness!, 'acting_recovery', async (pool) => {
+        const f = await actingFixture(pool);
+        const entered = gate();
+        const held = gate();
+        let pending: Promise<boolean> | undefined;
+        let calls = 0;
+        let signal: AbortSignal | undefined;
+        try {
+          const source = await f.create();
+          await f.until(async () => (await f.audio.get(source.id)).status === 'completed');
+          await f.engines.save({ ...f.engine, rateLimitRetries: 0 }, f.engine.id);
+          const original = f.annotationSpy.getMockImplementation()!;
+          f.annotationSpy.mockImplementation(async (...args) => {
+            if (args[3] !== PERFORMANCE_INSTRUCTION) return original(...args);
+            calls++;
+            signal = args[2];
+            const packet = JSON.parse(args[1].prompt) as ActingPacket;
+            if (calls === 1) {
+              entered.resolve();
+              if (failure === 'pause') await held.promise;
+              if (failure === '429')
+                throw Object.assign(connectionError('fixture limited', 429), { retryAfterSeconds: 1 });
+              if (failure === 'uncertain') throw connectionError('fixture ambiguous timeout', 502);
+              if (failure === 'rejected') return JSON.stringify({ performance: [] });
+            }
+            return actingResponse(packet);
+          });
+          const job = await actingVariant(f, source.id);
+          const before = f.requests.length;
+          f.synthesize.mockClear();
+          pending = f.audio.tick();
+          await entered.promise;
+          if (failure === 'pause') {
+            await f.audio.control(job.id, 'pause');
+            expect(signal?.aborted).toBe(false);
+            held.resolve();
+          }
+          await pending;
+          const decision = (
+            await pool.query(
+              "select response,dispatching,rejected from speaker_voice_decisions where audiobook_id=$1 and decision_key like 'acting:%'",
+              [job.id],
+            )
+          ).rows[0];
+          expect((await f.audio.get(job.id)).status).toBe(failure === 'pause' ? 'paused' : 'failed');
+          expect(decision.dispatching).toBe(failure === 'uncertain');
+          expect(decision.rejected).toBe(failure === 'rejected');
+          if (failure === 'pause' || failure === 'rejected') expect(decision.response).toContain('performance');
+          else expect(decision.response).toBeNull();
+          expect(f.synthesize).not.toHaveBeenCalled();
+          await f.audio.tick();
+          expect(calls).toBe(1);
+          await f.audio.control(job.id, 'resume', true);
+          await f.until(async () => (await f.audio.get(job.id)).status === 'completed');
+          expect(calls).toBe(failure === 'pause' ? 1 : 2);
+          expect(f.requests).toHaveLength(before);
+        } finally {
+          entered.resolve();
+          held.resolve();
+          await pending;
+          f.annotationSpy.mockRestore();
+          await f.cleanup();
+        }
+      });
+    },
+  );
+
+  it.each(['owner', 'revision', 'engine'] as const)(
+    'rejects a successful annotation after an awaited %s fence changes',
+    async (change) => {
+      await withPostgresSchema(harness!, 'acting_fence', async (pool) => {
+        const f = await actingFixture(pool);
+        const entered = gate();
+        const held = gate();
+        let pending: Promise<boolean> | undefined;
+        try {
+          const source = await f.create();
+          await f.until(async () => (await f.audio.get(source.id)).status === 'completed');
+          const original = f.annotationSpy.getMockImplementation()!;
+          f.annotationSpy.mockImplementation(async (...args) => {
+            if (args[3] !== PERFORMANCE_INSTRUCTION) return original(...args);
+            entered.resolve();
+            await held.promise;
+            return actingResponse(JSON.parse(args[1].prompt) as ActingPacket);
+          });
+          const job = await actingVariant(f, source.id);
+          f.synthesize.mockClear();
+          pending = f.audio.tick();
+          await entered.promise;
+          if (change === 'owner') await pool.query("update library_books set user_id='other' where id='book'");
+          if (change === 'revision')
+            await pool.query("update library_books set active_content_revision_id='changed' where id='book'");
+          if (change === 'engine') await f.engines.save({ ...f.engine, modelId: 'changed' }, f.engine.id);
+          held.resolve();
+          await pending;
+          expect((await pool.query('select status from saved_audiobooks where id=$1', [job.id])).rows[0].status).toBe(
+            'failed',
+          );
+          expect(
+            (
+              await pool.query(
+                "select 1 from saved_audiobook_items where audiobook_id=$1 and request->'cast' ? 'performance'",
+                [job.id],
+              )
+            ).rowCount,
+          ).toBe(0);
+          expect(
+            (await pool.query('select response from speaker_voice_decisions where audiobook_id=$1', [job.id])).rows[0]
+              .response,
+          ).toBeNull();
+          expect(f.synthesize).not.toHaveBeenCalled();
+        } finally {
+          entered.resolve();
+          held.resolve();
+          await pending;
+          f.annotationSpy.mockRestore();
+          await f.cleanup();
+        }
+      });
+    },
+  );
 });

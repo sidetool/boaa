@@ -15,6 +15,7 @@ import {createRoot} from 'react-dom/client';
 import Panel from '${root}src/ui-next/reader/UiNextAudiobookPanel.tsx';
 import Library from '${root}src/ui-next/reader/UiNextVoiceLibrary.tsx';
 import Revoice from '${root}src/ui-next/reader/UiNextSpeakerRevoice.tsx';
+import SpeakerPanel from '${root}src/ui-next/reader/UiNextSpeakerGenerationPanel.tsx';
 import {Sheet} from '${root}src/ui-next/components/primitives.tsx';
 import {RemoteApiClient} from '${root}src/services/remote/remote-api-client.ts';
 import {createAudiobookPort} from '${root}src/services/remote/audiobook-client.ts';
@@ -35,10 +36,25 @@ const reviewVoices=[{id:'a',label:'기본 목소리',lang:'ko',providerName:'검
 let reviewRows=[{id:'row',voiceId:'a',alias:'차분한 목소리',timbre:'낮은, 부드러운',description:'차분한 인물에게 어울려요.',language:'ko',enabled:true,providerId:'fixture',providerVoiceId:'a',model:{providerId:'fixture',modelId:'fixture-model',revision:'1'},origin:'catalog',available:true,sampleAvailable:false}];
 const reviewCalls=[]; window.reviewCalls=reviewCalls;
 const reviewPort={list:async()=>({voices:reviewRows,designers:[]}),save:async(v,s,id)=>{reviewRows=[{...reviewRows[0],...v}];reviewCalls.push({kind:'save',id,value:v});return reviewRows[0];}};
-const revoicePort={revoiceSource:async()=>({chapterCount:1,itemCount:12,voices:[{speakerId:'narrator',name:'내레이터',voiceId:'a',itemCount:8},{speakerId:'p1',name:'이름이매우길어서모바일에서줄바꿈이필요한등장인물',voiceId:'a',itemCount:4}]}),
- estimateRevoice:async(id,input)=>{reviewCalls.push({kind:'estimate',input});return {fingerprint:'r',chapterCount:1,itemCount:12,characters:1500,paid:true};},
+// Automatic acting: capable voices, one ordinary voice and one analysis connection; preferences live in sessionStorage.
+const q=new URLSearchParams(location.search), acting=q.has('acting');
+const actVoices=[{id:'g1',label:'연기 1',lang:'ko',providerId:'g',providerName:'연기 엔진',autoActingSupported:true,instructionsSupported:true},
+ {id:'g2',label:'연기 2',lang:'ko',providerId:'g',providerName:'연기 엔진',autoActingSupported:true},
+ {id:'x1',label:'일반 1',lang:'ko',providerId:'x',providerName:'일반 엔진'}];
+const analysis=[{id:'e1',name:'분석 A',modelId:'model-a',enabled:true,paid:true,purpose:'analysis',revision:'1'}];
+const speakerPort={preferences:async()=>JSON.parse(sessionStorage.prefs||'null')??undefined,
+ savePreferences:async(v)=>{sessionStorage.prefs=JSON.stringify(v);reviewCalls.push({kind:'prefs',value:v});},
+ list:async()=>[],remove:async()=>{},control:async()=>({}),create:async()=>({}),
+ estimate:async(input)=>{reviewCalls.push({kind:'speakerEstimate',input});return {fingerprint:'s',chapterCount:1,contextChapterCount:0,characters:900,modelLabel:'분석 A',voiceLabel:'연기 1',paid:true};}};
+const enginesPort={list:async()=>analysis,probe:async()=>({}),save:async()=>({}),remove:async()=>{}};
+const revoicePort={revoiceSource:async()=>({chapterCount:1,itemCount:12,...(acting?{hasActing:false,needsActing:true,actingEngineId:'e1'}:{}),
+ voices:[{speakerId:'narrator',name:'내레이터',voiceId:acting?'g1':'a',itemCount:8},{speakerId:'p1',name:'이름이매우길어서모바일에서줄바꿈이필요한등장인물',voiceId:acting?'g2':'a',itemCount:4}]}),
+ estimateRevoice:async(id,input)=>{reviewCalls.push({kind:'estimate',input});return {fingerprint:'r',chapterCount:1,itemCount:12,characters:1500,paid:true,actingAnalysis:input.acting?.mode==='auto'};},
  revoice:async(id,input,fingerprint,confirmPaid)=>{reviewCalls.push({kind:'create',input,confirmPaid});return {id:'variant',revoiceFrom:id};}};
-function ReviewFixture(){const review=new URLSearchParams(location.search).get('review');return <div className="ui-next"><Sheet open title={review==='library'?'목소리 보관함':'화자별 미리 생성하기'} onClose={()=>{}}>{review==='library'?<Library port={reviewPort} voices={reviewVoices} onChanged={()=>{}}/>:<div className="un-book-item"><Revoice job={{id:'source',status:'paused',chapterCount:2,itemCount:12,planningComplete:false}} port={revoicePort} voices={reviewVoices} library={reviewRows} onCreated={()=>reviewCalls.push({kind:'reload'})}/></div>}</Sheet></div>}
+function ReviewFixture(){const review=q.get('review');return <div className="ui-next"><Sheet open title={review==='library'?'목소리 보관함':'화자별 미리 생성하기'} onClose={()=>{}}>{review==='library'?<Library port={reviewPort} voices={reviewVoices} onChanged={()=>{}}/>
+ :review==='acting'?<SpeakerPanel controls={{key:'acting',port:speakerPort,engines:enginesPort,chapters:[{id:'c1',title:'1화'}],currentChapterId:'c1',narratorVoiceId:q.get('narrator')||'g1',rules:[],footnotePlayback:'skip',
+  voices:{available:true,defaultVoiceId:'g1',voices:actVoices,providers:[{id:'g',name:'연기 엔진',available:true,paid:true},{id:'x',name:'일반 엔진',available:true,paid:false}]},listen(){},refreshVoices(){}}}/>
+ :<div className="un-book-item"><Revoice job={{id:'source',status:'paused',chapterCount:2,itemCount:12,planningComplete:false}} port={revoicePort} voices={acting?actVoices:reviewVoices} library={reviewRows} engines={analysis} onCreated={()=>reviewCalls.push({kind:'reload'})}/></div>}</Sheet></div>}
 function Fixture(){
  const [open,setOpen]=useState(true);
  const [choice,setChoice]=useState(); const [chapter,setChapter]=useState('c1'); const [done,setDone]=useState(false);
@@ -303,8 +319,15 @@ try {
       await page.goto(`http://127.0.0.1:${server.address().port}/?review=revoice`);
       await page.getByText('음성 다시 만들기', { exact: true }).click();
       await page.getByText(/아직 분석하지 않은 나머지 회차/).waitFor();
-      await page.locator('select').nth(1).selectOption('b');
-      await page.locator('textarea').fill('차분하고 또렷하게, 서두르지 않고 말해 주세요.');
+      await page
+        .getByRole('combobox', { name: '이름이매우길어서모바일에서줄바꿈이필요한등장인물 새 목소리', exact: true })
+        .selectOption('b');
+      // Manual directions stay folded until asked for.
+      assert.equal(await page.getByRole('textbox').count(), 0);
+      await page.getByRole('button', { name: '직접 연기 지시 추가', exact: true }).click();
+      await page
+        .getByRole('textbox', { name: '이름이매우길어서모바일에서줄바꿈이필요한등장인물 연기 지시', exact: true })
+        .fill('차분하고 또렷하게, 서두르지 않고 말해 주세요.');
       await page.getByText(/Gemini 3.8: 이 인물의 대사/).waitFor();
       const cue = page.getByRole('button', { name: '지친 듯', exact: true });
       await cue.click();
@@ -344,8 +367,77 @@ try {
       assert.equal(creates.length, 1);
       assert.equal(creates[0].confirmPaid, true);
       assert.equal(creates[0].input.voices[1].instructions, '차분하고 또렷하게, 서두르지 않고 말해 주세요., 지친 듯');
+      const port = server.address().port;
+      const enabled = (name) =>
+        page.waitForFunction(
+          (n) => [...document.querySelectorAll('button')].some((b) => b.textContent.trim() === n && !b.disabled),
+          name,
+        );
+      const lastCall = (kind) => page.evaluate((k) => window.reviewCalls.filter((c) => c.kind === k).at(-1), kind);
+      const actingToggle = () => page.getByRole('checkbox', { name: /장면에 맞춰 감정/ });
+      const overflowing = () =>
+        page
+          .locator('.un-cast-field > span, .un-book-ack > span')
+          .evaluateAll((els) => els.filter((el) => el.scrollWidth > el.clientWidth + 1).map((el) => el.textContent));
+
+      // New generation: on by default for capable voices without saving, explicit off saved and restored.
+      await page.goto(`http://127.0.0.1:${port}/?review=acting`);
+      await enabled('분석 범위 확인');
+      assert.equal(await actingToggle().isChecked(), true);
+      assert.equal(await lastCall('prefs'), undefined);
+      await page.getByRole('button', { name: '분석 범위 확인', exact: true }).click();
+      await page.getByRole('button', { name: '생성 시작', exact: true }).waitFor();
+      assert.equal((await lastCall('speakerEstimate')).input.autoActing, true);
+      await bounded();
+      assert.deepEqual(await overflowing(), []);
+      await page.screenshot({ path: `${artifacts}/acting-${width}.png` });
+      await actingToggle().uncheck();
+      await page.waitForFunction(() => window.reviewCalls.some((c) => c.kind === 'prefs'));
+      assert.equal((await lastCall('prefs')).value.autoActing, false);
+      await page.reload();
+      await enabled('분석 범위 확인');
+      assert.equal(await actingToggle().isChecked(), false);
+      await page.getByRole('button', { name: '분석 범위 확인', exact: true }).click();
+      await page.getByRole('button', { name: '생성 시작', exact: true }).waitFor();
+      assert.equal((await lastCall('speakerEstimate')).input.autoActing, false);
+
+      // Ordinary voices with no saved choice: off and disabled, no blocking message, flag left out.
+      await page.evaluate(() => sessionStorage.clear());
+      await page.goto(`http://127.0.0.1:${port}/?review=acting&narrator=x1`);
+      await enabled('분석 범위 확인');
+      assert.equal(await actingToggle().isChecked(), false);
+      assert.equal(await actingToggle().isDisabled(), true);
+      assert.equal(await page.getByText('자동 연기를 지원하지 않는 목소리가 있어요').count(), 0);
+      await page.getByRole('button', { name: '분석 범위 확인', exact: true }).click();
+      await page.getByRole('button', { name: '생성 시작', exact: true }).waitFor();
+      assert.equal('autoActing' in (await lastCall('speakerEstimate')).input, false);
+
+      // Re-voicing an untagged capable source: fills acting with the original analysis model by default.
+      await page.goto(`http://127.0.0.1:${port}/?review=revoice&acting`);
+      await page.getByText('음성 다시 만들기', { exact: true }).click();
+      const mode = page.getByRole('combobox', { name: '자동 연기', exact: true });
+      await mode.waitFor();
+      assert.equal(await mode.inputValue(), 'auto');
+      assert.equal(await page.getByRole('combobox', { name: '연기 분석 모델', exact: true }).inputValue(), 'e1');
+      assert.equal(await page.getByRole('textbox').count(), 0);
+      await page.getByRole('button', { name: '다시 만들 범위 확인', exact: true }).click();
+      const actingCreate = page.getByRole('button', { name: '새 음성 만들기', exact: true });
+      await actingCreate.waitFor();
+      await page.getByText(/연기 분석 모델의 API 사용 요금/).waitFor();
+      await page.getByRole('checkbox').check();
+      await bounded();
+      assert.deepEqual(
+        await page
+          .locator('.un-revoice-row label > span')
+          .evaluateAll((els) => els.filter((el) => el.scrollWidth > el.clientWidth + 1).map((el) => el.textContent)),
+        [],
+      );
+      await page.screenshot({ path: `${artifacts}/revoice-acting-${width}.png` });
+      await actingCreate.click();
+      await page.getByText(/새 음성 작업을 만들었어요/).waitFor();
+      assert.deepEqual((await lastCall('create')).input.acting, { mode: 'auto', engineId: 'e1' });
       checks.push(
-        `${width}: metadata editing, bounded fields/chips, partial revoice source, separate instructions, consent and one create`,
+        `${width}: metadata editing, bounded fields/chips, partial revoice source, separate instructions, consent and one create; acting default on/explicit off/unsupported off and revoice auto-fill default`,
       );
       await context.close();
     }

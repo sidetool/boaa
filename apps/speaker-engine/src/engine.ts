@@ -1,3 +1,4 @@
+import { performanceRequest, performanceOutput, type PerformanceOutput } from './performance';
 import { structuredIntegrityHash, textIntegrityHash } from '@boaa/text-core/hash';
 import { buildSpeakerSceneInventory, buildSpeakerSpanInventory } from '@boaa/text-core/speaker-attribution';
 import {
@@ -17,7 +18,8 @@ type Checkpoint = {
   version: string;
   fingerprint: string;
   phase: 'attribution' | 'identity';
-  outputs: a.SpeakerChapterLabelV1[];
+  outputs: PerformanceOutput[];
+  autoActing?: boolean;
 };
 function paragraphs(chapter: SpeakerChapter) {
   let offset = 0;
@@ -126,10 +128,18 @@ export function prepare(source: SpeakerEngineSource): a.PreparedChapterSpeakerRu
   };
 }
 
-type AttributionCheckpoint = { fingerprint: string; outputs: a.SpeakerChapterLabelV1[] };
-function attributionState(prepared: a.PreparedChapterSpeakerRun, value?: unknown): AttributionCheckpoint {
+type AttributionCheckpoint = { fingerprint: string; outputs: PerformanceOutput[]; autoActing?: boolean };
+function attributionState(
+  prepared: a.PreparedChapterSpeakerRun,
+  value?: unknown,
+  autoActing?: boolean,
+): AttributionCheckpoint {
   const fingerprint = structuredIntegrityHash({ engine: ENGINE_VERSION, attribution: prepared.input.fingerprint });
-  const state = (value ?? { fingerprint, outputs: [] }) as AttributionCheckpoint;
+  const state = (value ?? {
+    fingerprint,
+    outputs: [],
+    ...(autoActing ? { autoActing: true } : {}),
+  }) as AttributionCheckpoint;
   const units = prepared.initialStrategy === 'chunked' ? prepared.fallbackUnits : [prepared.fullUnit];
   if (state.fingerprint !== fingerprint || !Array.isArray(state.outputs) || state.outputs.length > units.length)
     throw new Error('attribution_scope_changed');
@@ -140,20 +150,17 @@ function attributionState(prepared: a.PreparedChapterSpeakerRun, value?: unknown
 export function attributionStep(input: SpeakerAttributionStep): SpeakerAttributionResult {
   if (input.protocol !== SPEAKER_ENGINE_PROTOCOL) throw new Error('unsupported_protocol');
   const prepared = prepare(input.source);
-  const state = attributionState(prepared, input.checkpoint);
+  const state = attributionState(prepared, input.checkpoint, input.autoActing);
   const units = prepared.initialStrategy === 'chunked' ? prepared.fallbackUnits : [prepared.fullUnit];
   let outputs = state.outputs;
   if (input.response !== undefined) {
     const unit = units[outputs.length];
     if (!unit || !prepared.input.targets.length) throw new Error('unexpected_attribution_response');
-    outputs = [
-      ...outputs,
-      a.validateChapterSpeakerWire({ prepared, unit, wire: a.parseChapterSpeakerWire(input.response) }),
-    ];
+    outputs = [...outputs, performanceOutput(prepared, unit, input.response, state.autoActing === true)];
   }
   const checkpoint = { ...state, outputs };
   if (prepared.input.targets.length && outputs.length < units.length) {
-    const request = a.buildChapterSpeakerRequest({ prepared, unit: units[outputs.length] });
+    const request = performanceRequest(prepared, units[outputs.length], state.autoActing === true);
     return {
       kind: 'request',
       stage: 'attribution',
@@ -179,6 +186,13 @@ export function step(input: SpeakerEngineStep): SpeakerEngineResult {
     version: ENGINE_VERSION,
     fingerprint,
     phase: 'attribution',
+    ...(input.attribution === undefined
+      ? input.autoActing
+        ? { autoActing: true }
+        : {}
+      : attributionState(prepared, input.attribution).autoActing
+        ? { autoActing: true }
+        : {}),
     outputs: input.attribution === undefined ? [] : attributionState(prepared, input.attribution).outputs,
   }) as Checkpoint;
   if (
@@ -193,13 +207,10 @@ export function step(input: SpeakerEngineStep): SpeakerEngineResult {
   if (checkpoint.phase === 'attribution' && input.response !== undefined) {
     const unit = units[outputs.length];
     if (!unit) throw new Error('unexpected_attribution_response');
-    outputs = [
-      ...outputs,
-      a.validateChapterSpeakerWire({ prepared, unit, wire: a.parseChapterSpeakerWire(input.response) }),
-    ];
+    outputs = [...outputs, performanceOutput(prepared, unit, input.response, checkpoint.autoActing === true)];
   }
   if (prepared.input.targets.length && outputs.length < units.length) {
-    const request = a.buildChapterSpeakerRequest({ prepared, unit: units[outputs.length] });
+    const request = performanceRequest(prepared, units[outputs.length], checkpoint.autoActing === true);
     return {
       kind: 'request',
       stage: 'attribution',
@@ -271,6 +282,9 @@ export function step(input: SpeakerEngineStep): SpeakerEngineResult {
       const disposition = result.ledger.targetDispositions.find((d) => d.targetId === t.targetId);
       const identity = result.ledger.entries.find((e) => e.workSpeakerId === mapping?.workSpeakerId);
       return {
+        ...(outputs.find((o) => o.performance?.[t.targetId])?.performance?.[t.targetId]
+          ? { performance: outputs.find((o) => o.performance?.[t.targetId])!.performance![t.targetId] }
+          : {}),
         paragraphId: t.paragraphId,
         startOffset: t.startOffset,
         endOffset: t.endOffset,

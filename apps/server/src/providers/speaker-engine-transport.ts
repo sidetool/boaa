@@ -105,7 +105,7 @@ export class SpeakerEngineTransport {
   async capabilities(
     v: SpeakerEngineInput,
     signal: AbortSignal,
-  ): Promise<{ engineVersion: string; attributionPreparation?: boolean }> {
+  ): Promise<{ engineVersion: string; attributionPreparation?: boolean; performanceAnnotations?: boolean }> {
     const r = await this.json(v.engineUrl + '/v1/capabilities', signal, this.engineHeaders(v), undefined, false, 16384);
     if (
       r.protocol !== SPEAKER_ENGINE_PROTOCOL ||
@@ -114,7 +114,11 @@ export class SpeakerEngineTransport {
       r.engineVersion.length > 160
     )
       throw connectionError('이 분석 엔진 버전은 연결할 수 없어요.', 409);
-    return { engineVersion: r.engineVersion as string, attributionPreparation: r.attributionPreparation === true };
+    return {
+      engineVersion: r.engineVersion as string,
+      attributionPreparation: r.attributionPreparation === true,
+      performanceAnnotations: r.performanceAnnotations === true,
+    };
   }
   async models(v: SpeakerEngineInput, signal: AbortSignal): Promise<string[]> {
     const headers = await this.modelHeaders(v, signal);

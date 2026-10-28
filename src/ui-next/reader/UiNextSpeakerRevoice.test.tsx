@@ -6,6 +6,7 @@ import type {
   SpeakerGenerationPort,
   SpeakerRevoiceSource,
 } from '../../providers/speaker-generation';
+import type { SpeakerEngine } from '../../providers/speaker-engine';
 import UiNextSpeakerRevoice from './UiNextSpeakerRevoice';
 
 // Neutral synthetic fixtures only.
@@ -31,6 +32,9 @@ const voices: PlainTTSVoice[] = [
   },
   { id: 'b1', lang: 'ko', label: '외부 1', providerId: 'tts-b', providerName: '엔진 B', paid: true },
 ];
+const actingVoices = voices.map((voice) => (voice.id === 'b1' ? voice : { ...voice, autoActingSupported: true }));
+const analysisEngine = { id: 'e1', name: '분석 A', modelId: 'model-a', enabled: true, paid: true } as SpeakerEngine;
+const estimateValue = { fingerprint: 'fp-r', chapterCount: 2, itemCount: 4, characters: 900, paid: true };
 const source = (overrides: Partial<SpeakerRevoiceSource> = {}): SpeakerRevoiceSource => ({
   chapterCount: 2,
   itemCount: 10,
@@ -141,6 +145,125 @@ describe('UiNextSpeakerRevoice audio-only variant', () => {
     await change(byLabel(root, '인물 1 새 목소리')[0], 'a3');
     expect(text(root)).toContain('Gemini 3.8: 이 인물의 대사를');
     expect(byLabel(root, '내레이터 연기 예시')).toHaveLength(0);
+  });
+
+  it('adds automatic acting only with an explicit analysis model and explains its extra cost', async () => {
+    const port = fixture(source({ actingEngineId: 'gone' }));
+    port.estimateRevoice.mockResolvedValue({ ...estimateValue, actingAnalysis: true });
+    act(() => {
+      renderer = create(
+        <UiNextSpeakerRevoice
+          job={job()}
+          port={port}
+          voices={actingVoices}
+          engines={[analysisEngine]}
+          onCreated={vi.fn()}
+        />,
+      );
+    });
+    act(() => renderer!.root.findByType('details').props.onToggle({ currentTarget: { open: true } }));
+    await flush();
+    const root = renderer!.root;
+    expect(byLabel(root, '자동 연기')[0].props.value).toBe('preserve');
+    expect(button(root, '다시 만들 범위 확인').props.disabled).toBe(true);
+    await change(byLabel(root, '자동 연기')[0], 'auto');
+    expect(byLabel(root, '연기 분석 모델')[0].props.value).toBe('');
+    expect(text(root)).toContain('원래 분석 모델을 찾을 수 없어요');
+    expect(button(root, '다시 만들 범위 확인').props.disabled).toBe(true);
+    await change(byLabel(root, '연기 분석 모델')[0], 'e1');
+    await click(button(root, '다시 만들 범위 확인'));
+    expect(port.estimateRevoice).toHaveBeenLastCalledWith(
+      'job-1',
+      {
+        acting: { mode: 'auto', engineId: 'e1' },
+        voices: [
+          { speakerId: 'narrator', voiceId: 'a1' },
+          { speakerId: 's1', voiceId: 'a2', instructions: '차분하게' },
+        ],
+      },
+      expect.any(AbortSignal),
+    );
+    expect(text(root)).toContain('연기 분석 모델의 API 사용 요금');
+    await change(byLabel(root, '인물 1 새 목소리')[0], 'b1');
+    expect(text(root)).toContain('자동 연기를 지원하지 않는 목소리가 있어요 (인물 1)');
+    expect(button(root, '다시 만들 범위 확인').props.disabled).toBe(true);
+  });
+
+  it('fills acting by default for an untagged capable source with its model, and needs no model when nothing is missing', async () => {
+    const port = fixture(source({ actingEngineId: 'e1' }));
+    const open = async (onPort: SpeakerGenerationPort) => {
+      act(() => {
+        renderer = create(
+          <UiNextSpeakerRevoice
+            job={job()}
+            port={onPort}
+            voices={actingVoices}
+            engines={[analysisEngine]}
+            onCreated={vi.fn()}
+          />,
+        );
+      });
+      act(() => renderer!.root.findByType('details').props.onToggle({ currentTarget: { open: true } }));
+      await flush();
+      return renderer!.root;
+    };
+    let root = await open(port);
+    expect(byLabel(root, '자동 연기')[0].props.value).toBe('auto');
+    expect(byLabel(root, '연기 분석 모델')[0].props.value).toBe('e1');
+    await click(button(root, '다시 만들 범위 확인'));
+    expect(port.estimateRevoice.mock.lastCall![1].acting).toEqual({ mode: 'auto', engineId: 'e1' });
+    // Without acting and without voice changes there is nothing to re-make.
+    await change(byLabel(root, '자동 연기')[0], 'preserve');
+    expect(button(root, '다시 만들 범위 확인').props.disabled).toBe(true);
+    await change(byLabel(root, '인물 1 새 목소리')[0], 'a3');
+    await click(button(root, '다시 만들 범위 확인'));
+    expect(port.estimateRevoice.mock.lastCall![1]).not.toHaveProperty('acting');
+
+    act(() => renderer!.unmount());
+    const tagged = fixture(source({ hasActing: true, needsActing: false }));
+    root = await open(tagged);
+    expect(byLabel(root, '자동 연기')[0].props.value).toBe('preserve');
+    expect(byLabel(root, '자동 연기')[0].findAll((n) => n.type === 'option' && n.props.value === 'auto')).toHaveLength(
+      0,
+    );
+    await change(byLabel(root, '자동 연기')[0], 'auto');
+    expect(byLabel(root, '연기 분석 모델')).toHaveLength(0);
+    expect(text(root)).toContain('분석 모델을 부르지 않아요');
+    await click(button(root, '다시 만들 범위 확인'));
+    expect(tagged.estimateRevoice.mock.lastCall![1].acting).toEqual({ mode: 'auto' });
+  });
+
+  it('keeps existing acting tags by default, can remove them, and folds manual directions until asked', async () => {
+    const port = fixture(
+      source({
+        hasActing: true,
+        voices: [
+          { speakerId: 'narrator', name: '내레이터', voiceId: 'a1', itemCount: 6 },
+          { speakerId: 's1', name: '인물 1', voiceId: 'a2', itemCount: 4 },
+        ],
+      }),
+    );
+    act(() => {
+      renderer = create(<UiNextSpeakerRevoice job={job()} port={port} voices={actingVoices} onCreated={vi.fn()} />);
+    });
+    act(() => renderer!.root.findByType('details').props.onToggle({ currentTarget: { open: true } }));
+    await flush();
+    const root = renderer!.root;
+    expect(byLabel(root, '인물 1 연기 지시')).toHaveLength(0);
+    await click(button(root, '직접 연기 지시 추가'));
+    await change(byLabel(root, '인물 1 연기 지시')[0], '조용히');
+    await change(byLabel(root, '인물 1 연기 지시')[0], '');
+    expect(byLabel(root, '인물 1 연기 지시')).toHaveLength(1);
+    expect(button(root, '다시 만들 범위 확인').props.disabled).toBe(true);
+    await change(byLabel(root, '자동 연기')[0], 'off');
+    await click(button(root, '다시 만들 범위 확인'));
+    expect(port.estimateRevoice.mock.lastCall![1]).toEqual({
+      acting: { mode: 'off' },
+      voices: [
+        { speakerId: 'narrator', voiceId: 'a1' },
+        { speakerId: 's1', voiceId: 'a2' },
+      ],
+    });
   });
 
   it('needs paid consent, creates once per click and reloads the list without resending an unclear failure', async () => {

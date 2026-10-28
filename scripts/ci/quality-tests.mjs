@@ -62,6 +62,7 @@ const extraFilters = [
   'src/services/remote/audiobook-client.test.ts',
   'src/services/remote/saved-audio-deadline.test.ts',
   'src/providers/tts-position-writer.test.ts',
+  'src/providers/tts-performance.test.ts',
   'src/providers/plain-tts-session-cache.test.ts',
   'src/test/browser-audio-session.test.ts',
   'src/test/sync-contract-versioning.test.ts',

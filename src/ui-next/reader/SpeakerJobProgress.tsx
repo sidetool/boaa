@@ -8,6 +8,7 @@ const stageLabel: Record<SpeakerGenerationJob['stage'], string> = {
   attribution: '화자 찾기',
   identity: '인물 연결',
   casting: '목소리 선정',
+  performance: '연기 분석',
   audio: '음성 만들기',
   complete: '생성 완료',
 };
@@ -15,7 +16,7 @@ const stageLabel: Record<SpeakerGenerationJob['stage'], string> = {
 /** Report observed phases and checkpoint counts; never invent a percentage for an in-flight model request. */
 export default function SpeakerJobProgress({ item }: { item: SpeakerGenerationJob }) {
   const active = item.status === 'running';
-  const analyzing = ['attribution', 'identity', 'casting'].includes(item.stage);
+  const analyzing = ['attribution', 'identity', 'casting', 'performance'].includes(item.stage);
   const total = item.analysisProgress?.chapterCount ?? item.chapterCount + item.contextChapterCount;
   const current = item.analysisProgress?.currentChapter;
   const attributed = item.analysisProgress?.attributionCompleted;

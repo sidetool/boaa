@@ -1,3 +1,4 @@
+import { isGeminiActingModel } from '../../../../../src/providers/tts-performance';
 import { SpeakerEngineStore } from '../../providers/speaker-engine-store.js';
 import { VoiceLibraryStore, voiceSourceModel } from '../../services/voice-library-store.js';
 import { SpeakerVoiceCasting } from '../../services/speaker-voice-casting.js';
@@ -301,8 +302,13 @@ export async function registerPlainTTSRoutes(
       items.map(async (source) => {
         try {
           const found = await voices(source);
-          const instructionsSupported = (await source.createProvider()).supportsInstructions === true;
-          return { source, found, available: found.length > 0, instructionsSupported };
+          const adapter = await source.createProvider();
+          const instructionsSupported = adapter.supportsInstructions === true;
+          const autoActingSupported =
+            instructionsSupported &&
+            isGeminiActingModel(source.modelId) &&
+            ['gemini-tts', 'gemini-vertex-tts', 'google-cloud-tts'].includes(adapter.providerId);
+          return { source, found, available: found.length > 0, instructionsSupported, autoActingSupported };
         } catch {
           return { source, found: [], available: false };
         }
@@ -317,7 +323,7 @@ export async function registerPlainTTSRoutes(
       available: results.some((item) => item.available),
       modelId,
       revision: catalogRevision(items),
-      voices: results.flatMap(({ source, found, instructionsSupported }) =>
+      voices: results.flatMap(({ source, found, instructionsSupported, autoActingSupported }) =>
         found.map((voice) => ({
           ...voice,
           id: voiceKey(source, voice.id),
@@ -327,6 +333,7 @@ export async function registerPlainTTSRoutes(
           model: sourceModel(source),
           paid: source.paid,
           instructionsSupported: instructionsSupported === true,
+          autoActingSupported: autoActingSupported === true,
         })),
       ),
       providers: results.map(({ source, available }) => ({

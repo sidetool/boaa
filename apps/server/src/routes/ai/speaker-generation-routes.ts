@@ -76,6 +76,7 @@ export async function registerSpeakerGenerationRoutes(
         narratorVoiceId: b.narratorVoiceId,
         characterVoiceIds: b.characterVoiceIds,
         casting: normalizeCasting(b.casting),
+        autoActing: b.autoActing,
         rules: parsePlainTTSRules(b.rules),
         footnotePlayback: b.footnotePlayback,
       };
@@ -99,6 +100,7 @@ export async function registerSpeakerGenerationRoutes(
         const valid = (s: unknown) => typeof s === 'string' && s.length <= 512;
         if (
           !v ||
+          (v.autoActing !== undefined && typeof v.autoActing !== 'boolean') ||
           !valid(v.engineId) ||
           !valid(v.narratorVoiceId) ||
           !Array.isArray(v.characterVoiceIds) ||
@@ -111,6 +113,7 @@ export async function registerSpeakerGenerationRoutes(
           narratorVoiceId: v.narratorVoiceId,
           characterVoiceIds: [...new Set(v.characterVoiceIds)],
           casting: normalizeCasting(v.casting, true),
+          ...(typeof v.autoActing === 'boolean' ? { autoActing: v.autoActing } : {}),
         };
         const written = await pool.query(
           `insert into speaker_generation_preferences(book_id,user_id,value)
