@@ -117,7 +117,11 @@ export async function speakerPlan(
     throw audiobookError(400, '자동 연기를 지원하는 Gemini 3.8 연결에서 새 목소리를 만들어 주세요.');
   if (
     casting?.designMode === 'characters' &&
-    (!isGeminiVoiceDesignModel(casting.designModelId) || !isGeminiVoiceDesignModel(designer?.modelId))
+    (!isGeminiVoiceDesignModel(casting.designModelId) ||
+      !isGeminiVoiceDesignModel(designer?.modelId) ||
+      !isGeminiVoiceDesignModel(voices[0]?.model?.modelId) ||
+      voices[0]?.providerId !== casting.designProviderId ||
+      !isGeminiVoiceDesignModel(designModel?.modelId))
   )
     throw audiobookError(400, '새 목소리 제작은 Gemini 3.8 Flash TTS 연결에서 사용할 수 있어요.');
   const capabilities = await engines.transport.capabilities(engine, AbortSignal.timeout(15000));
@@ -138,6 +142,7 @@ export async function speakerPlan(
     rules: input.rules,
     footnotePlayback: input.footnotePlayback,
     cast: {
+      voiceEvidenceVersion: 2 as const,
       ...(input.autoActing
         ? { autoActing: true, actingEngine: { id: input.engineId, revision: speakerRevision(engine) } }
         : {}),

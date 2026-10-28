@@ -15,7 +15,7 @@ import { cx } from '../components/primitives';
 import SpeakerJobProgress from './SpeakerJobProgress';
 import { ChapterScopeFields, chapterScopeSummary, useChapterScope } from './chapter-scope';
 import { speakerPreferenceQueue } from './speaker-generation-preferences';
-import UiNextCastingOptions, { castingMode, designerFor, validBudget, voiceDesigners } from './UiNextCastingOptions';
+import UiNextCastingOptions, { castingMode, flashDesigner, validBudget } from './UiNextCastingOptions';
 import UiNextBookVoices from './UiNextBookVoices';
 import UiNextSpeakerRevoice from './UiNextSpeakerRevoice';
 import type { SpeakerCastingOptions, LibraryVoice, VoiceDesignProvider } from '../../providers/voice-library';
@@ -38,7 +38,7 @@ const ACTIVE: readonly AudiobookStatus[] = ['queued', 'running', 'pausing', 'del
 const STEPS = [
   ['attribution', '화자 찾기'],
   ['identity', '인물 연결'],
-  ['casting', '목소리 선정'],
+  ['casting', '목소리 배정'],
   ['performance', '연기 분석'],
   ['audio', '음성 만들기'],
 ] as const;
@@ -226,8 +226,19 @@ function Body({
   });
 
   /** Only the person's own changes are saved; restoring or defaulting never writes back. */
-  const choose = (next: Partial<SpeakerGenerationPreferences> & { resetPool?: boolean }) => {
-    const narratorVoiceId = next.narratorVoiceId ?? narratorId;
+  const choose = (change: Partial<SpeakerGenerationPreferences> & { resetPool?: boolean }) => {
+    const narratorVoiceId = change.narratorVoiceId ?? narratorId;
+    // New voices are made on the narrator's own Flash connection, so a narrator change carries it along.
+    const follow =
+      change.narratorVoiceId !== undefined && !change.casting && castingChoice?.autoDesign
+        ? flashDesigner(
+            voices.find((voice) => voice.id === narratorVoiceId),
+            library?.designers,
+          )
+        : undefined;
+    const next = follow
+      ? { ...change, casting: { ...castingChoice!, designProviderId: follow.id, designModelId: follow.modelId } }
+      : change;
     const characterVoiceIds = next.resetPool
       ? poolFor(narratorVoiceId)
       : (next.characterVoiceIds ?? [...(poolChoice ?? poolFor(narratorVoiceId))]);
@@ -248,20 +259,22 @@ function Body({
       ...((next.autoActing ?? actingChoice) !== undefined ? { autoActing: next.autoActing ?? actingChoice } : {}),
     });
   };
-  // Natural voice creation needs a listed design connection and model; a vanished one is never swapped.
+  // Voice creation is a Gemini 3.8 Flash TTS feature: only a Flash narrator opens it, on that same connection.
+  const designing = !!castingChoice?.autoDesign && castingMode(castingChoice) !== 'order';
   const naturalVoices = castingMode(castingChoice) === 'create';
-  const designer = library && designerFor(castingChoice, library.designers);
+  const designer = flashDesigner(narrator, library?.designers);
   const designProblem =
-    !naturalVoices || !library || designer
+    !designing || !library || designer
       ? undefined
-      : castingChoice?.designProviderId && voiceDesigners(library.designers).length
-        ? '목소리 제작 연결을 다시 골라 주세요.'
-        : '목소리를 만들 Gemini 3.8 Flash TTS 연결을 골라 주세요.';
+      : '새 목소리 만들기는 내레이터가 Gemini 3.8 Flash TTS일 때만 쓸 수 있어요. 내레이터나 배정 방식을 바꿔 주세요.';
   // A restored design choice may carry a 0 limit; the server refuses it, so it is asked for instead of sent.
   const budgetProblem =
-    castingChoice?.autoDesign && castingMode(castingChoice) !== 'order' && !validBudget(castingChoice.maxDesignedVoices)
-      ? '새로 만들 목소리 수를 정해 주세요.'
-      : undefined;
+    designing && !validBudget(castingChoice!.maxDesignedVoices) ? '새로 만들 인물 수를 정해 주세요.' : undefined;
+  // Saved connection ids may be stale; what is sent always names the narrator's current connection.
+  const casting =
+    designing && designer
+      ? { ...castingChoice!, designProviderId: designer.id, designModelId: designer.modelId }
+      : castingChoice;
   // Automatic acting is on by default when the narrator and pool all support it; an explicit off is kept.
   const actingUnsupported = [narratorId, ...pool].filter(
     (id) => voices.find((voice) => voice.id === id)?.autoActingSupported !== true,
@@ -298,7 +311,7 @@ function Body({
                         : range.selected.length === 0
                           ? '만들 회차를 골라 주세요.'
                           : autoActing && !actingAvailable
-                            ? '자동 연기를 지원하지 않는 목소리가 있어요. 자동 연기를 끄거나 목소리를 바꿔 주세요.'
+                            ? '장면 연기를 지원하지 않는 목소리가 있어요. 장면 연기를 끄거나 목소리를 바꿔 주세요.'
                             : (designProblem ?? budgetProblem);
   // Missing models or voices are already explained in their own section.
   const problemAbove = analysisEngines?.length === 0 || !catalog?.available || voices.length === 0;
@@ -314,7 +327,7 @@ function Body({
           engineId,
           narratorVoiceId: narratorId,
           characterVoiceIds: [...pool],
-          ...(castingChoice ? { casting: castingChoice } : {}),
+          ...(casting ? { casting } : {}),
           // The default for voices without support stays implicit; explicit choices are always sent.
           ...(actingChoice !== undefined || autoActing ? { autoActing } : {}),
           rules: controls.rules,
@@ -422,7 +435,7 @@ function Body({
   const hasVoices = !!catalog?.available && voices.length > 0;
   const mode = controls.voiceLibrary ? castingMode(castingChoice) : 'order';
   // The same list means different things per mode; its name says which.
-  const poolTitle = mode === 'create' ? '엑스트라·대체용 목소리' : mode === 'pick' ? '후보 목소리' : '나눠 쓸 목소리';
+  const poolTitle = mode === 'create' ? '그 밖의 인물용 목소리' : mode === 'pick' ? '후보 목소리' : '배정할 목소리';
   const poolDescribed = pool.filter((id) => {
     const saved = library?.voices.find((v) => v.voiceId === id);
     return !!(
@@ -481,12 +494,12 @@ function Body({
         )}
       </div>
       <p className="un-book-note">
-        같은 작품에서 한 번 정한 인물 목소리는 다음 생성 작업에서도 그대로 써요.
+        한 번 정한 인물 목소리는 이 작품에서 계속 써요.
         {!poolIsDefault && (
           <>
             {' '}
             <button type="button" className="un-listen-link" onClick={() => choose({ resetPool: true })}>
-              내레이터 엔진 목소리로 되돌리기
+              기본 목록으로 되돌리기
             </button>
           </>
         )}
@@ -499,7 +512,7 @@ function Body({
       <p className="un-cast-flag">
         <FlaskConical size={15} aria-hidden="true" />
         <span>
-          <b>실험 기능</b> · 누가 말하는지 확실하지 않은 문장은 내레이터 목소리로 읽어요.
+          <b>실험 기능</b> · 화자가 불확실한 문장은 내레이터가 읽어요.
         </span>
       </p>
 
@@ -523,7 +536,7 @@ function Body({
             </button>
           )}
         </div>
-        <p className="un-book-note">누가 말하는지 찾고 인물을 구분해요. 소리를 내지는 않아요.</p>
+        <p className="un-book-note">대사마다 누가 말하는지 찾아요.</p>
         {engineError ? (
           <p className="un-book-error" role="alert">
             <AlertCircle size={15} aria-hidden="true" />
@@ -575,7 +588,7 @@ function Body({
         </div>
         {!catalog?.available || voices.length === 0 ? (
           <p className="un-book-note is-box">
-            {catalog?.message ?? '서버 TTS 목소리를 불러오는 중이에요.'} 목소리는 듣기의 TTS 엔진 연결에서 추가해요.
+            {catalog?.message ?? '목소리를 불러오는 중이에요.'} 목소리는 듣기 설정의 TTS 연결에서 추가해요.
           </p>
         ) : (
           <>
@@ -599,7 +612,10 @@ function Body({
                 </optgroup>
               ))}
             </select>
-            <p className="un-book-note">지문과 누가 말하는지 확실하지 않은 문장을 읽어요.</p>
+            <p className="un-book-note">
+              지문과 화자가 불확실한 문장을 읽어요.
+              {designer ? ' Gemini 3.8 Flash TTS라 인물마다 새 목소리를 만들 수 있어요.' : ''}
+            </p>
           </>
         )}
       </section>
@@ -615,7 +631,7 @@ function Body({
           <UiNextCastingOptions
             value={castingChoice}
             engines={engines?.filter((e) => e.purpose === 'casting') ?? []}
-            designers={library?.designers ?? []}
+            designer={designer}
             disabled={prefs === 'loading'}
             pool={poolPicker}
             poolDescribed={{ described: poolDescribed, total: pool.length }}
@@ -631,7 +647,7 @@ function Body({
               <h3>인물 목소리</h3>
             </div>
             {poolPicker}
-            <p className="un-book-note">고른 목소리를 인물에게 차례로 나눠요. 성별·나이·음색은 맞추지 않아요.</p>
+            <p className="un-book-note">고른 목소리를 인물마다 돌아가며 써요.</p>
           </section>
         )
       )}
@@ -649,32 +665,31 @@ function Body({
             onChange={(event) => choose({ autoActing: event.target.checked })}
           />
           <span>
-            장면에 맞춰 감정·말투·속도 표시
+            감정·속도 살려 읽기
             <small className="un-book-note">
               {actingAvailable
-                ? `인물의 목소리는 그대로 두고, 대사마다 어떻게 말할지만 정해요. 화자 분석 모델${engine ? `(${engine.name})` : ''}이 화자를 찾으면서 함께 표시해서 따로 연결할 모델은 없지만, 응답이 길어져 요금이 조금 늘 수 있어요.`
-                : `내레이터와 인물 목소리가 모두 자동 연기를 지원하는 TTS 연결일 때 켤 수 있어요. 지원하지 않는 목소리: ${actingUnsupported
-                    .slice(0, 3)
-                    .map((id) => voices.find((voice) => voice.id === id)?.label ?? id)
-                    .join(', ')}${actingUnsupported.length > 3 ? ` 외 ${actingUnsupported.length - 3}개` : ''}`}
+                ? '목소리는 그대로 두고 장면마다 말하는 느낌만 바꿔요. 화자 분석과 함께 처리해요.'
+                : actingUnsupported.length === [narratorId, ...pool].length
+                  ? '지금 고른 목소리로는 쓸 수 없어요.'
+                  : `지원하지 않는 목소리가 있어 쓸 수 없어요: ${actingUnsupported
+                      .slice(0, 3)
+                      .map((id) => voices.find((voice) => voice.id === id)?.label ?? id)
+                      .join(', ')}${actingUnsupported.length > 3 ? ` 외 ${actingUnsupported.length - 3}개` : ''}`}
             </small>
           </span>
         </label>
-        {actingAvailable && actingChoice === undefined && (
-          <p className="un-book-note">지원하는 목소리라 기본으로 켜져 있어요.</p>
-        )}
       </section>
 
       <section className="un-book-group" aria-label="만들기">
         {problem && engines && !problemAbove && <p className="un-book-note is-box">{problem}</p>}
         {prefs === 'failed' && (
           <p className="un-book-note" role="status">
-            저장해 둔 선택을 불러오지 못했어요. 지금 고른 모델과 목소리는 저장하지 않아요.
+            저장한 설정을 불러오지 못했어요. 지금 바꾸는 설정은 저장되지 않아요.
           </p>
         )}
         {saveFailed && (
           <p className="un-book-note" role="status">
-            고른 모델과 목소리를 저장하지 못했어요. 다시 바꾸면 다시 저장해요.
+            설정을 저장하지 못했어요. 다시 바꾸면 다시 저장해요.
           </p>
         )}
         {fresh && (
@@ -685,7 +700,7 @@ function Body({
                 <dd>{formatCount(fresh.chapterCount)}</dd>
               </div>
               <div>
-                <dt>함께 분석할 앞 회차</dt>
+                <dt>앞 회차(분석만)</dt>
                 <dd>{formatCount(fresh.contextChapterCount)}</dd>
               </div>
               <div>
@@ -695,8 +710,7 @@ function Body({
             </dl>
             {fresh.contextChapterCount > 0 && (
               <p className="un-book-voice">
-                인물을 이어서 알아보려고 범위 앞 {formatCount(fresh.contextChapterCount)}개 회차도 분석해요. 앞 회차의
-                음성은 만들지 않아요.
+                인물을 알아보려고 앞 {formatCount(fresh.contextChapterCount)}개 회차도 읽어요. 음성은 만들지 않아요.
               </p>
             )}
             <ul className="un-cast-plan" aria-label="이번 작업에서 쓰는 모델">
@@ -706,13 +720,13 @@ function Body({
               </li>
               {fresh.selectionModelLabel && (
                 <li>
-                  <span>목소리 선정</span>
+                  <span>목소리 배정</span>
                   <b>{fresh.selectionModelLabel}</b>
                 </li>
               )}
               {!!fresh.maxDesignedVoices && (
                 <li>
-                  <span>목소리 제작</span>
+                  <span>새 목소리</span>
                   <b>
                     {designer?.name ?? 'Gemini 3.8 Flash TTS'} · 최대 {fresh.maxDesignedVoices}명
                   </b>
@@ -721,7 +735,7 @@ function Body({
               {input?.autoActing && (
                 <li>
                   <span>장면 연기</span>
-                  <b>화자 분석과 함께</b>
+                  <b>켬 · 화자 분석과 함께</b>
                 </li>
               )}
               <li>
@@ -732,19 +746,14 @@ function Body({
             {!!fresh.maxDesignedVoices && (
               <p className="un-book-note">
                 {naturalVoices
-                  ? `주요·조연 인물에게 최대 ${fresh.maxDesignedVoices}개를 새로 만들어요. 직접 지정했거나 이미 새로 만든 목소리는 그대로 쓰고, 자동으로 배정됐던 기본 목소리는 새 목소리로 바꿔요.`
-                  : `선정 모델이 필요하다고 본 주요 인물에게만 최대 ${fresh.maxDesignedVoices}개까지 새로 만들어요.`}{' '}
-                만든 목소리마다 제작 요금이 들어요.
+                  ? `주요·조연에게 최대 ${fresh.maxDesignedVoices}명까지 새 목소리를 만들어요. 직접 지정한 인물은 그대로예요.`
+                  : `주요 인물에게 최대 ${fresh.maxDesignedVoices}명까지 새 목소리를 만들어요.`}
               </p>
             )}
             {fresh.paid && (
               <label className="un-book-ack">
                 <input type="checkbox" checked={paidAck} onChange={(event) => setPaidAck(event.target.checked)} />
-                <span>
-                  {fresh.maxDesignedVoices
-                    ? '분석·선정 모델, 목소리 제작과 음성 서비스의 API 사용 요금이 발생할 수 있어요.'
-                    : '분석 모델이나 음성 서비스의 API 사용 요금이 발생할 수 있어요.'}
-                </span>
+                <span>유료 API 요금이 나올 수 있어요. 확인했어요.</span>
               </label>
             )}
           </div>
@@ -792,7 +801,7 @@ function Body({
 
       <section className="un-book-group" aria-labelledby="un-cast-saved">
         <div className="un-book-group-head">
-          <h3 id="un-cast-saved">화자별로 만든 음성</h3>
+          <h3 id="un-cast-saved">만든 음성</h3>
           <button
             type="button"
             className="un-icon-btn is-sm"
@@ -813,7 +822,7 @@ function Body({
           !listError && <p className="un-book-note">불러오는 중…</p>
         ) : items.length === 0 ? (
           <p className="un-book-note is-box">
-            아직 없어요. 만들기 시작하면 앱을 닫아도 서버에서 계속되고, 준비된 회차부터 본문에서 들을 수 있어요.
+            아직 없어요. 앱을 닫아도 서버에서 계속 만들고, 준비된 회차부터 들을 수 있어요.
           </p>
         ) : (
           <ul className="un-book-list">
@@ -921,7 +930,7 @@ function JobItem({
       </div>
       <small className="un-book-meta">
         {formatCount(item.chapterCount)}개 회차 · {item.voiceLabel} · {item.providerName}
-        {item.revoiceFrom ? ' · 음성만 다시 만든 작업' : ''}
+        {item.revoiceFrom ? ' · 목소리 바꾼 버전' : ''}
       </small>
       {showSteps && (
         <ol className="un-cast-steps" aria-label="진행 단계">
@@ -946,8 +955,8 @@ function JobItem({
           {error ?? item.error}
         </p>
       )}
-      {bookVoices}
       {revoice}
+      {bookVoices}
       {confirm ? (
         <div
           className="un-book-confirm"
@@ -957,7 +966,7 @@ function JobItem({
           <p>
             {confirm === 'remove'
               ? `만든 음성 ${formatBytes(item.bytes)}를 서버에서 지워요. 되돌릴 수 없어요.`
-              : `${item.planningComplete === false || item.itemCount === 0 ? '남은 회차의 분석과 음성 생성을 이어가요.' : `남은 ${formatCount(remaining)}개 구간을 이어 만들어요.`} 분석 모델이나 음성 서비스의 API 사용 요금이 발생할 수 있어요.`}
+              : `${item.planningComplete === false || item.itemCount === 0 ? '남은 회차를 이어서 만들어요.' : `남은 ${formatCount(remaining)}개 구간을 이어서 만들어요.`} 유료 API 요금이 나올 수 있어요.`}
           </p>
           <div className="un-book-actions">
             <button

@@ -1,3 +1,4 @@
+import { bookBindingVersions } from './speaker-book-voices';
 import type pg from 'pg';
 import { structuredIntegrityHash } from '@boaa/text-core/hash';
 import type { AudiobookInput } from '../../../../src/providers/plain-audiobook';
@@ -109,11 +110,32 @@ export async function planSpeakerRevoice(
     throw audiobookError(400, '자동 연기 설정을 확인해 주세요.');
   if (!input || !Array.isArray(input.voices) || input.voices.length !== view.voices.length || input.voices.length > 512)
     throw audiobookError(400, '내레이터와 인물의 목소리를 모두 골라 주세요.');
+  const explicit = input.designSpeakerIds;
+  if (
+    explicit !== undefined &&
+    (!Array.isArray(explicit) ||
+      !explicit.length ||
+      explicit.length > 8 ||
+      new Set(explicit).size !== explicit.length ||
+      explicit.some(
+        (id) => typeof id !== 'string' || id === 'narrator' || !view.voices.some((v) => v.speakerId === id),
+      ) ||
+      !input.casting)
+  )
+    throw audiobookError(400, '새 목소리를 만들 인물을 1~8명 선택해 주세요.');
+  // Explicit designs replace even unavailable old voices. This Flash voice is only a planning
+  // placeholder; every explicit target must finish design before any audio can be synthesized.
+  const designPlaceholder = explicit
+    ? catalog.voices.find(
+        (v) => v.id === (input.voices.find((r) => r?.speakerId === 'narrator')?.voiceId ?? source.settings.voiceId),
+      )
+    : undefined;
   const choices = new Map<string, { voiceId: string; instructions?: string }>();
   for (const row of input.voices) {
     if (!row || typeof row !== 'object') throw audiobookError(400, '인물 목소리를 확인해 주세요.');
     const speakerId = voiceText(row.speakerId, 256, true);
-    const voiceId = voiceText(row.voiceId, 512, true);
+    const requestedVoiceId = voiceText(row.voiceId, 512, true);
+    const voiceId = explicit?.includes(speakerId) ? (designPlaceholder?.id ?? requestedVoiceId) : requestedVoiceId;
     const instructions = row.instructions === undefined ? undefined : voiceText(row.instructions, 2000) || undefined;
     if (choices.has(speakerId) || !view.voices.some((v) => v.speakerId === speakerId))
       throw audiobookError(400, '이 작업에 있는 인물마다 목소리를 하나씩 골라 주세요.');
@@ -138,20 +160,31 @@ export async function planSpeakerRevoice(
     actingEngine = { id: engineId, revision: speakerRevision(engine) };
     actingPaid = engine.paid;
   }
-  const casting = normalizeCasting(input.casting);
+  if (input.applyToBook !== undefined && typeof input.applyToBook !== 'boolean')
+    throw audiobookError(400, '앞으로 쓸 목소리 설정을 확인해 주세요.');
+  const casting = normalizeCasting(
+    explicit
+      ? { ...input.casting, autoDesign: true, designMode: 'characters', maxDesignedVoices: explicit.length }
+      : input.casting,
+  );
   if (casting && (casting.designMode !== 'characters' || !casting.autoDesign || !engines || !library))
     throw audiobookError(400, '새 목소리 제작 설정을 확인해 주세요.');
   const selecting = casting?.engineId ? await engines!.loadCasting(casting.engineId) : undefined;
   const designer = casting
     ? (await library!.list()).designers.find((d) => d.id === casting.designProviderId)
     : undefined;
+  const narratorVoiceId = choices.get('narrator')?.voiceId ?? source.settings.voiceId;
+  const narratorModel = catalog.voices.find((v) => v.id === narratorVoiceId);
   const designVoice = casting ? catalog.voices.find((v) => v.providerId === casting.designProviderId) : undefined;
   if (
     casting &&
     (!designer ||
       !designVoice?.model ||
       !isGeminiVoiceDesignModel(casting.designModelId) ||
-      !isGeminiVoiceDesignModel(designer.modelId))
+      !isGeminiVoiceDesignModel(designer.modelId) ||
+      !isGeminiVoiceDesignModel(designVoice.model.modelId) ||
+      !isGeminiVoiceDesignModel(narratorModel?.model?.modelId) ||
+      narratorModel?.providerId !== casting.designProviderId)
   )
     throw audiobookError(400, '목소리 제작을 지원하는 Gemini 3.8 Flash TTS 연결을 골라 주세요.');
   const pinned = casting
@@ -162,16 +195,18 @@ export async function planSpeakerRevoice(
         )
       ).rows.map((r) => r.speaker_id as string)
     : [];
-  const recastSpeakers = casting
-    ? view.voices
-        .filter(
-          (v) =>
-            v.speakerId !== 'narrator' &&
-            !pinned.includes(v.speakerId) &&
-            choices.get(v.speakerId)!.voiceId === v.voiceId,
-        )
-        .map((v) => v.speakerId)
-    : [];
+  const recastSpeakers = explicit
+    ? [...explicit].sort()
+    : casting
+      ? view.voices
+          .filter(
+            (v) =>
+              v.speakerId !== 'narrator' &&
+              !pinned.includes(v.speakerId) &&
+              choices.get(v.speakerId)!.voiceId === v.voiceId,
+          )
+          .map((v) => v.speakerId)
+      : [];
   if (casting && !recastSpeakers.length)
     throw audiobookError(400, '새 목소리를 만들 인물이 없어요. 직접 지정한 목소리는 유지해요.');
   const resolvedCasting = casting
@@ -226,15 +261,42 @@ export async function planSpeakerRevoice(
     revision: source.content_revision,
     ...(actingEngine ? { actingEngine } : {}),
     ...(resolvedCasting ? { casting: resolvedCasting, recastSpeakers } : {}),
+    ...(explicit ? { designSpeakerIds: [...explicit].sort() } : {}),
+    applyToBook: input.applyToBook === true,
     items: items.map((i) => ({ chapterId: i.chapterId, request: i.request })),
   });
   const narrator = choices.get('narrator')?.voiceId ?? source.settings.voiceId;
+  const changedSpeakers = view.voices.filter(
+    (v) =>
+      v.speakerId !== 'narrator' &&
+      (recastSpeakers.includes(v.speakerId) || choices.get(v.speakerId)!.voiceId !== v.voiceId),
+  );
+  const bookVoiceVersions = input.applyToBook
+    ? await bookBindingVersions(
+        pool,
+        owner,
+        bookId,
+        source.analysis_key,
+        changedSpeakers.map((v) => v.speakerId),
+      )
+    : undefined;
+  const bookVoiceUpdates = input.applyToBook
+    ? changedSpeakers
+        .filter((v) => !recastSpeakers.includes(v.speakerId))
+        .map((v) => ({
+          speakerId: v.speakerId,
+          name: v.name,
+          voiceId: choices.get(v.speakerId)!.voiceId,
+          model: models[choices.get(v.speakerId)!.voiceId],
+        }))
+    : undefined;
   return {
     bookId,
     title: source.title,
     revision: source.content_revision,
     planningComplete: !actingAnalysis && !recastSpeakers.length,
     revoiceSource: { id, itemCount: captured.length, nextChapter: source.next_chapter },
+    bookVoiceUpdates,
     speakerRun: {
       analysisKey: source.analysis_key,
       chapterIds: contextIds,
@@ -250,11 +312,15 @@ export async function planSpeakerRevoice(
       voiceId: narrator,
       cast: {
         ...source.settings.cast!,
+        voiceEvidenceVersion: 2,
         autoActing: mode === 'auto',
         actingEngine,
         revoiceFrom: id,
         casting: resolvedCasting,
         recastSpeakers,
+        designSpeakerIds: explicit ? [...explicit].sort() : undefined,
+        applyToBook: input.applyToBook === true,
+        bookVoiceVersions,
         models,
         characterVoiceIds: selectedIds,
       },

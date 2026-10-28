@@ -40,11 +40,19 @@ const reviewPort={list:async()=>({voices:reviewRows,designers:[]}),save:async(v,
 const q=new URLSearchParams(location.search), acting=q.has('acting');
 const actVoices=[{id:'g1',label:'연기 1',lang:'ko',providerId:'g',providerName:'연기 엔진',autoActingSupported:true,instructionsSupported:true},
  {id:'g2',label:'연기 2',lang:'ko',providerId:'g',providerName:'연기 엔진',autoActingSupported:true},
- {id:'x1',label:'일반 1',lang:'ko',providerId:'x',providerName:'일반 엔진'}];
+ {id:'x1',label:'일반 1',lang:'ko',providerId:'x',providerName:'일반 엔진'},
+ // Gemini 3.8 Flash TTS voices on the design connection d1: only these narrators open voice creation.
+ {id:'f1',label:'플래시 1',lang:'ko',providerId:'d1',providerName:'Gemini 3.8 제작',modelId:'gemini-3.8-flash-tts',autoActingSupported:true,instructionsSupported:true},
+ {id:'f2',label:'플래시 2',lang:'ko',providerId:'d1',providerName:'Gemini 3.8 제작',modelId:'gemini-3.8-flash-tts',autoActingSupported:true,instructionsSupported:true}];
 const analysis=[{id:'e1',name:'분석 A',modelId:'model-a',enabled:true,paid:true,purpose:'analysis',revision:'1'}];
 const speakerPort={preferences:async()=>JSON.parse(sessionStorage.prefs||'null')??undefined,
  savePreferences:async(v)=>{sessionStorage.prefs=JSON.stringify(v);reviewCalls.push({kind:'prefs',value:v});},
- list:async()=>[],remove:async()=>{},control:async()=>({}),create:async()=>({}),
+ // &jobs: one finished job card, so the 목소리 바꾸기 entry is reviewed where people meet it.
+ list:async()=>q.has('jobs')?[{id:'source',bookId:'book',title:'작품',status:'completed',stage:'complete',chapterCount:1,itemCount:12,completedItems:12,characters:1500,bytes:204800,
+  voiceLabel:'화자별 목소리',providerName:'Gemini 3.8 제작',paid:true,fingerprint:'s',firstChapterTitle:'1화',lastChapterTitle:'1화',playbackIndex:0,createdAt:'2026-10-29T00:00:00Z',updatedAt:'2026-10-29T00:00:00Z',
+  analyzedChapters:1,contextChapterCount:0,readyChapterIds:['c1'],castVoiceIds:['f1','f2','g1','g2']}]:[],
+ castings:async()=>[{speakerId:'p1',name:'주인공',voiceId:'g2',alias:'',timbre:'',description:'',importance:'major',pinned:true}],
+ remove:async()=>{},control:async()=>({}),create:async()=>({}),
  estimate:async(input)=>{reviewCalls.push({kind:'speakerEstimate',input});return {fingerprint:'s',chapterCount:1,contextChapterCount:0,characters:900,modelLabel:'분석 A',voiceLabel:'연기 1',paid:true,
   ...(input.casting?.designMode?{selectionModelLabel:'선정 A',maxDesignedVoices:input.casting.maxDesignedVoices}:{})};}};
 // Natural voice creation (&design): a selection connection and a verified design connection.
@@ -54,14 +62,20 @@ const designers=[{id:'d1',name:'Gemini 3.8 제작',modelId:'gemini-3.8-flash-tts
 const allEngines=design?[...analysis,...selectors]:analysis;
 const designLibrary={list:async()=>({voices:[],designers}),save:async()=>({}),remove:async()=>{},design:async()=>({}),sample:async()=>new Blob()};
 const enginesPort={list:async()=>allEngines,probe:async()=>({}),save:async()=>({}),remove:async()=>{}};
+const longName='이름이매우길어서모바일에서줄바꿈이필요한등장인물';
+// &design: a Flash narrator job with a major, a supporting and a pinned designed extra character.
 const revoicePort={revoiceSource:async()=>({chapterCount:1,itemCount:12,...(acting?{hasActing:false,needsActing:true,actingEngineId:'e1'}:{}),
- voices:[{speakerId:'narrator',name:'내레이터',voiceId:acting?'g1':'a',itemCount:8},{speakerId:'p1',name:'이름이매우길어서모바일에서줄바꿈이필요한등장인물',voiceId:acting?'g2':'a',itemCount:4}]}),
+ narratorVoiceId:design?'f1':acting?'g1':'a',
+ voices:design?[{speakerId:'narrator',name:'내레이터',voiceId:'f1',itemCount:8},{speakerId:'p1',name:longName,voiceId:'g2',itemCount:4,importance:'major'},
+  {speakerId:'p2',name:'조연 B',voiceId:'g1',itemCount:3,importance:'supporting'},{speakerId:'p3',name:'엑스트라 C',voiceId:'f2',itemCount:1,importance:'extra',pinned:true,designed:true}]
+ :[{speakerId:'narrator',name:'내레이터',voiceId:acting?'g1':'a',itemCount:8},{speakerId:'p1',name:longName,voiceId:acting?'g2':'a',itemCount:4}]}),
  estimateRevoice:async(id,input)=>{reviewCalls.push({kind:'estimate',input});return {fingerprint:'r',chapterCount:1,itemCount:12,characters:1500,paid:true,actingAnalysis:input.acting?.mode==='auto',
-  ...(input.casting?{recastCharacters:1,selectionModelLabel:'선정 A',maxDesignedVoices:input.casting.maxDesignedVoices}:{})};},
+  ...(input.designSpeakerIds?{recastCharacters:input.designSpeakerIds.length,selectionModelLabel:'선정 A',maxDesignedVoices:input.designSpeakerIds.length}:{})};},
  revoice:async(id,input,fingerprint,confirmPaid)=>{reviewCalls.push({kind:'create',input,confirmPaid});return {id:'variant',revoiceFrom:id};}};
+Object.assign(speakerPort,{revoiceSource:revoicePort.revoiceSource,estimateRevoice:revoicePort.estimateRevoice,revoice:revoicePort.revoice});
 function ReviewFixture(){const review=q.get('review');return <div className="ui-next"><Sheet open title={review==='library'?'목소리 보관함':'화자별 미리 생성하기'} onClose={()=>{}}>{review==='library'?<Library port={reviewPort} voices={reviewVoices} onChanged={()=>{}}/>
  :review==='acting'?<SpeakerPanel controls={{key:'acting',port:speakerPort,engines:enginesPort,...(design?{voiceLibrary:designLibrary}:{}),chapters:[{id:'c1',title:'1화'}],currentChapterId:'c1',narratorVoiceId:q.get('narrator')||'g1',rules:[],footnotePlayback:'skip',
-  voices:{available:true,defaultVoiceId:'g1',voices:actVoices,providers:[{id:'g',name:'연기 엔진',available:true,paid:true},{id:'x',name:'일반 엔진',available:true,paid:false}]},listen(){},refreshVoices(){}}}/>
+  voices:{available:true,defaultVoiceId:'g1',voices:actVoices,providers:[{id:'g',name:'연기 엔진',available:true,paid:true},{id:'x',name:'일반 엔진',available:true,paid:false},{id:'d1',name:'Gemini 3.8 제작',available:true,paid:true}]},listen(){},refreshVoices(){}}}/>
  :<div className="un-book-item"><Revoice job={{id:'source',status:'paused',chapterCount:2,itemCount:12,planningComplete:false}} port={revoicePort} voices={acting?actVoices:reviewVoices} library={reviewRows} engines={allEngines} designers={design?designers:[]} onCreated={()=>reviewCalls.push({kind:'reload'})}/></div>}</Sheet></div>}
 function Fixture(){
  const [open,setOpen]=useState(true);
@@ -324,19 +338,42 @@ try {
       await page.screenshot({ path: `${artifacts}/library-${width}.png` });
       await page.getByRole('button', { name: '저장', exact: true }).click();
       assert.equal(await page.evaluate(() => window.reviewCalls[0].value.timbre.includes('여성적인')), true);
-      await page.goto(`http://127.0.0.1:${server.address().port}/?review=revoice`);
-      await page.getByText('음성 다시 만들기', { exact: true }).click();
-      await page.getByText(/아직 분석하지 않은 나머지 회차/).waitFor();
-      await page
-        .getByRole('combobox', { name: '이름이매우길어서모바일에서줄바꿈이필요한등장인물 새 목소리', exact: true })
-        .selectOption('b');
-      // Manual directions stay folded until asked for.
+      const port = server.address().port;
+      const longName = '이름이매우길어서모바일에서줄바꿈이필요한등장인물';
+      const noOverflow = async (selector) =>
+        assert.deepEqual(
+          await page
+            .locator(selector)
+            .evaluateAll((els) => els.filter((el) => el.scrollWidth > el.clientWidth + 1).map((el) => el.textContent)),
+          [],
+        );
+      const openRecast = async () => {
+        await page.getByRole('button', { name: /목소리 바꾸기/ }).click();
+        await page.getByRole('region', { name: '목소리 바꾸기', exact: true }).waitFor();
+      };
+      const planOf = (name) => page.getByRole('radiogroup', { name: `${name} 목소리`, exact: true });
+      const paidAck = () => page.getByRole('checkbox', { name: /유료 API 요금/ });
+      const applyToggle = () => page.getByRole('checkbox', { name: /다음 회차에도 바꾼 목소리 쓰기/ });
+      const recastLayout = async () => {
+        await noOverflow('.un-recast-head, .un-recast-voice, .un-seg label, .un-recast-summary dd, .un-recast-tools');
+        await bounded();
+      };
+
+      // 목소리 바꾸기 on an ordinary job: one character to another voice, a manual direction, book-wide by default.
+      await page.goto(`http://127.0.0.1:${port}/?review=revoice`);
+      await openRecast();
+      await page.getByText(/분석이 끝난 1개 회차만 바꿔요/).waitFor();
+      assert.equal(await page.getByRole('radio', { name: '새로 만들기' }).count(), 0);
+      await planOf(longName).getByText('다른 목소리', { exact: true }).click();
+      await page.getByRole('combobox', { name: `${longName} 새 목소리`, exact: true }).selectOption('b');
+      assert.equal(await applyToggle().isChecked(), true);
+      await page.getByText('이 작품의 인물 목소리도 바뀌어요.').waitFor();
+      // Manual directions stay folded under scene acting until asked for.
       assert.equal(await page.getByRole('textbox').count(), 0);
-      await page.getByRole('button', { name: '직접 연기 지시 추가', exact: true }).click();
+      await page.getByText('인물별 말투 직접 적기').click();
       await page
-        .getByRole('textbox', { name: '이름이매우길어서모바일에서줄바꿈이필요한등장인물 연기 지시', exact: true })
+        .getByRole('textbox', { name: `${longName} 말투`, exact: true })
         .fill('차분하고 또렷하게, 서두르지 않고 말해 주세요.');
-      await page.getByText(/Gemini 3.8: 이 인물의 대사/).waitFor();
       const cue = page.getByRole('button', { name: '지친 듯', exact: true });
       await cue.click();
       assert.equal(await cue.isDisabled(), true);
@@ -345,37 +382,28 @@ try {
         background: getComputedStyle(el).backgroundColor,
       }));
       assert.notEqual(chipStyle.color, chipStyle.background);
-      assert.deepEqual(
-        await page
-          .locator('.un-revoice .un-chip-row')
-          .evaluateAll((els) => els.filter((el) => el.scrollWidth > el.clientWidth + 1).map((el) => el.textContent)),
-        [],
-      );
-      assert.deepEqual(
-        await page
-          .locator('.un-revoice-row label > span')
-          .evaluateAll((els) => els.filter((el) => el.scrollWidth > el.clientWidth + 1).map((el) => el.textContent)),
-        [],
-      );
+      await noOverflow('.un-recast .un-chip-row');
       assert.equal(
-        await page.locator('.un-revoice textarea').evaluate((el) => getComputedStyle(el).borderTopWidth),
+        await page.locator('.un-recast textarea').evaluate((el) => getComputedStyle(el).borderTopWidth),
         '1px',
       );
-      await bounded();
-      await page.getByRole('button', { name: '다시 만들 범위 확인', exact: true }).click();
+      await recastLayout();
+      await page.getByRole('button', { name: '범위·요금 확인', exact: true }).click();
       const create = page.getByRole('button', { name: '새 음성 만들기', exact: true });
       await create.waitFor();
       assert.equal(await create.isDisabled(), true);
-      await page.getByRole('checkbox').check();
-      await bounded();
+      await paidAck().check();
+      await recastLayout();
       await page.screenshot({ path: `${artifacts}/revoice-${width}.png` });
       await create.click();
-      await page.getByText(/새 음성 작업을 만들었어요/).waitFor();
+      await page.getByText(/새 음성을 만들기 시작했어요/).waitFor();
       const creates = await page.evaluate(() => window.reviewCalls.filter((c) => c.kind === 'create'));
       assert.equal(creates.length, 1);
       assert.equal(creates[0].confirmPaid, true);
+      assert.equal(creates[0].input.applyToBook, true);
+      assert.equal(creates[0].input.voices[1].voiceId, 'b');
       assert.equal(creates[0].input.voices[1].instructions, '차분하고 또렷하게, 서두르지 않고 말해 주세요., 지친 듯');
-      const port = server.address().port;
+      assert.equal('designSpeakerIds' in creates[0].input, false);
       const enabled = (name) =>
         page.waitForFunction(
           (n) => [...document.querySelectorAll('button')].some((b) => b.textContent.trim() === n && !b.disabled),
@@ -393,7 +421,7 @@ try {
         await page.setViewportSize({ width, height: 900 });
       };
       const lastCall = (kind) => page.evaluate((k) => window.reviewCalls.filter((c) => c.kind === k).at(-1), kind);
-      const actingToggle = () => page.getByRole('checkbox', { name: /장면에 맞춰 감정/ });
+      const actingToggle = () => page.getByRole('checkbox', { name: /감정·속도 살려 읽기/ });
       const overflowing = () =>
         page
           .locator('.un-cast-field > span, .un-book-ack > span, .un-choice-text, .un-cast-roles dd')
@@ -426,54 +454,52 @@ try {
       await enabled('생성 전 확인');
       assert.equal(await actingToggle().isChecked(), false);
       assert.equal(await actingToggle().isDisabled(), true);
-      assert.equal(await page.getByText('자동 연기를 지원하지 않는 목소리가 있어요').count(), 0);
+      assert.equal(await page.getByText('장면 연기를 지원하지 않는 목소리가 있어요').count(), 0);
       await page.getByRole('button', { name: '생성 전 확인', exact: true }).click();
       await page.getByRole('button', { name: '생성 시작', exact: true }).waitFor();
       assert.equal('autoActing' in (await lastCall('speakerEstimate')).input, false);
 
       // Re-voicing an untagged capable source: fills acting with the original analysis model by default.
       await page.goto(`http://127.0.0.1:${port}/?review=revoice&acting`);
-      await page.getByText('음성 다시 만들기', { exact: true }).click();
-      const mode = page.getByRole('combobox', { name: '자동 연기', exact: true });
+      await openRecast();
+      const mode = page.getByRole('combobox', { name: '장면 연기', exact: true });
       await mode.waitFor();
       assert.equal(await mode.inputValue(), 'auto');
       assert.equal(await page.getByRole('combobox', { name: '연기 분석 모델', exact: true }).inputValue(), 'e1');
       assert.equal(await page.getByRole('textbox').count(), 0);
-      await page.getByRole('button', { name: '다시 만들 범위 확인', exact: true }).click();
+      await page.getByRole('button', { name: '범위·요금 확인', exact: true }).click();
       const actingCreate = page.getByRole('button', { name: '새 음성 만들기', exact: true });
       await actingCreate.waitFor();
-      await page.getByText(/연기 분석 모델의 API 사용 요금/).waitFor();
-      await page.getByRole('checkbox').check();
-      await bounded();
-      assert.deepEqual(
-        await page
-          .locator('.un-revoice-row label > span')
-          .evaluateAll((els) => els.filter((el) => el.scrollWidth > el.clientWidth + 1).map((el) => el.textContent)),
-        [],
-      );
+      await page.getByText('분석 A · 빠진 부분만').waitFor();
+      await paidAck().check();
+      await recastLayout();
       await page.screenshot({ path: `${artifacts}/revoice-acting-${width}.png` });
       await actingCreate.click();
-      await page.getByText(/새 음성 작업을 만들었어요/).waitFor();
+      await page.getByText(/새 음성을 만들기 시작했어요/).waitFor();
       assert.deepEqual((await lastCall('create')).input.acting, { mode: 'auto', engineId: 'e1' });
-      // Natural voice creation: an explicit mode with selection model, design connection and budget, no names to fill.
+
+      // Voice creation is offered only under a Gemini 3.8 Flash TTS narrator, even with a Flash designer listed.
+      const modes = page.getByRole('radiogroup', { name: '배정 방식', exact: true });
       await page.evaluate(() => sessionStorage.clear());
       await page.goto(`http://127.0.0.1:${port}/?review=acting&design`);
       await enabled('생성 전 확인');
+      assert.equal(await modes.getByRole('radio').count(), 2);
+      assert.equal(await page.getByText(/Gemini 3.8 Flash/).count(), 0);
+      await page.goto(`http://127.0.0.1:${port}/?review=acting&design&narrator=f1`);
+      await enabled('생성 전 확인');
       const castingSelect = (name) => page.getByRole('combobox', { name, exact: true });
-      const modes = page.getByRole('radiogroup', { name: '인물 목소리 정하기', exact: true });
-      assert.equal(await modes.getByRole('radio', { name: /순서대로 나누기/ }).isChecked(), true);
+      assert.equal(await modes.getByRole('radio', { name: /순서대로 배정/ }).isChecked(), true);
       // Choice cards are tapped as a whole, title and description included.
-      await modes.getByText('인물마다 새로 만들기', { exact: true }).click();
-      assert.equal(await modes.getByRole('radio', { name: /인물마다 새로 만들기/ }).isChecked(), true);
-      assert.equal(await castingSelect('목소리 선정 모델').inputValue(), 'c1');
-      assert.equal(await castingSelect('목소리 제작 연결').inputValue(), 'd1');
-      await page.getByRole('button', { name: '새로 만들 목소리 줄이기', exact: true }).click();
+      await modes.getByText('인물마다 새 목소리', { exact: true }).click();
+      assert.equal(await modes.getByRole('radio', { name: /인물마다 새 목소리/ }).isChecked(), true);
+      assert.equal(await castingSelect('배정 AI 모델').inputValue(), 'c1');
+      assert.equal(await page.getByRole('combobox', { name: '목소리 제작 연결' }).count(), 0);
+      await page.getByRole('button', { name: '줄이기', exact: true }).click();
       await page.getByText('새 목소리 · 최대 3명', { exact: true }).waitFor();
       await page
-        .getByText(/엑스트라·대체용 목소리/)
+        .getByText(/그 밖의 인물용 목소리/)
         .first()
         .waitFor();
-      assert.equal(await page.getByRole('textbox', { name: /모델 ID/ }).count(), 0);
       await page.getByRole('button', { name: '생성 전 확인', exact: true }).click();
       await page.getByRole('button', { name: '생성 시작', exact: true }).waitFor();
       assert.deepEqual((await lastCall('speakerEstimate')).input.casting, {
@@ -489,36 +515,57 @@ try {
       await page.screenshot({ path: `${artifacts}/design-${width}.png` });
       await sheetShot(`design-full-${width}`);
 
-      // Re-voicing with new character voices on top of the automatic acting default.
+      // The finished job card: 목소리 바꾸기 is the entry, the book-wide list says it applies to later chapters.
+      await page.goto(`http://127.0.0.1:${port}/?review=acting&design&narrator=f1&jobs`);
+      const entry = page.getByRole('button', { name: /목소리 바꾸기/ });
+      await entry.waitFor();
+      await page.getByText('작품 기본 목소리').click();
+      await page.getByText(/앞으로 만들 회차에만 적용돼요/).waitFor();
+      await bounded();
+      await page.locator('.un-book-item').screenshot({ path: `${artifacts}/job-card-${width}.png` });
+      await entry.click();
+      await page.getByRole('region', { name: '목소리 바꾸기', exact: true }).waitFor();
+      await recastLayout();
+      await page.locator('.un-book-item').screenshot({ path: `${artifacts}/job-card-open-${width}.png` });
+
+      // Re-voicing a Flash job: main cast in one tap, plus a pinned designed extra chosen explicitly.
       await page.goto(`http://127.0.0.1:${port}/?review=revoice&acting&design`);
-      await page.getByText('음성 다시 만들기', { exact: true }).click();
-      const recast = page.getByRole('radiogroup', { name: '인물 목소리', exact: true });
-      await recast.waitFor();
-      assert.equal(await recast.getByRole('radio', { name: /지금 목소리 그대로/ }).isChecked(), true);
-      await recast.getByText('인물마다 새로 만들기', { exact: true }).click();
-      assert.equal(await castingSelect('목소리 선정 모델').inputValue(), 'c1');
-      await page.getByText('새 목소리 · 최대 4명', { exact: true }).waitFor();
-      await page.getByRole('button', { name: '다시 만들 범위 확인', exact: true }).click();
+      await openRecast();
+      await page.getByRole('button', { name: '주요·조연 새로 만들기', exact: true }).click();
+      assert.equal(await planOf(longName).getByRole('radio', { name: '새로 만들기' }).isChecked(), true);
+      assert.equal(await planOf('조연 B').getByRole('radio', { name: '새로 만들기' }).isChecked(), true);
+      assert.equal(await planOf('엑스트라 C').getByRole('radio', { name: '그대로' }).isChecked(), true);
+      assert.equal(await planOf('내레이터').getByRole('radio', { name: '새로 만들기' }).count(), 0);
+      await planOf('엑스트라 C').getByText('새로 만들기', { exact: true }).click();
+      await page.getByText('지금 목소리 대신 본문에 맞춰 새 목소리를 만들어요.').waitFor();
+      await page.getByText('3명 · 새로 만들기 3명').waitFor();
+      assert.equal(await castingSelect('배정 AI 모델').inputValue(), 'c1');
+      assert.equal(await applyToggle().isChecked(), true);
+      await recastLayout();
+      await sheetShot(`revoice-plan-full-${width}`);
+      await page.getByRole('button', { name: '범위·요금 확인', exact: true }).click();
       const designCreate = page.getByRole('button', { name: '새 음성 만들기', exact: true });
       await designCreate.waitFor();
-      await page.getByText(/목소리 선정·제작과 연기 분석 모델의 API 사용 요금/).waitFor();
-      await page.getByRole('checkbox').check();
-      await bounded();
-      assert.deepEqual(
-        await page
-          .locator('.un-revoice-row label > span')
-          .evaluateAll((els) => els.filter((el) => el.scrollWidth > el.clientWidth + 1).map((el) => el.textContent)),
-        [],
-      );
+      await paidAck().check();
+      await recastLayout();
       await page.screenshot({ path: `${artifacts}/revoice-design-${width}.png` });
       await sheetShot(`revoice-design-full-${width}`);
       await designCreate.click();
-      await page.getByText(/새 음성 작업을 만들었어요/).waitFor();
+      await page.getByText(/새 음성을 만들기 시작했어요/).waitFor();
       const designed = (await lastCall('create')).input;
-      assert.equal(designed.casting.designMode, 'characters');
+      assert.deepEqual(designed.designSpeakerIds, ['p1', 'p2', 'p3']);
+      assert.deepEqual(designed.casting, {
+        engineId: 'c1',
+        autoDesign: true,
+        designMode: 'characters',
+        designProviderId: 'd1',
+        designModelId: 'gemini-3.8-flash-tts',
+        maxDesignedVoices: 3,
+      });
+      assert.equal(designed.applyToBook, true);
       assert.deepEqual(designed.acting, { mode: 'auto', engineId: 'e1' });
       checks.push(
-        `${width}: metadata editing, bounded fields/chips, partial revoice source, separate instructions, consent and one create; acting default on/explicit off/unsupported off and revoice auto-fill default; natural voice creation for new and revoiced jobs`,
+        `${width}: metadata editing; 목소리 바꾸기 swap with book apply, folded directions, consent and one create; acting default on/explicit off/unsupported off and auto-fill; creation hidden off Flash, Flash-narrator creation for new jobs, explicit main-cast + pinned extra targets on revoice`,
       );
       await context.close();
     }

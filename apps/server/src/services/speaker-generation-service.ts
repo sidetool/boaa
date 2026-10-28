@@ -221,8 +221,33 @@ export class SpeakerGenerationService {
   }
   async revoiceSource(bookId: string, id: string) {
     const { source, items } = await loadRevoiceSource(this.pool, this.owner, bookId, id);
+    const view = revoiceSourceView(items);
+    const bindings = (
+      await this.pool.query(
+        'select speaker_id,pinned,metadata from speaker_voice_bindings where user_id=$1 and book_id=$2 and analysis_key=$3',
+        [this.owner, bookId, source.analysis_key],
+      )
+    ).rows;
+    const designed = new Set(
+      (
+        await this.pool.query(
+          "select voice_id from tts_voice_library where user_id=$1 and voice_id=any($2::text[]) and origin='designed'",
+          [this.owner, view.voices.map((v) => v.voiceId)],
+        )
+      ).rows.map((v) => v.voice_id),
+    );
     return {
-      ...revoiceSourceView(items),
+      ...view,
+      narratorVoiceId: source.settings.voiceId,
+      voices: view.voices.map((v) => {
+        const binding = bindings.find((b) => b.speaker_id === v.speakerId);
+        return {
+          ...v,
+          pinned: binding?.pinned === true,
+          importance: binding?.metadata?.importance,
+          designed: designed.has(v.voiceId),
+        };
+      }),
       actingEngineId: source.settings.cast?.actingEngine?.id ?? source.settings.cast?.engineId,
     };
   }

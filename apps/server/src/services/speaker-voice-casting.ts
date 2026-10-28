@@ -194,6 +194,7 @@ export class SpeakerVoiceCasting {
     if (!missing.length) return { assignments, models };
     if (!candidates.length) throw audiobookError(409, '자동 배정에 쓸 목소리를 켜 주세요.');
     const batch = missing.slice(0, 8);
+    const requiredDesignIds = batch.filter((i) => config.designSpeakerIds?.includes(i.id)).map((i) => i.id);
     const prompt = selectionPrompt(
       chapter,
       result.labels,
@@ -201,6 +202,8 @@ export class SpeakerVoiceCasting {
       candidates,
       options?.autoDesign === true,
       options?.designMode,
+      requiredDesignIds,
+      config.voiceEvidenceVersion === 2,
     );
     const key = structuredIntegrityHash({
       chapter: chapter.id,
@@ -257,6 +260,7 @@ export class SpeakerVoiceCasting {
           candidates,
           options.autoDesign,
           options.designMode,
+          requiredDesignIds,
         );
       } catch (e) {
         await this.pool.query(
@@ -316,6 +320,8 @@ export class SpeakerVoiceCasting {
         designed++;
         madeVoice = true;
       }
+      if (requiredDesignIds.includes(d.speakerId) && !madeVoice)
+        throw audiobookError(409, '선택한 인물의 새 목소리를 만들지 못했어요. 설정을 확인하고 다시 시도해 주세요.');
       if (isolated && !madeVoice && fallbackAssignments?.[d.speakerId]) d.voiceId = fallbackAssignments[d.speakerId];
       assignments[d.speakerId] = d.voiceId;
     }

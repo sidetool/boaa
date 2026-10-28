@@ -43,18 +43,33 @@ export interface SpeakerGenerationJob extends SavedAudiobook {
   retryAt?: string;
 }
 export interface SpeakerRevoiceInput {
+  /** Explicit targets: each selected character gets a newly designed voice, including pinned voices. */
+  designSpeakerIds?: string[];
+  /** Apply changed character voices to future generation; existing audio remains immutable. */
+  applyToBook?: boolean;
   acting?: { mode: 'preserve' | 'off' | 'auto'; engineId?: string };
   casting?: SpeakerCastingOptions;
   voices: { speakerId: string; voiceId: string; instructions?: string }[];
 }
 export interface SpeakerRevoiceSource {
+  /** Narrator model context, including dialogue-only jobs with no narrator row. */
+  narratorVoiceId?: string;
   hasActing?: boolean;
   needsActing?: boolean;
   actingEngineId?: string;
   chapterCount: number;
   itemCount: number;
   /** Captured on this job's planned audio, independent of later book-wide assignments. */
-  voices: { speakerId: string; name: string; voiceId: string; instructions?: string; itemCount: number }[];
+  voices: {
+    speakerId: string;
+    name: string;
+    voiceId: string;
+    instructions?: string;
+    itemCount: number;
+    importance?: 'major' | 'supporting' | 'extra';
+    pinned?: boolean;
+    designed?: boolean;
+  }[];
 }
 export interface SpeakerRevoiceEstimate {
   actingAnalysis?: boolean;
@@ -119,6 +134,13 @@ export interface SpeakerGenerationSettings {
   /** Audio-only variant; all source-verified ranges were copied from this job. */
   revoiceFrom?: string;
   recastSpeakers?: string[];
+  /** Immutable explicit targets; unlike recastSpeakers this survives batch completion. */
+  designSpeakerIds?: string[];
+  applyToBook?: boolean;
+  /** Optimistic checks prevent delayed design completion from replacing a newer manual choice. */
+  bookVoiceVersions?: Record<string, string>;
+  /** Keeps pre-upgrade paid selection checkpoints addressable on resume. */
+  voiceEvidenceVersion?: 2;
   autoActing?: boolean;
   actingEngine?: { id: string; revision: string };
   language?: string;

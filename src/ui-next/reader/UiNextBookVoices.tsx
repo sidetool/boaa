@@ -56,7 +56,9 @@ export default function UiNextBookVoices({
   if (!port.castings) return null;
   return (
     <details className="un-cast-options" onToggle={(e) => setOpen(e.currentTarget.open)}>
-      <summary>인물 목소리</summary>
+      <summary>
+        작품 기본 목소리<small>다음 회차부터 적용</small>
+      </summary>
       {error && (
         <p role="alert" className="un-book-error">
           {error}
@@ -66,12 +68,11 @@ export default function UiNextBookVoices({
         (!rows ? (
           <p className="un-book-note">불러오는 중…</p>
         ) : rows.length === 0 ? (
-          <p className="un-book-note">분석이 끝나면 자동으로 배정된 목소리가 보여요.</p>
+          <p className="un-book-note">분석이 끝나면 인물별 목소리가 보여요.</p>
         ) : (
           <>
             <p className="un-book-note">
-              작품 전체의 인물 배정이에요. 만들기를 멈춘 뒤 바꿀 수 있고, 다음에 계획할 회차와 새 생성 작업부터
-              적용해요. 이미 만든 구간은 그대로이며, 만든 구간을 다른 목소리로 들으려면 ‘음성 다시 만들기’를 사용해요.
+              여기서 바꾸면 앞으로 만들 회차에만 적용돼요. 이미 만든 음성까지 바꾸려면 ‘목소리 바꾸기’를 써요.
             </p>
             {[...rows]
               .sort(
@@ -83,7 +84,10 @@ export default function UiNextBookVoices({
                 <label className="un-cast-field" key={row.speakerId}>
                   <span>
                     {row.name}
-                    {row.pinned ? ' · 직접 지정' : ''}
+                    <small>
+                      {row.importance === 'major' ? '주요' : row.importance === 'supporting' ? '조연' : '엑스트라'}
+                      {row.pinned ? ' · 직접 지정' : ''}
+                    </small>
                   </span>
                   <select
                     aria-label={`${row.name} 목소리`}

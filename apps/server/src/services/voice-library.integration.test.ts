@@ -1,3 +1,5 @@
+import { planSpeakerRevoice } from './speaker-revoice-plan';
+import { applyBookVoiceUpdates, bookBindingVersions } from './speaker-book-voices';
 import { randomUUID } from 'node:crypto';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -19,7 +21,7 @@ import type { PlainTTSSource } from '../providers/plain-tts-sources';
 import { wavFromPcm16 } from '../providers/tts-audio';
 import { VoiceLibraryStore, voiceSourceModel } from './voice-library-store';
 import { SpeakerVoiceCasting, type CastingRun } from './speaker-voice-casting';
-import { castRequests } from './speaker-generation-plan';
+import { castRequests, type CastRequest } from './speaker-generation-plan';
 import { AudiobookService } from './audiobook-service';
 import { AudiobookAudioStore } from './audiobook-audio';
 import { SpeakerGenerationService } from './speaker-generation-service';
@@ -169,6 +171,7 @@ async function setup(pool: pg.Pool, natural = false) {
       providerId: designer.id,
       model: voiceSourceModel(designer),
       autoActingSupported: natural,
+      instructionsSupported: natural,
       paid: true,
     });
     const rows = (
@@ -312,6 +315,7 @@ async function setup(pool: pg.Pool, natural = false) {
 }
 
 async function serviceFixture(f: Awaited<ReturnType<typeof setup>>) {
+  const failures: unknown[] = [];
   const directory = await mkdtemp(path.join(tmpdir(), 'boaa-voice-library-'));
   const render = vi.fn(async (text: string, voiceId: string, _model: PlainTTSModel, key: string) => ({
     data: Buffer.from(text + '|' + voiceId),
@@ -326,14 +330,18 @@ async function serviceFixture(f: Awaited<ReturnType<typeof setup>>) {
     async () => {
       throw Error('ordinary synthesis forbidden');
     },
-    classifyPlainTTSFailure,
+    (error) => {
+      failures.push(error);
+      return classifyPlainTTSFailure(error);
+    },
   );
   const service = new SpeakerGenerationService(f.pool, 'owner', f.engines, audio, f.catalog, render, f.casting);
   const untilCompleted = async (id: string) => {
     for (let n = 0; n < 30; n++) {
       const job = await audio.get(id);
       if (job.status === 'completed') return;
-      if (job.status === 'failed') throw Error(JSON.stringify(job));
+      if (job.status === 'failed')
+        throw new Error('Voice workflow failed: ' + String(failures.at(-1)), { cause: failures.at(-1) });
       await audio.tick();
     }
     throw Error('voice library test did not finish within bounded ticks');
@@ -1002,6 +1010,46 @@ async function serviceFixture(f: Awaited<ReturnType<typeof setup>>) {
 });
 
 (harness ? describe : describe.skip)('natural character voice workflow', () => {
+  it('does not overwrite a newer book voice when a delayed design finishes', async () => {
+    await withPostgresSchema(harness!, 'book_voice_conflict', async (pool) => {
+      const f = await setup(pool, true),
+        run = await f.run();
+      await f.casting.select(run, chapter, completed(), signal());
+      const versions = await bookBindingVersions(pool, 'owner', 'book', run.analysis_key, ['speaker-one']);
+      await pool.query(
+        "update speaker_voice_bindings set voice_id='local:b',pinned=true,updated_at=now() where speaker_id='speaker-one'",
+      );
+      const c = await pool.connect();
+      try {
+        await c.query('begin');
+        await expect(
+          applyBookVoiceUpdates(
+            c,
+            'owner',
+            'book',
+            run.analysis_key,
+            [
+              {
+                speakerId: 'speaker-one',
+                name: '민아',
+                voiceId: 'designer:preset',
+                model: voiceSourceModel(f.designer),
+              },
+            ],
+            versions,
+          ),
+        ).rejects.toMatchObject({ statusCode: 409 });
+      } finally {
+        await c.query('rollback');
+        c.release();
+      }
+      expect(
+        (await pool.query("select voice_id from speaker_voice_bindings where speaker_id='speaker-one'")).rows[0]
+          .voice_id,
+      ).toBe('local:b');
+    });
+  });
+
   it('replaces automatic presets, creates supporting voices within budget, then reuses designed and pinned voices', async () => {
     await withPostgresSchema(harness!, 'natural_cast', async (pool) => {
       const f = await setup(pool, true);
@@ -1088,12 +1136,19 @@ async function serviceFixture(f: Awaited<ReturnType<typeof setup>>) {
         const input: SpeakerGenerationInput = {
           chapterIds: [chapter.id],
           engineId: analysis.id,
-          narratorVoiceId: 'local:n',
+          narratorVoiceId: 'designer:preset',
           characterVoiceIds: ['local:a', 'local:b'],
           rules: [],
           footnotePlayback: 'skip',
           casting: await f.options(),
         };
+        await expect(
+          s.service.estimate('book', {
+            ...input,
+            narratorVoiceId: 'local:n',
+            casting: { ...(await f.options(true)), designMode: 'characters' },
+          }),
+        ).rejects.toMatchObject({ statusCode: 400 });
         const estimate = await s.service.estimate('book', input);
         const original = await s.service.create('book', input, estimate.fingerprint, true);
         await s.untilCompleted(original.id);
@@ -1186,6 +1241,101 @@ async function serviceFixture(f: Awaited<ReturnType<typeof setup>>) {
           voices: choices.voices.map((v) => (v.speakerId === 'two' ? { ...v, voiceId: 'local:b' } : v)),
         };
         await expect(s.service.estimateRevoice('book', original.id, manual)).rejects.toThrow('인물이 없어요');
+        const sourceView = await s.service.revoiceSource('book', original.id);
+        expect(sourceView.narratorVoiceId).toBe('designer:preset');
+        expect(sourceView.voices.find((v) => v.speakerId === 'one')).toMatchObject({ pinned: true, designed: false });
+        const explicit = {
+          ...manual,
+          designSpeakerIds: ['one'],
+          applyToBook: true,
+          casting: { ...choices.casting, maxDesignedVoices: 0 },
+        };
+        for (const ids of [[], ['one', 'one'], ['missing'], ['narrator'], Array(9).fill('one')])
+          await expect(
+            s.service.estimateRevoice('book', original.id, { ...explicit, designSpeakerIds: ids }),
+          ).rejects.toMatchObject({ statusCode: 400 });
+        await expect(
+          s.service.estimateRevoice('book', original.id, { ...explicit, casting: undefined }),
+        ).rejects.toMatchObject({ statusCode: 400 });
+        f.generate.mockImplementation(async (_e, req) => {
+          const data = JSON.parse(req.prompt);
+          expect(data.requiredDesignSpeakerIds).toEqual(['one']);
+          return JSON.stringify({
+            assignments: data.characters.map((c: { id: string; name: string }) => ({
+              speakerId: c.id,
+              voiceId: data.candidates[0].voiceId,
+              importance: 'extra',
+              alias: c.name,
+              timbre: '또렷함',
+              description: '본문에 근거한 성인 여성',
+              designPrompt: '또렷하고 차분한 성인 여성 목소리',
+            })),
+          });
+        });
+        const currentCatalog = await f.catalog();
+        const withoutOldVoice = { ...currentCatalog, voices: currentCatalog.voices.filter((v) => v.id !== 'local:a') };
+        const replacementPlan = await planSpeakerRevoice(
+          pool,
+          'owner',
+          'book',
+          original.id,
+          {
+            ...explicit,
+            voices: explicit.voices.map((v) =>
+              v.speakerId === 'one' ? { ...v, voiceId: 'deleted-voice', instructions: '조용하게' } : v,
+            ),
+          },
+          withoutOldVoice,
+          f.engines,
+          f.library,
+        );
+        expect(replacementPlan.estimate.recastCharacters).toBe(1);
+        expect(
+          replacementPlan.items.find((i) => (i.request as CastRequest).cast.speakerId === 'one')?.request,
+        ).toMatchObject({ voiceId: 'designer:preset', cast: { instructions: '조용하게' } });
+        expect(replacementPlan.planningComplete).toBe(false);
+        const explicitPrice = await s.service.estimateRevoice('book', original.id, explicit);
+        expect(explicitPrice).toMatchObject({ recastCharacters: 1, maxDesignedVoices: 1 });
+        const changed = await s.service.revoice('book', original.id, explicit, explicitPrice.fingerprint, true);
+        expect((await s.service.revoice('book', original.id, explicit, explicitPrice.fingerprint, true)).id).toBe(
+          changed.id,
+        );
+        expect(
+          (await pool.query("select voice_id,pinned from speaker_voice_bindings where speaker_id='two'")).rows[0],
+        ).toEqual({ voice_id: 'local:b', pinned: true });
+        f.design.mockResolvedValueOnce({ id: 'voice_created_2', sample: { data: sample, contentType: 'audio/wav' } });
+        await s.untilCompleted(changed.id);
+        const newlyAssigned = (
+          await pool.query("select voice_id,pinned from speaker_voice_bindings where speaker_id='one'")
+        ).rows[0];
+        expect(newlyAssigned.pinned).toBe(true);
+        expect(newlyAssigned.voice_id).toMatch(/^designer:voice_created_/);
+        expect(newlyAssigned.voice_id).not.toBe('designer:voice_created_1');
+        const changedSource = await s.service.revoiceSource('book', changed.id);
+        expect(changedSource.voices.find((v) => v.speakerId === 'one')).toMatchObject({ pinned: true, designed: true });
+        expect(
+          (
+            await pool.query('select * from saved_audiobook_items where audiobook_id=$1 order by ordinal', [
+              original.id,
+            ])
+          ).rows,
+        ).toEqual(before);
+        expect((await pool.query('select * from speaker_analysis order by chapter_id')).rows).toEqual(analysisRows);
+        // A failed explicit design cannot silently synthesize with an old/pool voice or change book defaults.
+        const failInput = {
+          ...explicit,
+          voices: changedSource.voices.map((v) => ({ speakerId: v.speakerId, voiceId: v.voiceId })),
+        };
+        const failPrice = await s.service.estimateRevoice('book', changed.id, failInput);
+        const failed = await s.service.revoice('book', changed.id, failInput, failPrice.fingerprint, true);
+        const renderCount = s.render.mock.calls.length;
+        f.design.mockRejectedValueOnce(new Error('fixture design unavailable'));
+        await s.audio.tick();
+        expect((await s.audio.get(failed.id)).status).toBe('failed');
+        expect(s.render).toHaveBeenCalledTimes(renderCount);
+        expect(
+          (await pool.query("select voice_id,pinned from speaker_voice_bindings where speaker_id='one'")).rows[0],
+        ).toEqual(newlyAssigned);
         await pool.query("update library_books set active_content_revision_id='changed' where id='book'");
         await expect(s.service.revoice('book', original.id, choices, pinned.fingerprint, true)).rejects.toMatchObject({
           statusCode: 409,

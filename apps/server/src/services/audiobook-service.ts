@@ -1,3 +1,4 @@
+import { applyBookVoiceUpdates } from './speaker-book-voices';
 import { randomUUID } from 'node:crypto';
 import type pg from 'pg';
 import type { AudiobookInput, SavedAudiobook, PreparedNarration } from '../../../../src/providers/plain-audiobook';
@@ -442,6 +443,15 @@ export class AudiobookService {
           [id, JSON.stringify(rows)],
         );
       }
+      if (plan.revoiceSource && plan.speakerRun && plan.bookVoiceUpdates?.length)
+        await applyBookVoiceUpdates(
+          client,
+          this.owner,
+          plan.bookId,
+          plan.speakerRun.analysisKey,
+          plan.bookVoiceUpdates,
+          plan.settings.cast?.bookVoiceVersions ?? {},
+        );
       await client.query('commit');
       return view(row);
     } catch (error) {

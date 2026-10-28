@@ -1,3 +1,4 @@
+import type { BookVoiceUpdate } from './speaker-book-voices';
 import type pg from 'pg';
 import { structuredIntegrityHash } from '@boaa/text-core/hash';
 import type { Paragraph } from '@boaa/contracts';
@@ -24,6 +25,8 @@ export interface AudiobookPlanItem {
   playable: PlayableTtsSegment;
 }
 export interface AudiobookPlan {
+  /** Trusted updates committed atomically with a new revoice job. */
+  bookVoiceUpdates?: BookVoiceUpdate[];
   planningComplete?: boolean;
   speakerRun?: {
     analysisKey: string;

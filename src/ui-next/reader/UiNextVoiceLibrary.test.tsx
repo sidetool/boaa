@@ -217,7 +217,7 @@ describe('UiNextVoiceLibrary owned edits and design requests', () => {
       designers: [{ id: 'lite', name: 'Lite TTS', modelId: 'gemini-3.8-flash-lite-tts', paid: true }],
     });
     let root = await mount(f.port);
-    expect(root.findAll((n) => n.type === 'button' && text(n).trim() === '설명으로 만들기')).toHaveLength(0);
+    expect(root.findAll((n) => n.type === 'button' && text(n).trim() === 'Gemini Flash로 만들기')).toHaveLength(0);
     act(() => renderer!.unmount());
     renderer = undefined;
     f.port.list.mockResolvedValue({
@@ -225,9 +225,9 @@ describe('UiNextVoiceLibrary owned edits and design requests', () => {
       designers: [{ id: 'designer', name: '합성 TTS', modelId: 'gemini-3.8-flash-tts', paid: true }],
     });
     root = await mount(f.port);
-    await click(button(root, '설명으로 만들기'));
-    expect(text(root)).toContain('Gemini 3.8: 성별·나이대');
-    expect(text(root)).toContain('제작 모델 gemini-3.8-flash-tts');
+    await click(button(root, 'Gemini Flash로 만들기'));
+    expect(text(root)).toContain('성별·나이·음색·말투처럼 늘 같은 특징');
+    expect(text(root)).toContain('gemini-3.8-flash-tts · 적은 설명대로');
     // The model is not typed: any other id would be rejected for voice design.
     expect(root.findAll((n) => n.type === 'input' && n.props.value === 'gemini-3.8-flash-tts')).toHaveLength(0);
   });
@@ -236,13 +236,11 @@ describe('UiNextVoiceLibrary owned edits and design requests', () => {
     const f = fixture();
     const root = await mount(f.port);
     f.port.design.mockRejectedValue(new Error('429 synthetic retry'));
-    await click(button(root, '설명으로 만들기'));
+    await click(button(root, 'Gemini Flash로 만들기'));
     await change(field(root, '별칭'), '새 별칭');
     await change(field(root, '만들 목소리 설명'), '차분한 원래 목소리');
     expect(button(root, '만들어 보관하기').props.disabled).toBe(true);
-    act(() =>
-      field(root, '새 목소리를 만드는 API 사용 요금을 확인했어요.').props.onChange({ target: { checked: true } }),
-    );
+    act(() => field(root, '유료 API 요금이 나올 수 있어요. 확인했어요.').props.onChange({ target: { checked: true } }));
     await flush();
     const start = button(root, '만들어 보관하기');
     act(() => {
@@ -264,9 +262,7 @@ describe('UiNextVoiceLibrary owned edits and design requests', () => {
     expect(f.port.design.mock.calls[1][0].requestId).toBe(original.requestId);
     await change(field(root, '만들 목소리 설명'), '다른 원래 목소리');
     expect(button(root, '만들어 보관하기').props.disabled).toBe(true);
-    act(() =>
-      field(root, '새 목소리를 만드는 API 사용 요금을 확인했어요.').props.onChange({ target: { checked: true } }),
-    );
+    act(() => field(root, '유료 API 요금이 나올 수 있어요. 확인했어요.').props.onChange({ target: { checked: true } }));
     await flush();
     await click(button(root, '만들어 보관하기'));
     expect(f.port.design.mock.calls[2][0].requestId).not.toBe(original.requestId);

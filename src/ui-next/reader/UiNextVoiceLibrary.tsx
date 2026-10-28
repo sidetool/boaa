@@ -8,6 +8,7 @@ import type {
   VoiceDesignProvider,
 } from '../../providers/voice-library';
 import { BrowserAudioSession } from '../../providers/browser-audio-session';
+import { isGeminiVoiceDesignModel } from '../../providers/voice-library';
 import { voiceDesigners } from './UiNextCastingOptions';
 import { cx, Switch } from '../components/primitives';
 import './audiobook.css';
@@ -30,8 +31,6 @@ const TIMBRE_WORDS = [
   ['인상', ['따뜻한', '차분한', '밝은', '냉정한', '위엄 있는', '장난스러운']],
   ['말투', ['느긋한', '또렷한', '빠른']],
 ] as const;
-/** Gemini 3.8 voice design keeps stable traits in the voice; per-line acting goes to 음성 다시 만들기. */
-const GEMINI_38 = new Set(['gemini-3.8-flash-tts', 'gemini-3.8-flash-lite-tts']);
 const timbreWords = (value: string) =>
   value
     .split(/[,，、]/)
@@ -177,7 +176,7 @@ export default function UiNextVoiceLibrary({
   return (
     <section className="un-voice-library un-cast" aria-label="목소리 보관함">
       <p className="un-book-note">
-        목소리를 한 번 준비해 두면 여러 작품에서 사용할 수 있어요. 별칭이나 설명을 바꿔도 이미 만든 음성은 그대로예요.
+        여기 저장한 목소리는 모든 작품에서 쓸 수 있어요. 설명을 고쳐도 이미 만든 음성은 바뀌지 않아요.
       </p>
       {error && (
         <p role="alert" className="un-book-error">
@@ -219,7 +218,7 @@ export default function UiNextVoiceLibrary({
             {designers.length > 0 && (
               <button type="button" className="un-btn is-ghost is-sm" onClick={() => setEditing({ kind: 'design' })}>
                 <WandSparkles size={16} />
-                설명으로 만들기
+                Gemini Flash로 만들기
               </button>
             )}
             <button
@@ -239,8 +238,7 @@ export default function UiNextVoiceLibrary({
             <p className="un-book-note">불러오는 중…</p>
           ) : rows.length === 0 ? (
             <p className="un-book-note is-box">
-              아직 보관한 목소리가 없어요. 기본 목소리로도 자동 배정할 수 있고, 자주 쓸 목소리를 추가하면 음색과
-              설명까지 참고해 골라 줘요.
+              아직 저장한 목소리가 없어요. 자주 쓸 목소리에 설명을 달아 두면 AI가 인물에 맞게 골라요.
             </p>
           ) : (
             <>
@@ -397,9 +395,7 @@ export default function UiNextVoiceLibrary({
               )}
             </details>
           )}
-          <p className="un-book-note">
-            미리듣기 음성이 없으면 짧은 샘플을 만들며, 연결한 API의 사용 요금이 발생할 수 있어요.
-          </p>
+          <p className="un-book-note">미리듣기 샘플이 없으면 새로 만들어요. 유료 API 요금이 나올 수 있어요.</p>
         </>
       )}
     </section>
@@ -461,7 +457,7 @@ function VoiceEditor({
   const chosen = timbreWords(timbre);
   return (
     <div className="un-filter un-tts-conn-editor un-speaker-engine-form">
-      <h3>{design ? '설명으로 목소리 만들기' : value ? '목소리 수정' : '목소리 추가'}</h3>
+      <h3>{design ? '새 목소리 만들기' : value ? '목소리 수정' : '목소리 추가'}</h3>
       {!design && (value || catalogVoice) && (
         <div className="un-voice-editor-id">
           <small className="un-voice-id">
@@ -501,7 +497,7 @@ function VoiceEditor({
               </select>
             </label>
             <small className="un-book-note">
-              제작 모델 <b>{modelId || '확인 필요'}</b> · 설명을 읽고 새 목소리를 만들어 보관해요.
+              <b>{modelId || '확인 필요'}</b> · 적은 설명대로 목소리를 만들어 저장해요.
             </small>
           </>
         ) : (
@@ -603,12 +599,11 @@ function VoiceEditor({
           />
           <small className="un-book-note">
             {description.length}/2000
-            {!design && ' · 직접 들은 느낌과 어울리는 인물을 적으면 배정에 도움이 돼요.'}
+            {!design && ' · 들은 느낌과 어울리는 인물을 적어 두면 더 잘 골라요.'}
           </small>
-          {design && GEMINI_38.has(modelId) && (
+          {design && isGeminiVoiceDesignModel(modelId) && (
             <small className="un-book-note">
-              Gemini 3.8: 성별·나이대·음색·억양·말하는 습관처럼 늘 유지할 특징을 적어요. 장면마다 바뀌는 감정은 여기
-              말고 ‘음성 다시 만들기’의 연기 지시로 따로 줘요.
+              성별·나이·음색·말투처럼 늘 같은 특징을 적어 주세요. 장면별 감정은 ‘목소리 바꾸기’의 장면 연기에서 정해요.
             </small>
           )}
         </label>
@@ -627,14 +622,14 @@ function VoiceEditor({
         {design && designer?.paid && (
           <label className="un-book-ack">
             <input type="checkbox" checked={ack} onChange={(e) => setAck(e.target.checked)} />
-            <span>새 목소리를 만드는 API 사용 요금을 확인했어요.</span>
+            <span>유료 API 요금이 나올 수 있어요. 확인했어요.</span>
           </label>
         )}
       </fieldset>
       <p className="un-book-note">
         {design
-          ? '만든 목소리는 보관함에 저장해서 계속 사용해요. 응답이 늦어져도 같은 요청을 중복으로 보내지 않아요.'
-          : '별칭·음색·설명은 선정 모델이 새로 배정할 인물을 고를 때만 참고해요. 이미 배정된 인물과 만든 음성은 바뀌지 않아요.'}
+          ? '응답이 늦어도 같은 목소리가 두 번 만들어지지 않아요.'
+          : '설명은 AI가 새 인물에게 목소리를 고를 때 참고해요. 이미 배정된 인물은 바뀌지 않아요.'}
       </p>
       <div className="un-book-actions">
         <button

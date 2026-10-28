@@ -153,6 +153,47 @@ describe('independent speaker voice selection', () => {
     expect(normalizeCasting(maximum)).toEqual(maximum);
   });
 
+  it('includes nearby narration for gender and relationship clues while bounding unrelated context', () => {
+    const story: SpeakerChapter = {
+      id: 'context',
+      index: 1,
+      title: '인물 소개',
+      paragraphs: [
+        { id: 'unrelated', index: 1, text: '멀리 떨어진 다른 장면' },
+        { id: 'before', index: 2, text: '앞'.repeat(900) },
+        { id: 'identity', index: 3, text: '민아는 아이의 어머니였다. 그녀가 문을 열었다.' },
+        { id: 'dialogue', index: 4, text: '“다녀왔니?”' },
+        { id: 'after', index: 5, text: '아들은 고개를 끄덕였다.' + '뒤'.repeat(900) },
+      ],
+    };
+    const packet = JSON.parse(
+      selectionPrompt(
+        story,
+        [
+          {
+            paragraphId: 'dialogue',
+            startOffset: 0,
+            endOffset: 7,
+            textHash: 'hash',
+            speakerId: 'mother',
+            reviewRequired: false,
+          },
+        ],
+        [{ id: 'mother', name: '민아', reviewRequired: false }],
+        candidates,
+        true,
+        'characters',
+      ),
+    );
+    const evidence = packet.characters[0].evidence[0];
+    expect(evidence.before).toEqual(['앞'.repeat(600), story.paragraphs[2].text]);
+    expect(evidence.after[0]).toHaveLength(600);
+    expect(evidence.after[0]).toContain('아들은 고개를 끄덕였다.');
+    expect(JSON.stringify(packet)).not.toContain('멀리 떨어진 다른 장면');
+    expect(evidence.dialogue).toBe(story.paragraphs[3].text);
+    expect(story.paragraphs[1].text).toHaveLength(900);
+  });
+
   it('sends bounded source evidence and candidate metadata as data, excluding uncertain labels', () => {
     const chapter: SpeakerChapter = {
       id: 'chapter',
@@ -187,10 +228,42 @@ describe('independent speaker voice selection', () => {
     expect(packet.characters[0].evidence[0].dialogue.length).toBeLessThanOrEqual(300);
     expect(packet.characters[0].evidence[0].context.length).toBeLessThanOrEqual(600);
     expect(packet.characters[1].evidence).toEqual([]);
+    const legacy = JSON.parse(
+      selectionPrompt(
+        chapter,
+        labels,
+        [{ id: 'speaker-one', name: '민아', reviewRequired: false }],
+        candidates,
+        false,
+        undefined,
+        [],
+        false,
+      ),
+    );
+    expect(legacy.characters[0].evidence[0]).toEqual({
+      dialogue: packet.characters[0].evidence[0].dialogue,
+      context: packet.characters[0].evidence[0].context,
+    });
+    expect(legacy).not.toHaveProperty('requiredDesignSpeakerIds');
   });
 });
 
 describe('explicit natural voice creation', () => {
+  it('requires new voices for explicitly chosen characters even when classified as extras', () => {
+    const extra = { ...decision(), importance: 'extra' as const, designPrompt: '성인 여성의 낮고 또렷한 목소리' };
+    expect(parseVoiceDecisions(raw([extra]), ['speaker-one'], candidates, true, 'characters', ['speaker-one'])).toEqual(
+      [extra],
+    );
+    expect(() =>
+      parseVoiceDecisions(raw([{ ...extra, designPrompt: '' }]), ['speaker-one'], candidates, true, 'characters', [
+        'speaker-one',
+      ]),
+    ).toThrow();
+    expect(() =>
+      parseVoiceDecisions(raw([extra]), ['speaker-one'], candidates, false, 'characters', ['speaker-one']),
+    ).toThrow();
+  });
+
   it('retains the opt-in mode, rejects contradictions, and requires stable prompts for major/supporting characters', () => {
     const settings = {
       engineId: 'casting',

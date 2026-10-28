@@ -180,14 +180,30 @@ function libraryPort(voices: LibraryVoice[] = []): VoiceLibraryPort {
     sample: vi.fn(async () => new Blob()),
   };
 }
+/** A Gemini 3.8 Flash TTS connection whose id is also its voice design connection. */
+const flashCatalog = (modelId = 'gemini-3.8-flash-tts') => {
+  const base = catalog();
+  return catalog({
+    voices: [
+      ...base.voices,
+      { id: 'g1', lang: 'ko-KR', label: '플래시 1', providerId: 'designer', providerName: '제작 TTS', modelId },
+      { id: 'g2', lang: 'ko-KR', label: '플래시 2', providerId: 'designer', providerName: '제작 TTS', modelId },
+    ],
+    providers: [...(base.providers ?? []), { id: 'designer', name: '제작 TTS', available: true, paid: true }],
+  });
+};
+const hasMode = (root: ReactTestInstance, value: string) =>
+  root
+    .find((n) => n.props.role === 'radiogroup' && n.props['aria-label'] === '배정 방식')
+    .findAll((n) => n.type === 'input' && n.props.value === value).length > 0;
 /** The casting mode is a radio card group; each card is a native radio input. */
 function modeCard(root: ReactTestInstance, value: string) {
-  const group = root.find((n) => n.props.role === 'radiogroup' && n.props['aria-label'] === '인물 목소리 정하기');
+  const group = root.find((n) => n.props.role === 'radiogroup' && n.props['aria-label'] === '배정 방식');
   return group.find((n) => n.type === 'input' && n.props.value === value);
 }
 const mode = (root: ReactTestInstance) =>
   root
-    .find((n) => n.props.role === 'radiogroup' && n.props['aria-label'] === '인물 목소리 정하기')
+    .find((n) => n.props.role === 'radiogroup' && n.props['aria-label'] === '배정 방식')
     .find((n) => n.type === 'input' && n.props.checked).props.value;
 async function chooseMode(root: ReactTestInstance, value: string) {
   const card = modeCard(root, value);
@@ -221,37 +237,57 @@ describe('voice library casting choices', () => {
     expect(button(root, '생성 전 확인').props.disabled).toBe(false);
   });
 
-  it('retains independent casting preferences across reopen and includes them in estimate and create payloads', async () => {
+  it('lists picking candidates by description and never offers voice creation for a non-Flash narrator', async () => {
+    const api = port();
+    const root = await mount(
+      controls({
+        port: api,
+        voiceLibrary: libraryPort([{ ...libraryVoice('a2'), timbre: '', description: '' }, libraryVoice('a3')]),
+        engines: engines(async () => [
+          engine({ purpose: 'analysis' }),
+          engine({ id: 'casting-model', purpose: 'casting', name: '선정 모델', modelId: 'casting-model-id' }),
+        ]),
+      }),
+    );
+    expect(text(select(root, '분석 모델'))).not.toContain('선정 모델');
+    expect(mode(root)).toBe('order');
+    expect(text(root)).toContain('배정할 목소리');
+    // The library lists a Flash designer, but the narrator reads on another connection.
+    expect(hasMode(root, 'create')).toBe(false);
+    expect(text(root)).not.toContain('Gemini 3.8 Flash');
+    await chooseMode(root, 'pick');
+    expect(castingField(root, '배정 AI 모델').props.value).toBe('casting-model');
+    expect(text(castingField(root, '배정 AI 모델'))).not.toContain('분석 A');
+    expect(text(root)).toContain('후보 목소리');
+    // Library voice a3 is described; a2 is saved without labels and has no provider description.
+    expect(text(root)).toContain('설명 없는 목소리 1개');
+    expect(hasMode(root, 'create')).toBe(false);
+  });
+
+  it('creates voices on the Flash narrator connection, keeps the limit across reopen and sends it', async () => {
     const api = port();
     vi.mocked(api.estimate).mockResolvedValue(
       estimate({ paid: true, maxDesignedVoices: 3, selectionModelLabel: '선정' }),
     );
     const props = controls({
       port: api,
-      voiceLibrary: libraryPort([{ ...libraryVoice('a2'), timbre: '', description: '' }, libraryVoice('a3')]),
+      voices: flashCatalog(),
+      narratorVoiceId: 'g1',
+      voiceLibrary: libraryPort(),
       engines: engines(async () => [
         engine({ purpose: 'analysis' }),
         engine({ id: 'casting-model', purpose: 'casting', name: '선정 모델', modelId: 'casting-model-id' }),
       ]),
     });
     let root = await mount(props);
-    expect(text(select(root, '분석 모델'))).not.toContain('선정 모델');
-    expect(mode(root)).toBe('order');
-    expect(text(root)).toContain('나눠 쓸 목소리');
-    expect(text(root)).not.toContain('엑스트라·대체용 목소리');
-    await chooseMode(root, 'pick');
-    expect(castingField(root, '목소리 선정 모델').props.value).toBe('casting-model');
-    expect(text(castingField(root, '목소리 선정 모델'))).not.toContain('분석 A');
-    expect(text(root)).toContain('후보 목소리');
-    expect(text(root)).toContain('성별·음색이 맞는다고 보장할 수 없어요');
-    // Library voice a3 is described; a2 is saved without labels and has no provider description.
-    expect(text(root)).toContain('후보 2개 중 1개는 설명이 없어요.');
+    expect(text(root)).toContain('Gemini 3.8 Flash TTS라 인물마다 새 목소리를 만들 수 있어요.');
     await chooseMode(root, 'create');
-    expect(text(root)).toContain('엑스트라·대체용 목소리');
+    expect(text(root)).toContain('그 밖의 인물용 목소리');
     expect(text(root)).toContain('새 목소리 · 최대 4명');
-    // No model id to type: the connection decides it.
-    expect(root.findAll((n) => n.type === 'input' && n.props.value === 'gemini-3.8-flash-tts')).toHaveLength(0);
-    await click(button(root, '새로 만들 목소리 줄이기'));
+    expect(text(root)).toContain('제작 TTS에서 만들고');
+    // No connection or model to pick: the narrator's connection decides both.
+    expect(root.findAll((n) => n.props['aria-label'] === '목소리 제작 연결')).toHaveLength(0);
+    await click(button(root, '줄이기'));
     expect(text(root)).toContain('새 목소리 · 최대 3명');
     const casting = {
       engineId: 'casting-model',
@@ -266,15 +302,14 @@ describe('voice library casting choices', () => {
     renderer = undefined;
     root = await mount(props);
     expect(mode(root)).toBe('create');
-    expect(castingField(root, '목소리 선정 모델').props.value).toBe('casting-model');
-    expect(castingField(root, '목소리 제작 연결').props.value).toBe('designer');
+    expect(castingField(root, '배정 AI 모델').props.value).toBe('casting-model');
     await click(button(root, '생성 전 확인'));
     expect(api.estimate).toHaveBeenCalledWith(expect.objectContaining({ casting }), expect.any(AbortSignal));
     expect(text(root)).toContain('제작 TTS · 최대 3명');
-    expect(text(root)).toContain('자동으로 배정됐던 기본 목소리는 새 목소리로 바꿔요.');
+    expect(text(root)).toContain('직접 지정한 인물은 그대로예요.');
     expect(button(root, '생성 시작').props.disabled).toBe(true);
     act(() =>
-      castingField(root, '분석·선정 모델, 목소리 제작과 음성 서비스의 API 사용 요금').props.onChange({
+      castingField(root, '유료 API 요금이 나올 수 있어요').props.onChange({
         target: { checked: true },
       }),
     );
@@ -291,13 +326,14 @@ describe('voice library casting choices', () => {
   it('sends a usable design limit when switching to creation and asks for one instead of sending a saved 0', async () => {
     const saved = (casting: SpeakerGenerationPreferences['casting']) =>
       port(async () => [], {
-        preferences: vi.fn(async () => ({ engineId: 'e1', narratorVoiceId: 'a1', characterVoiceIds: ['a2'], casting })),
+        preferences: vi.fn(async () => ({ engineId: 'e1', narratorVoiceId: 'g1', characterVoiceIds: ['g2'], casting })),
       });
     const twoEngines = () =>
       engines(async () => [engine(), engine({ id: 'cast', purpose: 'casting', name: '선정용' })]);
+    const flash = { voices: flashCatalog(), voiceLibrary: libraryPort(), engines: twoEngines() };
     // Without design a 0 limit is a valid saved choice; reading it changes nothing.
     let api = saved({ engineId: 'cast', autoDesign: false, maxDesignedVoices: 0 });
-    let root = await mount(controls({ port: api, voiceLibrary: libraryPort(), engines: twoEngines() }));
+    let root = await mount(controls({ port: api, ...flash }));
     expect(mode(root)).toBe('pick');
     expect(api.savePreferences).not.toHaveBeenCalled();
     await chooseMode(root, 'create');
@@ -316,34 +352,46 @@ describe('voice library casting choices', () => {
       designModelId: 'gemini-3.8-flash-tts',
       maxDesignedVoices: 0,
     });
-    root = await mount(controls({ port: api, voiceLibrary: libraryPort(), engines: twoEngines() }));
+    root = await mount(controls({ port: api, ...flash, engines: twoEngines() }));
     expect(mode(root)).toBe('create');
     expect(api.savePreferences).not.toHaveBeenCalled();
-    expect(text(root)).toContain('개수를 정해 주세요');
-    expect(text(root)).toContain('새로 만들 목소리 수를 정해 주세요.');
-    expect(button(root, '새로 만들 목소리 줄이기').props.disabled).toBe(true);
+    expect(text(root)).toContain('인원을 정해 주세요');
+    expect(text(root)).toContain('새로 만들 인물 수를 정해 주세요.');
+    expect(button(root, '줄이기').props.disabled).toBe(true);
     expect(button(root, '생성 전 확인').props.disabled).toBe(true);
-    await click(button(root, '새로 만들 목소리 늘리기'));
+    await click(button(root, '늘리기'));
     expect(vi.mocked(api.savePreferences).mock.lastCall![0].casting?.maxDesignedVoices).toBe(1);
     await click(button(root, '생성 전 확인'));
     expect(vi.mocked(api.estimate).mock.lastCall![0].casting?.maxDesignedVoices).toBe(1);
   });
 
-  it('opens new voice creation only for exact Gemini 3.8 Flash TTS connections and re-picks a changed one', async () => {
-    const lite = {
-      ...libraryPort([libraryVoice('a3')]),
-      list: vi.fn(async () => ({
-        voices: [],
-        designers: [{ id: 'lite', name: 'Lite', modelId: 'gemini-3.8-flash-lite-tts', paid: true }],
-      })),
-    };
+  it('opens creation only for an exact Gemini 3.8 Flash TTS narrator and follows it instead of a saved connection', async () => {
     const twoEngines = () =>
       engines(async () => [engine(), engine({ id: 'cast', purpose: 'casting', name: '선정용' })]);
-    let root = await mount(controls({ voiceLibrary: lite, engines: twoEngines() }));
-    expect(modeCard(root, 'create').props.disabled).toBe(true);
-    expect(text(root)).toContain('Flash-Lite나 다른 TTS 연결은 지원 범위가 아니에요');
+    // Flash-Lite narrator on a listed designer id: no creation.
+    let root = await mount(
+      controls({
+        voices: flashCatalog('gemini-3.8-flash-lite-tts'),
+        narratorVoiceId: 'g1',
+        voiceLibrary: libraryPort(),
+        engines: twoEngines(),
+      }),
+    );
+    expect(hasMode(root, 'create')).toBe(false);
     act(() => renderer!.unmount());
-    // A saved custom model id is not silently replaced; the person picks the connection again.
+    // Exact Flash model on a connection the library does not list as a designer: no creation.
+    root = await mount(
+      controls({
+        voices: flashCatalog(),
+        narratorVoiceId: 'g1',
+        voiceLibrary: { ...libraryPort(), list: vi.fn(async () => ({ voices: [], designers: [] })) },
+        engines: twoEngines(),
+      }),
+    );
+    expect(hasMode(root, 'create')).toBe(false);
+    act(() => renderer!.unmount());
+
+    // A saved creation choice under a non-Flash narrator stays visible, blocks, and is never swapped silently.
     const api = port(async () => [], {
       preferences: vi.fn(async () => ({
         engineId: 'e1',
@@ -354,17 +402,21 @@ describe('voice library casting choices', () => {
           autoDesign: true,
           designMode: 'characters' as const,
           maxDesignedVoices: 2,
-          designProviderId: 'designer',
+          designProviderId: 'old-connection',
           designModelId: 'custom-model',
         },
       })),
     });
-    root = await mount(controls({ port: api, voiceLibrary: libraryPort(), engines: twoEngines() }));
+    root = await mount(
+      controls({ port: api, voices: flashCatalog(), voiceLibrary: libraryPort(), engines: twoEngines() }),
+    );
     expect(mode(root)).toBe('create');
-    expect(castingField(root, '목소리 제작 연결').props.value).toBe('');
-    expect(text(root)).toContain('목소리 제작 연결을 다시 골라 주세요.');
+    expect(modeCard(root, 'create').props.checked).toBe(true);
+    expect(text(root)).toContain('내레이터가 Gemini 3.8 Flash TTS 목소리일 때만 쓸 수 있어요.');
+    expect(text(root)).toContain('새 목소리 만들기는 내레이터가 Gemini 3.8 Flash TTS일 때만 쓸 수 있어요.');
     expect(button(root, '생성 전 확인').props.disabled).toBe(true);
-    act(() => castingField(root, '목소리 제작 연결').props.onChange({ target: { value: 'designer' } }));
+    expect(api.savePreferences).not.toHaveBeenCalled();
+    act(() => select(root, '내레이터 목소리').props.onChange({ target: { value: 'g1' } }));
     await flush();
     expect(vi.mocked(api.savePreferences).mock.lastCall![0].casting).toMatchObject({
       designProviderId: 'designer',
@@ -372,6 +424,11 @@ describe('voice library casting choices', () => {
       maxDesignedVoices: 2,
     });
     expect(button(root, '생성 전 확인').props.disabled).toBe(false);
+    await click(button(root, '생성 전 확인'));
+    expect(vi.mocked(api.estimate).mock.lastCall![0].casting).toMatchObject({
+      designProviderId: 'designer',
+      designModelId: 'gemini-3.8-flash-tts',
+    });
   });
 
   it('turns automatic acting on by default for capable voices, remembers an explicit off, and stays off for others', async () => {
@@ -381,7 +438,7 @@ describe('voice library casting choices', () => {
       voice.providerId === 'tts-a' ? { ...voice, autoActingSupported: true } : voice,
     );
     const root = await mount(controls({ port: api, voices: acting }));
-    const toggle = () => castingField(root, '장면에 맞춰 감정·말투·속도 표시');
+    const toggle = () => castingField(root, '감정·속도 살려 읽기');
     expect(toggle().props.checked).toBe(true);
     expect(api.savePreferences).not.toHaveBeenCalled();
     await click(button(root, '생성 전 확인'));
@@ -404,24 +461,26 @@ describe('voice library casting choices', () => {
     await flush();
     await click(button(root, /^외부 1/));
     expect(toggle().props.checked).toBe(true);
-    expect(text(root)).toContain('자동 연기를 지원하지 않는 목소리가 있어요');
+    expect(text(root)).toContain('장면 연기를 지원하지 않는 목소리가 있어요');
+    expect(text(root)).toContain('지원하지 않는 목소리가 있어 쓸 수 없어요: 외부 1');
     expect(button(root, '생성 전 확인').props.disabled).toBe(true);
 
     act(() => renderer!.unmount());
     const plain = port();
     const other = await mount(controls({ port: plain }));
-    expect(castingField(other, '장면에 맞춰 감정·말투·속도 표시').props.checked).toBe(false);
-    expect(text(other)).not.toContain('자동 연기를 지원하지 않는 목소리가 있어요');
+    expect(castingField(other, '감정·속도 살려 읽기').props.checked).toBe(false);
+    expect(text(other)).toContain('지금 고른 목소리로는 쓸 수 없어요.');
+    expect(text(other)).not.toContain('장면 연기를 지원하지 않는 목소리가 있어요');
     await click(button(other, '생성 전 확인'));
     expect(vi.mocked(plain.estimate).mock.lastCall![0]).not.toHaveProperty('autoActing');
   });
 
-  it('keeps a legacy major-only design choice, restores the model after order, and explains missing design connections', async () => {
-    const saved = (casting: SpeakerGenerationPreferences['casting']) =>
+  it('keeps a legacy major-only design choice, restores the model after order, and blocks it off Flash', async () => {
+    const saved = (casting: SpeakerGenerationPreferences['casting'], narratorVoiceId = 'a1') =>
       port(async () => [], {
         preferences: vi.fn(async () => ({
           engineId: 'e1',
-          narratorVoiceId: 'a1',
+          narratorVoiceId,
           characterVoiceIds: ['a2'],
           casting,
         })),
@@ -433,9 +492,10 @@ describe('voice library casting choices', () => {
     const api = saved(legacy);
     let root = await mount(controls({ port: api, voiceLibrary: noDesigners, engines: twoEngines() }));
     expect(mode(root)).toBe('pick');
-    expect(castingField(root, '주요 인물만 새 목소리 (이전 방식)').props.checked).toBe(true);
-    expect(modeCard(root, 'create').props.disabled).toBe(true);
-    expect(text(root)).toContain('Gemini 3.8 Flash TTS(gemini-3.8-flash-tts) 연결에서만 지원해요');
+    expect(castingField(root, '주요 인물은 새 목소리로 만들기').props.checked).toBe(true);
+    expect(hasMode(root, 'create')).toBe(false);
+    expect(text(root)).toContain('새 목소리 만들기는 내레이터가 Gemini 3.8 Flash TTS일 때만 쓸 수 있어요.');
+    expect(button(root, '생성 전 확인').props.disabled).toBe(true);
     expect(api.savePreferences).not.toHaveBeenCalled();
     await chooseMode(root, 'order');
     expect(vi.mocked(api.savePreferences).mock.lastCall![0].casting?.engineId).toBeUndefined();
@@ -443,16 +503,19 @@ describe('voice library casting choices', () => {
     expect(vi.mocked(api.savePreferences).mock.lastCall![0].casting?.engineId).toBe('cast');
 
     act(() => renderer!.unmount());
+    // Under a Flash narrator the same saved choice works and is sent on that narrator's connection.
+    const flash = saved({ ...legacy, designProviderId: 'gone', designModelId: 'm' }, 'g1');
     root = await mount(
-      controls({
-        port: saved({ ...legacy, designMode: 'characters', designProviderId: 'gone', designModelId: 'm' }),
-        voiceLibrary: libraryPort(),
-        engines: twoEngines(),
-      }),
+      controls({ port: flash, voices: flashCatalog(), voiceLibrary: libraryPort(), engines: twoEngines() }),
     );
-    expect(mode(root)).toBe('create');
-    expect(text(root)).toContain('목소리 제작 연결을 다시 골라 주세요.');
-    expect(button(root, '생성 전 확인').props.disabled).toBe(true);
+    expect(mode(root)).toBe('pick');
+    expect(castingField(root, '주요 인물은 새 목소리로 만들기').props.checked).toBe(true);
+    await click(button(root, '생성 전 확인'));
+    expect(vi.mocked(flash.estimate).mock.lastCall![0].casting).toMatchObject({
+      autoDesign: true,
+      designProviderId: 'designer',
+      designModelId: 'gemini-3.8-flash-tts',
+    });
   });
 
   it('opens model and voice management without resetting the selected casting mode', async () => {
@@ -464,12 +527,12 @@ describe('voice library casting choices', () => {
     });
     const root = await mount(props, { onManageEngines: manageEngines, onManageVoices: manageVoices });
     await chooseMode(root, 'pick');
-    expect(castingField(root, '목소리 선정 모델').props.value).toBe('cast');
+    expect(castingField(root, '배정 AI 모델').props.value).toBe('cast');
     await click(button(root, '모델 연결'));
     await click(button(root, '목소리 보관함'));
     expect(manageEngines).toHaveBeenCalledTimes(1);
     expect(manageVoices).toHaveBeenCalledTimes(1);
-    expect(castingField(root, '목소리 선정 모델').props.value).toBe('cast');
+    expect(castingField(root, '배정 AI 모델').props.value).toBe('cast');
   });
 });
 function text(node: ReactTestInstance): string {
@@ -526,14 +589,12 @@ describe('UiNextSpeakerGenerationPanel creating', () => {
       expect.any(AbortSignal),
     );
     const confirm = text(root.findByProps({ 'aria-label': '생성 확인' }));
-    expect(confirm).toContain('함께 분석할 앞 회차');
-    expect(confirm).toContain('앞 1개 회차도 분석해요');
+    expect(confirm).toContain('앞 회차(분석만)');
+    expect(confirm).toContain('앞 1개 회차도 읽어요');
     expect(confirm).toContain('분석 A · model-a');
     expect(button(root, '생성 시작').props.disabled).toBe(true);
 
-    act(() =>
-      castingField(root, '분석 모델이나 음성 서비스의 API 사용 요금').props.onChange({ target: { checked: true } }),
-    );
+    act(() => castingField(root, '유료 API 요금이 나올 수 있어요').props.onChange({ target: { checked: true } }));
     // Two clicks before the first reply lands still start one job.
     let release!: () => void;
     vi.mocked(api.create).mockImplementation(
@@ -701,7 +762,7 @@ describe('UiNextSpeakerGenerationPanel jobs', () => {
     const root = await mount(controls({ port: api }));
     expect(text(root)).toContain('화자 찾기 단계에서 중단됐어요');
     await click(button(root, '다시 시도'));
-    expect(text(root)).toContain('남은 회차의 분석과 음성 생성을 이어가요.');
+    expect(text(root)).toContain('남은 회차를 이어서 만들어요.');
     expect(text(root)).not.toContain('남은 0개 구간');
     vi.mocked(api.list).mockResolvedValue([job({ planningComplete: false })]);
     await click(button(root, '목록 새로고침'));
@@ -713,7 +774,7 @@ describe('UiNextSpeakerGenerationPanel jobs', () => {
     const listen = vi.fn();
     const root = await mount(controls({ port: port(async () => [job()]), listen }));
     const steps = root.findByProps({ 'aria-label': '진행 단계' });
-    expect(text(steps)).toBe('화자 찾기인물 연결목소리 선정음성 만들기');
+    expect(text(steps)).toBe('화자 찾기인물 연결목소리 배정음성 만들기');
     expect(steps.findByProps({ 'aria-current': 'step' }).children).toEqual(['음성 만들기']);
     expect(text(root)).toContain('앞 회차 1개 포함');
     expect(text(root)).toContain('들을 수 있는 회차 1/2');
@@ -843,7 +904,7 @@ describe('UiNextSpeakerGenerationPanel saved choices', () => {
     const api = port();
     vi.mocked(api.preferences).mockRejectedValue(new Error('offline'));
     const root = await mount(controls({ port: api }));
-    expect(text(root)).toContain('저장해 둔 선택을 불러오지 못했어요');
+    expect(text(root)).toContain('저장한 설정을 불러오지 못했어요');
     act(() => select(root, '내레이터 목소리').props.onChange({ target: { value: 'a2' } }));
     await flush();
     expect(select(root, '내레이터 목소리').props.value).toBe('a2');

@@ -198,82 +198,6 @@
   font-weight: 600;
 }
 
-/* 음성 다시 만들기: one row per captured speaker, inside the job card. */
-.un-revoice-fields {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  gap: 12px;
-  min-width: 0;
-  margin: 0;
-  padding: 0;
-  border: 0;
-}
-
-.un-revoice-row {
-  display: grid;
-  gap: 8px;
-  min-width: 0;
-}
-
-.un-revoice-row + .un-revoice-row {
-  padding-top: 12px;
-  border-top: 1px solid var(--un-line);
-}
-
-.un-revoice-row .un-cast-field > span {
-  overflow-wrap: anywhere;
-}
-
-/* Inside the job card the fields need an edge, like the library editor's. */
-.un-revoice :is(select, textarea) {
-  border: 1px solid var(--un-line);
-  background: var(--un-bg-3);
-}
-
-.un-revoice textarea {
-  box-sizing: border-box;
-  width: 100%;
-  min-width: 0;
-  padding: 10px 11px;
-  border: 0;
-  border-radius: 10px;
-  color: var(--un-text);
-  font: inherit;
-  font-size: 14px;
-  resize: vertical;
-}
-
-.un-revoice :is(select, textarea):focus-visible {
-  outline: 2px solid var(--un-accent);
-  outline-offset: 2px;
-}
-
-.un-revoice .un-chip-row {
-  flex-wrap: wrap;
-  gap: 6px;
-  overflow: visible;
-  padding: 0;
-}
-
-.un-revoice .un-chip {
-  height: 30px;
-  padding: 0 11px;
-  font-size: 13px;
-}
-
-.un-revoice .un-chip.is-active,
-.un-revoice .un-chip.is-active:hover {
-  background: #f5f5f7;
-}
-
-.un-revoice .un-chip:disabled:not(.is-active) {
-  opacity: 0.45;
-}
-
-.un-revoice .un-revoice-manual {
-  justify-self: start;
-}
-
 /* A checkbox title and its note sit on separate lines instead of running together. */
 .un-cast .un-book-ack > span > small {
   display: block;
@@ -422,6 +346,8 @@
   background: var(--un-bg-2);
 }
 
+/* Above .un-book select, whose bg-2 would vanish on this bg-2 box. */
+.un-cast .un-cast-mode select,
 .un-cast-mode select {
   background: var(--un-bg-3);
 }
@@ -567,28 +493,6 @@
   overflow-wrap: anywhere;
 }
 
-.un-revoice-label {
-  color: var(--un-text-2);
-  font-size: 12.5px;
-  font-weight: 650;
-}
-
-.un-revoice .un-cast-mode {
-  background: var(--un-bg-3);
-}
-
-.un-revoice .un-cast-mode :is(select, .un-stepper) {
-  background: rgb(255 255 255 / 6%);
-}
-
-.un-revoice .un-choice {
-  background: var(--un-bg-3);
-}
-
-.un-revoice .un-choice.is-on {
-  background: linear-gradient(var(--un-accent-soft), var(--un-accent-soft)), var(--un-bg-3);
-}
-
 /* An optional setting, not a cost warning: neutral surface instead of the amber consent box. */
 .un-cast .un-book-ack.un-cast-toggle {
   background: var(--un-bg-2);
@@ -596,4 +500,408 @@
 
 .un-cast .un-book-ack.un-cast-toggle input {
   accent-color: var(--un-accent);
+}
+
+/* Saved legacy design choice: its switch and limit stay together under the pick settings. */
+.un-cast-legacy {
+  display: grid;
+  gap: 10px;
+}
+
+/* ───────── 목소리 바꾸기: per-character plan inside a job card ───────── */
+.un-recast-open {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 12px 14px;
+  border: 1px solid var(--un-line);
+  border-radius: 12px;
+  background: var(--un-bg-3);
+  color: var(--un-text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.16s var(--un-ease);
+}
+
+.un-recast-open:hover {
+  border-color: var(--un-line-2);
+}
+
+.un-recast-open:focus-visible {
+  outline: 2px solid var(--un-accent);
+  outline-offset: 2px;
+}
+
+.un-recast-open > svg:first-child {
+  color: var(--un-accent-2);
+}
+
+.un-recast-open > svg:last-child {
+  color: var(--un-text-3);
+}
+
+.un-recast-open span {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.un-recast-open b {
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.un-recast-open small {
+  color: var(--un-text-3);
+  font-size: 12.5px;
+}
+
+.un-recast {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 12px;
+  min-width: 0;
+  padding: 14px;
+  border: 1px solid var(--un-line-2);
+  border-radius: 14px;
+  background: var(--un-bg-1);
+}
+
+.un-recast-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.un-recast h4,
+.un-recast h5 {
+  margin: 0;
+  color: var(--un-text);
+  font-size: 15px;
+  font-weight: 750;
+  letter-spacing: -0.01em;
+}
+
+.un-recast h5 {
+  font-size: 13.5px;
+}
+
+.un-recast-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 12px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.un-recast .un-recast-body :is(select, textarea) {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  border: 1px solid var(--un-line-2);
+  border-radius: 10px;
+  background: var(--un-bg-3);
+  color: var(--un-text);
+  font: inherit;
+  font-size: 14px;
+}
+
+.un-recast .un-recast-body select {
+  height: 40px;
+  padding: 0 10px;
+  text-overflow: ellipsis;
+}
+
+.un-recast textarea {
+  padding: 10px 11px;
+  resize: vertical;
+}
+
+.un-recast :is(select, textarea):focus-visible {
+  outline: 2px solid var(--un-accent);
+  outline-offset: 2px;
+}
+
+.un-recast-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 4px 12px;
+  color: var(--un-text-3);
+  font-size: 12.5px;
+}
+
+.un-recast-tool-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  font-size: 13px;
+}
+
+.un-recast-list {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.un-recast-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 8px;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid transparent;
+  border-radius: 12px;
+  background: var(--un-bg-2);
+  transition: border-color 0.16s var(--un-ease);
+}
+
+.un-recast-row.is-changed {
+  border-color: rgb(91 140 255 / 45%);
+}
+
+.un-recast-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 6px;
+  min-width: 0;
+}
+
+.un-recast-head b {
+  min-width: 0;
+  margin-right: 2px;
+  font-size: 14.5px;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.un-recast-head small {
+  margin-left: auto;
+  color: var(--un-text-3);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.un-recast-badge {
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: rgb(255 255 255 / 7%);
+  color: var(--un-text-2);
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.un-recast-voice {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px 6px;
+  min-width: 0;
+  margin: 0;
+  color: var(--un-text-2);
+  font-size: 13px;
+}
+
+.un-recast-voice > span,
+.un-recast-voice > b {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.un-recast-voice > svg {
+  flex: none;
+  color: var(--un-text-3);
+}
+
+.un-recast-voice > b {
+  color: var(--un-accent-2);
+  font-weight: 700;
+}
+
+/* Segmented control: one tap per character, three short choices that fit a 320px card. */
+.un-seg {
+  display: grid;
+  grid-auto-columns: minmax(0, 1fr);
+  grid-auto-flow: column;
+  gap: 2px;
+  padding: 3px;
+  border-radius: 10px;
+  background: var(--un-bg-3);
+}
+
+.un-seg label {
+  position: relative;
+  display: grid;
+  place-items: center;
+  min-width: 0;
+  height: 34px;
+  padding: 0 2px;
+  border-radius: 8px;
+  color: var(--un-text-2);
+  font-size: 13px;
+  letter-spacing: -0.02em;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    background-color 0.14s var(--un-ease),
+    color 0.14s var(--un-ease);
+}
+
+.un-seg input {
+  position: absolute;
+  inset: 0;
+  margin: 0;
+  opacity: 0;
+  cursor: inherit;
+}
+
+.un-seg label.is-on {
+  background: var(--un-accent);
+  color: #fff;
+}
+
+.un-seg label.is-off {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.un-seg label:has(input:focus-visible) {
+  outline: 2px solid var(--un-accent-2);
+  outline-offset: 1px;
+}
+
+.un-recast .un-cast-mode {
+  background: var(--un-bg-2);
+}
+
+.un-recast-summary {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border-radius: 12px;
+  background: var(--un-bg-2);
+}
+
+.un-recast-summary dl {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+}
+
+.un-recast-summary dl > div {
+  display: grid;
+  grid-template-columns: 5em minmax(0, 1fr);
+  gap: 10px;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.un-recast-summary dt {
+  color: var(--un-text-3);
+}
+
+.un-recast-summary dd {
+  margin: 0;
+  color: var(--un-text-2);
+  overflow-wrap: anywhere;
+}
+
+.un-recast-summary .is-on dd {
+  color: var(--un-text);
+  font-weight: 650;
+}
+
+.un-recast-summary .un-book-ack.un-cast-toggle {
+  background: var(--un-bg-3);
+}
+
+.un-recast-acting {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 10px;
+  min-width: 0;
+  padding-top: 12px;
+  border-top: 1px solid var(--un-line);
+}
+
+.un-recast-directions > summary small {
+  margin-left: 6px;
+  color: var(--un-text-3);
+}
+
+.un-recast .un-chip-row {
+  flex-wrap: wrap;
+  gap: 6px;
+  overflow: visible;
+  padding: 0;
+}
+
+.un-recast .un-chip {
+  height: 30px;
+  padding: 0 11px;
+  font-size: 13px;
+}
+
+.un-recast .un-chip.is-active,
+.un-recast .un-chip.is-active:hover {
+  background: #f5f5f7;
+}
+
+.un-recast .un-chip:disabled:not(.is-active) {
+  opacity: 0.45;
+}
+
+.un-cast-options > summary > small {
+  margin-left: 6px;
+  color: var(--un-text-3);
+  font-size: 12px;
+}
+
+/* Small phones: the plan sits two cards deep, so the nested padding gives its width back to the choices. */
+@media (max-width: 360px) {
+  .un-recast {
+    padding: 12px 10px;
+  }
+
+  .un-recast-row {
+    padding: 10px;
+  }
+
+  .un-seg label {
+    font-size: 12.5px;
+  }
+}
+
+.un-recast .un-recast-body .un-cast-mode select {
+  background: rgb(255 255 255 / 6%);
+}
+
+.un-recast .un-book-ack > span > small {
+  display: block;
+  margin-top: 4px;
+}
+
+.un-recast-summary dd small {
+  display: block;
+  margin-top: 2px;
+  color: var(--un-text-2);
+  font-size: 12.5px;
+  font-weight: 500;
+}
+
+/* Book-wide list: its note stands apart from the first character row. */
+.un-cast-options > p.un-book-note {
+  margin: 0 0 10px;
 }

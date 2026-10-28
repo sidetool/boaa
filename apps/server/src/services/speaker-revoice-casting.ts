@@ -1,3 +1,4 @@
+import { applyBookVoiceUpdates } from './speaker-book-voices';
 import type pg from 'pg';
 import type { SpeakerEngineResult } from '../../../../src/providers/speaker-engine-protocol';
 import type { SpeakerVoiceCasting, CastingRun } from './speaker-voice-casting';
@@ -34,11 +35,19 @@ export async function prepareRevoiceCasting(options: {
     chapterId,
     run.settings.chapterIds.indexOf(chapterId) + 1,
   );
+  const evidence = (
+    await pool.query(
+      `select request from (select request,row_number() over(partition by request->'cast'->>'speakerId' order by ordinal) n
+     from saved_audiobook_items where audiobook_id=$1 and chapter_id=$2 and request->'cast'->>'speakerId'=any($3::text[])) examples
+     where n<=3 order by request->'cast'->>'speakerId',n`,
+      [run.id, chapterId, batch.map((r) => r.request.cast.speakerId)],
+    )
+  ).rows as { request: CastRequest }[];
   const result: Extract<SpeakerEngineResult, { kind: 'complete' }> = {
     kind: 'complete',
     ledger: {},
     identities: batch.map(({ request: r }) => ({ id: r.cast.speakerId, name: r.cast.label, reviewRequired: false })),
-    labels: batch.map(({ request: r }) => {
+    labels: evidence.map(({ request: r }) => {
       const paragraph = loaded.paragraphs.find((p) => p.id === r.paragraphId);
       if (!paragraph) throw audiobookError(409, '본문이 변경됐어요.');
       castPlayable(paragraph, r, run.settings.rules);
@@ -85,6 +94,20 @@ export async function prepareRevoiceCasting(options: {
         [run.id, id, voiceId, JSON.stringify(model)],
       );
     }
+    if (run.settings.cast?.applyToBook)
+      await applyBookVoiceUpdates(
+        c,
+        owner,
+        run.book_id,
+        run.analysis_key,
+        done.map((id) => ({
+          speakerId: id,
+          name: result.identities.find((i) => i.id === id)!.name,
+          voiceId: selected.assignments[id],
+          model: selected.models[selected.assignments[id]],
+        })),
+        run.settings.cast.bookVoiceVersions ?? {},
+      );
     const settings = {
       ...run.settings,
       cast: { ...run.settings.cast!, models: selected.models, recastSpeakers: remaining },
