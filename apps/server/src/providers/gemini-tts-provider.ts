@@ -1,3 +1,4 @@
+import { isGeminiVoiceDesignModel } from '../../../../src/providers/voice-library';
 import { ttsHttpError } from './tts-http-error.js';
 import { interactionAudioResponse } from './gemini-audio-response.js';
 import { wavFromPcm16 } from './tts-audio.js';
@@ -22,11 +23,17 @@ export class GeminiTTSProvider implements TTSSynthesisProvider {
 
   constructor(private readonly options: GeminiTTSProviderOptions) {}
 
+  get supportsVoiceDesign() {
+    return isGeminiVoiceDesignModel(this.options.modelId);
+  }
+
   async listVoices() {
     return namedVoices(GEMINI_VOICES);
   }
 
   async designVoice(input: { alias: string; prompt: string; language: string; modelId: string; signal: AbortSignal }) {
+    if (!this.supportsVoiceDesign || !isGeminiVoiceDesignModel(input.modelId))
+      throw new Error('Voice design requires Gemini 3.8 Flash TTS');
     const key = this.options.apiKey?.trim();
     if (!key) throw new Error('Gemini TTS API key is required');
     const response = await (this.options.fetchImpl ?? fetch)(

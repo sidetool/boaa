@@ -6,7 +6,7 @@ const input = () => ({
   alias: '합성 목소리',
   prompt: '차분하고 또렷한 원래 인물의 목소리',
   language: 'ko-KR',
-  modelId: 'selected-design-model',
+  modelId: 'gemini-3.8-flash-tts',
   signal: new AbortController().signal,
 });
 const wav = wavFromPcm16(Buffer.from([0, 0, 1, 0]), 24000);
@@ -14,7 +14,7 @@ const provider = (fetchImpl: typeof fetch) =>
   new GeminiTTSProvider({
     apiKey: 'fixture-key',
     baseUrl: 'http://gemini.invalid/',
-    modelId: 'different-synthesis-model',
+    modelId: 'gemini-3.8-flash-tts',
     fetchImpl,
   });
 
@@ -47,7 +47,7 @@ describe('Gemini stored voice design transport', () => {
     expect(audio.contentType).toBe('audio/wav');
     expect(fetchImpl).toHaveBeenCalledTimes(2);
     const synthesis = JSON.parse(String(fetchImpl.mock.calls[1][1]?.body));
-    expect(synthesis.model).toBe('different-synthesis-model');
+    expect(synthesis.model).toBe('gemini-3.8-flash-tts');
     expect(synthesis.generation_config.speech_config).toEqual([{ voice: 'voice_saved_custom' }]);
   });
   it('creates a stored prompted voice with the selected model and returns the provider ID and sample', async () => {
@@ -69,7 +69,7 @@ describe('Gemini stored voice design transport', () => {
       store: true,
       voice: {
         type: 'prompted',
-        model: 'selected-design-model',
+        model: 'gemini-3.8-flash-tts',
         display_name: request.alias,
         language_code: 'ko-KR',
         prompted: { input: request.prompt },
@@ -130,7 +130,7 @@ describe('Gemini stored voice design transport', () => {
     const fetchImpl = vi.fn<typeof fetch>(async () => new Response(stream));
     await expect(provider(fetchImpl).designVoice(input())).rejects.toThrow('too large');
     expect(cancel).toHaveBeenCalledTimes(1);
-    const noKey = new GeminiTTSProvider({ modelId: 'selected-model', fetchImpl });
+    const noKey = new GeminiTTSProvider({ modelId: 'gemini-3.8-flash-tts', fetchImpl });
     await expect(noKey.designVoice(input())).rejects.toThrow('API key');
     expect(fetchImpl).toHaveBeenCalledTimes(1);
   });

@@ -11,7 +11,10 @@ import { audiobookError, type AudiobookPlan } from './audiobook-plan.js';
 import { castPlayable, loadSpeakerChapter, type CastRequest } from './speaker-generation-plan.js';
 import { voiceText } from './voice-library-store.js';
 import type { SpeakerEngineStore } from '../providers/speaker-engine-store';
-import { speakerRevision } from '../providers/speaker-engine-config';
+import { normalizeCasting } from './speaker-voice-selection';
+import type { VoiceLibraryStore } from './voice-library-store';
+import { isGeminiVoiceDesignModel } from '../../../../src/providers/voice-library';
+import { speakerRevision, castingRevision } from '../providers/speaker-engine-config';
 
 interface Source {
   id: string;
@@ -97,6 +100,7 @@ export async function planSpeakerRevoice(
   input: SpeakerRevoiceInput,
   catalog: PlainTTSVoices,
   engines?: SpeakerEngineStore,
+  library?: VoiceLibraryStore,
 ): Promise<AudiobookPlan & { estimate: SpeakerRevoiceEstimate }> {
   const { source, items: captured } = await loadRevoiceSource(pool, owner, bookId, id);
   const view = revoiceSourceView(captured);
@@ -134,6 +138,45 @@ export async function planSpeakerRevoice(
     actingEngine = { id: engineId, revision: speakerRevision(engine) };
     actingPaid = engine.paid;
   }
+  const casting = normalizeCasting(input.casting);
+  if (casting && (casting.designMode !== 'characters' || !casting.autoDesign || !engines || !library))
+    throw audiobookError(400, '새 목소리 제작 설정을 확인해 주세요.');
+  const selecting = casting?.engineId ? await engines!.loadCasting(casting.engineId) : undefined;
+  const designer = casting
+    ? (await library!.list()).designers.find((d) => d.id === casting.designProviderId)
+    : undefined;
+  const designVoice = casting ? catalog.voices.find((v) => v.providerId === casting.designProviderId) : undefined;
+  if (
+    casting &&
+    (!designer ||
+      !designVoice?.model ||
+      !isGeminiVoiceDesignModel(casting.designModelId) ||
+      !isGeminiVoiceDesignModel(designer.modelId))
+  )
+    throw audiobookError(400, '목소리 제작을 지원하는 Gemini 3.8 Flash TTS 연결을 골라 주세요.');
+  const pinned = casting
+    ? (
+        await pool.query(
+          'select speaker_id from speaker_voice_bindings where user_id=$1 and book_id=$2 and analysis_key=$3 and pinned',
+          [owner, bookId, source.analysis_key],
+        )
+      ).rows.map((r) => r.speaker_id as string)
+    : [];
+  const recastSpeakers = casting
+    ? view.voices
+        .filter(
+          (v) =>
+            v.speakerId !== 'narrator' &&
+            !pinned.includes(v.speakerId) &&
+            choices.get(v.speakerId)!.voiceId === v.voiceId,
+        )
+        .map((v) => v.speakerId)
+    : [];
+  if (casting && !recastSpeakers.length)
+    throw audiobookError(400, '새 목소리를 만들 인물이 없어요. 직접 지정한 목소리는 유지해요.');
+  const resolvedCasting = casting
+    ? { ...casting, engineRevision: castingRevision(selecting!), designModel: designVoice!.model }
+    : undefined;
   const models = Object.fromEntries(voices.map((v) => [v.id, v.model!]));
   const contextIds = source.chapter_ids.slice(0, source.next_chapter);
   const chapterIds = source.settings.chapterIds.filter((chapterId) => captured.some((i) => i.chapter_id === chapterId));
@@ -142,7 +185,7 @@ export async function planSpeakerRevoice(
   const items: AudiobookPlan['items'] = [];
   let characters = 0,
     bytes = 0,
-    changed = actingAnalysis;
+    changed = actingAnalysis || recastSpeakers.length > 0;
   for (const chapterId of chapterIds) {
     const loaded = await loadSpeakerChapter(pool, owner, bookId, chapterId, contextIds.indexOf(chapterId) + 1);
     const paragraphs = new Map(loaded.paragraphs.map((p) => [p.id, p]));
@@ -182,6 +225,7 @@ export async function planSpeakerRevoice(
     sourceId: id,
     revision: source.content_revision,
     ...(actingEngine ? { actingEngine } : {}),
+    ...(resolvedCasting ? { casting: resolvedCasting, recastSpeakers } : {}),
     items: items.map((i) => ({ chapterId: i.chapterId, request: i.request })),
   });
   const narrator = choices.get('narrator')?.voiceId ?? source.settings.voiceId;
@@ -189,7 +233,7 @@ export async function planSpeakerRevoice(
     bookId,
     title: source.title,
     revision: source.content_revision,
-    planningComplete: !actingAnalysis,
+    planningComplete: !actingAnalysis && !recastSpeakers.length,
     revoiceSource: { id, itemCount: captured.length, nextChapter: source.next_chapter },
     speakerRun: {
       analysisKey: source.analysis_key,
@@ -209,6 +253,8 @@ export async function planSpeakerRevoice(
         autoActing: mode === 'auto',
         actingEngine,
         revoiceFrom: id,
+        casting: resolvedCasting,
+        recastSpeakers,
         models,
         characterVoiceIds: selectedIds,
       },
@@ -219,7 +265,14 @@ export async function planSpeakerRevoice(
       chapterCount: chapterIds.length,
       itemCount: items.length,
       characters,
-      paid: actingPaid || voices.some((v) => v.paid),
+      paid: actingPaid || !!selecting?.paid || !!designer?.paid || voices.some((v) => v.paid),
+      ...(resolvedCasting
+        ? {
+            recastCharacters: recastSpeakers.length,
+            selectionModelLabel: selecting!.name,
+            maxDesignedVoices: resolvedCasting.maxDesignedVoices,
+          }
+        : {}),
       ...(actingAnalysis ? { actingAnalysis: true } : {}),
       voiceLabel: '화자별 목소리',
       providerName: [...new Set(voices.map((v) => v.providerName || v.providerId || 'TTS'))].join(' · '),

@@ -111,6 +111,7 @@ export interface TTSSynthesisResult {
 
 export interface TTSSynthesisProvider {
   readonly supportsInstructions?: boolean;
+  readonly supportsVoiceDesign?: boolean;
   readonly providerId: string;
   readonly displayName: string;
   readonly supportsStreaming: boolean;

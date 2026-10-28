@@ -9,15 +9,16 @@ import type {
   SpeakerRevoiceInput,
   SpeakerRevoiceSource,
 } from '../../providers/speaker-generation';
-import type { LibraryVoice } from '../../providers/voice-library';
+import type { LibraryVoice, SpeakerCastingOptions, VoiceDesignProvider } from '../../providers/voice-library';
 import { formatCount } from '../../utils/format';
 import { cx } from '../components/primitives';
+import { VoiceDesignFields } from './UiNextCastingOptions';
 
 type Draft = Record<string, { voiceId: string; instructions: string }>;
 type ActingMode = NonNullable<SpeakerRevoiceInput['acting']>['mode'];
 /** Short delivery cues; they never change who the voice sounds like. */
 const ACTING_EXAMPLES = ['조용히 속삭이듯', '지친 듯', '긴장해서 빠르게', '단호하고 차갑게', '밝고 들뜬', '울먹이며'];
-/** Gemini 3.8 TTS takes per-line style separately from the stored voice; guidance is shown only for these. */
+/** Gemini 3.8 Flash TTS takes per-line style separately from the stored voice; guidance is shown only for these. */
 const GEMINI_38 = new Set(['gemini-3.8-flash-tts', 'gemini-3.8-flash-lite-tts']);
 const isGemini38 = (voice?: PlainTTSVoice) =>
   voice?.instructionsSupported === true && GEMINI_38.has(voice.modelId ?? voice.model?.modelId ?? '');
@@ -27,8 +28,9 @@ const message = (error: unknown, fallback: string) =>
 
 /**
  * 음성 다시 만들기: a new audio-only job from this job's captured plan. It never edits the book's
- * assignments, never re-runs speaker finding, identity or casting, and keeps the old audio.
- * Only an explicit 'auto' acting choice calls the chosen analysis model, for spans without acting tags.
+ * assignments, never re-runs speaker finding or identity, and keeps the old audio.
+ * Model calls happen only on explicit choices: 'auto' acting for untagged spans (analysis model) and
+ * natural voice creation for unchanged characters (selection model + voice design).
  */
 export default function UiNextSpeakerRevoice({
   job,
@@ -36,13 +38,16 @@ export default function UiNextSpeakerRevoice({
   voices,
   library,
   engines,
+  designers,
   onCreated,
 }: {
   job: SpeakerGenerationJob;
   port: SpeakerGenerationPort;
   voices: readonly PlainTTSVoice[];
-  /** Analysis connections; needed only to add automatic acting tags. */
+  /** All model connections: analysis ones add acting tags, selection ones plan new voices. */
   engines?: readonly SpeakerEngine[];
+  /** Voice design connections for natural voice creation. */
+  designers?: readonly VoiceDesignProvider[];
   /** Labels only; descriptions are never sent as acting directions. */
   library?: readonly LibraryVoice[];
   /** Reloads the parent job list; it must not start playback. */
@@ -56,6 +61,9 @@ export default function UiNextSpeakerRevoice({
   // Undefined until the person picks: the default follows the source (see defaultMode).
   const [actingChoice, setActingChoice] = useState<ActingMode>();
   const [actingEngineChoice, setActingEngineChoice] = useState<string>();
+  // New voices per character: off by default; turning it off keeps the draft for turning it back on.
+  const [recastOn, setRecastOn] = useState(false);
+  const [recast, setRecast] = useState<SpeakerCastingOptions>();
   // Per-character manual directions stay folded until asked for or already written.
   const [manual, setManual] = useState<ReadonlySet<string>>(new Set());
   const [estimate, setEstimate] = useState<{ key: string; value: SpeakerRevoiceEstimate }>();
@@ -106,10 +114,31 @@ export default function UiNextSpeakerRevoice({
   }, [open, available, port, job.id, job.itemCount, stopped, attempt]);
 
   const catalog = (id: string) => voices.find((v) => v.id === id);
+  const analysisEngines = engines?.filter((e) => e.purpose !== 'casting');
+  const selectionEngines = engines?.filter((e) => e.purpose === 'casting') ?? [];
   // The original analysis model is only a hint: if it is gone, the person picks one.
-  const hinted = engines?.some((e) => e.id === source?.actingEngineId) ? source?.actingEngineId : undefined;
+  const hinted = analysisEngines?.some((e) => e.id === source?.actingEngineId) ? source?.actingEngineId : undefined;
   const actingEngineId = actingEngineChoice ?? hinted;
-  const actingEngine = engines?.find((e) => e.id === actingEngineId);
+  const actingEngine = analysisEngines?.find((e) => e.id === actingEngineId);
+  const canRecast = selectionEngines.some((e) => e.enabled) && !!designers?.length;
+  const recasting = recastOn && recast ? recast : undefined;
+  const toggleRecast = (on: boolean) => {
+    setCreated(false);
+    setRecastOn(on);
+    if (on && !recast)
+      setRecast({
+        engineId: selectionEngines.find((e) => e.enabled)?.id,
+        autoDesign: true,
+        designMode: 'characters',
+        designProviderId: designers?.[0]?.id,
+        designModelId: designers?.[0]?.modelId,
+        maxDesignedVoices: 4,
+      });
+  };
+  const patchRecast = (next: Partial<SpeakerCastingOptions>) => {
+    setCreated(false);
+    setRecast((current) => current && { ...current, ...next });
+  };
   // Spans without tags; older sources omit it, so untagged means needed.
   const needsActing = source ? (source.needsActing ?? !source.hasActing) : false;
   const showActing = !!source?.hasActing || voices.some((v) => v.autoActingSupported === true);
@@ -117,7 +146,7 @@ export default function UiNextSpeakerRevoice({
     !!source?.voices.length && source.voices.every((v) => catalog(v.voiceId)?.autoActingSupported === true);
   // Fill missing tags by default only when it can start as is: capable voices and the original analysis model.
   const defaultMode: ActingMode =
-    showActing && needsActing && capturedSupported && engines?.find((e) => e.id === hinted)?.enabled
+    showActing && needsActing && capturedSupported && analysisEngines?.find((e) => e.id === hinted)?.enabled
       ? 'auto'
       : 'preserve';
   const actingMode = actingChoice ?? defaultMode;
@@ -130,6 +159,7 @@ export default function UiNextSpeakerRevoice({
             ...(actingMode === 'auto' && actingEngineId ? { engineId: actingEngineId } : {}),
           },
         }),
+    ...(recasting ? { casting: recasting } : {}),
     voices: source.voices.map((v) => {
       const d = draft[v.speakerId] ?? { voiceId: v.voiceId, instructions: v.instructions ?? '' };
       const text = d.instructions.trim();
@@ -166,9 +196,15 @@ export default function UiNextSpeakerRevoice({
           ? '연기를 분석할 모델을 골라 주세요.'
           : actingMode === 'auto' && needsActing && !actingEngine?.enabled
             ? '고른 분석 모델이 꺼져 있어요.'
-            : changes === 0 && actingMode === 'preserve'
-              ? '바꿀 목소리나 연기를 고르면 확인할 수 있어요.'
-              : undefined;
+            : recasting && !selectionEngines.some((e) => e.id === recasting.engineId && e.enabled)
+              ? '목소리 선정 모델을 골라 주세요.'
+              : recasting && !designers?.some((d) => d.id === recasting.designProviderId)
+                ? '목소리 제작 연결을 다시 골라 주세요.'
+                : recasting && !recasting.designModelId?.trim()
+                  ? '목소리 제작 모델 ID를 입력해 주세요.'
+                  : changes === 0 && actingMode === 'preserve' && !recasting
+                    ? '바꿀 목소리나 연기를 고르면 확인할 수 있어요.'
+                    : undefined;
   const inputKey = input ? JSON.stringify(input) : '';
   const fresh = estimate?.key === inputKey ? estimate.value : undefined;
   useEffect(() => {
@@ -247,8 +283,8 @@ export default function UiNextSpeakerRevoice({
       {open && (
         <>
           <p className="un-book-note">
-            이 작업에서 찾은 화자와 인물 연결을 그대로 쓰고 음성만 새 작업으로 만들어요. 화자 찾기·인물 연결·목소리
-            선정은 다시 하지 않고, 지금 음성과 작품의 인물 배정은 바뀌지 않아요.
+            이 작업에서 찾은 화자와 인물 연결을 그대로 쓰고 음성만 새 작업으로 만들어요. 화자 찾기·인물 연결은 다시 하지
+            않고, 지금 음성과 작품의 인물 배정은 바뀌지 않아요.
           </p>
           {sourceError && (
             <div className="un-book-actions">
@@ -275,6 +311,57 @@ export default function UiNextSpeakerRevoice({
                 </p>
               )}
               <fieldset className="un-revoice-fields" disabled={!stopped || !!working}>
+                <div className="un-revoice-row">
+                  <label className="un-cast-field">
+                    <span>인물 목소리</span>
+                    <select
+                      aria-label="인물 목소리"
+                      value={recastOn ? 'create' : 'keep'}
+                      onChange={(e) => toggleRecast(e.target.value === 'create')}
+                    >
+                      <option value="keep">지금 목소리 그대로</option>
+                      <option value="create" disabled={!recastOn && !canRecast}>
+                        인물마다 새 목소리 만들기{canRecast || recastOn ? '' : ' · 선정 모델과 제작 연결 필요'}
+                      </option>
+                    </select>
+                  </label>
+                  {recasting && (
+                    <>
+                      <label className="un-cast-field">
+                        <span>목소리 선정 모델</span>
+                        <select
+                          aria-label="목소리 선정 모델"
+                          value={recasting.engineId ?? ''}
+                          onChange={(e) => patchRecast({ engineId: e.target.value || undefined })}
+                        >
+                          {!selectionEngines.some((e) => e.id === recasting.engineId) && (
+                            <option value={recasting.engineId ?? ''}>
+                              {recasting.engineId ? '목록에 없는 선정 모델' : '선정 모델 고르기'}
+                            </option>
+                          )}
+                          {selectionEngines.map((e) => (
+                            <option key={e.id} value={e.id} disabled={!e.enabled}>
+                              {e.name} · {e.modelId}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <VoiceDesignFields
+                        value={recasting}
+                        designers={designers ?? []}
+                        disabled={false}
+                        onChange={patchRecast}
+                      />
+                    </>
+                  )}
+                  <small className="un-book-note">
+                    {recasting
+                      ? '원래 분석의 원문을 바탕으로 선정 모델이 주요·조연 인물의 고정 특징을 정리하고 새 목소리를 만들어요. 내레이터와 아래에서 목소리를 직접 바꾼 인물은 그대로이고, 엑스트라·불확실한 인물과 최대 개수를 넘는 인물은 지금 목소리를 써요. 원래 작업과 작품 배정은 바뀌지 않아요.'
+                      : canRecast
+                        ? '아래에서 인물별 목소리를 바꾸거나, 원문을 바탕으로 인물마다 새 목소리를 만들 수 있어요.'
+                        : '인물마다 새 목소리를 만들려면 목소리 선정 모델과 목소리 제작을 지원하는 Gemini 3.8 Flash TTS 연결이 필요해요.'}
+                  </small>
+                </div>
                 {showActing && (
                   <div className="un-revoice-row">
                     <label className="un-cast-field">
@@ -311,14 +398,14 @@ export default function UiNextSpeakerRevoice({
                           }}
                         >
                           {!actingEngineId && <option value="">분석 모델 고르기</option>}
-                          {engines?.map((e) => (
+                          {analysisEngines?.map((e) => (
                             <option key={e.id} value={e.id} disabled={!e.enabled && e.id !== actingEngineId}>
                               {e.name} · {e.modelId}
                               {e.paid ? ' · 유료 API' : ''}
                             </option>
                           ))}
                         </select>
-                        {engines && source.actingEngineId && !hinted && (
+                        {analysisEngines && source.actingEngineId && !hinted && (
                           <small className="un-book-note">원래 분석 모델을 찾을 수 없어요. 다시 골라 주세요.</small>
                         )}
                       </label>
@@ -450,7 +537,19 @@ export default function UiNextSpeakerRevoice({
                       <dt>낭독 글자</dt>
                       <dd>{formatCount(fresh.characters)}</dd>
                     </div>
+                    {fresh.recastCharacters !== undefined && (
+                      <div>
+                        <dt>새 목소리 인물</dt>
+                        <dd>{formatCount(fresh.recastCharacters)}</dd>
+                      </div>
+                    )}
                   </dl>
+                  {(fresh.selectionModelLabel || !!fresh.maxDesignedVoices) && (
+                    <p className="un-book-voice">
+                      목소리 선정 <b>{fresh.selectionModelLabel ?? '선정 모델'}</b>
+                      {fresh.maxDesignedVoices ? ` · 최대 ${fresh.maxDesignedVoices}개 제작` : ''}
+                    </p>
+                  )}
                   {fresh.actingAnalysis && (
                     <p className="un-book-voice">
                       연기 분석 <b>{actingEngine?.name ?? '분석 모델'}</b> · 표시가 없는 구간만
@@ -460,8 +559,14 @@ export default function UiNextSpeakerRevoice({
                     <label className="un-book-ack">
                       <input type="checkbox" checked={ack} onChange={(e) => setAck(e.target.checked)} />
                       <span>
-                        {fresh.actingAnalysis
-                          ? '음성 서비스와 연기 분석 모델의 API 사용 요금이 발생할 수 있어요. 화자 찾기·인물 연결은 다시 하지 않아요.'
+                        {fresh.actingAnalysis || recasting
+                          ? `${
+                              recasting && fresh.actingAnalysis
+                                ? '음성 서비스, 목소리 선정·제작과 연기 분석 모델'
+                                : recasting
+                                  ? '음성 서비스와 목소리 선정·제작'
+                                  : '음성 서비스와 연기 분석 모델'
+                            }의 API 사용 요금이 발생할 수 있어요. 화자 찾기·인물 연결은 다시 하지 않아요.`
                           : '음성 서비스의 API 사용 요금이 발생할 수 있어요. 분석 모델은 부르지 않아요.'}
                       </span>
                     </label>

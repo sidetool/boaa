@@ -138,7 +138,7 @@ describe('UiNextSpeakerRevoice audio-only variant', () => {
 
   it('appends optional acting examples and shows Gemini 3.8 guidance only for that model', async () => {
     const root = await mount(fixture());
-    expect(text(root)).not.toContain('Gemini 3.8');
+    expect(text(root)).not.toContain('Gemini 3.8:');
     await click(button(root, '지친 듯'));
     expect(byLabel(root, '인물 1 연기 지시')[0].props.value).toBe('차분하게, 지친 듯');
     expect(button(root, '지친 듯').props.disabled).toBe(true);
@@ -231,6 +231,75 @@ describe('UiNextSpeakerRevoice audio-only variant', () => {
     expect(text(root)).toContain('분석 모델을 부르지 않아요');
     await click(button(root, '다시 만들 범위 확인'));
     expect(tagged.estimateRevoice.mock.lastCall![1].acting).toEqual({ mode: 'auto' });
+  });
+
+  it('creates new character voices only when chosen, keeps the draft across keep/create, and states every cost', async () => {
+    const port = fixture();
+    port.estimateRevoice.mockResolvedValue({
+      ...estimateValue,
+      recastCharacters: 1,
+      selectionModelLabel: '선정 A',
+      maxDesignedVoices: 2,
+    });
+    const selection = {
+      id: 'sel',
+      name: '선정 A',
+      modelId: 'sel-model',
+      enabled: true,
+      purpose: 'casting',
+    } as SpeakerEngine;
+    const designers = [{ id: 'd1', name: '제작 연결', modelId: 'gemini-3.8-flash-tts', paid: true }];
+    const open = async (withDesigners: typeof designers) => {
+      act(() => {
+        renderer = create(
+          <UiNextSpeakerRevoice
+            job={job()}
+            port={port}
+            voices={voices}
+            engines={[analysisEngine, selection]}
+            designers={withDesigners}
+            onCreated={vi.fn()}
+          />,
+        );
+      });
+      act(() => renderer!.root.findByType('details').props.onToggle({ currentTarget: { open: true } }));
+      await flush();
+      return renderer!.root;
+    };
+    const field = (root: ReactTestInstance, label: string) =>
+      root
+        .findAllByType('label')
+        .find((l) => l.findAllByType('span').some((span) => text(span).startsWith(label)))!
+        .find((n) => n.type === 'select' || n.type === 'input');
+    let root = await open(designers);
+    expect(byLabel(root, '인물 목소리')[0].props.value).toBe('keep');
+    expect(button(root, '다시 만들 범위 확인').props.disabled).toBe(true);
+    await change(byLabel(root, '인물 목소리')[0], 'create');
+    expect(field(root, '목소리 선정 모델').props.value).toBe('sel');
+    expect(text(field(root, '목소리 선정 모델'))).not.toContain('분석 A');
+    await change(field(root, '새로 만들 목소리'), '2');
+    await change(byLabel(root, '인물 목소리')[0], 'keep');
+    await change(byLabel(root, '인물 목소리')[0], 'create');
+    expect(field(root, '새로 만들 목소리').props.value).toBe(2);
+    await click(button(root, '다시 만들 범위 확인'));
+    expect(port.estimateRevoice.mock.lastCall![1].casting).toEqual({
+      engineId: 'sel',
+      autoDesign: true,
+      designMode: 'characters',
+      designProviderId: 'd1',
+      designModelId: 'gemini-3.8-flash-tts',
+      maxDesignedVoices: 2,
+    });
+    expect(text(root)).toContain('최대 2개 제작');
+    expect(text(root)).toContain('음성 서비스와 목소리 선정·제작의 API 사용 요금');
+
+    act(() => renderer!.unmount());
+    root = await open([]);
+    const createOption = byLabel(root, '인물 목소리')[0].findAll(
+      (n) => n.type === 'option' && n.props.value === 'create',
+    )[0];
+    expect(createOption.props.disabled).toBe(true);
+    expect(text(root)).toContain('목소리 제작을 지원하는 Gemini 3.8 Flash TTS 연결이 필요해요');
   });
 
   it('keeps existing acting tags by default, can remove them, and folds manual directions until asked', async () => {

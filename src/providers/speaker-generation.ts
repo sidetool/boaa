@@ -44,6 +44,7 @@ export interface SpeakerGenerationJob extends SavedAudiobook {
 }
 export interface SpeakerRevoiceInput {
   acting?: { mode: 'preserve' | 'off' | 'auto'; engineId?: string };
+  casting?: SpeakerCastingOptions;
   voices: { speakerId: string; voiceId: string; instructions?: string }[];
 }
 export interface SpeakerRevoiceSource {
@@ -57,6 +58,9 @@ export interface SpeakerRevoiceSource {
 }
 export interface SpeakerRevoiceEstimate {
   actingAnalysis?: boolean;
+  recastCharacters?: number;
+  selectionModelLabel?: string;
+  maxDesignedVoices?: number;
   fingerprint: string;
   chapterCount: number;
   itemCount: number;
@@ -114,6 +118,7 @@ export interface TTSSpeakerGenerationControls {
 export interface SpeakerGenerationSettings {
   /** Audio-only variant; all source-verified ranges were copied from this job. */
   revoiceFrom?: string;
+  recastSpeakers?: string[];
   autoActing?: boolean;
   actingEngine?: { id: string; revision: string };
   language?: string;

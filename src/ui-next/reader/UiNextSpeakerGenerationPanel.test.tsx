@@ -219,17 +219,25 @@ describe('voice library casting choices', () => {
     });
     let root = await mount(props);
     expect(text(select(root, '분석 모델'))).not.toContain('선정 모델');
-    expect(text(castingField(root, '목소리 선정 모델'))).not.toContain('분석 A');
-    act(() => castingField(root, '목소리 선정 모델').props.onChange({ target: { value: 'casting-model' } }));
+    expect(castingField(root, '인물 목소리 정하기').props.value).toBe('order');
+    expect(text(root)).not.toContain('엑스트라·대체용 목소리');
+    act(() => castingField(root, '인물 목소리 정하기').props.onChange({ target: { value: 'pick' } }));
     await flush();
-    act(() => castingField(root, '주요 인물에게 어울리는 목소리 만들기').props.onChange({ target: { checked: true } }));
+    expect(castingField(root, '목소리 선정 모델').props.value).toBe('casting-model');
+    expect(text(castingField(root, '목소리 선정 모델'))).not.toContain('분석 A');
+    expect(text(root)).toContain('이름만 참고하므로 성별·음색이 맞는다고 보장할 수 없어요');
+    act(() => castingField(root, '인물 목소리 정하기').props.onChange({ target: { value: 'create' } }));
+    await flush();
+    expect(text(root)).toContain('엑스트라·대체용 목소리');
+    act(() => castingField(root, '새로 만들 목소리').props.onChange({ target: { value: '3' } }));
     await flush();
     act(() => castingField(root, '목소리 제작 모델 ID').props.onChange({ target: { value: 'custom-design-model' } }));
     await flush();
     const casting = {
       engineId: 'casting-model',
       autoDesign: true,
-      maxDesignedVoices: 4,
+      designMode: 'characters',
+      maxDesignedVoices: 3,
       designProviderId: 'designer',
       designModelId: 'custom-design-model',
     };
@@ -237,6 +245,7 @@ describe('voice library casting choices', () => {
     act(() => renderer!.unmount());
     renderer = undefined;
     root = await mount(props);
+    expect(castingField(root, '인물 목소리 정하기').props.value).toBe('create');
     expect(castingField(root, '목소리 선정 모델').props.value).toBe('casting-model');
     expect(castingField(root, '목소리 제작 모델 ID').props.value).toBe('custom-design-model');
     await click(button(root, '분석 범위 확인'));
@@ -297,6 +306,50 @@ describe('voice library casting choices', () => {
     expect(vi.mocked(plain.estimate).mock.lastCall![0]).not.toHaveProperty('autoActing');
   });
 
+  it('keeps a legacy major-only design choice, restores the model after order, and explains missing design connections', async () => {
+    const saved = (casting: SpeakerGenerationPreferences['casting']) =>
+      port(async () => [], {
+        preferences: vi.fn(async () => ({
+          engineId: 'e1',
+          narratorVoiceId: 'a1',
+          characterVoiceIds: ['a2'],
+          casting,
+        })),
+      });
+    const noDesigners = { ...libraryPort(), list: vi.fn(async () => ({ voices: [], designers: [] })) };
+    const twoEngines = () =>
+      engines(async () => [engine(), engine({ id: 'cast', purpose: 'casting', name: '선정용' })]);
+    const legacy = { engineId: 'cast', autoDesign: true, maxDesignedVoices: 2, designProviderId: 'designer' };
+    const api = saved(legacy);
+    let root = await mount(controls({ port: api, voiceLibrary: noDesigners, engines: twoEngines() }));
+    expect(castingField(root, '인물 목소리 정하기').props.value).toBe('pick');
+    expect(castingField(root, '주요 인물만 새 목소리 (이전 방식)').props.checked).toBe(true);
+    const create = castingField(root, '인물 목소리 정하기').findAll(
+      (n) => n.type === 'option' && n.props.value === 'create',
+    )[0];
+    expect(create.props.disabled).toBe(true);
+    expect(text(create)).toContain('제작 지원 연결 없음');
+    expect(api.savePreferences).not.toHaveBeenCalled();
+    act(() => castingField(root, '인물 목소리 정하기').props.onChange({ target: { value: 'order' } }));
+    await flush();
+    expect(vi.mocked(api.savePreferences).mock.lastCall![0].casting?.engineId).toBeUndefined();
+    act(() => castingField(root, '인물 목소리 정하기').props.onChange({ target: { value: 'pick' } }));
+    await flush();
+    expect(vi.mocked(api.savePreferences).mock.lastCall![0].casting?.engineId).toBe('cast');
+
+    act(() => renderer!.unmount());
+    root = await mount(
+      controls({
+        port: saved({ ...legacy, designMode: 'characters', designProviderId: 'gone', designModelId: 'm' }),
+        voiceLibrary: libraryPort(),
+        engines: twoEngines(),
+      }),
+    );
+    expect(castingField(root, '인물 목소리 정하기').props.value).toBe('create');
+    expect(text(root)).toContain('목소리 제작 연결을 다시 골라 주세요.');
+    expect(button(root, '분석 범위 확인').props.disabled).toBe(true);
+  });
+
   it('opens model and voice management without resetting the selected casting mode', async () => {
     const manageEngines = vi.fn(),
       manageVoices = vi.fn();
@@ -305,8 +358,9 @@ describe('voice library casting choices', () => {
       engines: engines(async () => [engine(), engine({ id: 'cast', purpose: 'casting', name: '선정용' })]),
     });
     const root = await mount(props, { onManageEngines: manageEngines, onManageVoices: manageVoices });
-    act(() => castingField(root, '목소리 선정 모델').props.onChange({ target: { value: 'cast' } }));
+    act(() => castingField(root, '인물 목소리 정하기').props.onChange({ target: { value: 'pick' } }));
     await flush();
+    expect(castingField(root, '목소리 선정 모델').props.value).toBe('cast');
     await click(button(root, '모델 연결'));
     await click(button(root, '목소리 보관함'));
     expect(manageEngines).toHaveBeenCalledTimes(1);

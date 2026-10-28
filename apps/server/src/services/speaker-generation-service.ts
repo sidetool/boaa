@@ -1,3 +1,4 @@
+import { prepareRevoiceCasting } from './speaker-revoice-casting';
 import type pg from 'pg';
 import { missingPerformance, preparePerformance } from './speaker-performance';
 import { performanceStyle } from '../../../../src/providers/tts-performance';
@@ -226,11 +227,30 @@ export class SpeakerGenerationService {
     };
   }
   async estimateRevoice(bookId: string, id: string, input: SpeakerRevoiceInput) {
-    return (await planSpeakerRevoice(this.pool, this.owner, bookId, id, input, await this.catalog(), this.engines))
-      .estimate;
+    return (
+      await planSpeakerRevoice(
+        this.pool,
+        this.owner,
+        bookId,
+        id,
+        input,
+        await this.catalog(),
+        this.engines,
+        this.casting?.library,
+      )
+    ).estimate;
   }
   async revoice(bookId: string, id: string, input: SpeakerRevoiceInput, fingerprint: string, paid: boolean) {
-    const plan = await planSpeakerRevoice(this.pool, this.owner, bookId, id, input, await this.catalog(), this.engines);
+    const plan = await planSpeakerRevoice(
+      this.pool,
+      this.owner,
+      bookId,
+      id,
+      input,
+      await this.catalog(),
+      this.engines,
+      this.casting?.library,
+    );
     const created = await this.audio.create(plan, fingerprint, paid);
     return (await this.list(bookId)).find((job) => job.id === created.id)!;
   }
@@ -249,7 +269,8 @@ export class SpeakerGenerationService {
   }
   async resume(id: string) {
     const run = await this.run(id);
-    if (run.settings.cast?.revoiceFrom && !run.settings.cast.autoActing) return;
+    if (run.settings.cast?.revoiceFrom && !run.settings.cast.autoActing && !run.settings.cast.recastSpeakers?.length)
+      return;
     if (!['paused', 'failed'].includes(run.status)) return;
     const client = await this.pool.connect();
     try {
@@ -270,7 +291,7 @@ export class SpeakerGenerationService {
         [id],
       );
       // Only an explicit, already cost-confirmed resume may retry an ambiguous creation.
-      if (!run.settings.cast?.revoiceFrom)
+      if (!run.settings.cast?.revoiceFrom || run.settings.cast.recastSpeakers?.length)
         await client.query(
           "update tts_voice_designs set status='retry' where user_id=$1 and request_id like $2 and status in ('dispatching','uncertain')",
           [this.owner, `cast_${id.replaceAll('-', '')}_%`],
@@ -286,7 +307,11 @@ export class SpeakerGenerationService {
   async advance(id: string, signal: AbortSignal) {
     const run = await this.run(id);
     await this.authority(run);
-    if (run.next_chapter >= run.chapter_ids.length && !run.settings.cast?.autoActing) {
+    if (
+      run.next_chapter >= run.chapter_ids.length &&
+      !run.settings.cast?.autoActing &&
+      !run.settings.cast?.recastSpeakers?.length
+    ) {
       await this.pool.query('update saved_audiobooks set planning_complete=true where id=$1', [id]);
       return;
     }
@@ -302,7 +327,23 @@ export class SpeakerGenerationService {
           signal.throwIfAborted();
           return (await this.run(id)).status === 'running';
         });
-      const latest = await this.run(id);
+      let latest = await this.run(id);
+      if (latest.settings.cast?.recastSpeakers?.length) {
+        if (!this.casting) throw audiobookError(409, '목소리 제작 연결을 확인해 주세요.');
+        await this.pool.query("update speaker_generation_runs set stage='casting' where audiobook_id=$1", [id]);
+        if (
+          !(await prepareRevoiceCasting({
+            pool: this.pool,
+            owner: this.owner,
+            run: latest,
+            casting: this.casting,
+            signal,
+            authority: (db, lock) => this.authority(latest, db, lock),
+          }))
+        )
+          return false;
+        latest = await this.run(id);
+      }
       if (latest.settings.cast?.autoActing && (await missingPerformance(this.pool, id))) {
         // Ordered identity always finishes before a supplementary acting pass.
         if (latest.next_chapter < latest.chapter_ids.length) return false;

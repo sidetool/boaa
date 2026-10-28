@@ -81,6 +81,7 @@ const extraFilters = [
   'apps/server/src/services/speaker-voice-selection.test.ts',
   'apps/server/src/services/voice-library.integration.test.ts',
   'apps/server/src/providers/gemini-voice-design.test.ts',
+  'apps/server/src/providers/vertex-voice-design.test.ts',
   'apps/server/src/providers/speaker-engine-transport.test.ts',
   'apps/server/src/providers/speaker-vertex.test.ts',
   'apps/server/src/providers/speaker-input-pdf.test.ts',

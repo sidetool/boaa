@@ -103,7 +103,8 @@ export class VoiceLibraryStore {
     const designers = [];
     for (const s of sources) {
       const adapter = await s.createProvider();
-      if (adapter.designVoice) designers.push({ id: s.id, name: s.name, modelId: s.modelId ?? '', paid: s.paid });
+      if (adapter.designVoice && adapter.supportsVoiceDesign !== false)
+        designers.push({ id: s.id, name: s.name, modelId: s.modelId ?? '', paid: s.paid });
     }
     return {
       voices: (await this.rows()).map((r) =>
@@ -229,7 +230,8 @@ export class VoiceLibraryStore {
     const s = await this.source(input.providerId),
       model = voiceSourceModel(s),
       adapter = await s.createProvider();
-    if (!adapter.designVoice) throw audiobookError(400, '이 TTS 연결은 설명으로 목소리 만들기를 지원하지 않아요.');
+    if (!adapter.designVoice || adapter.supportsVoiceDesign === false)
+      throw audiobookError(400, '이 TTS 연결은 설명으로 목소리 만들기를 지원하지 않아요.');
     if (s.paid && input.confirmPaid !== true) throw audiobookError(400, '목소리 만들기의 API 사용을 확인해 주세요.');
     const hash = structuredIntegrityHash({ alias, prompt, language, modelId, model });
     const c = await this.pool.connect();

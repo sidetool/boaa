@@ -1,3 +1,4 @@
+import { isGeminiVoiceDesignModel } from '../../../../src/providers/voice-library';
 import {
   parsePerformance,
   isGeminiActingModel,
@@ -114,6 +115,11 @@ export async function speakerPlan(
       !catalog.voices.some((v) => v.providerId === casting.designProviderId && v.autoActingSupported))
   )
     throw audiobookError(400, '자동 연기를 지원하는 Gemini 3.8 연결에서 새 목소리를 만들어 주세요.');
+  if (
+    casting?.designMode === 'characters' &&
+    (!isGeminiVoiceDesignModel(casting.designModelId) || !isGeminiVoiceDesignModel(designer?.modelId))
+  )
+    throw audiobookError(400, '새 목소리 제작은 Gemini 3.8 Flash TTS 연결에서 사용할 수 있어요.');
   const capabilities = await engines.transport.capabilities(engine, AbortSignal.timeout(15000));
   if (input.autoActing && !capabilities.performanceAnnotations)
     throw audiobookError(409, '화자 분석 서비스를 업데이트하면 자동 연출을 사용할 수 있어요.');

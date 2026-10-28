@@ -142,6 +142,7 @@ export class SpeakerVoiceCasting {
     chapter: SpeakerChapter,
     result: Extract<SpeakerEngineResult, { kind: 'complete' }>,
     signal: AbortSignal,
+    fallbackAssignments?: Record<string, string>,
   ): Promise<{ assignments: Record<string, string>; models: Record<string, PlainTTSModel> } | undefined> {
     const config = run.settings.cast!,
       options = config.casting;
@@ -163,7 +164,8 @@ export class SpeakerVoiceCasting {
         },
       ];
     });
-    const bindings = await this.bindings(run),
+    const isolated = !!config.revoiceFrom;
+    const bindings = isolated ? [] : await this.bindings(run),
       assignments = { ...run.assignments },
       models = { ...config.models };
     const audible = new Set(result.labels.filter((l) => !l.reviewRequired).map((l) => l.speakerId));
@@ -176,7 +178,11 @@ export class SpeakerVoiceCasting {
           409,
           '직접 지정한 목소리가 이 작업에서 확인한 TTS 모델과 달라요. 목소리 설정을 확인해 주세요.',
         );
-      if (old && this.allowedModel(run, old.model)) {
+      const replacePreset =
+        options?.designMode === 'characters' &&
+        !old?.pinned &&
+        library.find((v) => v.voiceId === old?.voice_id)?.origin !== 'designed';
+      if (old && !replacePreset && this.allowedModel(run, old.model)) {
         const voice = catalog.voices.find((v) => v.id === old.voice_id);
         if (!voice || structuredIntegrityHash(voice.model) !== structuredIntegrityHash(old.model))
           throw audiobookError(409, '이 작품에 배정한 목소리가 없거나 모델이 바뀌었어요. 기존 배정을 확인해 주세요.');
@@ -188,7 +194,14 @@ export class SpeakerVoiceCasting {
     if (!missing.length) return { assignments, models };
     if (!candidates.length) throw audiobookError(409, '자동 배정에 쓸 목소리를 켜 주세요.');
     const batch = missing.slice(0, 8);
-    const prompt = selectionPrompt(chapter, result.labels, batch, candidates, options?.autoDesign === true);
+    const prompt = selectionPrompt(
+      chapter,
+      result.labels,
+      batch,
+      candidates,
+      options?.autoDesign === true,
+      options?.designMode,
+    );
     const key = structuredIntegrityHash({
       chapter: chapter.id,
       ids: batch.map((i) => i.id),
@@ -243,6 +256,7 @@ export class SpeakerVoiceCasting {
           batch.map((i) => i.id),
           candidates,
           options.autoDesign,
+          options.designMode,
         );
       } catch (e) {
         await this.pool.query(
@@ -278,7 +292,9 @@ export class SpeakerVoiceCasting {
           [this.owner, requestId],
         )
       ).rows[0];
+      let madeVoice = false;
       if (created) {
+        madeVoice = true;
         d.voiceId = created.voice_id;
         models[created.voice_id] = created.model;
       } else if (d.designPrompt && options?.autoDesign && designed < options.maxDesignedVoices) {
@@ -298,7 +314,9 @@ export class SpeakerVoiceCasting {
         d.voiceId = voice.voiceId;
         models[voice.voiceId] = voice.model;
         designed++;
+        madeVoice = true;
       }
+      if (isolated && !madeVoice && fallbackAssignments?.[d.speakerId]) d.voiceId = fallbackAssignments[d.speakerId];
       assignments[d.speakerId] = d.voiceId;
     }
     const c = await this.pool.connect();
@@ -312,22 +330,23 @@ export class SpeakerVoiceCasting {
         const model = models[voiceId];
         if (!model) throw audiobookError(409, '선정한 목소리의 모델이 없어요.');
         await this.library.source(model.providerId, model);
-        await c.query(
-          `insert into speaker_voice_bindings(user_id,book_id,analysis_key,speaker_id,name,voice_id,model,metadata) values($1,$2,$3,$4,$5,$6,$7,$8)
+        if (!isolated)
+          await c.query(
+            `insert into speaker_voice_bindings(user_id,book_id,analysis_key,speaker_id,name,voice_id,model,metadata) values($1,$2,$3,$4,$5,$6,$7,$8)
           on conflict(user_id,book_id,analysis_key,speaker_id) do update set voice_id=excluded.voice_id,model=excluded.model,metadata=excluded.metadata,updated_at=now() where not speaker_voice_bindings.pinned`,
-          [
-            this.owner,
-            run.book_id,
-            run.analysis_key,
-            speakerId,
-            batch.find((i) => i.id === speakerId)!.name,
-            voiceId,
-            model,
-            metadata,
-          ],
-        );
+            [
+              this.owner,
+              run.book_id,
+              run.analysis_key,
+              speakerId,
+              batch.find((i) => i.id === speakerId)!.name,
+              voiceId,
+              model,
+              metadata,
+            ],
+          );
       }
-      for (const binding of await this.bindings(run, c))
+      for (const binding of isolated ? [] : await this.bindings(run, c))
         if (binding.pinned && Object.hasOwn(assignments, binding.speaker_id)) {
           if (!this.allowedModel(run, binding.model))
             throw audiobookError(409, '직접 지정한 목소리가 이 작업의 TTS 모델과 달라요.');
@@ -335,7 +354,16 @@ export class SpeakerVoiceCasting {
           assignments[binding.speaker_id] = binding.voice_id;
           models[binding.voice_id] = binding.model;
         }
-      await c.query('delete from speaker_voice_decisions where audiobook_id=$1 and decision_key=$2', [run.id, key]);
+      if (!isolated) {
+        // Keep progress for this job even when another batch or chapter acceptance is still pending.
+        await c.query('update speaker_generation_runs set assignments=$2 where audiobook_id=$1', [run.id, assignments]);
+        await c.query(
+          "update saved_audiobooks set settings=jsonb_set(settings,'{cast,models}',$2::jsonb) where id=$1",
+          [run.id, JSON.stringify(models)],
+        );
+      }
+      if (!isolated)
+        await c.query('delete from speaker_voice_decisions where audiobook_id=$1 and decision_key=$2', [run.id, key]);
       await c.query('commit');
     } catch (e) {
       await c.query('rollback');

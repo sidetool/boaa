@@ -1,3 +1,4 @@
+import { supportsVertexVoiceDesign, vertexVoiceDesign } from './vertex-voice-design';
 import { vertexAudioResponse } from './gemini-audio-response.js';
 import type { GoogleServiceAccount } from './google-service-account.js';
 import { GEMINI_VOICES, namedVoices } from './tts-voices.js';
@@ -26,6 +27,8 @@ export interface GeminiVertexTTSProviderOptions {
   readonly modelId: string;
   readonly providerOptions?: Record<string, unknown>;
   readonly client?: GeminiVertexTTSGenerateContentClient;
+  readonly designFetch?: typeof fetch;
+  readonly designAccessToken?: (signal: AbortSignal) => Promise<string>;
 }
 
 export class GeminiVertexTTSProvider implements TTSSynthesisProvider {
@@ -37,6 +40,13 @@ export class GeminiVertexTTSProvider implements TTSSynthesisProvider {
   readonly supportsPerCharacterVoice = true;
 
   constructor(private readonly options: GeminiVertexTTSProviderOptions) {}
+
+  get supportsVoiceDesign() {
+    return supportsVertexVoiceDesign(this.options);
+  }
+  designVoice(input: { alias: string; prompt: string; language: string; modelId: string; signal: AbortSignal }) {
+    return vertexVoiceDesign(this.options, input);
+  }
 
   async listVoices() {
     return namedVoices(GEMINI_VOICES);

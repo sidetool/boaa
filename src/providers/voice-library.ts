@@ -1,5 +1,8 @@
 import type { PlainTTSModel } from './plain-tts';
 
+/** Product scope: natural voice creation is enabled only for Gemini 3.8 Flash TTS. */
+export const isGeminiVoiceDesignModel = (modelId?: string) => modelId === 'gemini-3.8-flash-tts';
+
 /** Presentation metadata never participates in synthesis identity. */
 export interface VoiceLibraryInput {
   voiceId: string;
@@ -47,6 +50,8 @@ export interface SpeakerCastingOptions {
   /** Independent of the attribution model. Omit for stable, cost-free pool allocation. */
   engineId?: string;
   autoDesign: boolean;
+  /** Explicit natural voice creation for major/supporting characters, not just optional major designs. */
+  designMode?: 'characters';
   designProviderId?: string;
   designModelId?: string;
   /** Budget for this job; existing book assignments and extras reuse voices. */

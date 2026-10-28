@@ -81,7 +81,7 @@ function completed(ids = ['speaker-one']): Extract<SpeakerEngineResult, { kind: 
   };
 }
 
-async function setup(pool: pg.Pool) {
+async function setup(pool: pg.Pool, natural = false) {
   await pool.query(`create table users(id text primary key);
     create table library_books(id text primary key,user_id text,title text,format text,language text,active_content_revision_id text,deleted_at timestamptz);
     create table self_host_accounts(user_id text primary key,role text,status text);
@@ -146,7 +146,7 @@ async function setup(pool: pg.Pool) {
   const designer: PlainTTSSource = {
     id: 'designer',
     name: 'Design fixture',
-    modelId: 'synthesis-model',
+    modelId: natural ? 'gemini-3.8-flash-tts' : 'synthesis-model',
     revision: 'catalog-designer',
     synthesisRevision: 'synthesis-designer',
     paid: true,
@@ -168,6 +168,7 @@ async function setup(pool: pg.Pool) {
       lang: 'ko',
       providerId: designer.id,
       model: voiceSourceModel(designer),
+      autoActingSupported: natural,
       paid: true,
     });
     const rows = (
@@ -235,7 +236,7 @@ async function setup(pool: pg.Pool) {
     ...(autoDesign
       ? {
           designProviderId: designer.id,
-          designModelId: 'selected-design-model',
+          designModelId: natural ? 'gemini-3.8-flash-tts' : 'selected-design-model',
           designModel: voiceSourceModel(designer),
         }
       : {}),
@@ -398,7 +399,12 @@ async function serviceFixture(f: Awaited<ReturnType<typeof setup>>) {
     await withPostgresSchema(harness!, 'voice_design_saved', async (pool) => {
       const f = await setup(pool);
       expect((await f.library.list()).designers).toEqual([
-        { id: 'designer', name: 'Design fixture', modelId: 'synthesis-model', paid: true },
+        {
+          id: 'designer',
+          name: 'Design fixture',
+          modelId: 'synthesis-model',
+          paid: true,
+        },
       ]);
       await expect(f.library.design({ ...designInput(), providerId: 'local' }, signal())).rejects.toMatchObject({
         statusCode: 400,
@@ -991,6 +997,202 @@ async function serviceFixture(f: Awaited<ReturnType<typeof setup>>) {
       ).toBe('local:a');
       expect(f.generate).toHaveBeenCalledTimes(1);
       expect(f.design).not.toHaveBeenCalled();
+    });
+  });
+});
+
+(harness ? describe : describe.skip)('natural character voice workflow', () => {
+  it('replaces automatic presets, creates supporting voices within budget, then reuses designed and pinned voices', async () => {
+    await withPostgresSchema(harness!, 'natural_cast', async (pool) => {
+      const f = await setup(pool, true);
+      const initial = await f.run({ casting: await f.options() });
+      await f.casting.select(initial, chapter, completed(['one', 'two']), signal());
+      f.generate.mockImplementation(async (_engine, req) =>
+        JSON.stringify({
+          assignments: JSON.parse(req.prompt).characters.map((c: { id: string; name: string }) => ({
+            speakerId: c.id,
+            voiceId: 'local:a',
+            importance: 'supporting',
+            alias: c.name,
+            timbre: '차분함',
+            description: '지속적인 음색',
+            designPrompt: '차분하고 또렷한 성인 목소리. 장면별 감정은 지정하지 않는다.',
+          })),
+        }),
+      );
+      const options = { ...(await f.options(true)), designMode: 'characters' as const };
+      const run = await f.run({ casting: options });
+      const result = await f.casting.select(run, chapter, completed(['one', 'two']), signal());
+      expect(result?.assignments).toEqual({ one: 'designer:voice_created_1', two: 'local:a' });
+      expect(f.design).toHaveBeenCalledTimes(1);
+      await pool.query("update speaker_voice_bindings set pinned=true where speaker_id='two'");
+      f.generate.mockClear();
+      const next = await f.run({ casting: options });
+      expect((await f.casting.select(next, chapter, completed(['one', 'two']), signal()))?.assignments).toEqual(
+        result?.assignments,
+      );
+      expect(f.generate).not.toHaveBeenCalled();
+      expect(f.design).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it('persists each casting batch so budget fallbacks cannot loop before later characters', async () => {
+    await withPostgresSchema(harness!, 'natural_batches', async (pool) => {
+      const f = await setup(pool, true);
+      f.generate.mockImplementation(async (_e, req) =>
+        JSON.stringify({
+          assignments: JSON.parse(req.prompt).characters.map((c: { id: string; name: string }) => ({
+            speakerId: c.id,
+            voiceId: 'local:a',
+            importance: 'supporting',
+            alias: c.name,
+            timbre: '',
+            description: '',
+            designPrompt: '차분한 목소리',
+          })),
+        }),
+      );
+      const run = await f.run({ casting: { ...(await f.options(true)), designMode: 'characters' } });
+      const result = completed(Array.from({ length: 9 }, (_, i) => 'person-' + i));
+      expect(await f.casting.select(run, chapter, result, signal())).toBeUndefined();
+      const saved = (
+        await pool.query(
+          'select r.assignments,a.settings from speaker_generation_runs r join saved_audiobooks a on a.id=r.audiobook_id where a.id=$1',
+          [run.id],
+        )
+      ).rows[0];
+      expect(Object.keys(saved.assignments)).toHaveLength(8);
+      const finished = await f.casting.select({ ...run, ...saved }, chapter, result, signal());
+      expect(Object.keys(finished!.assignments)).toHaveLength(9);
+      expect(f.generate).toHaveBeenCalledTimes(2);
+      expect(f.design).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it('recasts captured spans without analysis, preserves original audio and book bindings, and keeps budget fallback voices', async () => {
+    await withPostgresSchema(harness!, 'natural_revoice', async (pool) => {
+      const f = await setup(pool, true),
+        s = await serviceFixture(f);
+      const analysis = await f.engines.save({
+        ...(await f.engines.loadCasting(f.engine.id)),
+        purpose: 'analysis',
+        name: 'Analysis',
+        modelId: 'analysis',
+        paid: false,
+      });
+      const analyzed = completed(['one', 'two']);
+      analyzed.labels.forEach((l, i) => (l.textHash = textIntegrityHash(chapter.paragraphs[i].text)));
+      vi.spyOn(f.transport, 'capabilities').mockResolvedValue({ engineVersion: ENGINE_VERSION });
+      const step = vi.spyOn(f.transport, 'step').mockResolvedValue(analyzed);
+      try {
+        const input: SpeakerGenerationInput = {
+          chapterIds: [chapter.id],
+          engineId: analysis.id,
+          narratorVoiceId: 'local:n',
+          characterVoiceIds: ['local:a', 'local:b'],
+          rules: [],
+          footnotePlayback: 'skip',
+          casting: await f.options(),
+        };
+        const estimate = await s.service.estimate('book', input);
+        const original = await s.service.create('book', input, estimate.fingerprint, true);
+        await s.untilCompleted(original.id);
+        const before = (
+          await pool.query('select * from saved_audiobook_items where audiobook_id=$1 order by ordinal', [original.id])
+        ).rows;
+        const bindings = (await pool.query('select * from speaker_voice_bindings order by speaker_id')).rows;
+        const analysisRows = (await pool.query('select * from speaker_analysis order by chapter_id')).rows;
+        await f.engines.remove(analysis.id);
+        step.mockClear();
+        f.generate.mockImplementation(async (_e, req) =>
+          JSON.stringify({
+            assignments: JSON.parse(req.prompt).characters.map((c: { id: string; name: string }) => ({
+              speakerId: c.id,
+              voiceId: 'local:a',
+              importance: 'supporting',
+              alias: c.name,
+              timbre: '낮음',
+              description: '차분함',
+              designPrompt: '차분하고 낮은 성인 목소리',
+            })),
+          }),
+        );
+        const choices = {
+          voices: (await s.service.revoiceSource('book', original.id)).voices.map((v) => ({
+            speakerId: v.speakerId,
+            voiceId: v.voiceId,
+          })),
+          casting: { ...(await f.options(true)), designMode: 'characters' as const },
+        };
+        const unsupported = { ...choices.casting, designModelId: 'gemini-3.8-flash-lite-tts' };
+        await expect(
+          s.service.estimateRevoice('book', original.id, { ...choices, casting: unsupported }),
+        ).rejects.toMatchObject({ statusCode: 400 });
+        const price = await s.service.estimateRevoice('book', original.id, choices);
+        expect(price).toMatchObject({ paid: true, recastCharacters: 2, maxDesignedVoices: 1 });
+        expect(f.design).not.toHaveBeenCalled();
+        await expect(s.service.revoice('book', original.id, choices, price.fingerprint, false)).rejects.toMatchObject({
+          statusCode: 400,
+        });
+        const variant = await s.service.revoice('book', original.id, choices, price.fingerprint, true);
+        const same = await s.service.revoice('book', original.id, choices, price.fingerprint, true);
+        expect(same.id).toBe(variant.id);
+        const rendersBefore = s.render.mock.calls.length;
+        f.design.mockImplementationOnce(async () => {
+          await s.audio.control(variant.id, 'pause');
+          return { id: 'voice_created_1', sample: { data: sample, contentType: 'audio/wav' } };
+        });
+        f.generate.mockClear();
+        await s.audio.tick();
+        expect((await s.audio.get(variant.id)).status).toBe('paused');
+        expect(s.render).toHaveBeenCalledTimes(rendersBefore);
+        expect(f.design).toHaveBeenCalledTimes(1);
+        expect(f.generate).toHaveBeenCalledTimes(1);
+        await s.audio.control(variant.id, 'resume', true);
+        await s.untilCompleted(variant.id);
+        expect(f.generate).toHaveBeenCalledTimes(1);
+        expect(f.design).toHaveBeenCalledTimes(1);
+        expect(step).not.toHaveBeenCalled();
+        const updated = (
+          await pool.query('select request from saved_audiobook_items where audiobook_id=$1 order by ordinal', [
+            variant.id,
+          ])
+        ).rows;
+        expect(
+          updated
+            .filter((r) => r.request.cast.speakerId === 'one')
+            .every((r) => r.request.voiceId === 'designer:voice_created_1'),
+        ).toBe(true);
+        expect(
+          updated.filter((r) => r.request.cast.speakerId === 'two').every((r) => r.request.voiceId === 'local:a'),
+        ).toBe(true);
+        expect(updated.map((r) => ({ ...r.request.cast, model: undefined }))).toEqual(
+          before.map((r) => ({ ...r.request.cast, model: undefined })),
+        );
+        expect(
+          (
+            await pool.query('select * from saved_audiobook_items where audiobook_id=$1 order by ordinal', [
+              original.id,
+            ])
+          ).rows,
+        ).toEqual(before);
+        expect((await pool.query('select * from speaker_voice_bindings order by speaker_id')).rows).toEqual(bindings);
+        expect((await pool.query('select * from speaker_analysis order by chapter_id')).rows).toEqual(analysisRows);
+        await pool.query("update speaker_voice_bindings set pinned=true where speaker_id='one'");
+        const pinned = await s.service.estimateRevoice('book', original.id, choices);
+        expect(pinned.recastCharacters).toBe(1);
+        const manual = {
+          ...choices,
+          voices: choices.voices.map((v) => (v.speakerId === 'two' ? { ...v, voiceId: 'local:b' } : v)),
+        };
+        await expect(s.service.estimateRevoice('book', original.id, manual)).rejects.toThrow('인물이 없어요');
+        await pool.query("update library_books set active_content_revision_id='changed' where id='book'");
+        await expect(s.service.revoice('book', original.id, choices, pinned.fingerprint, true)).rejects.toMatchObject({
+          statusCode: 409,
+        });
+      } finally {
+        await s.cleanup();
+      }
     });
   });
 });

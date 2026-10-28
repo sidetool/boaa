@@ -189,3 +189,34 @@ describe('independent speaker voice selection', () => {
     expect(packet.characters[1].evidence).toEqual([]);
   });
 });
+
+describe('explicit natural voice creation', () => {
+  it('retains the opt-in mode, rejects contradictions, and requires stable prompts for major/supporting characters', () => {
+    const settings = {
+      engineId: 'casting',
+      autoDesign: true,
+      designMode: 'characters' as const,
+      designProviderId: 'gemini',
+      designModelId: 'gemini-3.8-flash-tts',
+      maxDesignedVoices: 2,
+    };
+    expect(normalizeCasting(settings)).toEqual(settings);
+    expect(() => normalizeCasting({ ...settings, autoDesign: false })).toThrow();
+    expect(() => normalizeCasting({ ...settings, designMode: 'other' })).toThrow();
+    const d = { ...decision(), designPrompt: 'A warm, steady adult voice with clear articulation.' };
+    expect(parseVoiceDecisions(raw([d]), ['speaker-one'], candidates, true, 'characters')).toEqual([d]);
+    for (const importance of ['major', 'supporting'])
+      expect(() =>
+        parseVoiceDecisions(
+          raw([{ ...d, importance, designPrompt: '  ' }]),
+          ['speaker-one'],
+          candidates,
+          true,
+          'characters',
+        ),
+      ).toThrow();
+    expect(() =>
+      parseVoiceDecisions(raw([{ ...d, importance: 'extra' }]), ['speaker-one'], candidates, true, 'characters'),
+    ).toThrow();
+  });
+});

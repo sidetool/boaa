@@ -15,7 +15,7 @@ import { cx } from '../components/primitives';
 import SpeakerJobProgress from './SpeakerJobProgress';
 import { ChapterScopeFields, chapterScopeSummary, useChapterScope } from './chapter-scope';
 import { speakerPreferenceQueue } from './speaker-generation-preferences';
-import UiNextCastingOptions from './UiNextCastingOptions';
+import UiNextCastingOptions, { castingMode } from './UiNextCastingOptions';
 import UiNextBookVoices from './UiNextBookVoices';
 import UiNextSpeakerRevoice from './UiNextSpeakerRevoice';
 import type { SpeakerCastingOptions, LibraryVoice, VoiceDesignProvider } from '../../providers/voice-library';
@@ -248,6 +248,16 @@ function Body({
       ...((next.autoActing ?? actingChoice) !== undefined ? { autoActing: next.autoActing ?? actingChoice } : {}),
     });
   };
+  // Natural voice creation needs a listed design connection and model; a vanished one is never swapped.
+  const naturalVoices = castingMode(castingChoice) === 'create';
+  const designProblem =
+    !naturalVoices || !library
+      ? undefined
+      : !library?.designers.some((d) => d.id === castingChoice?.designProviderId)
+        ? '목소리 제작 연결을 다시 골라 주세요.'
+        : !castingChoice?.designModelId?.trim()
+          ? '목소리 제작 모델 ID를 입력해 주세요.'
+          : undefined;
   // Automatic acting is on by default when the narrator and pool all support it; an explicit off is kept.
   const actingUnsupported = [narratorId, ...pool].filter(
     (id) => voices.find((voice) => voice.id === id)?.autoActingSupported !== true,
@@ -285,7 +295,7 @@ function Body({
                           ? '만들 회차를 골라 주세요.'
                           : autoActing && !actingAvailable
                             ? '자동 연기를 지원하지 않는 목소리가 있어요. 자동 연기를 끄거나 목소리를 바꿔 주세요.'
-                            : undefined;
+                            : designProblem;
   // Missing models or voices are already explained in their own section.
   const problemAbove = analysisEngines?.length === 0 || !catalog?.available || voices.length === 0;
   const input: SpeakerGenerationInput | undefined =
@@ -515,7 +525,9 @@ function Body({
               </select>
             </label>
             <details className="un-cast-options">
-              <summary>자동 배정에 쓸 목소리 · {pool.length}개</summary>
+              <summary>
+                {naturalVoices ? '엑스트라·대체용 목소리' : '자동 배정에 쓸 목소리'} · {pool.length}개
+              </summary>
               <div className="un-cast-field">
                 <span id="un-cast-pool">
                   인물 목소리 <small>{formatCount(pool.length)}개 선택</small>
@@ -765,7 +777,8 @@ function Body({
                     port={controls.port}
                     voices={voices}
                     library={library?.voices}
-                    engines={analysisEngines}
+                    engines={engines}
+                    designers={library?.designers}
                     onCreated={() => void refresh()}
                   />
                 }

@@ -46,15 +46,22 @@ const speakerPort={preferences:async()=>JSON.parse(sessionStorage.prefs||'null')
  savePreferences:async(v)=>{sessionStorage.prefs=JSON.stringify(v);reviewCalls.push({kind:'prefs',value:v});},
  list:async()=>[],remove:async()=>{},control:async()=>({}),create:async()=>({}),
  estimate:async(input)=>{reviewCalls.push({kind:'speakerEstimate',input});return {fingerprint:'s',chapterCount:1,contextChapterCount:0,characters:900,modelLabel:'분석 A',voiceLabel:'연기 1',paid:true};}};
-const enginesPort={list:async()=>analysis,probe:async()=>({}),save:async()=>({}),remove:async()=>{}};
+// Natural voice creation (&design): a selection connection and a verified design connection.
+const design=q.has('design');
+const selectors=[{id:'c1',name:'선정 A',modelId:'select-a',enabled:true,paid:true,purpose:'casting',revision:'1'}];
+const designers=[{id:'d1',name:'Gemini 3.8 제작',modelId:'gemini-3.8-flash-tts',paid:true}];
+const allEngines=design?[...analysis,...selectors]:analysis;
+const designLibrary={list:async()=>({voices:[],designers}),save:async()=>({}),remove:async()=>{},design:async()=>({}),sample:async()=>new Blob()};
+const enginesPort={list:async()=>allEngines,probe:async()=>({}),save:async()=>({}),remove:async()=>{}};
 const revoicePort={revoiceSource:async()=>({chapterCount:1,itemCount:12,...(acting?{hasActing:false,needsActing:true,actingEngineId:'e1'}:{}),
  voices:[{speakerId:'narrator',name:'내레이터',voiceId:acting?'g1':'a',itemCount:8},{speakerId:'p1',name:'이름이매우길어서모바일에서줄바꿈이필요한등장인물',voiceId:acting?'g2':'a',itemCount:4}]}),
- estimateRevoice:async(id,input)=>{reviewCalls.push({kind:'estimate',input});return {fingerprint:'r',chapterCount:1,itemCount:12,characters:1500,paid:true,actingAnalysis:input.acting?.mode==='auto'};},
+ estimateRevoice:async(id,input)=>{reviewCalls.push({kind:'estimate',input});return {fingerprint:'r',chapterCount:1,itemCount:12,characters:1500,paid:true,actingAnalysis:input.acting?.mode==='auto',
+  ...(input.casting?{recastCharacters:1,selectionModelLabel:'선정 A',maxDesignedVoices:input.casting.maxDesignedVoices}:{})};},
  revoice:async(id,input,fingerprint,confirmPaid)=>{reviewCalls.push({kind:'create',input,confirmPaid});return {id:'variant',revoiceFrom:id};}};
 function ReviewFixture(){const review=q.get('review');return <div className="ui-next"><Sheet open title={review==='library'?'목소리 보관함':'화자별 미리 생성하기'} onClose={()=>{}}>{review==='library'?<Library port={reviewPort} voices={reviewVoices} onChanged={()=>{}}/>
- :review==='acting'?<SpeakerPanel controls={{key:'acting',port:speakerPort,engines:enginesPort,chapters:[{id:'c1',title:'1화'}],currentChapterId:'c1',narratorVoiceId:q.get('narrator')||'g1',rules:[],footnotePlayback:'skip',
+ :review==='acting'?<SpeakerPanel controls={{key:'acting',port:speakerPort,engines:enginesPort,...(design?{voiceLibrary:designLibrary}:{}),chapters:[{id:'c1',title:'1화'}],currentChapterId:'c1',narratorVoiceId:q.get('narrator')||'g1',rules:[],footnotePlayback:'skip',
   voices:{available:true,defaultVoiceId:'g1',voices:actVoices,providers:[{id:'g',name:'연기 엔진',available:true,paid:true},{id:'x',name:'일반 엔진',available:true,paid:false}]},listen(){},refreshVoices(){}}}/>
- :<div className="un-book-item"><Revoice job={{id:'source',status:'paused',chapterCount:2,itemCount:12,planningComplete:false}} port={revoicePort} voices={acting?actVoices:reviewVoices} library={reviewRows} engines={analysis} onCreated={()=>reviewCalls.push({kind:'reload'})}/></div>}</Sheet></div>}
+ :<div className="un-book-item"><Revoice job={{id:'source',status:'paused',chapterCount:2,itemCount:12,planningComplete:false}} port={revoicePort} voices={acting?actVoices:reviewVoices} library={reviewRows} engines={allEngines} designers={design?designers:[]} onCreated={()=>reviewCalls.push({kind:'reload'})}/></div>}</Sheet></div>}
 function Fixture(){
  const [open,setOpen]=useState(true);
  const [choice,setChoice]=useState(); const [chapter,setChapter]=useState('c1'); const [done,setDone]=useState(false);
@@ -436,8 +443,58 @@ try {
       await actingCreate.click();
       await page.getByText(/새 음성 작업을 만들었어요/).waitFor();
       assert.deepEqual((await lastCall('create')).input.acting, { mode: 'auto', engineId: 'e1' });
+      // Natural voice creation: an explicit mode with selection model, design connection and budget, no names to fill.
+      await page.evaluate(() => sessionStorage.clear());
+      await page.goto(`http://127.0.0.1:${port}/?review=acting&design`);
+      await enabled('분석 범위 확인');
+      const castingSelect = (name) => page.getByRole('combobox', { name, exact: true });
+      assert.equal(await castingSelect('인물 목소리 정하기').inputValue(), 'order');
+      await castingSelect('인물 목소리 정하기').selectOption('create');
+      assert.equal(await castingSelect('목소리 선정 모델').inputValue(), 'c1');
+      assert.equal(await castingSelect('목소리 제작 연결').inputValue(), 'd1');
+      await castingSelect('새로 만들 목소리').selectOption('3');
+      await page.getByText(/엑스트라·대체용 목소리/).waitFor();
+      await page.getByRole('button', { name: '분석 범위 확인', exact: true }).click();
+      await page.getByRole('button', { name: '생성 시작', exact: true }).waitFor();
+      assert.deepEqual((await lastCall('speakerEstimate')).input.casting, {
+        engineId: 'c1',
+        autoDesign: true,
+        designMode: 'characters',
+        designProviderId: 'd1',
+        designModelId: 'gemini-3.8-flash-tts',
+        maxDesignedVoices: 3,
+      });
+      await bounded();
+      assert.deepEqual(await overflowing(), []);
+      await page.screenshot({ path: `${artifacts}/design-${width}.png` });
+
+      // Re-voicing with new character voices on top of the automatic acting default.
+      await page.goto(`http://127.0.0.1:${port}/?review=revoice&acting&design`);
+      await page.getByText('음성 다시 만들기', { exact: true }).click();
+      await castingSelect('인물 목소리').waitFor();
+      assert.equal(await castingSelect('인물 목소리').inputValue(), 'keep');
+      await castingSelect('인물 목소리').selectOption('create');
+      assert.equal(await castingSelect('목소리 선정 모델').inputValue(), 'c1');
+      await page.getByRole('button', { name: '다시 만들 범위 확인', exact: true }).click();
+      const designCreate = page.getByRole('button', { name: '새 음성 만들기', exact: true });
+      await designCreate.waitFor();
+      await page.getByText(/목소리 선정·제작과 연기 분석 모델의 API 사용 요금/).waitFor();
+      await page.getByRole('checkbox').check();
+      await bounded();
+      assert.deepEqual(
+        await page
+          .locator('.un-revoice-row label > span')
+          .evaluateAll((els) => els.filter((el) => el.scrollWidth > el.clientWidth + 1).map((el) => el.textContent)),
+        [],
+      );
+      await page.screenshot({ path: `${artifacts}/revoice-design-${width}.png` });
+      await designCreate.click();
+      await page.getByText(/새 음성 작업을 만들었어요/).waitFor();
+      const designed = (await lastCall('create')).input;
+      assert.equal(designed.casting.designMode, 'characters');
+      assert.deepEqual(designed.acting, { mode: 'auto', engineId: 'e1' });
       checks.push(
-        `${width}: metadata editing, bounded fields/chips, partial revoice source, separate instructions, consent and one create; acting default on/explicit off/unsupported off and revoice auto-fill default`,
+        `${width}: metadata editing, bounded fields/chips, partial revoice source, separate instructions, consent and one create; acting default on/explicit off/unsupported off and revoice auto-fill default; natural voice creation for new and revoiced jobs`,
       );
       await context.close();
     }
