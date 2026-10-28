@@ -1,7 +1,12 @@
 import type pg from 'pg';
 import { structuredIntegrityHash } from '@boaa/text-core/hash';
 import type { AudiobookInput, PreparedNarration } from '../../../../src/providers/plain-audiobook';
-import type { SpeakerGenerationInput, SpeakerGenerationJob } from '../../../../src/providers/speaker-generation';
+import type {
+  SpeakerGenerationInput,
+  SpeakerGenerationJob,
+  SpeakerRevoiceInput,
+} from '../../../../src/providers/speaker-generation';
+import { loadRevoiceSource, revoiceSourceView, planSpeakerRevoice } from './speaker-revoice-plan.js';
 import { SPEAKER_ENGINE_PROTOCOL, type SpeakerEngineResult } from '../../../../src/providers/speaker-engine-protocol';
 import type { PlainTTSVoices, PlainTTSModel } from '../../../../src/providers/plain-tts';
 import type { SavedAudio } from './audiobook-audio.js';
@@ -46,6 +51,7 @@ export class SpeakerGenerationService {
       model: PlainTTSModel,
       key: string,
       regenerate: boolean,
+      instructions?: string,
     ) => Promise<SavedAudio>,
     readonly casting?: SpeakerVoiceCasting,
   ) {
@@ -161,6 +167,7 @@ export class SpeakerGenerationService {
     return rows.map((r) => ({
       ...r.estimate,
       id: r.id,
+      revoiceFrom: r.settings.cast?.revoiceFrom,
       bookId: r.book_id,
       chapterIds: r.settings.chapterIds,
       chapterCount: r.settings.chapterIds.length,
@@ -209,6 +216,17 @@ export class SpeakerGenerationService {
       await speakerPlan(this.pool, this.owner, bookId, input, await this.catalog(), this.engines, this.casting?.library)
     ).estimate;
   }
+  async revoiceSource(bookId: string, id: string) {
+    return revoiceSourceView((await loadRevoiceSource(this.pool, this.owner, bookId, id)).items);
+  }
+  async estimateRevoice(bookId: string, id: string, input: SpeakerRevoiceInput) {
+    return (await planSpeakerRevoice(this.pool, this.owner, bookId, id, input, await this.catalog())).estimate;
+  }
+  async revoice(bookId: string, id: string, input: SpeakerRevoiceInput, fingerprint: string, paid: boolean) {
+    const plan = await planSpeakerRevoice(this.pool, this.owner, bookId, id, input, await this.catalog());
+    const created = await this.audio.create(plan, fingerprint, paid);
+    return (await this.list(bookId)).find((job) => job.id === created.id)!;
+  }
   async create(bookId: string, input: SpeakerGenerationInput, fingerprint: string, paid: boolean) {
     const { plan } = await speakerPlan(
       this.pool,
@@ -224,6 +242,7 @@ export class SpeakerGenerationService {
   }
   async resume(id: string) {
     const run = await this.run(id);
+    if (run.settings.cast?.revoiceFrom) return;
     if (!['paused', 'failed'].includes(run.status)) return;
     const client = await this.pool.connect();
     try {
@@ -642,7 +661,14 @@ export class SpeakerGenerationService {
       request,
       text: playable.text,
     });
-    const audio = await this.synthesize(playable.text, request.voiceId, request.cast.model, key, regenerate);
+    const audio = await this.synthesize(
+      playable.text,
+      request.voiceId,
+      request.cast.model,
+      key,
+      regenerate,
+      request.cast.instructions,
+    );
     await this.authority(run);
     return audio;
   }

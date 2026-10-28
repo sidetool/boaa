@@ -24,6 +24,7 @@ interface ServiceAccountCredentials {
 }
 
 export class GoogleCloudTTSProvider implements TTSSynthesisProvider {
+  readonly supportsInstructions = true;
   readonly providerId = 'google-cloud-tts';
   readonly displayName = 'Google Cloud TTS';
   readonly supportsStreaming = true;

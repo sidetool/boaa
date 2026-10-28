@@ -27,6 +27,7 @@ export interface CastRequest extends Omit<PlainTTSRequest, 'rules'> {
     label: string;
     language?: string;
     model: PlainTTSModel;
+    instructions?: string;
   };
 }
 export async function speakerPlan(

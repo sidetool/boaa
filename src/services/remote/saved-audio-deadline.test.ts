@@ -1,4 +1,5 @@
 import { afterEach, expect, it, vi } from 'vitest';
+import { createAudiobookPort } from './audiobook-client';
 import { RemoteApiClient, RemoteApiRequestTimeoutError } from './remote-api-client';
 
 afterEach(() => {
@@ -50,3 +51,26 @@ it('preserves long file downloads and caller cancellation', async () => {
   abort.abort();
   await rejected;
 });
+
+it.each(['reader', 'resolve'] as const)(
+  'bounds the complete %s response body without automatically repeating a paid POST',
+  async (phase) => {
+    vi.useFakeTimers();
+    const f = stalledFetch();
+    const client = new RemoteApiClient('https://fixture.invalid/api');
+    const port = createAudiobookPort(client, 'book');
+    const signal = new AbortController().signal;
+    const result =
+      phase === 'reader' ? port.reader('chapter', { id: 'saved' }, signal) : port.resolve('saved', 2, true, signal);
+    const rejected = expect(result).rejects.toBeInstanceOf(RemoteApiRequestTimeoutError);
+    const limit = phase === 'reader' ? 30_000 : 150_000;
+    await vi.advanceTimersByTimeAsync(limit - 1);
+    expect(f.fetch).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+    await rejected;
+    expect(f.fetch).toHaveBeenCalledTimes(1);
+    const init = f.fetch.mock.calls[0][1];
+    expect(init?.method ?? 'GET').toBe(phase === 'reader' ? 'GET' : 'POST');
+    if (phase === 'resolve') expect(JSON.parse(String(init?.body))).toEqual({ regenerate: true });
+  },
+);

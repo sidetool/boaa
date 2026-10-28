@@ -29,6 +29,7 @@ import {
   type SpeakerEngineResult,
 } from '../../../../src/providers/speaker-engine-protocol';
 import { attributionKey } from './speaker-attribution-preparation';
+import { planSpeakerRevoice } from './speaker-revoice-plan';
 import type { SpeakerGenerationInput } from '../../../../src/providers/speaker-generation';
 
 const harness = await startPostgresIntegrationHarness();
@@ -72,7 +73,8 @@ async function setup(pool: pg.Pool, concurrency: 1 | 2 = 1, chapterIds = ['c1', 
       label: id,
       lang: 'ko',
       model: { providerId: 'fixture', modelId: 'same', revision: 'stable' },
-      paid: false,
+      paid: id === 'b',
+      instructionsSupported: id === 'b',
     })),
   });
   const audio = new AudiobookService(
@@ -179,6 +181,7 @@ async function setup(pool: pg.Pool, concurrency: 1 | 2 = 1, chapterIds = ['c1', 
     engines,
     engine,
     service,
+    catalog,
     synthesize,
     requests,
     fetchImpl,
@@ -207,6 +210,140 @@ async function setup(pool: pg.Pool, concurrency: 1 | 2 = 1, chapterIds = ['c1', 
   };
 }
 (harness ? describe : describe.skip)('speaker background generation with real preset35 and PostgreSQL', () => {
+  it('revoices captured audio with no analysis calls, independent cache identities and an immutable original', async () => {
+    await withPostgresSchema(harness!, 'speaker_revoice', async (pool) => {
+      const f = await setup(pool);
+      try {
+        const original = await f.create();
+        await f.until(async () => (await f.audio.get(original.id)).status === 'completed');
+        const before = (
+          await pool.query(
+            'select ordinal,request,cache_key from saved_audiobook_items where audiobook_id=$1 order by ordinal',
+            [original.id],
+          )
+        ).rows;
+        const source = await f.service.revoiceSource('book', original.id);
+        const input = {
+          voices: source.voices.map((v) => ({
+            speakerId: v.speakerId,
+            voiceId: v.speakerId === 'narrator' ? v.voiceId : 'b',
+            ...(v.speakerId === 'narrator' ? {} : { instructions: '낮고 차분한 목소리로.' }),
+          })),
+        };
+        await f.engines.remove(f.engine.id);
+        f.fetchImpl.mockClear();
+        f.synthesize.mockClear();
+        const estimate = await f.service.estimateRevoice('book', original.id, input);
+        expect(estimate).toMatchObject({ paid: true, chapterCount: 2, itemCount: before.length });
+        await expect(f.service.revoice('book', original.id, input, estimate.fingerprint, false)).rejects.toMatchObject({
+          statusCode: 400,
+        });
+        const next = await f.service.revoice('book', original.id, input, estimate.fingerprint, true);
+        expect(next.id).not.toBe(original.id);
+        expect(next.revoiceFrom).toBe(original.id);
+        expect(next.planningComplete).toBe(true);
+        expect((await f.service.revoice('book', original.id, input, estimate.fingerprint, true)).id).toBe(next.id);
+        await f.until(async () => (await f.audio.get(next.id)).status === 'completed');
+        expect(f.fetchImpl).not.toHaveBeenCalled();
+        const after = (
+          await pool.query(
+            'select ordinal,request,cache_key from saved_audiobook_items where audiobook_id=$1 order by ordinal',
+            [next.id],
+          )
+        ).rows;
+        for (const [i, item] of after.entries()) {
+          expect(item.request.paragraphHash).toBe(before[i].request.paragraphHash);
+          expect(item.request.chunkHash).toBe(before[i].request.chunkHash);
+          expect(item.request.cast).toMatchObject({
+            start: before[i].request.cast.start,
+            end: before[i].request.cast.end,
+            part: before[i].request.cast.part,
+            speakerId: before[i].request.cast.speakerId,
+          });
+          if (item.request.cast.speakerId === 'narrator') expect(item.cache_key).toBe(before[i].cache_key);
+          else {
+            expect(item.cache_key).not.toBe(before[i].cache_key);
+            expect(item.request.cast.instructions).toBe('낮고 차분한 목소리로.');
+          }
+        }
+        expect(
+          (
+            await pool.query(
+              'select ordinal,request,cache_key from saved_audiobook_items where audiobook_id=$1 order by ordinal',
+              [original.id],
+            )
+          ).rows,
+        ).toEqual(before);
+        expect(f.synthesize.mock.calls.some((call) => (call as unknown[])[5] === '낮고 차분한 목소리로.')).toBe(true);
+        await f.service.remove(original.id);
+        expect((await f.service.list('book')).some((job) => job.id === next.id)).toBe(true);
+        expect((await pool.query('select count(*)::int n from speaker_analysis')).rows[0].n).toBeGreaterThan(0);
+        expect((await f.service.reader(next.id, 'c1')).items[0].playable.preparedAudio?.id).toBe(next.id);
+      } finally {
+        await f.cleanup();
+      }
+    });
+  });
+  it('validates full revoice choices, capabilities, source identity and transactional source/owner fences', async () => {
+    await withPostgresSchema(harness!, 'revoice_fences', async (pool) => {
+      const f = await setup(pool);
+      try {
+        const original = await f.create();
+        await f.until(async () => (await f.audio.get(original.id)).status === 'completed');
+        const source = await f.service.revoiceSource('book', original.id);
+        const input = {
+          voices: source.voices.map((v) => ({ speakerId: v.speakerId, voiceId: 'b', instructions: '또렷하게.' })),
+        };
+        for (const bad of [
+          { voices: [] },
+          { voices: [input.voices[0], input.voices[0]] },
+          { voices: input.voices.map((v) => ({ ...v, voiceId: 'missing' })) },
+          { voices: input.voices.map((v) => ({ ...v, voiceId: 'a' })) },
+          { voices: input.voices.map((v) => ({ ...v, instructions: 'x'.repeat(2001) })) },
+        ])
+          await expect(f.service.estimateRevoice('book', original.id, bad)).rejects.toHaveProperty('statusCode');
+        await expect(f.service.revoiceSource('other-book', original.id)).rejects.toMatchObject({ statusCode: 409 });
+        const plan = await planSpeakerRevoice(pool, 'owner', 'book', original.id, input, await f.catalog());
+        await pool.query("update saved_audiobooks set status='running' where id=$1", [original.id]);
+        await expect(f.audio.create(plan, plan.estimate.fingerprint, true)).rejects.toMatchObject({ statusCode: 409 });
+        await pool.query("update saved_audiobooks set status='completed' where id=$1", [original.id]);
+        await pool.query("update self_host_accounts set role='member' where user_id='owner'");
+        await expect(f.audio.create(plan, plan.estimate.fingerprint, true)).rejects.toMatchObject({ statusCode: 409 });
+        await pool.query("update self_host_accounts set role='admin' where user_id='owner'");
+        await pool.query("update library_books set active_content_revision_id='new' where id='book'");
+        await expect(f.audio.create(plan, plan.estimate.fingerprint, true)).rejects.toMatchObject({ statusCode: 409 });
+        expect((await pool.query('select count(*)::int n from saved_audiobooks')).rows[0].n).toBe(1);
+      } finally {
+        await f.cleanup();
+      }
+    });
+  });
+  it('copies only fully planned chapters from a paused partial job and never restarts analysis on resume', async () => {
+    await withPostgresSchema(harness!, 'revoice_partial', async (pool) => {
+      const f = await setup(pool);
+      try {
+        const original = await f.create();
+        await f.until(async () => (await f.service.list('book')).find((job) => job.id === original.id)!.itemCount > 0);
+        await f.audio.control(original.id, 'pause');
+        const source = await f.service.revoiceSource('book', original.id);
+        expect(source.chapterCount).toBe(1);
+        const input = { voices: source.voices.map((v) => ({ speakerId: v.speakerId, voiceId: 'b' })) };
+        const estimate = await f.service.estimateRevoice('book', original.id, input);
+        const next = await f.service.revoice('book', original.id, input, estimate.fingerprint, true);
+        expect(next.chapterIds).toEqual(['c1']);
+        expect(next.itemCount).toBe(source.itemCount);
+        await f.audio.control(next.id, 'pause');
+        await f.engines.remove(f.engine.id);
+        f.fetchImpl.mockClear();
+        await f.audio.control(next.id, 'resume', true);
+        await f.until(async () => (await f.audio.get(next.id)).status === 'completed');
+        expect(f.fetchImpl).not.toHaveBeenCalled();
+        expect((await f.audio.get(original.id)).status).toBe('paused');
+      } finally {
+        await f.cleanup();
+      }
+    });
+  });
   it('reports context analysis position and durable retry time before an audio plan exists', async () => {
     await withPostgresSchema(harness!, 'speaker_progress', async (pool) => {
       const f = await setup(pool);
@@ -1018,6 +1155,7 @@ function gate() {
       await withPostgresSchema(harness!, 'speaker_parallel_failure', async (pool) => {
         const f = await setup(pool);
         const held = gate();
+        const siblingsStarted = gate();
         let entered = 0;
         let settled = false;
         let failOnce = true;
@@ -1029,6 +1167,10 @@ function gate() {
             const chapter = input.source.chapter.id;
             attempts.push(chapter);
             entered++;
+            if (entered === 2) siblingsStarted.resolve();
+            // This case exercises failures after both requests are dispatched.
+            // A synchronous failure before the sibling starts correctly closes admission instead.
+            await siblingsStarted.promise;
             if (chapter === 'c1') await held.promise;
             if (chapter === 'c2' && failOnce) {
               failOnce = false;
@@ -1089,6 +1231,7 @@ function gate() {
             f.modelCalls.filter((c) => c.request.stage === 'identity').map((c) => c.input.source.chapter.id),
           ).toEqual(['c1', 'c2']);
         } finally {
+          siblingsStarted.resolve();
           held.resolve();
           await pending;
           generate.mockRestore();

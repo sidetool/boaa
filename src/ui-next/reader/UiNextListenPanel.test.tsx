@@ -192,22 +192,28 @@ describe('UiNextListenPanel playback', () => {
       synthesizePlainTTS: synthesize,
     } as unknown as PlainInput['client'];
     let completeAudio: ((played: boolean) => void) | undefined;
+    let audioPlaying: ((active: boolean) => void) | undefined;
     const audio = {
       get hasActivePlayback() {
         return Boolean(completeAudio);
       },
       playBlob: vi.fn(
-        (_blob: Blob) =>
+        (_blob: Blob, _progress?: (fraction: number) => void, onPlaying?: (active: boolean) => void) =>
           new Promise<boolean>((resolve) => {
             completeAudio = resolve;
+            audioPlaying = onPlaying;
+            audioPlaying?.(true);
           }),
       ),
       stop: vi.fn(() => {
         completeAudio?.(false);
         completeAudio = undefined;
       }),
-      pause: vi.fn(),
-      resume: vi.fn(async () => true),
+      pause: vi.fn(() => audioPlaying?.(false)),
+      resume: vi.fn(async () => {
+        audioPlaying?.(true);
+        return true;
+      }),
     };
     const systemTTS = { stop: vi.fn(), pause: vi.fn(), resume: vi.fn() } as unknown as PlainInput['systemTTS'];
     const owner = {};
@@ -279,6 +285,10 @@ describe('UiNextListenPanel playback', () => {
     expect(plain.ready).toBe(true);
     expect(controller.playbackWaiting).toBe(true);
     expect(button(renderer!.root, '현재 음성 다시 생성').props.disabled).toBe(true);
+    act(() => controller.pause());
+    expect(controller.playbackWaiting).toBe(true);
+    expect(button(renderer!.root, '현재 음성 다시 생성').props.disabled).toBe(true);
+    act(() => controller.resume());
     await act(async () => {
       completeSynthesis(new Blob(['original audio']));
     });

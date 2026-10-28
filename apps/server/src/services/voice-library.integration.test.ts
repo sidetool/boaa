@@ -378,6 +378,8 @@ async function serviceFixture(f: Awaited<ReturnType<typeof setup>>) {
       });
       const fresh = new VoiceLibraryStore(pool, 'owner', f.sources, f.catalog);
       expect((await fresh.list()).voices).toEqual([updated]);
+      await expect(f.library.save(metadata())).rejects.toMatchObject({ statusCode: 409 });
+      expect((await fresh.list()).voices).toEqual([updated]);
       await expect(f.library.save(metadata('local:b'), original.id)).rejects.toMatchObject({ statusCode: 400 });
       await expect(f.otherLibrary.save(metadata(), original.id)).rejects.toMatchObject({ statusCode: 404 });
       await expect(f.otherLibrary.sample(original.id)).rejects.toMatchObject({ statusCode: 404 });

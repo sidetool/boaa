@@ -25,7 +25,15 @@ export interface AudiobookPlanItem {
 }
 export interface AudiobookPlan {
   planningComplete?: boolean;
-  speakerRun?: { analysisKey: string; chapterIds: string[] };
+  speakerRun?: {
+    analysisKey: string;
+    chapterIds: string[];
+    nextChapter?: number;
+    ledger?: unknown;
+    assignments?: Record<string, string>;
+  };
+  /** Trusted server-only source fence for an audio-only variant. */
+  revoiceSource?: { id: string; itemCount: number; nextChapter: number };
   bookId: string;
   title: string;
   revision: string | null;

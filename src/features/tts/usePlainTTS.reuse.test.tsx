@@ -365,3 +365,94 @@ it('uses prepared items with the normal audio controller despite different curre
     act(() => root?.unmount());
   }
 });
+
+it('releases a stalled prepared GET shared with prefetch and rereads without synthesizing or reusing another job audio', async () => {
+  vi.useFakeTimers();
+  let root: ReactTestRenderer | undefined;
+  let staleRead!: AbortSignal;
+  const audio = vi.fn().mockImplementationOnce((_: string, _index: number, signal: AbortSignal) => {
+    staleRead = signal;
+    return new Promise<Blob>(() => undefined);
+  });
+  const fresh = new Blob(['saved recovered']);
+  const variant = new Blob(['new job voice']);
+  audio.mockResolvedValueOnce(fresh).mockResolvedValueOnce(variant);
+  const resolve = vi.fn();
+  const synthesize = vi.fn();
+  const onError = vi.fn();
+  const playAudio = vi.fn(async () => true);
+  const controller = {
+    beginHostedPlayback: () => ({ controller: new AbortController() }),
+    isSessionCurrent: () => true,
+    setHostedStatus: vi.fn(),
+    playAudio,
+    finishOperation: vi.fn(),
+    stopAll: vi.fn(),
+  } as unknown as Input['controller'];
+  const client = {
+    listPlainTTSVoices: async () => ({ available: false, voices: [] }),
+    synthesizePlainTTS: synthesize,
+  } as unknown as Input['client'];
+  const prepared = { audio, resolve } as unknown as Input['prepared'];
+  const owner = {};
+  const paragraph = { id: 'p', novelId: 'b', chapterId: 'c', index: 1, text: '이미 준비된 음성입니다.' } as Paragraph;
+  const playable = {
+    ...buildPlainTTSItems({ paragraph, rate: 1, chunking: 'sentence' })[0],
+    preparedAudio: { id: 'saved', ordinal: 0, ready: true },
+  };
+  let hook!: ReturnType<typeof usePlainTTS>;
+  function Harness() {
+    hook = usePlainTTS({
+      client,
+      owner,
+      prepared,
+      enabled: true,
+      chapterId: 'c',
+      contentRevision: 'r1',
+      settings: { ...DEFAULT_TTS_PLAYBACK_SETTINGS, voiceSource: 'server' },
+      rules: [],
+      controller,
+      systemTTS: { stop: vi.fn() } as unknown as Input['systemTTS'],
+      onError,
+    });
+    return null;
+  }
+  try {
+    await act(async () => {
+      root = create(<Harness />);
+    });
+    let prefetch!: Promise<void>;
+    let playback!: Promise<boolean>;
+    await act(async () => {
+      prefetch = hook.prefetch(playable, paragraph, 1);
+      playback = hook.play(playable, paragraph, 1);
+      await Promise.resolve();
+    });
+    expect(audio).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(45_000);
+      await prefetch;
+      expect(await playback).toBe(false);
+    });
+    expect(staleRead.aborted).toBe(true);
+    expect(onError).toHaveBeenCalledOnce();
+    await act(async () => {
+      expect(await hook.play(playable, paragraph, 2)).toBe(true);
+    });
+    expect(playAudio).toHaveBeenLastCalledWith(fresh, 2, undefined);
+    await act(async () => {
+      await hook.play(playable, paragraph, 3);
+    });
+    expect(audio).toHaveBeenCalledTimes(2);
+    await act(async () => {
+      await hook.play({ ...playable, preparedAudio: { ...playable.preparedAudio, id: 'new-voice-job' } }, paragraph, 4);
+    });
+    expect(audio).toHaveBeenCalledTimes(3);
+    expect(playAudio).toHaveBeenLastCalledWith(variant, 4, undefined);
+    expect(resolve).not.toHaveBeenCalled();
+    expect(synthesize).not.toHaveBeenCalled();
+  } finally {
+    if (root) act(() => root!.unmount());
+    vi.useRealTimers();
+  }
+});

@@ -16,6 +16,9 @@ export interface OpenAITTSProviderOptions {
 }
 
 export class OpenAITTSProvider implements TTSSynthesisProvider {
+  get supportsInstructions() {
+    return !legacyTTSModel(this.options.modelId);
+  }
   readonly providerId = 'openai-tts';
   readonly displayName = 'OpenAI TTS';
   readonly supportsStreaming = true;

@@ -25,6 +25,7 @@ export interface SpeakerGenerationEstimate {
   maxDesignedVoices?: number;
 }
 export interface SpeakerGenerationJob extends SavedAudiobook {
+  revoiceFrom?: string;
   stage: 'waiting' | 'attribution' | 'identity' | 'casting' | 'audio' | 'complete';
   analyzedChapters: number;
   contextChapterCount: number;
@@ -39,6 +40,22 @@ export interface SpeakerGenerationJob extends SavedAudiobook {
   /** False means itemCount covers only the chapters planned so far. */
   planningComplete?: boolean;
   retryAt?: string;
+}
+export interface SpeakerRevoiceInput {
+  voices: { speakerId: string; voiceId: string; instructions?: string }[];
+}
+export interface SpeakerRevoiceSource {
+  chapterCount: number;
+  itemCount: number;
+  /** Captured on this job's planned audio, independent of later book-wide assignments. */
+  voices: { speakerId: string; name: string; voiceId: string; instructions?: string; itemCount: number }[];
+}
+export interface SpeakerRevoiceEstimate {
+  fingerprint: string;
+  chapterCount: number;
+  itemCount: number;
+  characters: number;
+  paid: boolean;
 }
 export interface SpeakerGenerationPort {
   preferences(signal?: AbortSignal): Promise<SpeakerGenerationPreferences | undefined>;
@@ -55,6 +72,15 @@ export interface SpeakerGenerationPort {
   remove(id: string): Promise<void>;
   castings?(id: string, signal?: AbortSignal): Promise<BookVoiceAssignment[]>;
   assign?(id: string, speakerId: string, voiceId: string, signal?: AbortSignal): Promise<void>;
+  revoiceSource?(id: string, signal?: AbortSignal): Promise<SpeakerRevoiceSource>;
+  estimateRevoice?(id: string, input: SpeakerRevoiceInput, signal?: AbortSignal): Promise<SpeakerRevoiceEstimate>;
+  revoice?(
+    id: string,
+    input: SpeakerRevoiceInput,
+    fingerprint: string,
+    confirmPaid: boolean,
+    signal?: AbortSignal,
+  ): Promise<SpeakerGenerationJob>;
 }
 export interface SpeakerGenerationPreferences {
   engineId: string;
@@ -79,6 +105,8 @@ export interface TTSSpeakerGenerationControls {
 }
 /** Server-only pinned identity; not accepted from public create requests. */
 export interface SpeakerGenerationSettings {
+  /** Audio-only variant; all source-verified ranges were copied from this job. */
+  revoiceFrom?: string;
   language?: string;
   engineId: string;
   engineRevision: string;

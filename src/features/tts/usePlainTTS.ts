@@ -186,6 +186,7 @@ export function usePlainTTS(input: {
             waitForPlainTTSAudio(
               audioCache.getOrCreate({
                 key,
+                readOnly: item.ready && !regeneration,
                 chapter: paragraph.chapterId,
                 scope: scopeFor(),
                 positions: playable.plainBatchPositions?.map((p) => p.paragraphIndex) ?? [],
@@ -278,6 +279,7 @@ export function usePlainTTS(input: {
       try {
         await audioCache.getOrCreate({
           key: `prepared:${item.id}:${item.ordinal}`,
+          readOnly: item.ready,
           chapter: paragraph.chapterId,
           scope: scopeFor(),
           positions: playable.plainBatchPositions?.map((p) => p.paragraphIndex) ?? [],

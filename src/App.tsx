@@ -1,3 +1,4 @@
+import { createTTSPositionWriter } from './providers/tts-position-writer';
 import {
   createSpeakerEnginesPort,
   createSpeakerGenerationPort,
@@ -955,6 +956,12 @@ export default function App() {
     }),
     [readerRuntime, ttsAccountScope, ttsContentOwner, ttsCacheGateway, providerApiClient],
   );
+  const ttsPositionWriter = useRef<ReturnType<typeof createTTSPositionWriter>>();
+  useEffect(() => {
+    const writer = createTTSPositionWriter();
+    ttsPositionWriter.current = writer;
+    return () => writer.close();
+  }, [ttsSessionOwner]);
   const ttsExecutionController = useTTSExecutionController({
     sessionOwner: ttsSessionOwner,
     systemTTS,
@@ -4729,16 +4736,18 @@ export default function App() {
         }
         if (document.visibilityState === 'visible') void scrollToParagraph(paragraph.id);
       },
-      onPlayableStart: async (_playableIndex, playable, paragraphIndex, paragraph) => {
+      onPlayableStart: (_playableIndex, playable, paragraphIndex, paragraph) => {
         if (!selectedNovel?.activeContentRevisionId) return;
+        const contentRevisionId = selectedNovel.activeContentRevisionId;
         const sourceRange = playable.sourceRanges.find((range) => range.paragraphId === paragraph.id);
         const startOffset = sourceRange?.startOffset ?? 0;
         const endOffset = sourceRange?.endOffset ?? startOffset;
-        try {
+        ttsPositionWriter.current?.enqueue(async () => {
+          if (!ttsExecutionController.isSessionCurrent(sessionId)) return;
           const position = await saveListeningPosition({
             bookId: selectedNovel.id,
             chapterId: paragraph.chapterId,
-            contentRevisionId: selectedNovel.activeContentRevisionId,
+            contentRevisionId,
             queueItemFingerprint: ttsQueueItemFingerprint(playable),
             settingsFingerprint: ttsResumeFingerprint,
             anchor: {
@@ -4748,7 +4757,7 @@ export default function App() {
               endOffset,
               reader: {
                 bookId: selectedNovel.id,
-                contentRevisionId: selectedNovel.activeContentRevisionId,
+                contentRevisionId,
                 sectionId: paragraph.chapterId,
                 blockId: paragraph.id,
                 blockIndex: paragraphIndex,
@@ -4756,11 +4765,10 @@ export default function App() {
               },
             },
           });
+          if (!ttsExecutionController.isSessionCurrent(sessionId)) return;
           setTTSListeningPosition(position);
           await readerMutationCommittedRef.current('progress');
-        } catch {
-          // Playback remains available when a best-effort cursor write fails.
-        }
+        });
       },
       onActivePlayback: (playback) => {
         ttsExecutionController.setActivePlayback(sessionId, playback);

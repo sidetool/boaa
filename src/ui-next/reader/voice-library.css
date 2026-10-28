@@ -74,3 +74,59 @@
 .un-speaker-engine-form [hidden] {
   display: none !important;
 }
+.un-voice-library .un-chip-row {
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  overflow: visible;
+  padding: 0;
+}
+.un-voice-library .un-chip {
+  height: 30px;
+  padding: 0 11px;
+  font-size: 13px;
+}
+/* Touch screens keep :hover on a tapped chip; the selected chip must stay readable. */
+.un-voice-library .un-chip.is-active:hover {
+  background: #f5f5f7;
+}
+.un-voice-library .un-chip:disabled {
+  opacity: 0.45;
+}
+.un-voice-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.un-voice-desc {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  white-space: pre-line;
+}
+.un-voice-desc.is-open {
+  display: block;
+}
+.un-voice-library .un-voice-more {
+  justify-self: start;
+}
+.un-voice-editor-id {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+.un-voice-timbre,
+.un-voice-chips {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+.un-voice-chips small {
+  min-width: 3.5em;
+  color: var(--un-text-3);
+  font-size: 12px;
+}

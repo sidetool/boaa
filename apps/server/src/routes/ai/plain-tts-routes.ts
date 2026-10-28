@@ -167,6 +167,7 @@ export async function registerPlainTTSRoutes(
     source: PlainTTSSource,
     regenerate = false,
     timeoutMs = 45_000,
+    instructions?: string,
   ): Promise<Audio> {
     const current = pending.get(key);
     if (current && (!regenerate || regenerating.has(key))) return current;
@@ -221,6 +222,11 @@ export async function registerPlainTTSRoutes(
         };
         // Ordinary listening owns voice/rate/container; cast render options must not override its controls.
         const providerOptions = { ...source.providerOptions };
+        if (instructions) {
+          if (!adapter.supportsInstructions) throw new PlainTTSError(409, '이 목소리는 연기 지시를 지원하지 않아요.');
+          providerOptions.prompt = instructions;
+          providerOptions.instructions = instructions;
+        }
         for (const option of ['responseFormat', 'outputFormat', 'audioEncoding', 'format', 'speed', 'speakingRate'])
           delete providerOptions[option];
         const cooldown = cooldowns.get(source.id);
@@ -295,7 +301,8 @@ export async function registerPlainTTSRoutes(
       items.map(async (source) => {
         try {
           const found = await voices(source);
-          return { source, found, available: found.length > 0 };
+          const instructionsSupported = (await source.createProvider()).supportsInstructions === true;
+          return { source, found, available: found.length > 0, instructionsSupported };
         } catch {
           return { source, found: [], available: false };
         }
@@ -310,7 +317,7 @@ export async function registerPlainTTSRoutes(
       available: results.some((item) => item.available),
       modelId,
       revision: catalogRevision(items),
-      voices: results.flatMap(({ source, found }) =>
+      voices: results.flatMap(({ source, found, instructionsSupported }) =>
         found.map((voice) => ({
           ...voice,
           id: voiceKey(source, voice.id),
@@ -319,6 +326,7 @@ export async function registerPlainTTSRoutes(
           modelId: source.modelId,
           model: sourceModel(source),
           paid: source.paid,
+          instructionsSupported: instructionsSupported === true,
         })),
       ),
       providers: results.map(({ source, available }) => ({
@@ -613,7 +621,7 @@ export async function registerPlainTTSRoutes(
       engines,
       service,
       catalog,
-      async (text, voiceId, expected, key, regenerate) => {
+      async (text, voiceId, expected, key, regenerate, instructions) => {
         const current = (await sources()).find((s) => s.id === expected.providerId);
         if (!current || structuredIntegrityHash(sourceModel(current)) !== structuredIntegrityHash(expected))
           throw new PlainTTSError(
@@ -622,7 +630,7 @@ export async function registerPlainTTSRoutes(
           );
         const selected = (await voices(current)).find((v) => voiceKey(current, v.id) === voiceId);
         if (!selected) throw new PlainTTSError(409, '배정한 목소리를 찾지 못했어요.');
-        const audio = await synthesize(key, text, selected.id, 1, current, regenerate, 120_000);
+        const audio = await synthesize(key, text, selected.id, 1, current, regenerate, 120_000, instructions);
         const after = (await sources()).find((s) => s.id === expected.providerId);
         if (!after || structuredIntegrityHash(sourceModel(after)) !== structuredIntegrityHash(expected))
           throw new PlainTTSError(409, '생성 중 모델 연결이 바뀌었어요.');

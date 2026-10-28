@@ -4,6 +4,8 @@ import type {
   SpeakerGenerationJob,
   SpeakerGenerationEstimate,
   SpeakerGenerationPreferences,
+  SpeakerRevoiceSource,
+  SpeakerRevoiceEstimate,
 } from '../../providers/speaker-generation';
 import type { RemoteApiClient } from './remote-api-client';
 import type { VoiceLibraryPort, LibraryVoice, BookVoiceAssignment } from '../../providers/voice-library';
@@ -55,6 +57,11 @@ export function createSpeakerGenerationPort(client: RemoteApiClient, bookId: str
     assign: async (id, speakerId, voiceId, signal) => {
       await send(client, item(id) + '/castings', 'PUT', { speakerId, voiceId }, signal);
     },
+    revoiceSource: (id, signal) => client.request<SpeakerRevoiceSource>(item(id) + '/revoice', { signal }, 30000, true),
+    estimateRevoice: (id, input, signal) =>
+      send<SpeakerRevoiceEstimate>(client, item(id) + '/revoice/estimate', 'POST', input, signal),
+    revoice: (id, input, fingerprint, confirmPaid, signal) =>
+      send<SpeakerGenerationJob>(client, item(id) + '/revoice', 'POST', { ...input, fingerprint, confirmPaid }, signal),
   };
 }
 export function createVoiceLibraryPort(client: RemoteApiClient): VoiceLibraryPort {

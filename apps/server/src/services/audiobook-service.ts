@@ -377,6 +377,25 @@ export class AudiobookService {
       ).rows[0];
       if (!book || book.active_content_revision_id !== plan.revision)
         throw audiobookError(409, '본문이 변경됐습니다. 다시 확인해 주세요.');
+      if (plan.revoiceSource) {
+        await client.query('select user_id from self_host_accounts where user_id=$1 for share', [this.owner]);
+        const original = await client.query(
+          `select a.id from saved_audiobooks a join speaker_generation_runs r on r.audiobook_id=a.id
+          where a.id=$1 and a.user_id=$2 and a.book_id=$3 and a.status in ('paused','failed','completed')
+          and a.total_items=$4 and r.next_chapter=$5 and a.content_revision is not distinct from $6::text
+          and not exists(select 1 from self_host_accounts where user_id=$2 and (role<>'admin' or status<>'active'))
+          for share of a,r`,
+          [
+            plan.revoiceSource.id,
+            this.owner,
+            plan.bookId,
+            plan.revoiceSource.itemCount,
+            plan.revoiceSource.nextChapter,
+            plan.revision,
+          ],
+        );
+        if (!original.rowCount) throw audiobookError(409, '원래 작업이나 계정이 변경됐어요. 다시 확인해 주세요.');
+      }
       const id = randomUUID();
       const row = (
         await client.query(
@@ -399,8 +418,16 @@ export class AudiobookService {
       // Send bounded batches to PostgreSQL; requests contain source hashes, never raw book text.
       if (plan.speakerRun)
         await client.query(
-          'insert into speaker_generation_runs(audiobook_id,analysis_key,chapter_ids) values($1,$2,$3)',
-          [id, plan.speakerRun.analysisKey, JSON.stringify(plan.speakerRun.chapterIds)],
+          'insert into speaker_generation_runs(audiobook_id,analysis_key,chapter_ids,next_chapter,ledger,assignments,stage) values($1,$2,$3,$4,$5,$6,$7)',
+          [
+            id,
+            plan.speakerRun.analysisKey,
+            JSON.stringify(plan.speakerRun.chapterIds),
+            plan.speakerRun.nextChapter ?? 0,
+            plan.speakerRun.ledger ?? null,
+            plan.speakerRun.assignments ?? {},
+            plan.revoiceSource ? 'audio' : 'waiting',
+          ],
         );
       for (let start = 0; start < plan.items.length; start += 250) {
         const rows = plan.items.slice(start, start + 250).map((item, index) => ({

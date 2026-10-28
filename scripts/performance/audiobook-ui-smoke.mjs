@@ -13,6 +13,8 @@ const source = `
 import React,{useState,useEffect,useMemo} from 'react';
 import {createRoot} from 'react-dom/client';
 import Panel from '${root}src/ui-next/reader/UiNextAudiobookPanel.tsx';
+import Library from '${root}src/ui-next/reader/UiNextVoiceLibrary.tsx';
+import Revoice from '${root}src/ui-next/reader/UiNextSpeakerRevoice.tsx';
 import {Sheet} from '${root}src/ui-next/components/primitives.tsx';
 import {RemoteApiClient} from '${root}src/services/remote/remote-api-client.ts';
 import {createAudiobookPort} from '${root}src/services/remote/audiobook-client.ts';
@@ -23,10 +25,20 @@ import {runTTSPlaybackSession} from '${root}src/providers/tts-playback-session-r
 import {DEFAULT_TTS_PLAYBACK_SETTINGS} from '${root}src/providers/tts-playback-settings.ts';
 import '${root}src/ui-next/styles/tokens.css';
 import '${root}src/ui-next/styles/kit.css';
+import '${root}src/styles/base.css';
 const client = new RemoteApiClient('/api',{getAuthToken:()=> 'fixture'});
 const port=createAudiobookPort(client,'book');
 const systemTTS={pause(){},resume(){},stop(){}};
 const owner={};
+const reviewVoices=[{id:'a',label:'기본 목소리',lang:'ko',providerName:'검증 엔진'},
+ {id:'b',label:'아주 긴 이름을 가진 두 번째 목소리',lang:'ko',providerName:'검증 엔진',instructionsSupported:true,paid:true}];
+let reviewRows=[{id:'row',voiceId:'a',alias:'차분한 목소리',timbre:'낮은, 부드러운',description:'차분한 인물에게 어울려요.',language:'ko',enabled:true,providerId:'fixture',providerVoiceId:'a',model:{providerId:'fixture',modelId:'fixture-model',revision:'1'},origin:'catalog',available:true,sampleAvailable:false}];
+const reviewCalls=[]; window.reviewCalls=reviewCalls;
+const reviewPort={list:async()=>({voices:reviewRows,designers:[]}),save:async(v,s,id)=>{reviewRows=[{...reviewRows[0],...v}];reviewCalls.push({kind:'save',id,value:v});return reviewRows[0];}};
+const revoicePort={revoiceSource:async()=>({chapterCount:1,itemCount:12,voices:[{speakerId:'narrator',name:'내레이터',voiceId:'a',itemCount:8},{speakerId:'p1',name:'이름이매우길어서모바일에서줄바꿈이필요한등장인물',voiceId:'a',itemCount:4}]}),
+ estimateRevoice:async(id,input)=>{reviewCalls.push({kind:'estimate',input});return {fingerprint:'r',chapterCount:1,itemCount:12,characters:1500,paid:true};},
+ revoice:async(id,input,fingerprint,confirmPaid)=>{reviewCalls.push({kind:'create',input,confirmPaid});return {id:'variant',revoiceFrom:id};}};
+function ReviewFixture(){const review=new URLSearchParams(location.search).get('review');return <div className="ui-next"><Sheet open title={review==='library'?'목소리 보관함':'화자별 미리 생성하기'} onClose={()=>{}}>{review==='library'?<Library port={reviewPort} voices={reviewVoices} onChanged={()=>{}}/>:<div className="un-book-item"><Revoice job={{id:'source',status:'paused',chapterCount:2,itemCount:12,planningComplete:false}} port={revoicePort} voices={reviewVoices} library={reviewRows} onCreated={()=>reviewCalls.push({kind:'reload'})}/></div>}</Sheet></div>}
 function Fixture(){
  const [open,setOpen]=useState(true);
  const [choice,setChoice]=useState(); const [chapter,setChapter]=useState('c1'); const [done,setDone]=useState(false);
@@ -63,7 +75,11 @@ function Fixture(){
  generation:location.search.includes('offline')?undefined:{voiceId:'fixture',modelRevision:'v1',chunking:'batch',footnotePlayback:'skip',rules:[]},
  rate:1.1,volume:0.5,listen:(item)=>{controller.stopAll();window.followed=[];setChoice(item);setChapter('c1');setDone(false);setOpen(false);}
  }}/></Sheet>}</div>}
-createRoot(document.getElementById('root')).render(<Fixture/>);`;
+const OriginalAudio=window.Audio;
+window.Audio=function(...args){const audio=new OriginalAudio(...args);
+ audio.addEventListener('playing',()=>{window.actualPlaying=(window.actualPlaying||0)+1;window.actualAudio=audio;});
+ audio.addEventListener('timeupdate',()=>{if(audio.currentTime>0)window.audioAdvanced=true;});return audio;};
+createRoot(document.getElementById('root')).render(location.search.includes('review=')?<ReviewFixture/>:<Fixture/>);`;
 const { output } = await build({
   root,
   configFile: false,
@@ -168,6 +184,11 @@ const server = createServer(async (request, response) => {
     }
     const id = pathname.split('/')[3];
     const job = jobs.find((x) => x.id === id);
+    if (pathname.includes('/audio/')) {
+      if (Number(pathname.split('/').at(-1)) % 2) return response.writeHead(404).end('{}');
+      response.setHeader('Content-Type', 'audio/wav');
+      return response.end(audio);
+    }
     if (pathname.includes('/resolve/')) {
       response.setHeader('Content-Type', 'audio/wav');
       return response.end(audio);
@@ -207,7 +228,9 @@ const checks = [];
 const errors = [];
 try {
   browser = await chromium.launch({ headless: true, executablePath: process.env.READER_UI_BROWSER_EXECUTABLE });
-  for (const width of process.env.AUDIOBOOK_UI_PLAYBACK_ONLY ? [] : [320, 390, 1280]) {
+  for (const width of process.env.AUDIOBOOK_UI_PLAYBACK_ONLY || process.env.AUDIOBOOK_UI_REVOICE_ONLY
+    ? []
+    : [320, 390, 1280]) {
     const context = await browser.newContext({ viewport: { width, height: 900 }, reducedMotion: 'reduce' });
     const page = await context.newPage();
     activePage = page;
@@ -242,30 +265,106 @@ try {
     await context.close();
     checks.push(`${width}: cold layout, estimate consent, create, pause and resume confirmation`);
   }
-  const context = await browser.newContext({ viewport: { width: 390, height: 900 }, reducedMotion: 'reduce' });
-  const page = await context.newPage();
-  activePage = page;
-  page.on('pageerror', (e) => errors.push(e.message));
-  jobs = [structuredClone(completed)];
-  calls.length = 0;
-  await page.goto(`http://127.0.0.1:${server.address().port}/?offline`);
-  await page.getByRole('button', { name: '본문에서 듣기', exact: true }).click();
-  await page.getByRole('main', { name: '본문' }).waitFor();
-  assert.equal(await page.getByRole('dialog').count(), 0);
-  await page.getByText('끝까지 들었어요.', { exact: true }).waitFor();
-  assert.equal(await page.evaluate(() => window.playbackError), undefined);
-  assert.deepEqual(await page.evaluate(() => window.followed), ['c1-0', 'c1-1', 'c2-0', 'c2-1']);
-  assert.deepEqual(
-    calls.filter((x) => x.path.includes('/resolve/')).map((x) => x.path),
-    [0, 1, 2, 3].map((i) => '/api/audiobooks/saved/resolve/' + i),
-  );
-  assert.equal(calls.filter((x) => x.path.includes('/tts/plain') && x.method === 'POST').length, 0);
-  assert.equal(calls.filter((x) => x.path.endsWith('/estimate') || x.path.endsWith('/progress')).length, 0);
-  await page.screenshot({ path: `${artifacts}/reader-390.png` });
-  await context.close();
-  checks.push(
-    'reader handoff: same TTS controller decoded four clips across two chapters, matching source highlights, offline catalog and different current settings, no independent player or ordinary synthesis request',
-  );
+  if (process.env.AUDIOBOOK_UI_REVOICE_ONLY || process.env.AUDIOBOOK_UI_LAYOUT_ONLY) {
+    for (const width of process.env.AUDIOBOOK_UI_LAYOUT_ONLY ? [320, 390] : [320, 390, 1280]) {
+      const context = await browser.newContext({ viewport: { width, height: 900 }, reducedMotion: 'reduce' });
+      const page = await context.newPage();
+      activePage = page;
+      page.on('pageerror', (e) => errors.push(e.message));
+      const bounded = async () => {
+        const failures = await page.locator('input,textarea,select,button').evaluateAll((els) =>
+          els
+            .filter((el) => el.getClientRects().length)
+            .flatMap((el) => {
+              const r = el.getBoundingClientRect();
+              const d = el.closest('[role="dialog"]')?.getBoundingClientRect();
+              return d && (r.left < d.left - 1 || r.right > d.right + 1)
+                ? [{ tag: el.tagName, left: r.left, right: r.right }]
+                : [];
+            }),
+        );
+        assert.deepEqual(failures, []);
+      };
+      await page.goto(`http://127.0.0.1:${server.address().port}/?review=library`);
+      await page.getByRole('button', { name: '수정', exact: true }).click();
+      await page.getByRole('button', { name: '여성적인', exact: true }).click();
+      await page.getByRole('button', { name: '젊은', exact: true }).click();
+      await page.getByRole('button', { name: '젊은', exact: true }).hover();
+      assert.equal(
+        await page
+          .getByRole('button', { name: '젊은', exact: true })
+          .evaluate((el) => getComputedStyle(el).backgroundColor),
+        'rgb(245, 245, 247)',
+      );
+      await bounded();
+      await page.screenshot({ path: `${artifacts}/library-${width}.png` });
+      await page.getByRole('button', { name: '저장', exact: true }).click();
+      assert.equal(await page.evaluate(() => window.reviewCalls[0].value.timbre.includes('여성적인')), true);
+      await page.goto(`http://127.0.0.1:${server.address().port}/?review=revoice`);
+      await page.getByText('음성 다시 만들기', { exact: true }).click();
+      await page.getByText(/아직 분석하지 않은 나머지 회차/).waitFor();
+      await page.locator('select').nth(1).selectOption('b');
+      await page.locator('textarea').fill('차분하고 또렷하게, 서두르지 않고 말해 주세요.');
+      assert.deepEqual(
+        await page
+          .locator('.un-revoice-row label > span')
+          .evaluateAll((els) => els.filter((el) => el.scrollWidth > el.clientWidth + 1).map((el) => el.textContent)),
+        [],
+      );
+      assert.equal(
+        await page.locator('.un-revoice textarea').evaluate((el) => getComputedStyle(el).borderTopWidth),
+        '1px',
+      );
+      await bounded();
+      await page.getByRole('button', { name: '다시 만들 범위 확인', exact: true }).click();
+      const create = page.getByRole('button', { name: '새 음성 만들기', exact: true });
+      await create.waitFor();
+      assert.equal(await create.isDisabled(), true);
+      await page.getByRole('checkbox').check();
+      await bounded();
+      await page.screenshot({ path: `${artifacts}/revoice-${width}.png` });
+      await create.click();
+      await page.getByText(/새 음성 작업을 만들었어요/).waitFor();
+      const creates = await page.evaluate(() => window.reviewCalls.filter((c) => c.kind === 'create'));
+      assert.equal(creates.length, 1);
+      assert.equal(creates[0].confirmPaid, true);
+      assert.equal(creates[0].input.voices[1].instructions, '차분하고 또렷하게, 서두르지 않고 말해 주세요.');
+      checks.push(
+        `${width}: metadata editing, bounded fields/chips, partial revoice source, separate instructions, consent and one create`,
+      );
+      await context.close();
+    }
+  }
+  if (!process.env.AUDIOBOOK_UI_LAYOUT_ONLY) {
+    const context = await browser.newContext({ viewport: { width: 390, height: 900 }, reducedMotion: 'reduce' });
+    const page = await context.newPage();
+    activePage = page;
+    page.on('pageerror', (e) => errors.push(e.message));
+    jobs = [structuredClone(completed)];
+    calls.length = 0;
+    await page.goto(`http://127.0.0.1:${server.address().port}/?offline`);
+    await page.getByRole('button', { name: '본문에서 듣기', exact: true }).click();
+    await page.getByRole('main', { name: '본문' }).waitFor();
+    await page.waitForFunction(() => window.actualPlaying > 0);
+    await page.evaluate(() => window.actualAudio.pause());
+    assert.equal(await page.getByRole('dialog').count(), 0);
+    await page.getByText('끝까지 들었어요.', { exact: true }).waitFor();
+    assert.equal(await page.evaluate(() => window.playbackError), undefined);
+    assert.deepEqual(await page.evaluate(() => window.followed), ['c1-0', 'c1-1', 'c2-0', 'c2-1']);
+    assert.deepEqual(
+      calls.filter((x) => x.path.includes('/resolve/')).map((x) => x.path),
+      [1, 3].map((i) => '/api/audiobooks/saved/resolve/' + i),
+    );
+    assert.equal(await page.evaluate(() => window.audioAdvanced), true);
+    assert((await page.evaluate(() => window.actualPlaying)) >= 5);
+    assert.equal(calls.filter((x) => x.path.includes('/tts/plain') && x.method === 'POST').length, 0);
+    assert.equal(calls.filter((x) => x.path.endsWith('/estimate') || x.path.endsWith('/progress')).length, 0);
+    await page.screenshot({ path: `${artifacts}/reader-390.png` });
+    await context.close();
+    checks.push(
+      'reader handoff: same TTS controller decoded four clips across two chapters, matching source highlights, offline catalog and different current settings, no independent player or ordinary synthesis request',
+    );
+  }
   assert.deepEqual(errors, []);
 } catch (error) {
   if (activePage && !activePage.isClosed()) {

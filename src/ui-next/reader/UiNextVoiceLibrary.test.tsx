@@ -119,6 +119,7 @@ describe('UiNextVoiceLibrary owned edits and design requests', () => {
 
   it('prefills catalog alias and traits, follows untouched defaults and preserves user edits', async () => {
     const f = fixture();
+    f.port.list.mockResolvedValue({ voices: [], designers: [] });
     const root = await mount(f.port);
     await click(button(root, '기존 목소리 추가'));
     expect(field(root, '별칭').props.value).toBe('목소리 A');
@@ -131,6 +132,82 @@ describe('UiNextVoiceLibrary owned edits and design requests', () => {
     await change(field(root, '목소리'), 'local:a');
     expect(field(root, '별칭').props.value).toBe('직접 고른 별칭');
     expect(field(root, '설명').props.value).toBe('직접 쓴 설명');
+  });
+
+  it('never re-adds a saved voice over its labels and labels an unlisted catalog voice as a new row', async () => {
+    const f = fixture();
+    const root = await mount(f.port);
+    expect(text(root)).toContain('보관함에 없는 목록 목소리 1개');
+    await click(button(root, '기존 목소리 추가'));
+    const select = field(root, '목소리');
+    expect(select.props.value).toBe('local:b');
+    const savedOption = select.findAllByType('option').find((o) => o.props.value === 'local:a')!;
+    expect(savedOption.props.disabled).toBe(true);
+    expect(text(savedOption)).toContain('보관함에 있음');
+    await click(button(root, '취소'));
+    await click(button(root, '목소리 B 라벨 달기'));
+    expect(field(root, '목소리').props.value).toBe('local:b');
+    expect(text(root)).toContain('local · local:b');
+    await click(button(root, '저장'));
+    expect(f.port.save).toHaveBeenCalledWith(
+      expect.objectContaining({ voiceId: 'local:b', alias: '목소리 B', description: '부드러운 기본 설명' }),
+      expect.any(AbortSignal),
+      undefined,
+    );
+  });
+
+  it('toggles timbre quick picks without dropping typed words and shows the saved ID and model', async () => {
+    const f = fixture();
+    const root = await mount(f.port);
+    expect(text(root)).toContain('local · a · fixture');
+    await click(button(root, '수정'));
+    expect(text(root)).toContain('local · a · fixture');
+    await change(field(root, '음색'), '따뜻함、직접 들은 느낌');
+    await click(button(root, '낮은'));
+    expect(field(root, '음색').props.value).toBe('따뜻함, 직접 들은 느낌, 낮은');
+    expect(button(root, '낮은').props['aria-pressed']).toBe(true);
+    await click(button(root, '따뜻한'));
+    await click(button(root, '낮은'));
+    expect(field(root, '음색').props.value).toBe('따뜻함, 직접 들은 느낌, 따뜻한');
+    await click(button(root, '저장'));
+    expect(f.port.save.mock.calls[0][0].timbre).toBe('따뜻함, 직접 들은 느낌, 따뜻한');
+    expect(f.port.save.mock.calls[0][2]).toBe('library-one');
+  });
+
+  it('filters by label status and searches language and IDs, keeping the filter after an edit', async () => {
+    const f = fixture();
+    const rows = [
+      row(),
+      row({ id: 'blank', voiceId: 'local:b', providerVoiceId: 'b', alias: '빈 라벨', timbre: '', description: '' }),
+      row({
+        id: 'off',
+        voiceId: 'remote:c',
+        providerVoiceId: 'zephyr',
+        alias: '꺼둔 목소리',
+        enabled: false,
+        language: 'ja',
+      }),
+    ];
+    f.port.list.mockResolvedValue({ voices: rows, designers: [] });
+    const root = await mount(f.port);
+    const chip = (label: string) =>
+      root.find((n) => n.type === 'button' && n.props['aria-pressed'] !== undefined && text(n).startsWith(label));
+    const aliases = () => root.findAllByType('b').map(text);
+    expect(text(chip('라벨 필요'))).toBe('라벨 필요 1');
+    await click(chip('라벨 필요'));
+    expect(aliases()).toEqual(['빈 라벨']);
+    await click(chip('자동 배정 꺼짐'));
+    expect(aliases()).toEqual(['꺼둔 목소리']);
+    await click(chip('전체'));
+    await change(field(root, '목소리 찾기'), 'ZEPHYR');
+    expect(aliases()).toEqual(['꺼둔 목소리']);
+    await change(field(root, '목소리 찾기'), 'ja');
+    expect(aliases()).toEqual(['꺼둔 목소리']);
+    await change(field(root, '목소리 찾기'), '');
+    await click(chip('라벨 필요'));
+    await click(button(root, '수정'));
+    await click(button(root, '저장'));
+    expect(chip('라벨 필요').props['aria-pressed']).toBe(true);
   });
 
   it('requires paid opt-in, suppresses a double click, reuses the request ID on retry and renews it after edits', async () => {

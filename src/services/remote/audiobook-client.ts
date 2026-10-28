@@ -23,7 +23,8 @@ export function createAudiobookPort(client: RemoteApiClient, bookId: string): Au
     list: async (signal) => (await client.request<{ audiobooks: SavedAudiobook[] }>(path, { signal })).audiobooks,
     reader: async (chapterId, choice, signal) => {
       const query = new URLSearchParams({ chapterId, ...choice });
-      return (await client.request<{ plan?: PreparedNarration }>(`${path}/reader?${query}`, { signal })).plan;
+      return (await client.request<{ plan?: PreparedNarration }>(`${path}/reader?${query}`, { signal }, 30_000, true))
+        .plan;
     },
     resolve: async (id, index, regenerate, signal) =>
       (
@@ -36,6 +37,9 @@ export function createAudiobookPort(client: RemoteApiClient, bookId: string): Au
             signal,
           },
           150_000,
+          undefined,
+          undefined,
+          true,
         )
       ).blob,
     estimate: (input, signal) => post<AudiobookEstimate>(`${path}/estimate`, input, signal),

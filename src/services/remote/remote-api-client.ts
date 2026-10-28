@@ -508,7 +508,7 @@ export class RemoteApiClient {
     }
   }
 
-  async request<T>(path: string, init: RequestInit = {}, timeoutMs?: number): Promise<T> {
+  async request<T>(path: string, init: RequestInit = {}, timeoutMs?: number, timeoutIncludesBody = false): Promise<T> {
     const authToken = this.options.getAuthToken?.()?.trim();
     let result!: T;
     await this.fetch(
@@ -529,6 +529,7 @@ export class RemoteApiClient {
         }
         if (response.status !== 204) result = (await response.json()) as T;
       },
+      timeoutIncludesBody,
     );
     return result;
   }

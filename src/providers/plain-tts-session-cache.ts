@@ -7,6 +7,8 @@ export class PlainTTSSessionCache {
       chapter: string;
       positions: readonly number[];
       controller: AbortController;
+      createdAt: number;
+      expire?: () => void;
       promise: Promise<Blob>;
       blob?: Blob;
     }
@@ -22,23 +24,50 @@ export class PlainTTSSessionCache {
     scope: string;
     chapter: string;
     positions: readonly number[];
+    /** Only safe, already-generated audio GETs may be expired and read again. */
+    readOnly?: boolean;
     fetch(signal: AbortSignal): Promise<Blob>;
   }): Promise<Blob> {
-    const existing = this.entries.get(input.key);
+    let existing = this.entries.get(input.key);
+    if (existing && !existing.blob && existing.expire && Date.now() - existing.createdAt >= 45_000) {
+      existing.expire();
+      this.entries.delete(input.key);
+      existing = undefined;
+    }
     if (existing) {
       this.entries.delete(input.key);
       this.entries.set(input.key, existing);
       return existing.promise;
     }
     const controller = new AbortController();
-    const entry = { ...input, controller, blob: undefined as Blob | undefined, promise: undefined! as Promise<Blob> };
+    const entry = {
+      ...input,
+      controller,
+      createdAt: Date.now(),
+      expire: undefined as (() => void) | undefined,
+      blob: undefined as Blob | undefined,
+      promise: undefined! as Promise<Blob>,
+    };
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const deadline = input.readOnly
+      ? new Promise<never>((_resolve, reject) => {
+          entry.expire = () => {
+            controller.abort();
+            reject(new Error('미리 만든 음성을 불러오지 못했어요. 연결을 확인하고 다시 재생해 주세요.'));
+          };
+          timer = setTimeout(entry.expire, 45_000);
+        })
+      : undefined;
     entry.promise = Promise.resolve()
       .then(() => {
         if (controller.signal.aborted) throw new DOMException('Cancelled', 'AbortError');
-        return input.fetch(controller.signal);
+        const request = input.fetch(controller.signal);
+        return deadline ? Promise.race([request, deadline]) : request;
       })
       .then(
         (blob) => {
+          clearTimeout(timer);
+          entry.expire = undefined;
           if (this.entries.get(input.key) === entry) {
             entry.blob = blob;
             this.trim();
@@ -46,6 +75,8 @@ export class PlainTTSSessionCache {
           return blob;
         },
         (error: unknown) => {
+          clearTimeout(timer);
+          entry.expire = undefined;
           if (this.entries.get(input.key) === entry) this.entries.delete(input.key);
           throw error;
         },

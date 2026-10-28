@@ -197,3 +197,53 @@
   font-size: 12px;
   font-weight: 600;
 }
+
+/* 음성 다시 만들기: one row per captured speaker, inside the job card. */
+.un-revoice-fields {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 12px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.un-revoice-row {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.un-revoice-row + .un-revoice-row {
+  padding-top: 12px;
+  border-top: 1px solid var(--un-line);
+}
+
+.un-revoice-row .un-cast-field > span {
+  overflow-wrap: anywhere;
+}
+
+/* Inside the job card the fields need an edge, like the library editor's. */
+.un-revoice :is(select, textarea) {
+  border: 1px solid var(--un-line);
+  background: var(--un-bg-3);
+}
+
+.un-revoice textarea {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  padding: 10px 11px;
+  border: 0;
+  border-radius: 10px;
+  color: var(--un-text);
+  font: inherit;
+  font-size: 14px;
+  resize: vertical;
+}
+
+.un-revoice :is(select, textarea):focus-visible {
+  outline: 2px solid var(--un-accent);
+  outline-offset: 2px;
+}

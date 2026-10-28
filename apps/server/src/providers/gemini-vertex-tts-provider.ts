@@ -29,6 +29,7 @@ export interface GeminiVertexTTSProviderOptions {
 }
 
 export class GeminiVertexTTSProvider implements TTSSynthesisProvider {
+  readonly supportsInstructions = true;
   readonly providerId = 'gemini-vertex-tts';
   readonly displayName = 'Gemini Vertex TTS';
   readonly supportsStreaming = true;

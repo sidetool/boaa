@@ -128,6 +128,12 @@ export class VoiceLibraryStore {
     try {
       await c.query('begin');
       await this.authority(c, true);
+      if (
+        !id &&
+        (await c.query('select 1 from tts_voice_library where user_id=$1 and voice_id=$2', [this.owner, voiceId]))
+          .rowCount
+      )
+        throw audiobookError(409, '이미 보관함에 있는 목소리예요. 수정에서 설명을 바꿔 주세요.');
       const old = id
         ? ((await c.query('select * from tts_voice_library where id=$1 and user_id=$2', [id, this.owner])).rows[0] as
             Row | undefined)
@@ -159,8 +165,7 @@ export class VoiceLibraryStore {
         const providerVoiceId = s.legacyIds ? voiceId : decodeURIComponent(voiceId.slice(s.id.length + 1));
         r = (
           await c.query(
-            `insert into tts_voice_library(id,user_id,voice_id,provider_id,provider_voice_id,model,metadata,origin) values($1,$2,$3,$4,$5,$6,$7,'catalog')
-          on conflict(user_id,voice_id) do update set metadata=excluded.metadata,updated_at=now() returning *`,
+            `insert into tts_voice_library(id,user_id,voice_id,provider_id,provider_voice_id,model,metadata,origin) values($1,$2,$3,$4,$5,$6,$7,'catalog') returning *`,
             [randomUUID(), this.owner, voiceId, s.id, providerVoiceId, voice!.model, metadata],
           )
         ).rows[0];

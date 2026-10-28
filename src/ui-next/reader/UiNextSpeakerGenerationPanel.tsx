@@ -17,6 +17,7 @@ import { ChapterScopeFields, chapterScopeSummary, useChapterScope } from './chap
 import { speakerPreferenceQueue } from './speaker-generation-preferences';
 import UiNextCastingOptions from './UiNextCastingOptions';
 import UiNextBookVoices from './UiNextBookVoices';
+import UiNextSpeakerRevoice from './UiNextSpeakerRevoice';
 import type { SpeakerCastingOptions, LibraryVoice, VoiceDesignProvider } from '../../providers/voice-library';
 import './audiobook.css';
 import './speaker-generation.css';
@@ -708,6 +709,15 @@ function Body({
                 key={item.id}
                 item={item}
                 bookVoices={<UiNextBookVoices job={item} port={controls.port} voices={voices} />}
+                revoice={
+                  <UiNextSpeakerRevoice
+                    job={item}
+                    port={controls.port}
+                    voices={voices}
+                    library={library?.voices}
+                    onCreated={() => void refresh()}
+                  />
+                }
                 pending={pending === item.id}
                 confirm={confirm?.id === item.id ? confirm.action : undefined}
                 error={actionError?.id === item.id ? actionError.text : undefined}
@@ -753,6 +763,7 @@ function rangeLabel(item: SpeakerGenerationJob) {
 function JobItem({
   item,
   bookVoices,
+  revoice,
   pending,
   confirm,
   error,
@@ -764,6 +775,7 @@ function JobItem({
 }: {
   item: SpeakerGenerationJob;
   bookVoices?: import('react').ReactNode;
+  revoice?: import('react').ReactNode;
   pending: boolean;
   confirm?: Confirm['action'];
   error?: string;
@@ -792,6 +804,7 @@ function JobItem({
       </div>
       <small className="un-book-meta">
         {formatCount(item.chapterCount)}개 회차 · {item.voiceLabel} · {item.providerName}
+        {item.revoiceFrom ? ' · 음성만 다시 만든 작업' : ''}
       </small>
       {showSteps && (
         <ol className="un-cast-steps" aria-label="진행 단계">
@@ -817,6 +830,7 @@ function JobItem({
         </p>
       )}
       {bookVoices}
+      {revoice}
       {confirm ? (
         <div
           className="un-book-confirm"

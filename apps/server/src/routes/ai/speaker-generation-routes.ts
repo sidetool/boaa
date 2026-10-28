@@ -7,6 +7,7 @@ import type { AudiobookService } from '../../services/audiobook-service.js';
 import type {
   SpeakerGenerationInput,
   SpeakerGenerationPreferences,
+  SpeakerRevoiceInput,
 } from '../../../../../src/providers/speaker-generation';
 import type { SpokenTextRule } from '@boaa/contracts';
 import { audiobookError } from '../../services/audiobook-plan.js';
@@ -125,6 +126,27 @@ export async function registerSpeakerGenerationRoutes(
       '/api/books/:bookId/speaker-generation/estimate',
       { bodyLimit: 256 * 1024 },
       async (req) => service.estimate(req.params.bookId, input(req.body)),
+    );
+    routes.get<{ Params: { bookId: string; id: string } }>(
+      '/api/books/:bookId/speaker-generation/:id/revoice',
+      async (req) => service.revoiceSource(req.params.bookId, req.params.id),
+    );
+    routes.post<{ Params: { bookId: string; id: string }; Body: SpeakerRevoiceInput }>(
+      '/api/books/:bookId/speaker-generation/:id/revoice/estimate',
+      { bodyLimit: 256 * 1024 },
+      async (req) => service.estimateRevoice(req.params.bookId, req.params.id, req.body),
+    );
+    routes.post<{
+      Params: { bookId: string; id: string };
+      Body: SpeakerRevoiceInput & { fingerprint: string; confirmPaid?: boolean };
+    }>('/api/books/:bookId/speaker-generation/:id/revoice', { bodyLimit: 256 * 1024 }, async (req) =>
+      service.revoice(
+        req.params.bookId,
+        req.params.id,
+        req.body,
+        req.body?.fingerprint,
+        req.body?.confirmPaid === true,
+      ),
     );
     routes.get<{ Params: { bookId: string; id: string } }>(
       '/api/books/:bookId/speaker-generation/:id/castings',

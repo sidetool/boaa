@@ -13,6 +13,7 @@ export interface GeminiTTSProviderOptions {
 }
 
 export class GeminiTTSProvider implements TTSSynthesisProvider {
+  readonly supportsInstructions = true;
   readonly providerId = 'gemini-tts';
   readonly displayName = 'Gemini TTS';
   readonly supportsStreaming = true;

@@ -65,6 +65,7 @@ export function useTTSExecutionController(input: TTSExecutionControllerInput) {
 
   const inputRef = useRef(input);
   const sessionRef = useRef(0);
+  const audioInvocationRef = useRef(0);
   const sessionTargetRef = useRef<{ bookId: string; chapterId: string; owner?: object }>();
   const sessionAbortRef = useRef<AbortController>();
   const playingRef = useRef(false);
@@ -342,8 +343,15 @@ export function useTTSExecutionController(input: TTSExecutionControllerInput) {
     if (itemActiveRef.current) sleepTimerRef.current.resume();
     resolveResumeWaiters();
     if (audioSession.hasActivePlayback) {
+      const invocation = audioInvocationRef.current;
       void audioSession.resume().then((resumed) => {
-        if (!resumed && isSessionCurrent(sessionId) && audioSession.hasActivePlayback) audioSession.stop(false);
+        if (
+          !resumed &&
+          invocation === audioInvocationRef.current &&
+          isSessionCurrent(sessionId) &&
+          audioSession.hasActivePlayback
+        )
+          audioSession.stop(false);
       });
     } else inputRef.current.systemTTS.resume();
     setPaused(false);
@@ -353,15 +361,25 @@ export function useTTSExecutionController(input: TTSExecutionControllerInput) {
     async (blob: Blob, sessionId: number, onProgress?: (fraction: number) => void): Promise<boolean> => {
       if (!isSessionCurrent(sessionId)) return true;
       if (!(await waitForResume(sessionId)) || !isSessionCurrent(sessionId)) return true;
-      itemActiveRef.current = true;
-      setItemActiveState(true);
-      if (!pausedRef.current) sleepTimerRef.current.resume();
+      const invocation = ++audioInvocationRef.current;
+      itemActiveRef.current = false;
+      setItemActiveState(false);
       try {
-        return await audioSession.playBlob(blob, (fraction) => {
-          if (isSessionCurrent(sessionId)) onProgress?.(fraction);
-        });
+        return await audioSession.playBlob(
+          blob,
+          (fraction) => {
+            if (isSessionCurrent(sessionId) && audioInvocationRef.current === invocation) onProgress?.(fraction);
+          },
+          (active) => {
+            if (!isSessionCurrent(sessionId) || audioInvocationRef.current !== invocation) return;
+            itemActiveRef.current = active;
+            setItemActiveState(active);
+            if (active && !pausedRef.current) sleepTimerRef.current.resume();
+            else sleepTimerRef.current.pause();
+          },
+        );
       } finally {
-        if (isSessionCurrent(sessionId, false)) {
+        if (isSessionCurrent(sessionId, false) && audioInvocationRef.current === invocation) {
           itemActiveRef.current = false;
           setItemActiveState(false);
           sleepTimerRef.current.pause();
@@ -582,7 +600,9 @@ export function useTTSExecutionController(input: TTSExecutionControllerInput) {
     hostedJob: visibleHostedLane === 'playback' ? playbackJob : warmupJob,
     hostedStatus: visibleHostedLane === 'playback' ? playbackStatus : warmupStatus,
     hostedBusy: playbackBusy || warmupBusy,
-    playbackWaiting: playbackBusy && !itemActive,
+    // An explicitly paused, loaded blob is ready to retry. Pausing an outstanding
+    // synthesis/read has no active audio and must still count as waiting.
+    playbackWaiting: playbackBusy && !itemActive && !(paused && audioSession.hasActivePlayback),
     playbackStatus,
     warmupBusy,
     beginSession,

@@ -19,8 +19,13 @@ class TestAudioSession {
     return this.active;
   }
 
-  playBlob(): Promise<boolean> {
+  playBlob(
+    _blob?: Blob,
+    _progress?: (fraction: number) => void,
+    onPlaying?: (playing: boolean) => void,
+  ): Promise<boolean> {
     this.active = true;
+    onPlaying?.(true);
     return new Promise(() => undefined);
   }
 
@@ -363,5 +368,82 @@ it('reports current audio preparation separately from warmup and audio already p
     expect(controller.playbackStatus).toBeUndefined();
   } finally {
     await act(async () => renderer.unmount());
+  }
+});
+
+it('tracks real playing callbacks and fences deferred resume and old completion within the same session', async () => {
+  const plays: { completion: ReturnType<typeof deferred<boolean>>; playing: (active: boolean) => void }[] = [];
+  const resumed = deferred<boolean>();
+  const stop = vi.fn();
+  const audio = {
+    hasActivePlayback: true,
+    pause: vi.fn(),
+    resume: () => resumed.promise,
+    stop,
+    playBlob: vi.fn((_blob: Blob, _progress?: (fraction: number) => void, playing?: (active: boolean) => void) => {
+      const completion = deferred<boolean>();
+      plays.push({ completion, playing: playing! });
+      return completion.promise;
+    }),
+  };
+  let controller!: ReturnType<typeof useTTSExecutionController>;
+  function Harness() {
+    controller = useTTSExecutionController({
+      systemTTS: { pause: vi.fn(), resume: vi.fn(), stop: vi.fn() },
+      audioSession: audio,
+      bookId: 'b',
+      chapterId: 'c',
+    });
+    return null;
+  }
+  let root!: ReactTestRenderer;
+  let first!: Promise<boolean>;
+  let second!: Promise<boolean>;
+  try {
+    await act(async () => {
+      root = create(<Harness />);
+    });
+    let session!: number;
+    await act(async () => {
+      session = controller.beginSession('b', 'c', 0)!;
+      controller.beginHostedPlayback(session, 'loading');
+      first = controller.playAudio(new Blob(['first']), session);
+    });
+    expect(controller.itemActive).toBe(false);
+    expect(controller.playbackWaiting).toBe(true);
+    act(() => plays[0].playing(true));
+    expect(controller.itemActive).toBe(true);
+    expect(controller.playbackWaiting).toBe(false);
+    act(() => {
+      controller.pause();
+      controller.resume();
+    });
+    await act(async () => {
+      second = controller.playAudio(new Blob(['second']), session);
+    });
+    act(() => plays[1].playing(true));
+    const stopsBeforeLateResult = stop.mock.calls.length;
+    await act(async () => {
+      resumed.resolve(false);
+      await resumed.promise;
+    });
+    expect(stop).toHaveBeenCalledTimes(stopsBeforeLateResult);
+    act(() => plays[0].playing(false));
+    expect(controller.itemActive).toBe(true);
+    await act(async () => {
+      plays[0].completion.resolve(true);
+      await first;
+    });
+    expect(controller.itemActive).toBe(true);
+    await act(async () => {
+      plays[1].completion.resolve(true);
+      await second;
+    });
+    expect(controller.itemActive).toBe(false);
+  } finally {
+    plays.forEach((play) => play.completion.resolve(true));
+    resumed.resolve(true);
+    if (root) act(() => root.unmount());
+    await Promise.allSettled([first, second].filter(Boolean));
   }
 });
