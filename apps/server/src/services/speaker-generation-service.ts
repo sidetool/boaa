@@ -335,7 +335,8 @@ export class SpeakerGenerationService {
       client.release();
     }
   }
-  async advance(id: string, signal: AbortSignal) {
+  async advance(id: string, signal: AbortSignal, admit: () => boolean = () => true) {
+    if (!admit()) return false;
     const run = await this.run(id);
     await this.authority(run);
     if (
@@ -356,8 +357,9 @@ export class SpeakerGenerationService {
       if (run.next_chapter < run.chapter_ids.length)
         await this.advanceChapter(run, client, signal, true, async () => {
           signal.throwIfAborted();
-          return (await this.run(id)).status === 'running';
+          return admit() && (await this.run(id)).status === 'running';
         });
+      if (!admit()) return false;
       let latest = await this.run(id);
       if (latest.settings.cast?.recastSpeakers?.length) {
         if (!this.casting) throw audiobookError(409, '목소리 제작 연결을 확인해 주세요.');
@@ -375,6 +377,7 @@ export class SpeakerGenerationService {
           return false;
         latest = await this.run(id);
       }
+      if (!admit()) return false;
       if (latest.settings.cast?.autoActing && (await missingPerformance(this.pool, id))) {
         // Ordered identity always finishes before a supplementary acting pass.
         if (latest.next_chapter < latest.chapter_ids.length) return false;

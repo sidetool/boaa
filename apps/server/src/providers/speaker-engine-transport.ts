@@ -239,13 +239,22 @@ export class SpeakerEngineTransport {
       );
     } catch (error) {
       signal.throwIfAborted();
+      const stage = request.stage === 'identity' ? '인물 연결' : '화자 찾기';
       if (timeout.aborted) {
-        const stage = request.stage === 'identity' ? '인물 연결' : '화자 찾기';
         throw connectionError(
           `${stage} 분석 응답을 10분 동안 받지 못해 멈췄어요. 완료한 분석은 보관돼 있어요. 이어 만들기로 다시 요청할 수 있어요.`,
           504,
         );
       }
+      if ((error as { upstreamStatus?: number }).upstreamStatus === 504)
+        throw Object.assign(
+          connectionError(
+            `${stage} 요청이 분석 제공자에서 시간 초과됐어요(HTTP 504). 완료한 분석과 음성은 남아 있어요. 이어 만들기로 다시 요청할 수 있어요.`,
+            502,
+          ),
+          { upstreamStatus: 504, requestStage: request.stage },
+        );
+      if (error && typeof error === 'object') Object.assign(error, { requestStage: request.stage });
       throw error;
     }
   }

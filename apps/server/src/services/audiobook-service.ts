@@ -48,7 +48,7 @@ function view(row: JobRow): SavedAudiobook {
 
 export class AudiobookService {
   speaker?: {
-    advance(id: string, signal: AbortSignal): Promise<void | boolean>;
+    advance(id: string, signal: AbortSignal, admit?: () => boolean): Promise<void | boolean>;
     reader(id: string, chapterId: string): Promise<PreparedNarration>;
     render(id: string, ordinal: number, regenerate: boolean): Promise<SavedAudio>;
     resume(id: string): Promise<void>;
@@ -561,7 +561,78 @@ export class AudiobookService {
     ]);
   }
 
-  /** At most two independent items per turn; the global lock remains held until every dispatched item settles. */
+  /** Drain already committed speech while the next analysis step waits for its provider. */
+  private async advanceWithAudio(job: JobRow, signal: AbortSignal) {
+    let finished = false;
+    let stopped = false;
+    const failures: unknown[] = [];
+    const analysis = this.speaker!.advance(job.id, signal, () => !stopped)
+      .catch((error) => {
+        stopped = true;
+        failures.push(error);
+      })
+      .finally(() => {
+        finished = true;
+      });
+    try {
+      while (!finished && !stopped && !signal.aborted && !this.closing) {
+        const current = await this.get(job.id);
+        if (current.status !== 'running') break;
+        // Playback owns its requests; unprepared voices/acting must never be synthesized early.
+        const items =
+          this.foreground > 0 || current.settings.cast?.recastSpeakers?.length
+            ? []
+            : (
+                await this.pool.query(
+                  `select ordinal,chapter_title from saved_audiobook_items where audiobook_id=$1 and status<>'ready'
+             and (not $2::boolean or request->'cast' ? 'performance') order by ordinal limit $3`,
+                  [
+                    job.id,
+                    current.settings.cast?.autoActing === true,
+                    current.rate_limit_attempts > 0 ? 1 : await this.backgroundConcurrency(current.settings),
+                  ],
+                )
+              ).rows;
+        if (!items.length) {
+          // New spans are committed by the analysis lane; no paid request is sent while waiting.
+          await Promise.race([analysis, new Promise((resolve) => setTimeout(resolve, 250))]);
+          continue;
+        }
+        if (finished || stopped || signal.aborted || this.closing) break;
+        await this.pool.query('update saved_audiobooks set current_chapter_title=$2 where id=$1', [
+          job.id,
+          items[0].chapter_title,
+        ]);
+        const batch = await Promise.allSettled(
+          items.map((item) => this.ensureItem(current, item.ordinal, false, true)),
+        );
+        const errors = batch.flatMap((item) =>
+          item.status === 'rejected' && !(item.reason instanceof BackgroundYield) ? [item.reason] : [],
+        );
+        if (errors.length) {
+          stopped = true;
+          failures.push(...errors);
+        }
+      }
+    } catch (error) {
+      stopped = true;
+      failures.push(error);
+    }
+    // Never release the runner lock or requeue while either lane still has a paid request in flight.
+    const result = await analysis;
+    const permanent = failures.find((error) => this.failure(error).status !== 429);
+    if (permanent) throw permanent;
+    if (failures.length) {
+      const retryAfter = (error: unknown) => {
+        const detail = error as { retryAfterSeconds?: number; payload?: { retryAfterSeconds?: number } };
+        return detail.retryAfterSeconds ?? detail.payload?.retryAfterSeconds ?? 0;
+      };
+      throw failures.reduce((a, b) => (retryAfter(a) >= retryAfter(b) ? a : b));
+    }
+    return result;
+  }
+
+  /** Keep the global lock until analysis and every dispatched audio item settle. */
   async tick(): Promise<boolean> {
     const client = await this.pool.connect();
     let locked = false;
@@ -611,7 +682,7 @@ export class AudiobookService {
       try {
         if (job.settings.cast) {
           if (!this.speaker) throw audiobookError(503, '화자별 생성 연결을 확인해 주세요.');
-          if ((await this.speaker.advance(job.id, abort.signal)) === false) {
+          if ((await this.advanceWithAudio(job, abort.signal)) === false) {
             await client.query(
               "update saved_audiobooks set status=case when status='pausing' then 'paused' else 'queued' end,updated_at=now() where id=$1 and status in ('running','pausing')",
               [job.id],
@@ -713,13 +784,17 @@ export class AudiobookService {
           );
           const stage = (error as { requestStage?: string }).requestStage;
           const label =
-            stage === 'voice_design'
-              ? '목소리 제작'
-              : stage === 'voice_selection'
-                ? '목소리 배정'
-                : stage === 'acting'
-                  ? '장면 연기 분석'
-                  : '음성 제공자';
+            stage === 'attribution'
+              ? '화자 찾기'
+              : stage === 'identity'
+                ? '인물 연결'
+                : stage === 'voice_design'
+                  ? '목소리 제작'
+                  : stage === 'voice_selection'
+                    ? '목소리 배정'
+                    : stage === 'acting'
+                      ? '장면 연기 분석'
+                      : '음성 제공자';
           await client.query(
             `update saved_audiobooks set
             status=case when status='pausing' then 'paused' else 'queued' end,

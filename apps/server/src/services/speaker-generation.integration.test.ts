@@ -47,6 +47,8 @@ afterAll(async () => {
   await harness?.stop();
 }, POSTGRES_HARNESS_CLEANUP_TIMEOUT_MS);
 async function setup(pool: pg.Pool, concurrency: 1 | 2 = 1, chapterIds = ['c1', 'c2']) {
+  // Match production: runner + analysis session fences + two audio sessions need query headroom.
+  pool.options.max = 10;
   await pool.query(`create table users(id text primary key);create table library_books(id text primary key,user_id text,title text,format text,language text,active_content_revision_id text,deleted_at timestamptz);
  create table chapters(id text primary key,book_id text,title text,chapter_index int);create table paragraph_search(book_id text,chapter_id text,paragraph_id text,paragraph_index int,paragraph jsonb,text text);
  create table self_host_accounts(user_id text,role text,status text);insert into users values('owner'),('other');insert into library_books values('book','owner','Fixture','txt','ko','rev',null);insert into self_host_accounts values('owner','admin','active');
@@ -244,6 +246,118 @@ async function setup(pool: pg.Pool, concurrency: 1 | 2 = 1, chapterIds = ['c1', 
   };
 }
 (harness ? describe : describe.skip)('speaker background generation with real preset35 and PostgreSQL', () => {
+  it.each(['complete', 'pause', 'audio-limit'] as const)(
+    'overlaps committed audio with a held next-chapter model request: %s',
+    async (ending) => {
+      await withPostgresSchema(harness!, 'speaker_audio_overlap', async (pool) => {
+        const f = await setup(pool, 2);
+        const entered = gate(),
+          held = gate(),
+          audioEntered = gate(),
+          audioHeld = gate();
+        let pending: Promise<boolean> | undefined;
+        let activeAudio = 0,
+          peakAudio = 0;
+        let modelPending = false;
+        const generateOriginal = f.engines.transport.generate.bind(f.engines.transport);
+        const generate = vi
+          .spyOn(f.engines.transport, 'generate')
+          .mockImplementation(async (engine, request, signal) => {
+            if (f.context(request).input.source.chapter.id === 'c2') {
+              modelPending = true;
+              entered.resolve();
+              await held.promise;
+            }
+            return generateOriginal(engine, request, signal);
+          });
+        const originalAudio = f.synthesize.getMockImplementation()!;
+        f.synthesize.mockImplementation(async (...args) => {
+          activeAudio++;
+          peakAudio = Math.max(peakAudio, activeAudio);
+          try {
+            // Hold narration only once the next chapter's paid analysis is pending.
+            if (modelPending && blocked) {
+              audioEntered.resolve();
+              await audioHeld.promise;
+              if (ending === 'audio-limit')
+                throw Object.assign(connectionError('limited', 429), { retryAfterSeconds: 17 });
+            }
+            return await originalAudio(...args);
+          } finally {
+            activeAudio--;
+          }
+        });
+        let blocked = false;
+        try {
+          for (let i = 2; i <= 22; i++) {
+            const p = {
+              id: 'c1-p' + i,
+              novelId: 'book',
+              chapterId: 'c1',
+              index: i,
+              text: '바람이 불고 길이 이어졌다.',
+            };
+            await pool.query('insert into paragraph_search values($1,$2,$3,$4,$5,$6)', [
+              'book',
+              'c1',
+              p.id,
+              i,
+              p,
+              p.text,
+            ]);
+          }
+          const job = await f.create();
+          await f.until(async () => (await f.service.list('book'))[0].analyzedChapters === 1);
+          const before = (await f.audio.get(job.id)).completed_items;
+          blocked = true;
+          // The next turn prepares a request, then the following turn dispatches it.
+          // Release any short preparation turn's audio so the held model turn can begin.
+          audioHeld.resolve();
+          for (let n = 0; n < 5; n++) {
+            pending = f.audio.tick();
+            const state = await Promise.race([pending.then(() => 'turn'), entered.promise.then(() => 'model')]);
+            if (state === 'model') break;
+          }
+          await Promise.race([
+            entered.promise,
+            new Promise((_, reject) => setTimeout(() => reject(new Error('model not entered')), 1500)),
+          ]);
+          if (ending === 'audio-limit') await audioEntered.promise;
+          if (ending !== 'audio-limit') {
+            await expect.poll(async () => (await f.audio.get(job.id)).completed_items).toBeGreaterThan(before);
+            expect((await f.audio.get(job.id)).status).toBe('running');
+          }
+          expect(
+            (await pool.query('select pg_try_advisory_xact_lock(61879419263191::bigint) locked')).rows[0].locked,
+          ).toBe(false);
+          if (ending === 'pause') await f.audio.control(job.id, 'pause');
+          held.resolve();
+          await pending;
+          expect(peakAudio).toBeLessThanOrEqual(2);
+          expect(activeAudio).toBe(0);
+          const final = await f.audio.get(job.id);
+          if (ending === 'pause') expect(final.status).toBe('paused');
+          else if (ending === 'audio-limit') {
+            expect(final.status).toBe('queued');
+            expect(final.error_message).toContain('요청 제한');
+            const count = f.synthesize.mock.calls.length;
+            await f.audio.tick();
+            expect(f.synthesize).toHaveBeenCalledTimes(count);
+          } else {
+            blocked = false;
+            await f.until(async () => (await f.audio.get(job.id)).status === 'completed');
+            expect(new Set(f.synthesize.mock.calls.map((args) => args[3])).size).toBe(f.synthesize.mock.calls.length);
+          }
+        } finally {
+          held.resolve();
+          audioHeld.resolve();
+          await pending;
+          generate.mockRestore();
+          await f.cleanup();
+        }
+      });
+    },
+  );
   it('selectively clears book audio/settings, keeps analysis and creates fresh audio without another analysis call', async () => {
     await withPostgresSchema(harness!, 'speaker_cleanup_reuse', async (pool) => {
       const f = await setup(pool, 1, ['c1']);

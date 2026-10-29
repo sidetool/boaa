@@ -172,6 +172,17 @@ describe('speaker model transport', () => {
       await expect(t.generate(v, request, new AbortController().signal)).rejects.toMatchObject({ statusCode: 502 });
     }
   });
+  it('distinguishes an upstream gateway timeout from its own analysis deadline without replaying the request', async () => {
+    const fetchImpl = vi.fn(async () => new Response('', { status: 504 }));
+    const t = new SpeakerEngineTransport({ fetchImpl, lookup: async () => [{ address: '192.168.1.10', family: 4 }] });
+    await expect(t.generate(config, request, new AbortController().signal)).rejects.toMatchObject({
+      statusCode: 502,
+      upstreamStatus: 504,
+      requestStage: 'attribution',
+      message: expect.stringContaining('분석 제공자에서 시간 초과'),
+    });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
   it('keeps semantic revision stable across key/catalog/label changes and preserves bounded date Retry-After', async () => {
     expect(speakerRevision({ ...config, apiKey: 'new', name: 'renamed', paid: true })).toBe(speakerRevision(config));
     expect(speakerRevision({ ...config, modelId: 'other' })).not.toBe(speakerRevision(config));
@@ -182,6 +193,7 @@ describe('speaker model transport', () => {
     const t = new SpeakerEngineTransport({ fetchImpl, lookup: async () => [{ address: '192.168.1.10', family: 4 }] });
     await expect(t.generate(config, request, new AbortController().signal)).rejects.toMatchObject({
       statusCode: 429,
+      requestStage: 'attribution',
       retryAfterSeconds: expect.any(Number),
     });
     expect(fetchImpl).toHaveBeenCalledTimes(1);
