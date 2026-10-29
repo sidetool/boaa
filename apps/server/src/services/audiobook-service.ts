@@ -124,7 +124,9 @@ export class AudiobookService {
       and a.content_revision is not distinct from b.active_content_revision_id
       and (exists(select 1 from saved_audiobook_items i where i.audiobook_id=a.id and i.chapter_id=$3) or (a.settings ? 'cast' and a.settings->'chapterIds' ? $3))
       and ($4::text is null or a.id::text=$4) and ($4::text is not null or a.settings->>'voiceId'=$5)
-      order by a.created_at desc limit 1`,
+      order by (exists(select 1 from saved_audiobook_items i where i.audiobook_id=a.id and i.chapter_id=$3)
+        and not exists(select 1 from saved_audiobook_items i where i.audiobook_id=a.id and i.chapter_id=$3 and i.status<>'ready')) desc,
+        a.created_at desc limit 1`,
         [bookId, this.owner, chapterId, choice.id ?? null, choice.voiceId ?? null],
       )
     ).rows[0] as JobRow | undefined;
@@ -204,7 +206,8 @@ export class AudiobookService {
     } catch (error) {
       // Do not let the background runner automatically repeat an ambiguous foreground failure.
       const failure = this.failure(error);
-      if (failure.status !== 429 && failure.status !== 425 && /^[a-f0-9-]{36}$/.test(id))
+      const status = (error as { statusCode?: number })?.statusCode ?? failure.status;
+      if (status !== 429 && status !== 425 && /^[a-f0-9-]{36}$/.test(id))
         await this.pool.query(
           `update saved_audiobooks set status='failed',error_message=$3,updated_at=now()
           where id=$1 and user_id=$2 and status in ('queued','running')`,

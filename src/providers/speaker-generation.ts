@@ -53,6 +53,7 @@ export interface SpeakerGenerationJob extends SavedAudiobook {
   stage: 'waiting' | 'attribution' | 'identity' | 'casting' | 'performance' | 'audio' | 'complete';
   analyzedChapters: number;
   contextChapterCount: number;
+  /** Chapters whose entire committed audio plan is saved; a partial recording is not ready. */
   readyChapterIds: string[];
   castVoiceIds?: string[];
   /** Includes earlier chapters needed to identify recurring characters. */

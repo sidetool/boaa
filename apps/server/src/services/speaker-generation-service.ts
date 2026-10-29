@@ -157,7 +157,7 @@ export class SpeakerGenerationService {
     const rows = (
       await this.pool.query(
         `select a.*,r.next_chapter,r.chapter_ids as context_ids,r.stage,c.title as analysis_chapter_title,
-      coalesce((select jsonb_agg(distinct i.chapter_id) from saved_audiobook_items i where i.audiobook_id=a.id and i.status='ready'),'[]') ready_ids
+      coalesce((select jsonb_agg(ready.chapter_id) from (select i.chapter_id from saved_audiobook_items i where i.audiobook_id=a.id group by i.chapter_id having bool_and(i.status='ready')) ready),'[]') ready_ids
       from saved_audiobooks a join speaker_generation_runs r on r.audiobook_id=a.id join library_books b on b.id=a.book_id
       left join chapters c on c.id=(r.chapter_ids->>r.next_chapter) and c.book_id=a.book_id
       where a.book_id=$1 and a.user_id=$2 and b.user_id=$2 and b.deleted_at is null order by a.created_at desc limit 50`,
@@ -741,6 +741,11 @@ export class SpeakerGenerationService {
       )
     ).rows;
     if (!rows.length) throw audiobookError(425, '이 회차의 화자를 분석하고 있어요. 준비된 회차부터 들을 수 있어요.');
+    if (
+      run.settings.cast?.recastSpeakers?.length ||
+      (run.settings.cast?.autoActing && rows.some((r) => r.status !== 'ready' && !r.request.cast?.performance))
+    )
+      throw audiobookError(425, '이 회차의 목소리·연기 분석이 아직 끝나지 않았어요. 완성된 회차부터 재생해 주세요.');
     const byId = new Map(loaded.paragraphs.map((p) => [p.id, p]));
     return {
       id,
@@ -784,7 +789,7 @@ export class SpeakerGenerationService {
     if (run.settings.cast?.recastSpeakers?.length)
       throw audiobookError(425, '새 목소리 제작이 끝나면 음성을 만들 수 있어요.');
     if (run.settings.cast?.autoActing && !request.cast.performance)
-      throw audiobookError(409, '연기 분석이 끝나면 이 음성을 만들 수 있어요.');
+      throw audiobookError(425, '연기 분석이 끝나면 이 음성을 만들 수 있어요.');
     const effectiveInstructions = request.cast.instructions || performanceStyle(request.cast.performance);
     const renderRequest = { ...request, cast: { ...request.cast } };
     delete renderRequest.cast.performance;

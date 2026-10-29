@@ -246,6 +246,59 @@ async function setup(pool: pg.Pool, concurrency: 1 | 2 = 1, chapterIds = ['c1', 
   };
 }
 (harness ? describe : describe.skip)('speaker background generation with real preset35 and PostgreSQL', () => {
+  it('does not advertise partial acting chapters, prefers a complete recording and keeps preparation waits out of job failure', async () => {
+    await withPostgresSchema(harness!, 'speaker_ready_chapters', async (pool) => {
+      const f = await setup(pool);
+      try {
+        const catalog = await f.catalog();
+        f.catalog.mockResolvedValue({
+          ...catalog,
+          voices: catalog.voices.map((v) => ({ ...v, autoActingSupported: true })),
+        });
+        const original = await f.create();
+        await f.until(async () => (await f.audio.get(original.id)).status === 'completed');
+        const originalAudio = await f.audio.audio(original.id, 0);
+        expect((await f.service.list('book'))[0].readyChapterIds.sort()).toEqual(['c1', 'c2']);
+        // The same cached speaker analysis predates acting annotations, as on existing works.
+        const next = await f.create({ ...f.input, autoActing: true });
+        await f.until(
+          async () =>
+            (await pool.query('select 1 from saved_audiobook_items where audiobook_id=$1 limit 1', [next.id])).rows
+              .length > 0,
+        );
+        const items = (
+          await pool.query('select ordinal,request from saved_audiobook_items where audiobook_id=$1 order by ordinal', [
+            next.id,
+          ])
+        ).rows;
+        const eligible = items.find((i) => i.request.cast.performance);
+        const pending = items.find((i) => !i.request.cast.performance);
+        expect(eligible).toBeDefined();
+        expect(pending).toBeDefined();
+        await f.audio.resolve(next.id, eligible.ordinal);
+        expect((await f.service.list('book')).find((j) => j.id === next.id)?.readyChapterIds).toEqual([]);
+        expect((await f.audio.reader('book', 'c1', { voiceId: 'n' }))?.id).toBe(original.id);
+        // Explicitly choosing a new voice must not silently switch back to an older recording.
+        await expect(f.audio.reader('book', 'c1', { id: next.id })).rejects.toMatchObject({ statusCode: 425 });
+        await pool.query("update saved_audiobooks set status='running' where id=$1", [next.id]);
+        const calls = f.synthesize.mock.calls.length;
+        await expect(f.audio.resolve(next.id, pending.ordinal)).rejects.toMatchObject({ statusCode: 425 });
+        expect((await f.audio.get(next.id)).status).toBe('running');
+        expect(f.synthesize).toHaveBeenCalledTimes(calls);
+        expect(
+          (
+            await pool.query('select status from saved_audiobook_items where audiobook_id=$1 and ordinal=$2', [
+              next.id,
+              pending.ordinal,
+            ])
+          ).rows[0].status,
+        ).toBe('pending');
+        expect(await f.audio.audio(original.id, 0)).toEqual(originalAudio);
+      } finally {
+        await f.cleanup();
+      }
+    });
+  });
   it.each(['complete', 'pause', 'audio-limit'] as const)(
     'overlaps committed audio with a held next-chapter model request: %s',
     async (ending) => {
