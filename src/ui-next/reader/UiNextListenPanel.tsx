@@ -226,6 +226,8 @@ export default function UiNextListenPanel(props: TTSAddonPanelProps) {
                 port={speakerGeneration.voiceLibrary}
                 voices={speakerGeneration.voices?.voices ?? []}
                 beforePreview={speakerGeneration.beforePreview}
+                previewVoice={speakerGeneration.previewVoice}
+                previewRevision={speakerGeneration.voices?.revision}
                 onChanged={() => {
                   setVoiceLibraryRevision((v) => v + 1);
                   void Promise.resolve(speakerGeneration.refreshVoices()).catch(() => undefined);

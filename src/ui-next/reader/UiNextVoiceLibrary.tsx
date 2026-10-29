@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Pencil, Play, Plus, RefreshCw, Square, Trash2, WandSparkles } from 'lucide-react';
 import type { PlainTTSVoice } from '../../providers/plain-tts';
 import type {
@@ -10,6 +10,7 @@ import type {
 import { BrowserAudioSession } from '../../providers/browser-audio-session';
 import { isGeminiVoiceDesignModel } from '../../providers/voice-library';
 import { voiceDesigners } from './UiNextCastingOptions';
+import { createVoicePreview, useVoicePreview } from './voice-preview';
 import { cx, Switch } from '../components/primitives';
 import './audiobook.css';
 import './listen.css';
@@ -49,11 +50,17 @@ export default function UiNextVoiceLibrary({
   voices,
   onChanged,
   beforePreview,
+  previewVoice,
+  previewRevision,
 }: {
   port: VoiceLibraryPort;
   voices: readonly PlainTTSVoice[];
   onChanged(): void;
   beforePreview?(): void | Promise<void>;
+  /** Fixed-sentence sample of a catalog voice that is not saved yet; nothing is written to the library. */
+  previewVoice?(voiceId: string, signal: AbortSignal): Promise<Blob>;
+  /** Catalog revision: part of the sample key, so a changed connection is heard anew. */
+  previewRevision?: string;
 }) {
   const [rows, setRows] = useState<LibraryVoice[]>();
   const [designers, setDesigners] = useState<VoiceDesignProvider[]>([]);
@@ -71,6 +78,45 @@ export default function UiNextVoiceLibrary({
   const sampleRun = useRef<AbortController>();
   const working = useRef(false);
   const [audio] = useState(() => new BrowserAudioSession());
+  // Saved voices keep their own stored sample (port.sample); catalog voices use the plain sample path.
+  const sampleLatest = useRef({ previewVoice, beforePreview });
+  sampleLatest.current = { previewVoice, beforePreview };
+  const stopSaved = useCallback(() => {
+    sampleRun.current?.abort();
+    audio.stop();
+    setPlaying(undefined);
+  }, [audio]);
+  const [catalogPreview] = useState(() =>
+    createVoicePreview(
+      (voiceId, signal) => {
+        const load = sampleLatest.current.previewVoice;
+        if (!load) throw new Error('미리듣기를 쓸 수 없어요.');
+        return load(voiceId, signal);
+      },
+      async () => {
+        stopSaved();
+        await sampleLatest.current.beforePreview?.();
+      },
+    ),
+  );
+  const catalogSample = useVoicePreview(catalogPreview);
+  useEffect(() => () => catalogPreview.dispose(), [catalogPreview]);
+  useEffect(() => catalogPreview.reset(), [catalogPreview, port, previewRevision]);
+  // Opening, switching or closing an editor stops any sample, saved or catalog, so none keeps playing unseen.
+  useEffect(() => {
+    catalogPreview.stop();
+    stopSaved();
+  }, [catalogPreview, stopSaved, editing]);
+  const listen = (token: string, voiceId: string) => {
+    const voice = voices.find((v) => v.id === voiceId);
+    if (!previewVoice || !voice) return undefined;
+    const phase = catalogSample.token === token ? catalogSample.phase : undefined;
+    return {
+      phase,
+      play: () =>
+        void catalogPreview.play(token, JSON.stringify([previewRevision, voiceId, voice.model?.revision]), voiceId),
+    };
+  };
   const load = async () => {
     const signal = lifetime.current.signal;
     const version = ++loadVersion.current;
@@ -131,6 +177,7 @@ export default function UiNextVoiceLibrary({
     }
   };
   const preview = async (row: LibraryVoice) => {
+    catalogPreview.stop();
     sampleRun.current?.abort();
     audio.stop();
     setError(undefined);
@@ -178,9 +225,9 @@ export default function UiNextVoiceLibrary({
       <p className="un-book-note">
         여기 저장한 목소리는 모든 작품에서 쓸 수 있어요. 설명을 고쳐도 이미 만든 음성은 바뀌지 않아요.
       </p>
-      {error && (
+      {(error || catalogSample.error) && (
         <p role="alert" className="un-book-error">
-          {error}
+          {error ?? catalogSample.error?.message}
         </p>
       )}
       {editing ? (
@@ -199,6 +246,8 @@ export default function UiNextVoiceLibrary({
           busy={busy}
           playing={editing.kind === 'edit' && playing === editing.row.id}
           onPreview={editing.kind === 'edit' ? () => void preview(editing.row) : undefined}
+          listen={(voiceId) => listen(`editor:${voiceId}`, voiceId)}
+          onVoiceChange={() => catalogPreview.stop()}
           onCancel={() => setEditing(undefined)}
           onSave={(input) =>
             void act(
@@ -376,6 +425,9 @@ export default function UiNextVoiceLibrary({
                     <li key={voice.id} className="un-book-item">
                       <div className="un-book-item-head">
                         <b>{voice.label}</b>
+                      </div>
+                      <div className="un-book-actions">
+                        <SampleButton name={voice.label} sample={listen(`list:${voice.id}`, voice.id)} />
                         <button
                           type="button"
                           className="un-btn is-text is-sm"
@@ -401,6 +453,24 @@ export default function UiNextVoiceLibrary({
     </section>
   );
 }
+type Sample = { phase?: 'loading' | 'playing'; play(): void };
+/** Plays on press only; the same press stops it or cancels a sample still loading. */
+function SampleButton({ name, sample }: { name: string; sample?: Sample }) {
+  if (!sample) return null;
+  return (
+    <button
+      type="button"
+      className="un-btn is-ghost is-sm"
+      aria-label={`${name} 미리듣기`}
+      aria-pressed={!!sample.phase}
+      aria-busy={sample.phase === 'loading' || undefined}
+      onClick={sample.play}
+    >
+      {sample.phase ? <Square size={15} /> : <Play size={15} />}
+      {sample.phase === 'loading' ? '불러오는 중' : sample.phase === 'playing' ? '정지' : '미리듣기'}
+    </button>
+  );
+}
 const voiceIdLine = (row: LibraryVoice) =>
   [row.providerId, row.providerVoiceId, row.model.modelId].filter(Boolean).join(' · ');
 const catalogIdLine = (voice: PlainTTSVoice) =>
@@ -415,6 +485,8 @@ function VoiceEditor({
   busy,
   playing,
   onPreview,
+  listen,
+  onVoiceChange,
   onCancel,
   onSave,
   onDesign,
@@ -430,6 +502,9 @@ function VoiceEditor({
   busy: boolean;
   playing: boolean;
   onPreview?(): void;
+  /** Catalog sample of an unsaved voice; undefined where samples cannot be made. */
+  listen?(voiceId: string): Sample | undefined;
+  onVoiceChange?(): void;
   onCancel(): void;
   onSave(v: VoiceLibraryInput): void;
   onDesign(v: Parameters<VoiceLibraryPort['design']>[0]): void;
@@ -474,6 +549,7 @@ function VoiceEditor({
               {playing ? <Square size={15} /> : <Play size={15} />}미리듣기
             </button>
           )}
+          {!value && catalogVoice && <SampleButton name={catalogVoice.label} sample={listen?.(catalogVoice.id)} />}
         </div>
       )}
       <fieldset disabled={busy} className="un-voice-fields">
@@ -507,6 +583,7 @@ function VoiceEditor({
               value={voiceId}
               disabled={!!value}
               onChange={(e) => {
+                onVoiceChange?.();
                 setVoiceId(e.target.value);
                 const previous = voices.find((v) => v.id === voiceId);
                 const next = voices.find((v) => v.id === e.target.value);

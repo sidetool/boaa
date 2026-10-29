@@ -268,6 +268,55 @@ describe('UiNextVoiceLibrary owned edits and design requests', () => {
     expect(f.port.design.mock.calls[2][0].requestId).not.toBe(original.requestId);
   });
 
+  it('plays unsaved catalog voices on press only, in the list and while adding, without saving anything', async () => {
+    const f = fixture();
+    const sample = vi.fn(async (_voiceId: string, _signal: AbortSignal) => new Blob(['wav']));
+    const before = vi.fn();
+    act(() => {
+      renderer = create(
+        <UiNextVoiceLibrary
+          port={f.port}
+          voices={voices}
+          onChanged={f.changed}
+          beforePreview={before}
+          previewVoice={sample}
+          previewRevision="rev-1"
+        />,
+      );
+    });
+    await flush();
+    const root = renderer!.root;
+    // local:a is saved (its own stored sample); local:b is only in the catalog.
+    expect(sample).not.toHaveBeenCalled();
+    act(() => root.findByType('details').props.onToggle({ currentTarget: { open: true } }));
+    await click(button(root, '목소리 B 미리듣기'));
+    expect(before).toHaveBeenCalledTimes(1);
+    expect(sample).toHaveBeenCalledWith('local:b', expect.any(AbortSignal));
+    expect(audio.playBlob).toHaveBeenCalledTimes(1);
+
+    await click(button(root, '목소리 B 라벨 달기'));
+    await click(button(root, '목소리 B 미리듣기'));
+    // Same revision and voice: served from the session cache.
+    expect(sample).toHaveBeenCalledTimes(1);
+    expect(audio.playBlob).toHaveBeenCalledTimes(2);
+    await change(field(root, '설명'), '들어 보니 맑고 또렷해요.');
+    expect(f.port.save).not.toHaveBeenCalled();
+    expect(f.port.sample).not.toHaveBeenCalled();
+
+    // A saved voice still plays through its own stored sample.
+    await click(button(root, '취소'));
+    await click(button(root, '미리듣기'));
+    expect(f.port.sample).toHaveBeenCalledWith('library-one', expect.any(AbortSignal));
+    expect(sample).toHaveBeenCalledTimes(1);
+  });
+
+  it('offers no catalog sample without a sample source', async () => {
+    const f = fixture();
+    const root = await mount(f.port);
+    act(() => root.findByType('details').props.onToggle({ currentTarget: { open: true } }));
+    expect(root.findAll((n) => n.type === 'button' && n.props['aria-label'] === '목소리 B 미리듣기')).toHaveLength(0);
+  });
+
   it('aborts an old port lifetime and ignores its late list instead of replacing another account rows', async () => {
     const first = fixture(),
       next = fixture();
