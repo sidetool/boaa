@@ -539,11 +539,16 @@ async function setup(pool: pg.Pool, concurrency: 1 | 2 = 1) {
         const plan = await f.service.plan('book', settings);
         const job = await f.service.create(plan, plan.estimate.fingerprint, true);
         f.render.mockRejectedValueOnce(
-          Object.assign(new Error('fixture rate limit'), { status: 429, retryAfterSeconds: 1 }),
+          Object.assign(new Error('fixture rate limit'), {
+            status: 429,
+            retryAfterSeconds: 1,
+            requestStage: 'voice_design',
+          }),
         );
         await f.service.tick();
         expect(f.render).toHaveBeenCalledTimes(1);
         expect((await f.service.list('book'))[0]).toMatchObject({ completedItems: 0, status: 'queued' });
+        expect((await f.service.list('book'))[0].error).toContain('목소리 제작 요청 제한으로 대기 중');
         await f.service.tick();
         expect(f.render).toHaveBeenCalledTimes(1);
         await pool.query("update saved_audiobooks set retry_at=now()-interval '1 second' where id=$1", [job.id]);
@@ -558,6 +563,33 @@ async function setup(pool: pg.Pool, concurrency: 1 | 2 = 1) {
           status: 'failed',
           error: expect.stringContaining('저장 공간'),
         });
+      } finally {
+        await f.cleanup();
+      }
+    });
+  });
+
+  it('stops automatic creation retries when Google confirms the voice creation quota is zero', async () => {
+    await withPostgresSchema(harness!, 'voice_quota_zero', async (pool) => {
+      const f = await setup(pool);
+      try {
+        const plan = await f.service.plan('book', settings);
+        const job = await f.service.create(plan, plan.estimate.fingerprint, true);
+        f.render.mockRejectedValue(
+          Object.assign(new Error('limited'), {
+            status: 429,
+            requestStage: 'voice_design',
+            voiceCreationQuota: 0,
+          }),
+        );
+        await f.service.tick();
+        expect(await f.service.get(job.id)).toMatchObject({
+          status: 'failed',
+          retry_at: null,
+          error_message: expect.stringContaining('제작 한도가 0'),
+        });
+        await f.service.tick();
+        expect(f.render).toHaveBeenCalledTimes(1);
       } finally {
         await f.cleanup();
       }

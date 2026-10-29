@@ -502,6 +502,48 @@ describe('UiNextSpeakerRevoice scene acting', () => {
   });
 });
 
+describe('UiNextSpeakerRevoice request batching', () => {
+  const toggle = (root: ReactTestInstance) => checkbox(root, '이어지는 대사 묶어 만들기');
+  it('stays hidden without Gemini 3.8 voices and starts off for a Flash job, sent only when turned on', async () => {
+    let root = await mount(fixture());
+    expect(byLabel(root, '요청 묶기')).toHaveLength(0);
+    act(() => renderer!.unmount());
+
+    const port = fixture(flashSource());
+    root = await mount(port, flashProps());
+    expect(toggle(root).props.checked).toBe(false);
+    expect(text(root)).toContain('Gemini 3.8 Flash·Lite 목소리만 묶여요.');
+    expect(text(root)).toContain('바꿀 인물을 골라 주세요.');
+    act(() => toggle(root).props.onChange({ target: { checked: true } }));
+    await flush();
+    // Batching alone is a change for an unbatched source.
+    expect(text(byLabel(root, '바뀌는 내용')[0])).toContain('만드는 방식이어지는 대사 묶어서');
+    await click(button(root, CHECK));
+    expect(port.estimateRevoice.mock.lastCall![1].batchAudio).toBe(true);
+    expect(text(byLabel(root, '만들기 확인')[0])).toContain('요청 묶기켬');
+    act(() => toggle(root).props.onChange({ target: { checked: false } }));
+    await flush();
+    expect(text(root)).toContain('바꿀 인물을 골라 주세요.');
+    await choose(root, '주연 1', 'design');
+    await click(button(root, CHECK));
+    expect(port.estimateRevoice.mock.lastCall![1]).not.toHaveProperty('batchAudio');
+  });
+
+  it('opens a batched source off, so it can be re-made span by span without other changes', async () => {
+    const port = fixture(flashSource({ batched: true }));
+    const root = await mount(port, flashProps());
+    expect(toggle(root).props.checked).toBe(false);
+    expect(text(root)).toContain('원래 음성은 묶어서 만들었어요. 끄면 개별 구간으로 나눠 다시 만들어요.');
+    expect(text(byLabel(root, '바뀌는 내용')[0])).toContain('만드는 방식개별 구간으로 나눠서');
+    await click(button(root, CHECK));
+    expect(port.estimateRevoice.mock.lastCall![1]).not.toHaveProperty('batchAudio');
+    act(() => toggle(root).props.onChange({ target: { checked: true } }));
+    await flush();
+    expect(text(root)).toContain('원래 음성도 묶어서 만들었어요.');
+    expect(text(root)).toContain('바꿀 인물을 골라 주세요.');
+  });
+});
+
 describe('UiNextSpeakerRevoice creating', () => {
   it('needs paid consent, creates once per click and reloads the list without resending an unclear failure', async () => {
     const port = fixture();

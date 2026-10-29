@@ -1,7 +1,7 @@
 import { GoogleAuth } from 'google-auth-library';
 import { isGeminiVoiceDesignModel } from '../../../../src/providers/voice-library';
 import type { GeminiVertexTTSProviderOptions } from './gemini-vertex-tts-provider';
-import { ttsHttpError } from './tts-http-error';
+import { googleTtsHttpError } from './tts-http-error';
 import { wavFromPcm16 } from './tts-audio';
 
 export function supportsVertexVoiceDesign(v: GeminiVertexTTSProviderOptions) {
@@ -66,8 +66,7 @@ export async function vertexVoiceDesign(
     },
   );
   if (!response.ok) {
-    await response.body?.cancel().catch(() => {});
-    throw ttsHttpError(`Vertex voice design failed with ${response.status}`, response);
+    throw await googleTtsHttpError(`Vertex voice design failed with ${response.status}`, response);
   }
   const reader = response.body?.getReader();
   if (!reader) throw new Error('Vertex voice design returned no response');

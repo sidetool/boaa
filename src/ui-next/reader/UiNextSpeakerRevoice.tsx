@@ -12,7 +12,7 @@ import type {
 import type { LibraryVoice, VoiceDesignProvider } from '../../providers/voice-library';
 import { formatCount } from '../../utils/format';
 import { cx } from '../components/primitives';
-import { flashDesigner, SelectionModelField } from './UiNextCastingOptions';
+import { BatchAudioToggle, batchable, flashDesigner, SelectionModelField } from './UiNextCastingOptions';
 
 type Speaker = SpeakerRevoiceSource['voices'][number];
 /** keep: the captured voice. swap: another listed voice. design: a new Gemini 3.8 Flash TTS voice. */
@@ -67,6 +67,8 @@ export default function UiNextSpeakerRevoice({
   const [actingEngineChoice, setActingEngineChoice] = useState<string>();
   const [selectionChoice, setSelectionChoice] = useState<string>();
   const [applyToBook, setApplyToBook] = useState(true);
+  // A fresh choice for the new audio: off unless turned on here, whatever the source did.
+  const [batchChoice, setBatchChoice] = useState(false);
   const [estimate, setEstimate] = useState<{ key: string; value: SpeakerRevoiceEstimate }>();
   const [ack, setAck] = useState(false);
   const [working, setWorking] = useState<'estimate' | 'create'>();
@@ -146,6 +148,10 @@ export default function UiNextSpeakerRevoice({
   // A design target will speak through a new voice on the narrator's Flash connection, not its old voice,
   // which may even be gone; acting and direction support follow that connection.
   const capability = (v: Speaker) => (effective(v) === 'design' ? narratorVoice : catalog(voiceOf(v)));
+  const batchAvailable = speakers.some((v) => batchable(capability(v)));
+  const batchAudio = batchAvailable && batchChoice;
+  // Turning batching off for a batched source re-makes it span by span, which is a change on its own.
+  const batchChanged = batchAudio !== !!source?.batched;
 
   // Spans without tags; older sources omit it, so untagged means needed.
   const needsActing = source ? (source.needsActing ?? !source.hasActing) : false;
@@ -185,6 +191,7 @@ export default function UiNextSpeakerRevoice({
         }
       : {}),
     ...(characterChanged ? { applyToBook } : {}),
+    ...(batchAudio ? { batchAudio: true } : {}),
     // Design targets keep their captured voiceId as a placeholder; the server replaces it.
     voices: speakers.map((v) => {
       const text = (directions[v.speakerId] ?? v.instructions ?? '').trim();
@@ -210,7 +217,7 @@ export default function UiNextSpeakerRevoice({
           ? '연기를 분석할 모델을 골라 주세요.'
           : designIds.length && !selection?.enabled
             ? '새 목소리를 정할 배정 AI 모델을 골라 주세요.'
-            : changedSpeakers.length === 0 && directed.length === 0 && actingMode === 'preserve'
+            : changedSpeakers.length === 0 && directed.length === 0 && actingMode === 'preserve' && !batchChanged
               ? '바꿀 인물을 골라 주세요.'
               : undefined;
   const inputKey = input ? JSON.stringify(input) : '';
@@ -422,6 +429,12 @@ export default function UiNextSpeakerRevoice({
                 <dt>지금 음성</dt>
                 <dd>지우지 않고 그대로 둬요</dd>
               </div>
+              {batchChanged && (
+                <div className="is-on">
+                  <dt>만드는 방식</dt>
+                  <dd>{batchAudio ? '이어지는 대사 묶어서' : '개별 구간으로 나눠서'}</dd>
+                </div>
+              )}
             </dl>
             {characterChanged && (
               <label className="un-book-ack un-cast-toggle">
@@ -505,6 +518,27 @@ export default function UiNextSpeakerRevoice({
             </div>
           )}
 
+          {(batchAvailable || source.batched) && (
+            <div className="un-recast-acting" role="group" aria-label="요청 묶기">
+              <h5>요청 묶기</h5>
+              <BatchAudioToggle
+                checked={batchAudio}
+                partial={!speakers.every((v) => batchable(capability(v)))}
+                disabled={!batchAvailable}
+                onChange={(on) => {
+                  setCreated(false);
+                  setBatchChoice(on);
+                }}
+              />
+              {source.batched && (
+                <p className="un-book-note">
+                  {batchAudio
+                    ? '원래 음성도 묶어서 만들었어요.'
+                    : '원래 음성은 묶어서 만들었어요. 끄면 개별 구간으로 나눠 다시 만들어요.'}
+                </p>
+              )}
+            </div>
+          )}
           {dropped.length > 0 && (
             <p className="un-book-note">
               {dropped.map((v) => v.name).join(', ')}: 고른 목소리가 말투 지시를 지원하지 않아 지시 없이 만들어요.
@@ -549,6 +583,12 @@ export default function UiNextSpeakerRevoice({
                   <li>
                     <span>새 목소리</span>
                     <b>{designer.name}</b>
+                  </li>
+                )}
+                {input?.batchAudio && (
+                  <li>
+                    <span>요청 묶기</span>
+                    <b>켬</b>
                   </li>
                 )}
                 {fresh.actingAnalysis && (

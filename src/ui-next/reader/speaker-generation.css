@@ -905,3 +905,43 @@
 .un-cast-options > p.un-book-note {
   margin: 0 0 10px;
 }
+
+/* 작품 기본 목소리: the selection memo under each character, clearly labelled and two lines by default. */
+.un-book-trait {
+  display: grid;
+  justify-items: start;
+  gap: 2px;
+  min-width: 0;
+}
+
+.un-book-trait > small {
+  display: -webkit-box;
+  overflow: hidden;
+  color: var(--un-text-3);
+  font-size: 12.5px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.un-book-trait > small.is-open {
+  display: block;
+  -webkit-line-clamp: unset;
+}
+
+.un-book-trait b {
+  margin-right: 6px;
+  color: var(--un-text-2);
+  font-weight: 650;
+}
+
+.un-book-trait > .un-btn {
+  height: auto;
+  padding: 0;
+}
+
+/* Optional settings inside 목소리 바꾸기 stay neutral; amber is for cost consent only. */
+.un-recast .un-book-ack.un-cast-toggle {
+  background: var(--un-bg-2);
+}

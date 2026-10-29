@@ -7,6 +7,7 @@ import {
   type VoiceDesignProvider,
 } from '../../providers/voice-library';
 import type { SpeakerEngine } from '../../providers/speaker-engine';
+import { isGeminiActingModel } from '../../providers/tts-performance';
 import { cx } from '../components/primitives';
 import './voice-library.css';
 
@@ -30,6 +31,42 @@ export const flashDesigner = (voice: PlainTTSVoice | undefined, designers: reado
   voice && isGeminiVoiceDesignModel(voice.modelId ?? voice.model?.modelId)
     ? voiceDesigners(designers).find((d) => d.id === voice.providerId)
     : undefined;
+
+/** Request batching is a Gemini 3.8 Flash / Flash-Lite TTS option; other voices are always made one span at a time. */
+export const batchable = (voice?: PlainTTSVoice) => isGeminiActingModel(voice?.modelId ?? voice?.model?.modelId);
+
+/** Opt-in: fewer requests, at the cost of approximate in-batch position and no per-paragraph files. */
+export function BatchAudioToggle({
+  checked,
+  partial,
+  disabled,
+  onChange,
+}: {
+  checked: boolean;
+  /** Some voices in this job cannot be batched. */
+  partial: boolean;
+  disabled?: boolean;
+  onChange(next: boolean): void;
+}) {
+  return (
+    <label className="un-book-ack un-cast-toggle">
+      <input
+        type="checkbox"
+        checked={checked}
+        disabled={disabled}
+        onChange={(event) => onChange(event.target.checked)}
+      />
+      <span>
+        이어지는 대사 묶어 만들기
+        <small className="un-book-note">
+          같은 인물이 같은 말투로 이어 말하는 부분을 한 번에 만들어 요청이 줄어요. 묶인 부분은 읽는 위치가 대략
+          표시되고, 구간별 음성은 따로 남지 않아요.
+          {partial ? ' Gemini 3.8 Flash·Lite 목소리만 묶여요.' : ''}
+        </small>
+      </span>
+    </label>
+  );
+}
 
 export interface ChoiceOption<T extends string> {
   value: T;

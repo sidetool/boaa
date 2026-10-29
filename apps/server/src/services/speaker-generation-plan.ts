@@ -36,7 +36,29 @@ export interface CastRequest extends Omit<PlainTTSRequest, 'rules'> {
     model: PlainTTSModel;
     instructions?: string;
     performance?: SpeakerPerformance;
+    /** Additional contiguous source spans sharing this speaker, voice and delivery. */
+    batch?: CastSource[];
   };
+}
+export interface CastSource {
+  paragraphId: string;
+  paragraphHash: string;
+  chunkHash: string;
+  start: number;
+  end: number;
+  part: number;
+}
+export function unbatchCastRequest(request: CastRequest): CastRequest[] {
+  const { batch, ...cast } = request.cast;
+  const first = { ...request, cast };
+  return [
+    first,
+    ...(batch ?? []).map(({ start, end, part, ...source }) => ({
+      ...first,
+      ...source,
+      cast: { ...cast, start, end, part },
+    })),
+  ];
 }
 export async function speakerPlan(
   pool: pg.Pool,
@@ -49,6 +71,7 @@ export async function speakerPlan(
 ): Promise<{ plan: AudiobookPlan; estimate: SpeakerGenerationEstimate }> {
   if (
     !input ||
+    (input.batchAudio !== undefined && typeof input.batchAudio !== 'boolean') ||
     (input.autoActing !== undefined && typeof input.autoActing !== 'boolean') ||
     !Array.isArray(input.chapterIds) ||
     !input.chapterIds.length ||
@@ -143,6 +166,7 @@ export async function speakerPlan(
     footnotePlayback: input.footnotePlayback,
     cast: {
       voiceEvidenceVersion: 2 as const,
+      ...(input.batchAudio === true ? { batchAudio: true } : {}),
       ...(input.autoActing
         ? { autoActing: true, actingEngine: { id: input.engineId, revision: speakerRevision(engine) } }
         : {}),
@@ -252,10 +276,48 @@ function sourceSlice(p: Paragraph, start: number, end: number): Paragraph {
   };
 }
 export function castPlayable(
-  paragraph: Paragraph,
+  source: Paragraph | readonly Paragraph[],
   request: CastRequest,
   rules: readonly SpokenTextRule[],
 ): PlayableTtsSegment {
+  const paragraphs: readonly Paragraph[] = Array.isArray(source) ? source : [source as Paragraph];
+  const paragraph = paragraphs.find((p) => p.id === request.paragraphId);
+  if (!paragraph) throw audiobookError(409, '본문이 변경됐어요.');
+  if (request.cast.batch) {
+    if (!request.cast.batch.length || request.cast.batch.length > 15)
+      throw audiobookError(409, '묶음 낭독 위치가 올바르지 않아요.');
+    const requests = unbatchCastRequest(request);
+    const parts = requests.map((r) => castPlayable(paragraphs, r, rules));
+    const positions: { paragraphId: string; paragraphIndex: number; spokenLength: number }[] = [];
+    let text = '';
+    for (const [i, part] of parts.entries()) {
+      const p = paragraphs.find((p) => p.id === part.paragraphId)!;
+      const previous = positions.at(-1);
+      if (p.chapterId !== paragraph.chapterId || (previous && p.index - 1 < previous.paragraphIndex))
+        throw audiobookError(409, '묶음 낭독 순서가 본문과 일치하지 않아요.');
+      if (i && p.id === requests[i - 1].paragraphId) {
+        const before = parts[i - 1].sourceRanges.at(-1)!;
+        if (part.sourceRanges[0].startOffset < before.endOffset) throw audiobookError(409, '묶음 낭독 위치가 겹쳐요.');
+      }
+      text += (i ? (previous?.paragraphId === p.id ? ' ' : '\n\n') : '') + part.text;
+      if (previous?.paragraphId === p.id) previous.spokenLength += [...part.text].length;
+      else positions.push({ paragraphId: p.id, paragraphIndex: p.index - 1, spokenLength: [...part.text].length });
+    }
+    if ([...text].length > 700) throw audiobookError(409, '묶음 낭독 문장이 너무 길어요.');
+    return {
+      ...parts[0],
+      text,
+      sourceText: undefined,
+      spokenTextSpans: undefined,
+      spokenTextFingerprint: structuredIntegrityHash({
+        version: 'cast-batch-1',
+        parts: parts.map((p) => p.spokenTextFingerprint),
+        text,
+      }),
+      plainBatchPositions: positions,
+      sourceRanges: parts.flatMap((p) => p.sourceRanges),
+    };
+  }
   const c = request.cast;
   if (
     !c ||

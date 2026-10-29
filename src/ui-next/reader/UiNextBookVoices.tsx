@@ -17,6 +17,7 @@ export default function UiNextBookVoices({
     [error, setError] = useState<string>();
   const [busy, setBusy] = useState<string>();
   const [revision, setRevision] = useState(0);
+  const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
   const working = useRef(false);
   useEffect(() => {
     if (!open || !port.castings) return;
@@ -73,6 +74,8 @@ export default function UiNextBookVoices({
           <>
             <p className="un-book-note">
               여기서 바꾸면 앞으로 만들 회차에만 적용돼요. 이미 만든 음성까지 바꾸려면 ‘목소리 바꾸기’를 써요.
+              {rows.some((row) => row.description.trim()) &&
+                ' 인물 특징은 목소리를 정할 때 참고한 메모예요. 장면별 감정·말투는 따로 정해요.'}
             </p>
             {[...rows]
               .sort(
@@ -106,11 +109,41 @@ export default function UiNextBookVoices({
                         </option>
                       ))}
                   </select>
-                  {row.description && <small className="un-book-note">{row.description}</small>}
+                  {row.description.trim() && (
+                    <TraitNote
+                      text={row.description.trim()}
+                      open={expanded.has(row.speakerId)}
+                      onToggle={() =>
+                        setExpanded((current) => {
+                          const next = new Set(current);
+                          if (!next.delete(row.speakerId)) next.add(row.speakerId);
+                          return next;
+                        })
+                      }
+                    />
+                  )}
                 </label>
               ))}
           </>
         ))}
     </details>
+  );
+}
+
+/** Selection metadata, not a synthesis instruction: labelled as such and folded to two lines when long. */
+function TraitNote({ text, open, onToggle }: { text: string; open: boolean; onToggle(): void }) {
+  const long = text.length > 60 || text.includes('\n');
+  return (
+    <span className="un-book-trait">
+      <small className={open || !long ? 'is-open' : undefined}>
+        <b>인물 특징</b>
+        {text}
+      </small>
+      {long && (
+        <button type="button" className="un-btn is-text is-sm" aria-expanded={open} onClick={onToggle}>
+          {open ? '접기' : '더 보기'}
+        </button>
+      )}
+    </span>
   );
 }

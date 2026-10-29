@@ -1,4 +1,5 @@
 import { prepareRevoiceCasting } from './speaker-revoice-casting';
+import { batchCastRequests } from './speaker-audio-batching';
 import type pg from 'pg';
 import { missingPerformance, preparePerformance } from './speaker-performance';
 import { performanceStyle } from '../../../../src/providers/tts-performance';
@@ -633,12 +634,18 @@ export class SpeakerGenerationService {
     }).paragraphs;
     const ids = new Set(ps.map((p) => p.id));
     const requests = selected
-      ? castRequests(
+      ? batchCastRequests(
           ps,
-          result.labels.filter((l) => ids.has(l.paragraphId)),
-          result.identities,
-          assignments,
-          run.settings,
+          castRequests(
+            ps,
+            result.labels.filter((l) => ids.has(l.paragraphId)),
+            result.identities,
+            assignments,
+            run.settings,
+          ),
+          run.settings.rules,
+          run.settings.cast?.autoActing,
+          run.settings.cast?.batchAudio === true,
         )
       : [];
     if (run.settings.cast?.autoActing && requests.length) {
@@ -732,12 +739,13 @@ export class SpeakerGenerationService {
       items: rows.map((r) => {
         const p = byId.get(r.request.paragraphId);
         if (!p) throw audiobookError(409, '본문이 변경됐어요.');
+        const playable = castPlayable(loaded.paragraphs, r.request, run.settings.rules);
         return {
           ordinal: r.ordinal,
           paragraphIndex: p.index - 1,
-          nextParagraphIndex: p.index,
+          nextParagraphIndex: (playable.plainBatchPositions?.at(-1)?.paragraphIndex ?? p.index - 1) + 1,
           playable: {
-            ...castPlayable(p, r.request, run.settings.rules),
+            ...playable,
             preparedAudio: { id, ordinal: r.ordinal, ready: r.status === 'ready' },
           },
         };
@@ -762,6 +770,8 @@ export class SpeakerGenerationService {
       run.chapter_ids.indexOf(row.chapter_id) + 1,
     );
     const request = row.request as CastRequest;
+    if (run.settings.cast?.recastSpeakers?.length)
+      throw audiobookError(425, '새 목소리 제작이 끝나면 음성을 만들 수 있어요.');
     if (run.settings.cast?.autoActing && !request.cast.performance)
       throw audiobookError(409, '연기 분석이 끝나면 이 음성을 만들 수 있어요.');
     const effectiveInstructions = request.cast.instructions || performanceStyle(request.cast.performance);
@@ -771,7 +781,7 @@ export class SpeakerGenerationService {
     else delete renderRequest.cast.instructions;
     const p = loaded.paragraphs.find((p) => p.id === request.paragraphId);
     if (!p) throw audiobookError(409, '본문이 변경됐어요.');
-    const playable = castPlayable(p, request, run.settings.rules);
+    const playable = castPlayable(loaded.paragraphs, request, run.settings.rules);
     const key = structuredIntegrityHash({
       v: 'cast-prepared-1',
       user: this.owner,

@@ -166,7 +166,7 @@ export async function preparePerformance(options: {
           'update speaker_voice_decisions set dispatching=false where audiobook_id=$1 and decision_key=$2',
           args,
         );
-        Object.assign(e as object, { analysisRetryLimit: engine.rateLimitRetries });
+        Object.assign(e as object, { analysisRetryLimit: engine.rateLimitRetries, requestStage: 'acting' });
       }
       throw e;
     }

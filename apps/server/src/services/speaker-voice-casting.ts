@@ -243,11 +243,16 @@ export class SpeakerVoiceCasting {
             VOICE_SELECTION_INSTRUCTION,
           );
         } catch (e) {
-          if ((e as { statusCode?: number }).statusCode === 429)
+          if ((e as { statusCode?: number }).statusCode === 429) {
             await this.pool.query(
               'update speaker_voice_decisions set dispatching=false where audiobook_id=$1 and decision_key=$2',
               [run.id, key],
             );
+            Object.assign(e as object, {
+              requestStage: 'voice_selection',
+              analysisRetryLimit: engine.rateLimitRetries,
+            });
+          }
           throw e;
         }
         if (Buffer.byteLength(response) > 262144) throw audiobookError(502, '목소리 선정 응답이 너무 커요.');

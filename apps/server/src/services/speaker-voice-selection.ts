@@ -53,6 +53,8 @@ export const VOICE_SELECTION_INSTRUCTION = [
   'Actively use narration, pronouns, relationships, forms of address and dialogue context to determine each character’s gender and approximate life stage. Evidence need not be an explicit profile: for example, narration identifying a speaker as someone’s mother or son is useful evidence. Resolve who each clue refers to; a character addressing another person does not describe their own gender. Use consistent contextual inference, not stereotypes about names, occupations or personality.',
   'When the evidence supports a male or female character voice, say so clearly in the voice description and designPrompt. Do not default everyone to a gender-neutral voice. Use a broad age range when supported, without inventing an exact age. Leave only genuinely unresolved traits unspecified; other known traits must still be used.',
   'Choose a concrete, differentiated timbre and habitual speaking manner appropriate to the character. These are casting choices, not claims that the source stated an exact pitch. Keep stable voice identity separate from temporary scene emotions. Use the source language for display text. Original vocal personas must not imitate named real people.',
+  'Keep description to a short voice profile: supported gender, broad age group, and one or two habitual voice or speaking traits. For Korean, use a compact phrase such as "성인 여성 · 낮고 차분한 목소리 · 또렷한 말투". Omit unknown traits without disclaimers about unspecified gender or age. Never describe the current scene, plot, dialogue content, emotions or why a voice was selected. Do not prescribe delivery for individual lines; a separate acting step handles that.',
+  'Use these same simple, stable traits in designPrompt. One short sentence is enough. Do not add scene directions, elaborate personality biographies or a requirement to make every voice unusually distinctive. Select existing voices primarily by supported gender, broad age group and habitual speaking style; scene emotion is not a selection criterion.',
   'Return every supplied speaker once, with an existing voiceId as fallback. Determine major/supporting/extra from narrative role, independently of how much gender or age information is available. Missing age or gender is not a reason to classify an identified speaking character as extra.',
   'requiredDesignSpeakerIds are explicit user choices: every listed speaker must receive a nonempty usable designPrompt, regardless of narrative importance or previous voice. Never substitute a preset for an explicitly requested new voice.',
   'When designMode is characters, major AND supporting characters require a nonempty designPrompt describing a usable stable voice: supported gender and life stage, distinct timbre, and habitual delivery. Only speakers outside requiredDesignSpeakerIds may reuse candidates when they are extras or their identity is genuinely unresolved. Otherwise a designPrompt is optional only for major characters when allowDesign is true. Do not rewrite or label the source text.',
@@ -74,8 +76,16 @@ export const VOICE_SELECTION_SCHEMA = {
           importance: { type: 'string', enum: ['major', 'supporting', 'extra'] },
           alias: { type: 'string' },
           timbre: { type: 'string' },
-          description: { type: 'string' },
-          designPrompt: { type: 'string' },
+          description: {
+            type: 'string',
+            description:
+              'Short stable voice profile: gender, broad age, habitual speaking style. No scene directions or selection rationale.',
+          },
+          designPrompt: {
+            type: 'string',
+            description:
+              'One short sentence describing the same stable voice traits, or empty when no design is requested. No temporary emotion or scene context.',
+          },
         },
       },
     },

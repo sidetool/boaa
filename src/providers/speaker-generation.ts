@@ -5,6 +5,8 @@ import type { SpeakerCastingOptions, VoiceLibraryPort, BookVoiceAssignment } fro
 
 /** The regular narrator voice is also the conservative fallback for uncertain attribution. */
 export interface SpeakerGenerationInput {
+  /** Opt-in grouping of adjacent Gemini speech with identical voice and delivery; absent means off. */
+  batchAudio?: boolean;
   chapterIds: string[];
   engineId: string;
   narratorVoiceId: string;
@@ -43,6 +45,7 @@ export interface SpeakerGenerationJob extends SavedAudiobook {
   retryAt?: string;
 }
 export interface SpeakerRevoiceInput {
+  batchAudio?: boolean;
   /** Explicit targets: each selected character gets a newly designed voice, including pinned voices. */
   designSpeakerIds?: string[];
   /** Apply changed character voices to future generation; existing audio remains immutable. */
@@ -52,6 +55,8 @@ export interface SpeakerRevoiceInput {
   voices: { speakerId: string; voiceId: string; instructions?: string }[];
 }
 export interface SpeakerRevoiceSource {
+  /** True when the captured audio actually contains grouped source spans. */
+  batched?: boolean;
   /** Narrator model context, including dialogue-only jobs with no narrator row. */
   narratorVoiceId?: string;
   hasActing?: boolean;
@@ -108,6 +113,7 @@ export interface SpeakerGenerationPort {
   ): Promise<SpeakerGenerationJob>;
 }
 export interface SpeakerGenerationPreferences {
+  batchAudio?: boolean;
   engineId: string;
   narratorVoiceId: string;
   characterVoiceIds: string[];
@@ -131,6 +137,7 @@ export interface TTSSpeakerGenerationControls {
 }
 /** Server-only pinned identity; not accepted from public create requests. */
 export interface SpeakerGenerationSettings {
+  batchAudio?: boolean;
   /** Audio-only variant; all source-verified ranges were copied from this job. */
   revoiceFrom?: string;
   recastSpeakers?: string[];

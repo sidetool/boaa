@@ -1,5 +1,5 @@
 import { isGeminiVoiceDesignModel } from '../../../../src/providers/voice-library';
-import { ttsHttpError } from './tts-http-error.js';
+import { googleTtsHttpError } from './tts-http-error.js';
 import { interactionAudioResponse } from './gemini-audio-response.js';
 import { wavFromPcm16 } from './tts-audio.js';
 import { GEMINI_VOICES, namedVoices } from './tts-voices.js';
@@ -56,8 +56,7 @@ export class GeminiTTSProvider implements TTSSynthesisProvider {
       },
     );
     if (!response.ok) {
-      await response.body?.cancel().catch(() => undefined);
-      throw ttsHttpError(`Gemini voice design failed with ${response.status}`, response);
+      throw await googleTtsHttpError(`Gemini voice design failed with ${response.status}`, response);
     }
     const reader = response.body?.getReader();
     if (!reader) throw new Error('Gemini voice design returned no response');
@@ -170,8 +169,7 @@ export class GeminiTTSProvider implements TTSSynthesisProvider {
     );
     if (!response.ok) {
       // Preserve status for cooldown/retry without retaining provider text or credentials.
-      await response.body?.cancel().catch(() => undefined);
-      throw ttsHttpError(`Gemini TTS request failed with ${response.status}`, response);
+      throw await googleTtsHttpError(`Gemini TTS request failed with ${response.status}`, response);
     }
     const json = await response.json().catch(() => undefined);
     const { buffer: pcm } = interactionAudioResponse(json);

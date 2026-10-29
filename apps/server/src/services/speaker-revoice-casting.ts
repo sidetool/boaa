@@ -1,8 +1,9 @@
 import { applyBookVoiceUpdates } from './speaker-book-voices';
+import { textIntegrityHash } from '@boaa/text-core/hash';
 import type pg from 'pg';
 import type { SpeakerEngineResult } from '../../../../src/providers/speaker-engine-protocol';
 import type { SpeakerVoiceCasting, CastingRun } from './speaker-voice-casting';
-import { loadSpeakerChapter, castPlayable, type CastRequest } from './speaker-generation-plan';
+import { loadSpeakerChapter, castPlayable, unbatchCastRequest, type CastRequest } from './speaker-generation-plan';
 import { audiobookError } from './audiobook-plan';
 
 /** Recast only captured spans in a new audio variant; never alters analysis or book bindings. */
@@ -47,19 +48,21 @@ export async function prepareRevoiceCasting(options: {
     kind: 'complete',
     ledger: {},
     identities: batch.map(({ request: r }) => ({ id: r.cast.speakerId, name: r.cast.label, reviewRequired: false })),
-    labels: evidence.map(({ request: r }) => {
-      const paragraph = loaded.paragraphs.find((p) => p.id === r.paragraphId);
-      if (!paragraph) throw audiobookError(409, '본문이 변경됐어요.');
-      castPlayable(paragraph, r, run.settings.rules);
-      return {
-        paragraphId: r.paragraphId,
-        startOffset: r.cast.start,
-        endOffset: r.cast.end,
-        textHash: r.paragraphHash,
-        speakerId: r.cast.speakerId,
-        reviewRequired: false,
-      };
-    }),
+    labels: evidence
+      .flatMap(({ request }) => unbatchCastRequest(request))
+      .map((r) => {
+        const paragraph = loaded.paragraphs.find((p) => p.id === r.paragraphId);
+        if (!paragraph) throw audiobookError(409, '본문이 변경됐어요.');
+        castPlayable(paragraph, r, run.settings.rules);
+        return {
+          paragraphId: r.paragraphId,
+          startOffset: r.cast.start,
+          endOffset: r.cast.end,
+          textHash: textIntegrityHash(paragraph.text.slice(r.cast.start, r.cast.end)),
+          speakerId: r.cast.speakerId,
+          reviewRequired: false,
+        };
+      }),
   };
   const selected = await casting.select({ ...run, assignments: {} }, loaded.chapter, result, signal, run.assignments);
   if (!selected) return false;

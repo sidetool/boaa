@@ -15,7 +15,13 @@ import { cx } from '../components/primitives';
 import SpeakerJobProgress from './SpeakerJobProgress';
 import { ChapterScopeFields, chapterScopeSummary, useChapterScope } from './chapter-scope';
 import { speakerPreferenceQueue } from './speaker-generation-preferences';
-import UiNextCastingOptions, { castingMode, flashDesigner, validBudget } from './UiNextCastingOptions';
+import UiNextCastingOptions, {
+  BatchAudioToggle,
+  batchable,
+  castingMode,
+  flashDesigner,
+  validBudget,
+} from './UiNextCastingOptions';
 import UiNextBookVoices from './UiNextBookVoices';
 import UiNextSpeakerRevoice from './UiNextSpeakerRevoice';
 import type { SpeakerCastingOptions, LibraryVoice, VoiceDesignProvider } from '../../providers/voice-library';
@@ -127,6 +133,8 @@ function Body({
   const [poolChoice, setPoolChoice] = useState<readonly string[] | undefined>(restored?.characterVoiceIds);
   const [castingChoice, setCastingChoice] = useState<SpeakerCastingOptions | undefined>(restored?.casting);
   const [actingChoice, setActingChoice] = useState<boolean | undefined>(restored?.autoActing);
+  // Off unless the person turns it on; no saved choice means off.
+  const [batchChoice, setBatchChoice] = useState<boolean | undefined>(restored?.batchAudio);
   const [library, setLibrary] = useState<{ voices: LibraryVoice[]; designers: VoiceDesignProvider[] }>();
   const [libraryError, setLibraryError] = useState<string>();
   useEffect(() => {
@@ -162,6 +170,7 @@ function Body({
           setPoolChoice((current) => current ?? value.characterVoiceIds);
           setCastingChoice((current) => current ?? value.casting);
           setActingChoice((current) => current ?? value.autoActing);
+          setBatchChoice((current) => current ?? value.batchAudio);
         }
         setPrefs('ready');
       },
@@ -247,6 +256,7 @@ function Body({
     if (next.characterVoiceIds !== undefined) setPoolChoice(next.characterVoiceIds);
     if (next.casting !== undefined) setCastingChoice(next.casting);
     if (next.autoActing !== undefined) setActingChoice(next.autoActing);
+    if (next.batchAudio !== undefined) setBatchChoice(next.batchAudio);
     if (next.resetPool) setPoolChoice(undefined);
     if (prefs !== 'ready') return;
     setSaveFailed(false);
@@ -257,6 +267,7 @@ function Body({
       casting: next.casting ?? castingChoice,
       // Only an explicit on/off is saved; no saved choice means "on whenever the voices support it".
       ...((next.autoActing ?? actingChoice) !== undefined ? { autoActing: next.autoActing ?? actingChoice } : {}),
+      ...((next.batchAudio ?? batchChoice) !== undefined ? { batchAudio: next.batchAudio ?? batchChoice } : {}),
     });
   };
   // Voice creation is a Gemini 3.8 Flash TTS feature: only a Flash narrator opens it, on that same connection.
@@ -281,6 +292,10 @@ function Body({
   );
   const actingAvailable = Boolean(narratorId) && actingUnsupported.length === 0;
   const autoActing = actingChoice ?? actingAvailable;
+  // Shown while any voice of this job can be batched; a saved 'on' under other voices is simply not sent.
+  const batchVoices = [narratorId, ...pool].map((id) => voices.find((voice) => voice.id === id));
+  const batchAvailable = batchVoices.some(batchable);
+  const batchAudio = batchAvailable && batchChoice === true;
   const togglePool = (id: string) =>
     choose({ characterVoiceIds: pool.includes(id) ? pool.filter((item) => item !== id) : [...pool, id] });
 
@@ -330,6 +345,7 @@ function Body({
           ...(casting ? { casting } : {}),
           // The default for voices without support stays implicit; explicit choices are always sent.
           ...(actingChoice !== undefined || autoActing ? { autoActing } : {}),
+          ...(batchAudio ? { batchAudio: true } : {}),
           rules: controls.rules,
           footnotePlayback: controls.footnotePlayback,
         }
@@ -680,6 +696,21 @@ function Body({
         </label>
       </section>
 
+      {batchAvailable && (
+        <section className="un-book-group" aria-labelledby="un-cast-batch">
+          <div className="un-book-group-head">
+            <h3 id="un-cast-batch">요청 묶기</h3>
+            <small>선택</small>
+          </div>
+          <BatchAudioToggle
+            checked={batchAudio}
+            partial={!batchVoices.every(batchable)}
+            disabled={prefs === 'loading'}
+            onChange={(on) => choose({ batchAudio: on })}
+          />
+        </section>
+      )}
+
       <section className="un-book-group" aria-label="만들기">
         {problem && engines && !problemAbove && <p className="un-book-note is-box">{problem}</p>}
         {prefs === 'failed' && (
@@ -736,6 +767,12 @@ function Body({
                 <li>
                   <span>장면 연기</span>
                   <b>켬 · 화자 분석과 함께</b>
+                </li>
+              )}
+              {input?.batchAudio && (
+                <li>
+                  <span>요청 묶기</span>
+                  <b>켬</b>
                 </li>
               )}
               <li>

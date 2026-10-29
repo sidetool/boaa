@@ -446,7 +446,11 @@ async function serviceFixture(f: Awaited<ReturnType<typeof setup>>) {
     await withPostgresSchema(harness!, 'voice_design_retry', async (pool) => {
       const f = await setup(pool);
       f.design.mockRejectedValueOnce(Object.assign(new Error('rate limited'), { status: 429, retryAfterSeconds: 20 }));
-      await expect(f.library.design(designInput(), signal())).rejects.toMatchObject({ status: 429 });
+      await expect(f.library.design(designInput(), signal())).rejects.toMatchObject({
+        status: 429,
+        requestStage: 'voice_design',
+        retryAfterSeconds: 20,
+      });
       expect((await pool.query('select status from tts_voice_designs')).rows[0].status).toBe('retry');
       const fresh = new VoiceLibraryStore(pool, 'owner', f.sources, f.catalog);
       await fresh.design(designInput(), signal());

@@ -7,7 +7,7 @@ const stageLabel: Record<SpeakerGenerationJob['stage'], string> = {
   waiting: '생성 준비',
   attribution: '화자 찾기',
   identity: '인물 연결',
-  casting: '목소리 선정',
+  casting: '목소리 배정',
   performance: '연기 분석',
   audio: '음성 만들기',
   complete: '생성 완료',
@@ -26,8 +26,11 @@ export default function SpeakerJobProgress({ item }: { item: SpeakerGenerationJo
   const label = stageLabel[item.stage];
   // A partial plan has no known audio total, so its bar would overstate progress; analysis checkpoints stay honest.
   const audioBar = !analyzing && item.itemCount > 0 && item.planningComplete !== false;
+  // The server names what is waiting (analysis, voice design, audio); its own '· N초 후' tail would go stale,
+  // so only the part before it is shown and the retry time below stays live.
+  const waiting = retrying ? item.error?.split(' · ')[0]?.trim() : undefined;
   const activity = retrying
-    ? '요청 제한으로 대기 중'
+    ? waiting || '요청 제한으로 대기 중'
     : item.status === 'queued'
       ? '차례를 기다리는 중'
       : item.status === 'pausing'

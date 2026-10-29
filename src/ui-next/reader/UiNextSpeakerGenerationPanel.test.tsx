@@ -431,6 +431,48 @@ describe('voice library casting choices', () => {
     });
   });
 
+  it('offers request batching off by default for Gemini 3.8 voices only and sends it only when turned on', async () => {
+    const api = port();
+    let root = await mount(controls({ port: api }));
+    expect(root.findAll((n) => n.props.id === 'un-cast-batch')).toHaveLength(0);
+    await click(button(root, '생성 전 확인'));
+    expect(vi.mocked(api.estimate).mock.lastCall![0]).not.toHaveProperty('batchAudio');
+    act(() => renderer!.unmount());
+
+    const props = controls({ port: api, voices: flashCatalog('gemini-3.8-flash-lite-tts'), narratorVoiceId: 'g1' });
+    root = await mount(props);
+    const toggle = () => castingField(root, '이어지는 대사 묶어 만들기');
+    expect(toggle().props.checked).toBe(false);
+    expect(api.savePreferences).not.toHaveBeenCalled();
+    await click(button(root, '생성 전 확인'));
+    expect(vi.mocked(api.estimate).mock.lastCall![0]).not.toHaveProperty('batchAudio');
+    act(() => toggle().props.onChange({ target: { checked: true } }));
+    await flush();
+    expect(api.savePreferences).toHaveBeenLastCalledWith(expect.objectContaining({ batchAudio: true }));
+    await click(button(root, '생성 전 확인'));
+    expect(vi.mocked(api.estimate).mock.lastCall![0].batchAudio).toBe(true);
+    expect(text(root.findByProps({ 'aria-label': '생성 확인' }))).toContain('요청 묶기켬');
+
+    // A saved 'on' is restored, but never sent through voices that cannot batch.
+    act(() => renderer!.unmount());
+    const saved = port(async () => [], {
+      preferences: vi.fn(async () => ({
+        engineId: 'e1',
+        narratorVoiceId: 'a1',
+        characterVoiceIds: ['a2'],
+        batchAudio: true,
+      })),
+    });
+    root = await mount(controls({ port: saved, voices: flashCatalog() }));
+    expect(root.findAll((n) => n.props.id === 'un-cast-batch')).toHaveLength(0);
+    await click(button(root, '생성 전 확인'));
+    expect(vi.mocked(saved.estimate).mock.lastCall![0]).not.toHaveProperty('batchAudio');
+    act(() => select(root, '내레이터 목소리').props.onChange({ target: { value: 'g1' } }));
+    await flush();
+    expect(castingField(root, '이어지는 대사 묶어 만들기').props.checked).toBe(true);
+    expect(text(root)).toContain('Gemini 3.8 Flash·Lite 목소리만 묶여요.');
+  });
+
   it('turns automatic acting on by default for capable voices, remembers an explicit off, and stays off for others', async () => {
     const api = port();
     const acting = catalog();
@@ -726,24 +768,68 @@ describe('UiNextSpeakerGenerationPanel jobs', () => {
         port: port(async () => [
           job({
             status: 'queued',
-            stage: 'identity',
             itemCount: 0,
             completedItems: 0,
             bytes: 0,
             readyChapterIds: [],
             retryAt,
-            error: '음성 제공자 요청 제한으로 대기 중 · 300초 후 자동으로 이어 만들어요.',
+            stage: 'casting',
+            error: '목소리 제작 요청 제한으로 대기 중 · 300초 후 자동으로 이어 만들어요.',
           }),
+          // No server wording: a generic headline instead of nothing.
+          job({ id: 'job-2', status: 'queued', stage: 'audio', retryAt, error: undefined }),
         ]),
       }),
     );
+    // The server names the waiting step; the stale seconds tail is dropped for the live retry time.
+    expect(text(root)).toContain('목소리 제작 요청 제한으로 대기 중');
+    expect(text(root)).not.toContain('대기 중 ·');
     expect(text(root)).toContain('요청 제한으로 대기 중');
     expect(text(root)).toContain('자동으로 다시 시도해요.');
-    expect(root.findByType('time').props.dateTime).toBe(retryAt);
+    expect(root.findAllByType('time')[0].props.dateTime).toBe(retryAt);
     expect(text(root)).not.toContain('300초');
-    expect(text(root)).not.toContain('인물 연결 중');
+    expect(text(root)).not.toContain('목소리 배정 중');
     expect(root.findAll((n) => n.type === 'svg' && String(n.props.className).includes('un-spin'))).toHaveLength(0);
-    expect(button(root, '멈추기').props.disabled).toBe(false);
+    expect(root.findAll((n) => matches(n, '멈추기')).every((n) => n.props.disabled !== true)).toBe(true);
+  });
+
+  it('labels a long book voice memo as selection notes, folded until asked', async () => {
+    const memo =
+      '30대 남성, 낮고 차분한 중저음. 평소에는 느긋하고 정중하게 말하지만 화가 나면 짧게 끊어 말한다. 낯선 사람에게도 존댓말을 쓴다.';
+    const castings = vi.fn(async () => [
+      {
+        speakerId: 'p1',
+        name: '인물 1',
+        voiceId: 'a2',
+        alias: '',
+        timbre: '',
+        description: memo,
+        importance: 'major' as const,
+        pinned: false,
+      },
+      {
+        speakerId: 'p2',
+        name: '인물 2',
+        voiceId: 'a3',
+        alias: '',
+        timbre: '',
+        description: '',
+        importance: 'extra' as const,
+        pinned: false,
+      },
+    ]);
+    const root = await mount(controls({ port: port(async () => [job({ status: 'completed' })], { castings }) }));
+    const details = root.findAll((n) => n.type === 'details' && text(n).includes('작품 기본 목소리'))[0];
+    act(() => details.props.onToggle({ currentTarget: { open: true } }));
+    await flush();
+    expect(text(root)).toContain('인물 특징은 목소리를 정할 때 참고한 메모예요. 장면별 감정·말투는 따로 정해요.');
+    expect(text(root)).toContain('인물 특징' + memo);
+    // The stored text is shown as is; nothing is sent back to a model.
+    expect(castings).toHaveBeenCalledTimes(1);
+    expect(root.findAll((n) => n.type === 'small' && n.props.className === 'is-open')).toHaveLength(0);
+    await click(button(root, '더 보기'));
+    expect(root.findAll((n) => n.type === 'small' && n.props.className === 'is-open')).toHaveLength(1);
+    expect(hasButton(root, '접기')).toBe(true);
   });
 
   it('explains resume before any audio plan exists and labels partial plan counts', async () => {

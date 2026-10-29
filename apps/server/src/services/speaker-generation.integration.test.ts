@@ -244,6 +244,75 @@ async function setup(pool: pg.Pool, concurrency: 1 | 2 = 1, chapterIds = ['c1', 
   };
 }
 (harness ? describe : describe.skip)('speaker background generation with real preset35 and PostgreSQL', () => {
+  it('batches Gemini narration through generation, playback and revoice without replacing original audio', async () => {
+    await withPostgresSchema(harness!, 'speaker_batch_roundtrip', async (pool) => {
+      const f = await setup(pool, 1, ['c1']);
+      try {
+        const catalog = await f.catalog();
+        f.catalog.mockResolvedValue({
+          ...catalog,
+          voices: catalog.voices.map((v) => ({
+            ...v,
+            model: { ...v.model!, modelId: 'gemini-3.8-flash-tts' },
+            autoActingSupported: true,
+          })),
+        });
+        await pool.query('delete from paragraph_search');
+        const texts = ['아침이 밝았다.', '문이 열렸다.', '바람이 불었다.'];
+        for (const [i, text] of texts.entries()) {
+          const paragraph = { id: `c1-${i}`, novelId: 'book', chapterId: 'c1', index: i + 1, text };
+          await pool.query('insert into paragraph_search values($1,$2,$3,$4,$5,$6)', [
+            'book',
+            'c1',
+            paragraph.id,
+            i + 1,
+            paragraph,
+            text,
+          ]);
+        }
+        const defaultPlan = await f.service.estimate('book', f.input);
+        const enabledPlan = await f.service.estimate('book', { ...f.input, batchAudio: true });
+        expect(defaultPlan.fingerprint).not.toBe(enabledPlan.fingerprint);
+        const original = await f.create({ ...f.input, batchAudio: true });
+        await f.until(async () => (await f.audio.get(original.id)).status === 'completed');
+        expect(f.synthesize).toHaveBeenCalledTimes(1);
+        expect(f.synthesize.mock.calls[0][0]).toBe(texts.join('\n\n'));
+        const recorded = await f.audio.resolve(original.id, 0);
+        const reader = await f.service.reader(original.id, 'c1');
+        expect(reader.items).toHaveLength(1);
+        expect(reader.items[0]).toMatchObject({ paragraphIndex: 0, nextParagraphIndex: 3 });
+        expect(reader.items[0].playable.plainBatchPositions).toHaveLength(3);
+        const source = await f.service.revoiceSource('book', original.id);
+        const input: SpeakerRevoiceInput = {
+          batchAudio: true,
+          voices: source.voices.map((v) => ({ speakerId: v.speakerId, voiceId: 'b' })),
+        };
+        expect(source.batched).toBe(true);
+        const ungroupedInput: SpeakerRevoiceInput = {
+          voices: source.voices.map((v) => ({ speakerId: v.speakerId, voiceId: v.voiceId })),
+        };
+        const ungrouped = await f.service.estimateRevoice('book', original.id, ungroupedInput);
+        expect(ungrouped.itemCount).toBe(3);
+        const beforeCalls = f.modelCalls.length;
+        const estimate = await f.service.estimateRevoice('book', original.id, input);
+        expect(estimate.itemCount).toBe(1);
+        const next = await f.service.revoice('book', original.id, input, estimate.fingerprint, true);
+        await f.until(async () => (await f.audio.get(next.id)).status === 'completed');
+        expect(f.modelCalls).toHaveLength(beforeCalls);
+        expect(f.synthesize).toHaveBeenCalledTimes(2);
+        expect(f.synthesize.mock.calls[1][0]).toBe(texts.join('\n\n'));
+        expect(await f.audio.resolve(original.id, 0)).toEqual(recorded);
+        await pool.query(
+          "update paragraph_search set text='변경됨',paragraph=jsonb_set(paragraph,'{text}','\"변경됨\"') where paragraph_id='c1-2'",
+        );
+        await expect(f.service.render(next.id, 0, true)).rejects.toMatchObject({ statusCode: 409 });
+        expect(f.synthesize).toHaveBeenCalledTimes(2);
+      } finally {
+        await f.cleanup();
+      }
+    });
+  });
+
   it('revoices captured audio with no analysis calls, independent cache identities and an immutable original', async () => {
     await withPostgresSchema(harness!, 'speaker_revoice', async (pool) => {
       const f = await setup(pool);
@@ -2128,6 +2197,11 @@ async function actingVariant(f: ActingFixture, original: string) {
           });
           const job = await actingVariant(f, source.id);
           f.synthesize.mockClear();
+          const planned = (
+            await pool.query('select request from saved_audiobook_items where audiobook_id=$1 order by ordinal', [
+              job.id,
+            ])
+          ).rows;
           pending = f.audio.tick();
           await entered.promise;
           if (change === 'owner') await pool.query("update library_books set user_id='other' where id='book'");
@@ -2141,12 +2215,11 @@ async function actingVariant(f: ActingFixture, original: string) {
           );
           expect(
             (
-              await pool.query(
-                "select 1 from saved_audiobook_items where audiobook_id=$1 and request->'cast' ? 'performance'",
-                [job.id],
-              )
-            ).rowCount,
-          ).toBe(0);
+              await pool.query('select request from saved_audiobook_items where audiobook_id=$1 order by ordinal', [
+                job.id,
+              ])
+            ).rows,
+          ).toEqual(planned);
           expect(
             (await pool.query('select response from speaker_voice_decisions where audiobook_id=$1', [job.id])).rows[0]
               .response,

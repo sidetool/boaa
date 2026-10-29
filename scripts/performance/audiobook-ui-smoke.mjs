@@ -51,7 +51,7 @@ const speakerPort={preferences:async()=>JSON.parse(sessionStorage.prefs||'null')
  list:async()=>q.has('jobs')?[{id:'source',bookId:'book',title:'작품',status:'completed',stage:'complete',chapterCount:1,itemCount:12,completedItems:12,characters:1500,bytes:204800,
   voiceLabel:'화자별 목소리',providerName:'Gemini 3.8 제작',paid:true,fingerprint:'s',firstChapterTitle:'1화',lastChapterTitle:'1화',playbackIndex:0,createdAt:'2026-10-29T00:00:00Z',updatedAt:'2026-10-29T00:00:00Z',
   analyzedChapters:1,contextChapterCount:0,readyChapterIds:['c1'],castVoiceIds:['f1','f2','g1','g2']}]:[],
- castings:async()=>[{speakerId:'p1',name:'주인공',voiceId:'g2',alias:'',timbre:'',description:'',importance:'major',pinned:true}],
+ castings:async()=>[{speakerId:'p1',name:'주인공',voiceId:'g2',alias:'',timbre:'',description:'30대 남성, 낮고 차분한 중저음. 평소에는 느긋하고 정중하게 말하지만 화가 나면 짧게 끊어 말한다. 낯선 사람에게도 존댓말을 쓴다.',importance:'major',pinned:true}],
  remove:async()=>{},control:async()=>({}),create:async()=>({}),
  estimate:async(input)=>{reviewCalls.push({kind:'speakerEstimate',input});return {fingerprint:'s',chapterCount:1,contextChapterCount:0,characters:900,modelLabel:'분석 A',voiceLabel:'연기 1',paid:true,
   ...(input.casting?.designMode?{selectionModelLabel:'선정 A',maxDesignedVoices:input.casting.maxDesignedVoices}:{})};}};
@@ -521,6 +521,8 @@ try {
       await entry.waitFor();
       await page.getByText('작품 기본 목소리').click();
       await page.getByText(/앞으로 만들 회차에만 적용돼요/).waitFor();
+      await page.getByText(/장면별 감정·말투는 따로 정해요/).waitFor();
+      await page.getByRole('button', { name: '더 보기', exact: true }).waitFor();
       await bounded();
       await page.locator('.un-book-item').screenshot({ path: `${artifacts}/job-card-${width}.png` });
       await entry.click();

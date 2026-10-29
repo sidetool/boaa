@@ -1,4 +1,6 @@
 import { bookBindingVersions } from './speaker-book-voices';
+import { batchCastRequests } from './speaker-audio-batching';
+import { NEUTRAL_PERFORMANCE } from '../../../../src/providers/tts-performance';
 import type pg from 'pg';
 import { structuredIntegrityHash } from '@boaa/text-core/hash';
 import type { AudiobookInput } from '../../../../src/providers/plain-audiobook';
@@ -9,7 +11,7 @@ import type {
   SpeakerRevoiceEstimate,
 } from '../../../../src/providers/speaker-generation';
 import { audiobookError, type AudiobookPlan } from './audiobook-plan.js';
-import { castPlayable, loadSpeakerChapter, type CastRequest } from './speaker-generation-plan.js';
+import { castPlayable, loadSpeakerChapter, unbatchCastRequest, type CastRequest } from './speaker-generation-plan.js';
 import { voiceText } from './voice-library-store.js';
 import type { SpeakerEngineStore } from '../providers/speaker-engine-store';
 import { normalizeCasting } from './speaker-voice-selection';
@@ -85,6 +87,7 @@ export function revoiceSourceView(items: readonly Item[]): SpeakerRevoiceSource 
     });
   }
   return {
+    batched: items.some((i) => !!i.request.cast.batch?.length),
     hasActing: items.some((i) => !!i.request.cast.performance),
     needsActing: items.some((i) => !i.request.cast.performance),
     chapterCount: new Set(items.map((i) => i.chapter_id)).size,
@@ -104,6 +107,8 @@ export async function planSpeakerRevoice(
   library?: VoiceLibraryStore,
 ): Promise<AudiobookPlan & { estimate: SpeakerRevoiceEstimate }> {
   const { source, items: captured } = await loadRevoiceSource(pool, owner, bookId, id);
+  if (input?.batchAudio !== undefined && typeof input.batchAudio !== 'boolean')
+    throw audiobookError(400, '문장 묶기 설정을 확인해 주세요.');
   const view = revoiceSourceView(captured);
   const mode = input?.acting?.mode ?? 'preserve';
   if (!['preserve', 'off', 'auto'].includes(mode) || (input?.acting && typeof input.acting !== 'object'))
@@ -220,11 +225,18 @@ export async function planSpeakerRevoice(
   const items: AudiobookPlan['items'] = [];
   let characters = 0,
     bytes = 0,
-    changed = actingAnalysis || recastSpeakers.length > 0;
+    changed =
+      actingAnalysis ||
+      recastSpeakers.length > 0 ||
+      (input.batchAudio === true) !== (source.settings.cast?.batchAudio === true) ||
+      (view.batched === true && input.batchAudio !== true);
   for (const chapterId of chapterIds) {
     const loaded = await loadSpeakerChapter(pool, owner, bookId, chapterId, contextIds.indexOf(chapterId) + 1);
     const paragraphs = new Map(loaded.paragraphs.map((p) => [p.id, p]));
-    for (const old of captured.filter((i) => i.chapter_id === chapterId)) {
+    const chapterRequests: CastRequest[] = [];
+    for (const old of captured
+      .filter((i) => i.chapter_id === chapterId)
+      .flatMap((i) => unbatchCastRequest(i.request).map((request) => ({ ...i, request })))) {
       const choice = choices.get(old.request.cast.speakerId)!;
       const request: CastRequest = {
         ...old.request,
@@ -234,6 +246,13 @@ export async function planSpeakerRevoice(
       if (choice.instructions) request.cast.instructions = choice.instructions;
       else delete request.cast.instructions;
       if (mode === 'off') delete request.cast.performance;
+      if (
+        input.batchAudio === true &&
+        mode === 'auto' &&
+        request.cast.speakerId === 'narrator' &&
+        !request.cast.performance
+      )
+        request.cast.performance = NEUTRAL_PERFORMANCE;
       const paragraph = paragraphs.get(request.paragraphId);
       if (!paragraph) throw audiobookError(409, '본문이 변경됐어요. 원래 음성의 본문을 확인해 주세요.');
       const playable = castPlayable(paragraph, request, source.settings.rules);
@@ -242,17 +261,28 @@ export async function planSpeakerRevoice(
       bytes += Buffer.byteLength(JSON.stringify(request));
       if (characters > 20_000_000 || bytes > 32 * 1024 * 1024)
         throw audiobookError(413, '다시 만들 음성의 범위가 너무 커요.');
+      chapterRequests.push(request);
+    }
+    for (const request of batchCastRequests(
+      loaded.paragraphs,
+      chapterRequests,
+      source.settings.rules,
+      mode === 'auto',
+      input.batchAudio === true,
+    )) {
+      const paragraph = paragraphs.get(request.paragraphId)!;
+      const playable = castPlayable(loaded.paragraphs, request, source.settings.rules);
       items.push({
         chapterId,
-        chapterTitle: old.chapter_title,
+        chapterTitle: loaded.chapter.title,
         request,
         playable,
         paragraphIndex: paragraph.index - 1,
-        nextParagraphIndex: paragraph.index,
+        nextParagraphIndex: (playable.plainBatchPositions?.at(-1)?.paragraphIndex ?? paragraph.index - 1) + 1,
       });
     }
   }
-  if (!changed) throw audiobookError(400, '바꿀 목소리나 연기 지시를 먼저 선택해 주세요.');
+  if (!changed) throw audiobookError(400, '바꿀 목소리나 연기, 문장 묶기 설정을 선택해 주세요.');
   const fingerprint = structuredIntegrityHash({
     version: 'speaker-revoice-1',
     owner,
@@ -263,6 +293,7 @@ export async function planSpeakerRevoice(
     ...(resolvedCasting ? { casting: resolvedCasting, recastSpeakers } : {}),
     ...(explicit ? { designSpeakerIds: [...explicit].sort() } : {}),
     applyToBook: input.applyToBook === true,
+    ...(input.batchAudio === true ? { batchAudio: true } : {}),
     items: items.map((i) => ({ chapterId: i.chapterId, request: i.request })),
   });
   const narrator = choices.get('narrator')?.voiceId ?? source.settings.voiceId;
@@ -312,6 +343,7 @@ export async function planSpeakerRevoice(
       voiceId: narrator,
       cast: {
         ...source.settings.cast!,
+        batchAudio: input.batchAudio === true,
         voiceEvidenceVersion: 2,
         autoActing: mode === 'auto',
         actingEngine,

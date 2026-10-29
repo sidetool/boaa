@@ -204,7 +204,7 @@ export class AudiobookService {
     } catch (error) {
       // Do not let the background runner automatically repeat an ambiguous foreground failure.
       const failure = this.failure(error);
-      if (failure.status !== 429 && /^[a-f0-9-]{36}$/.test(id))
+      if (failure.status !== 429 && failure.status !== 425 && /^[a-f0-9-]{36}$/.test(id))
         await this.pool.query(
           `update saved_audiobooks set status='failed',error_message=$3,updated_at=now()
           where id=$1 and user_id=$2 and status in ('queued','running')`,
@@ -664,6 +664,20 @@ export class AudiobookService {
       } catch (error) {
         await client.query('rollback');
         if (this.failure(error).status === 429) {
+          if (
+            (error as { requestStage?: string; voiceCreationQuota?: number }).requestStage === 'voice_design' &&
+            (error as { voiceCreationQuota?: number }).voiceCreationQuota === 0
+          ) {
+            await client.query(
+              `update saved_audiobooks set status=case when status='pausing' then 'paused' else 'failed' end,
+               retry_at=null,error_message=$2,updated_at=now() where id=$1 and status in ('running','pausing')`,
+              [
+                job.id,
+                '이 Google Cloud 프로젝트의 목소리 제작 한도가 0이에요. Cloud 콘솔에서 제작 한도와 이용 권한을 확인한 뒤 이어 만들어 주세요.',
+              ],
+            );
+            return false;
+          }
           const retryLimit = (error as { analysisRetryLimit?: number }).analysisRetryLimit;
           if (
             Number.isInteger(retryLimit) &&
@@ -686,13 +700,22 @@ export class AudiobookService {
             backoff,
             typeof hint === 'number' && Number.isFinite(hint) ? Math.min(86400, hint) : 0,
           );
+          const stage = (error as { requestStage?: string }).requestStage;
+          const label =
+            stage === 'voice_design'
+              ? '목소리 제작'
+              : stage === 'voice_selection'
+                ? '목소리 배정'
+                : stage === 'acting'
+                  ? '장면 연기 분석'
+                  : '음성 제공자';
           await client.query(
             `update saved_audiobooks set
             status=case when status='pausing' then 'paused' else 'queued' end,
             retry_at=now()+($2 * interval '1 second'),rate_limit_attempts=least(rate_limit_attempts+1,100),
             error_message=case when status='pausing' then null else $3 end,updated_at=now()
             where id=$1 and status in ('running','pausing')`,
-            [job.id, seconds, `음성 제공자 요청 제한으로 대기 중 · ${Math.ceil(seconds)}초 후 자동으로 이어 만들어요.`],
+            [job.id, seconds, `${label} 요청 제한으로 대기 중 · ${Math.ceil(seconds)}초 후 자동으로 이어 만들어요.`],
           );
           return false;
         }

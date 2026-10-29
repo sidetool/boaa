@@ -303,6 +303,7 @@ export class VoiceLibraryStore {
           ? 'retry'
           : 'uncertain',
       ]);
+      if (e && typeof e === 'object') Object.assign(e, { requestStage: 'voice_design' });
       throw e;
     }
     if (
