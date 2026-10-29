@@ -888,7 +888,7 @@ describe('UiNextSpeakerGenerationPanel jobs', () => {
       job({ status: 'completed', stage: 'complete', readyChapterIds: ['c2', 'c3'] }),
     ]);
     await click(button(root, '목록 새로고침'));
-    await click(button(root, '음성 삭제'));
+    await click(button(root, '음성만 삭제'));
     await click(button(root, '삭제'));
     expect(api.remove).toHaveBeenCalledWith('job-1');
   });
@@ -911,6 +911,120 @@ describe('UiNextSpeakerGenerationPanel jobs', () => {
     await flush();
     expect(text(renderer!.root)).not.toContain('2화 ~ 3화');
     expect(text(renderer!.root)).toContain('아직 없어요');
+  });
+});
+
+describe('UiNextSpeakerGenerationPanel cleanup', () => {
+  const preview = (overrides = {}) => ({
+    fingerprint: 'clean-1',
+    jobCount: 2,
+    audioBytes: 2048,
+    assignmentCount: 5,
+    analysisCount: 3,
+    ...overrides,
+  });
+  const option = (root: ReactTestInstance, title: string) => castingField(root, title);
+
+  it('starts with nothing picked, shows what each choice removes and what always stays', async () => {
+    const previewCleanup = vi.fn(async (options: { analysis: boolean; audio: boolean }) =>
+      preview(
+        options.analysis && !options.audio
+          ? { blockedReason: '분석이 끝나지 않은 생성 작업도 함께 삭제해 주세요.' }
+          : {},
+      ),
+    );
+    const cleanup = vi.fn(async () => ({ removedJobs: 2, removedAssignments: 0, removedAnalyses: 3 }));
+    const api = port(async () => [], { previewCleanup, cleanup });
+    const root = await mount(controls({ port: api }));
+    expect(previewCleanup).not.toHaveBeenCalled();
+    await click(button(root, '초기화·삭제'));
+    const run = () => button(root, '선택한 항목 지우기');
+    for (const title of ['만든 음성·생성 작업', '인물 목소리 배정·생성 설정', '화자 분석 기록'])
+      expect(option(root, title).props.checked).toBe(false);
+    expect(run().props.disabled).toBe(true);
+    expect(text(root)).toContain('2개 · 2 KB');
+    expect(text(root)).toContain('인물 5명');
+    expect(text(root)).toContain('화자 분석 기록은 남아요.');
+    expect(text(root)).toContain('목소리 보관함과 TTS·분석 모델 연결은 그대로예요.');
+
+    act(() => option(root, '화자 분석 기록').props.onChange());
+    await flush();
+    expect(previewCleanup).toHaveBeenLastCalledWith(
+      { audio: false, settings: false, analysis: true },
+      expect.any(AbortSignal),
+    );
+    expect(text(root)).toContain('분석이 끝나지 않은 생성 작업도 함께 삭제해 주세요.');
+    expect(text(root)).not.toContain('화자 분석 기록은 남아요.');
+    expect(run().props.disabled).toBe(true);
+    act(() => option(root, '만든 음성·생성 작업').props.onChange());
+    await flush();
+    expect(text(root)).toContain('되돌릴 수 없어요.');
+    await click(run());
+    expect(cleanup).toHaveBeenCalledWith({ audio: true, settings: false, analysis: true }, 'clean-1', true);
+    expect(text(root)).toContain('정리했어요: 음성 작업 2개, 분석 기록 3개.');
+  });
+
+  it('resets saved choices to the defaults after pending saves, without saving them back', async () => {
+    const order: string[] = [];
+    const api = port(async () => [], {
+      preferences: vi.fn(async () => ({ engineId: 'e1', narratorVoiceId: 'a2', characterVoiceIds: ['a3'] })),
+      previewCleanup: vi.fn(async () => preview()),
+      cleanup: vi.fn(async () => {
+        order.push('cleanup');
+        return {
+          removedJobs: 0,
+          removedAssignments: 5,
+          removedAnalyses: 0,
+          preferences: { engineId: 'e1', narratorVoiceId: '', characterVoiceIds: [] },
+        };
+      }),
+    });
+    vi.mocked(api.savePreferences).mockImplementation(async () => {
+      order.push('save');
+    });
+    const root = await mount(controls({ port: api }));
+    expect(select(root, '내레이터 목소리').props.value).toBe('a2');
+    act(() => select(root, '내레이터 목소리').props.onChange({ target: { value: 'a3' } }));
+    await click(button(root, '초기화·삭제'));
+    act(() => option(root, '인물 목소리 배정·생성 설정').props.onChange());
+    await flush();
+    await click(button(root, '선택한 항목 지우기'));
+    expect(order).toEqual(['save', 'cleanup']);
+    // Narrator back to the listen setting, pool back to its engine; nothing written by the reset itself.
+    expect(select(root, '내레이터 목소리').props.value).toBe('a1');
+    expect(button(root, /^목소리 2/).props['aria-pressed']).toBe(true);
+    expect(api.savePreferences).toHaveBeenCalledTimes(1);
+    expect(text(root)).toContain('정리했어요: 인물 배정 5명.');
+  });
+
+  it('reopens a reset as the defaults, but keeps a pool emptied by hand', async () => {
+    const reset = port(async () => [], {
+      preferences: vi.fn(async () => ({ engineId: 'e1', narratorVoiceId: '', characterVoiceIds: [] })),
+    });
+    let root = await mount(controls({ port: reset }));
+    expect(select(root, '내레이터 목소리').props.value).toBe('a1');
+    expect(button(root, /^목소리 2/).props['aria-pressed']).toBe(true);
+    expect(button(root, /^목소리 3/).props['aria-pressed']).toBe(true);
+    act(() => renderer!.unmount());
+    const emptied = port(async () => [], {
+      preferences: vi.fn(async () => ({ engineId: 'e1', narratorVoiceId: 'a1', characterVoiceIds: [] })),
+    });
+    root = await mount(controls({ port: emptied }));
+    expect(button(root, /^목소리 2/).props['aria-pressed']).toBe(false);
+    expect(text(root)).toContain('인물 목소리를 하나 이상 골라 주세요.');
+  });
+
+  it('waits for running jobs to stop', async () => {
+    const api = port(async () => [job({ status: 'running' })], {
+      previewCleanup: vi.fn(async () => preview()),
+      cleanup: vi.fn(),
+    });
+    const root = await mount(controls({ port: api }));
+    await click(button(root, '초기화·삭제'));
+    act(() => option(root, '만든 음성·생성 작업').props.onChange());
+    await flush();
+    expect(text(root)).toContain('만드는 중인 작업을 멈춘 뒤 초기화할 수 있어요.');
+    expect(button(root, '선택한 항목 지우기').props.disabled).toBe(true);
   });
 });
 

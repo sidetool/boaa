@@ -12,6 +12,10 @@ export interface SpeakerPreferenceQueue {
   readonly latest: SpeakerGenerationPreferences | undefined;
   readonly port: SpeakerGenerationPort;
   save(value: SpeakerGenerationPreferences): void;
+  /** Resolves once every save asked for so far has been sent (or failed). */
+  idle(): Promise<void>;
+  /** The server replaced the saved value (cleanup): take it as both the newest and the last sent. */
+  replace(value: SpeakerGenerationPreferences | undefined): void;
   onError(listener: Listener): () => void;
 }
 
@@ -24,6 +28,7 @@ const same = (a?: SpeakerGenerationPreferences, b?: SpeakerGenerationPreferences
     a.engineId === b.engineId &&
     a.narratorVoiceId === b.narratorVoiceId &&
     a.autoActing === b.autoActing &&
+    a.batchAudio === b.batchAudio &&
     JSON.stringify(a.casting) === JSON.stringify(b.casting) &&
     a.characterVoiceIds.length === b.characterVoiceIds.length &&
     a.characterVoiceIds.every((id, index) => id === b.characterVoiceIds[index]),
@@ -36,6 +41,7 @@ export function speakerPreferenceQueue(port: SpeakerGenerationPort): SpeakerPref
   let waiting: SpeakerGenerationPreferences | undefined;
   let sent: SpeakerGenerationPreferences | undefined;
   let running = false;
+  let drained: Promise<void> = Promise.resolve();
   const listeners = new Set<Listener>();
 
   const drain = async () => {
@@ -66,7 +72,15 @@ export function speakerPreferenceQueue(port: SpeakerGenerationPort): SpeakerPref
         casting: value.casting ? { ...value.casting } : undefined,
       };
       waiting = latest;
-      if (!running) void drain();
+      if (!running) drained = drain();
+    },
+    idle() {
+      return drained;
+    },
+    replace(value) {
+      latest = value && { ...value, characterVoiceIds: [...value.characterVoiceIds] };
+      waiting = undefined;
+      sent = latest;
     },
     onError(listener) {
       listeners.add(listener);

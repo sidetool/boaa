@@ -1,3 +1,5 @@
+import { cleanupSpeakerBook, previewSpeakerCleanup } from './speaker-cleanup.js';
+import type { SpeakerCleanupOptions } from '../../../../src/providers/speaker-generation';
 import { prepareRevoiceCasting } from './speaker-revoice-casting';
 import { batchCastRequests } from './speaker-audio-batching';
 import type pg from 'pg';
@@ -128,7 +130,10 @@ export class SpeakerGenerationService {
           .n,
       );
       if (total > 512 * 1024 * 1024)
-        throw audiobookError(413, '화자 분석 저장 공간이 가득 찼어요. 필요 없는 생성 작업을 삭제해 주세요.');
+        throw audiobookError(
+          413,
+          '화자 분석 저장 공간이 가득 찼어요. 필요 없는 작품의 화자 분석 기록을 삭제해 주세요.',
+        );
       if (stage) await c.query('update speaker_generation_runs set stage=$2 where audiobook_id=$1', [run.id, stage]);
       await c.query('commit');
     } catch (e) {
@@ -139,14 +144,14 @@ export class SpeakerGenerationService {
     }
   }
   async remove(id: string) {
-    const run = await this.run(id);
+    await this.run(id);
     await this.audio.remove(id);
-    // Other voice variants may still depend on these reusable analysis artifacts.
-    await this.pool.query(
-      `delete from speaker_analysis s where s.user_id=$1 and s.book_id=$2 and s.analysis_key=any($4::text[])
-      and not exists(select 1 from speaker_generation_runs r join saved_audiobooks a on a.id=r.audiobook_id where a.user_id=s.user_id and a.book_id=s.book_id and r.analysis_key=$3)`,
-      [this.owner, run.book_id, run.analysis_key, [run.analysis_key, attributionKey(run.analysis_key)]],
-    );
+  }
+  previewCleanup(bookId: string, options: SpeakerCleanupOptions) {
+    return previewSpeakerCleanup(this.pool, this.owner, bookId, options);
+  }
+  cleanup(bookId: string, options: SpeakerCleanupOptions, fingerprint: string, confirm: boolean) {
+    return cleanupSpeakerBook(this.pool, this.owner, this.audio.audioStore, bookId, options, fingerprint, confirm);
   }
   async list(bookId: string): Promise<SpeakerGenerationJob[]> {
     const rows = (
@@ -562,7 +567,10 @@ export class SpeakerGenerationService {
           .rows[0].n,
       );
       if (used + 2 * 1024 * 1024 > 512 * 1024 * 1024 || Number(state.bytes) + 2 * 1024 * 1024 > 16 * 1024 * 1024)
-        throw audiobookError(413, '분석 응답을 저장할 공간이 부족해요. 필요 없는 생성 작업을 삭제해 주세요.');
+        throw audiobookError(
+          413,
+          '분석 응답을 저장할 공간이 부족해요. 필요 없는 작품의 화자 분석 기록을 삭제해 주세요.',
+        );
       await client.query(
         'update speaker_analysis set dispatching=true where user_id=$1 and book_id=$2 and analysis_key=$3 and chapter_id=$4',
         args,

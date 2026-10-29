@@ -150,6 +150,13 @@ export async function speakerPlan(
   const capabilities = await engines.transport.capabilities(engine, AbortSignal.timeout(15000));
   if (input.autoActing && !capabilities.performanceAnnotations)
     throw audiobookError(409, '화자 분석 서비스를 업데이트하면 자동 연출을 사용할 수 있어요.');
+  const generationEpoch: string | null =
+    (
+      await pool.query(
+        "select value->>'generationEpoch' epoch from speaker_generation_preferences where book_id=$1 and user_id=$2",
+        [bookId, owner],
+      )
+    ).rows[0]?.epoch ?? null;
   const analysisKey = structuredIntegrityHash({
     book: bookId,
     revision: book.active_content_revision_id,
@@ -185,6 +192,7 @@ export async function speakerPlan(
     book: bookId,
     revision: book.active_content_revision_id,
     analysisKey,
+    ...(generationEpoch ? { generationEpoch } : {}),
     pinnedVoices: library
       ? (
           await pool.query(
@@ -209,6 +217,7 @@ export async function speakerPlan(
   return {
     estimate,
     plan: {
+      generationEpoch,
       bookId,
       title: book.title,
       revision: book.active_content_revision_id,

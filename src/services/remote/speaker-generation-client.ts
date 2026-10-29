@@ -1,5 +1,7 @@
 import type { SpeakerEngine, SpeakerEngineDiscovery, SpeakerEnginesPort } from '../../providers/speaker-engine';
 import type {
+  SpeakerCleanupPreview,
+  SpeakerCleanupResult,
   SpeakerGenerationPort,
   SpeakerGenerationJob,
   SpeakerGenerationEstimate,
@@ -56,6 +58,17 @@ export function createSpeakerGenerationPort(client: RemoteApiClient, bookId: str
       (await client.request<{ assignments: BookVoiceAssignment[] }>(item(id) + '/castings', { signal })).assignments,
     assign: async (id, speakerId, voiceId, signal) => {
       await send(client, item(id) + '/castings', 'PUT', { speakerId, voiceId }, signal);
+    },
+    previewCleanup: async (options, signal) => {
+      await writes;
+      return send<SpeakerCleanupPreview>(client, base + '/cleanup/preview', 'POST', options, signal);
+    },
+    cleanup: (options, fingerprint, confirm, signal) => {
+      const task = writes.then(() =>
+        send<SpeakerCleanupResult>(client, base + '/cleanup', 'POST', { ...options, fingerprint, confirm }, signal),
+      );
+      writes = task.catch(() => undefined);
+      return task;
     },
     revoiceSource: (id, signal) => client.request<SpeakerRevoiceSource>(item(id) + '/revoice', { signal }, 30000, true),
     estimateRevoice: (id, input, signal) =>

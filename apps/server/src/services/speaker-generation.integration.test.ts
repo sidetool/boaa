@@ -3,7 +3,7 @@ import { runTTSPlaybackSession } from '../../../../src/providers/tts-playback-se
 import { VoiceLibraryStore } from './voice-library-store';
 import type { SpeakerVoiceCasting } from './speaker-voice-casting';
 import type { PlainTTSVoices } from '../../../../src/providers/plain-tts';
-import { loadSpeakerChapter } from './speaker-generation-plan';
+import { speakerPlan, loadSpeakerChapter } from './speaker-generation-plan';
 import { afterAll, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -244,6 +244,136 @@ async function setup(pool: pg.Pool, concurrency: 1 | 2 = 1, chapterIds = ['c1', 
   };
 }
 (harness ? describe : describe.skip)('speaker background generation with real preset35 and PostgreSQL', () => {
+  it('selectively clears book audio/settings, keeps analysis and creates fresh audio without another analysis call', async () => {
+    await withPostgresSchema(harness!, 'speaker_cleanup_reuse', async (pool) => {
+      const f = await setup(pool, 1, ['c1']);
+      try {
+        const first = await f.create();
+        await f.until(async () => (await f.audio.get(first.id)).status === 'completed');
+        const calls = f.modelCalls.length;
+        const analysis = (await pool.query('select result from speaker_analysis order by analysis_key')).rows;
+        await pool.query("insert into speaker_generation_preferences values('book','owner',$1,now())", [
+          { engineId: f.engine.id, narratorVoiceId: 'n', characterVoiceIds: ['a'], batchAudio: true },
+        ]);
+        await pool.query(
+          "insert into speaker_voice_bindings(user_id,book_id,analysis_key,speaker_id,name,voice_id,model,metadata,pinned) values('owner','book','key','s1','민아','a','{}','{}',true)",
+        );
+        await pool.query("insert into library_books values('other-book','other','Other','txt','ko','rev',null)");
+        await pool.query("insert into speaker_generation_preferences values('other-book','other','{}',now())");
+        const options = { audio: true, settings: true, analysis: false };
+        const preview = await f.service.previewCleanup('book', options);
+        expect(preview).toMatchObject({ jobCount: 1, assignmentCount: 1, analysisCount: analysis.length });
+        await expect(f.service.cleanup('book', options, preview.fingerprint, false)).rejects.toMatchObject({
+          statusCode: 400,
+        });
+        const result = await f.service.cleanup('book', options, preview.fingerprint, true);
+        expect(result).toMatchObject({
+          removedJobs: 1,
+          removedAssignments: 1,
+          removedAnalyses: 0,
+          preferences: { engineId: f.engine.id, narratorVoiceId: '', characterVoiceIds: [] },
+        });
+        expect((await pool.query('select result from speaker_analysis order by analysis_key')).rows).toEqual(analysis);
+        expect((await f.engines.list()).length).toBe(1);
+        expect(
+          (await pool.query("select value from speaker_generation_preferences where book_id='other-book'")).rows,
+        ).toHaveLength(1);
+        expect(await f.audio.audioStore.get(first.id, 0)).toBeUndefined();
+        const second = await f.create();
+        expect(second.id).not.toBe(first.id);
+        await f.until(async () => (await f.audio.get(second.id)).status === 'completed');
+        expect(f.modelCalls).toHaveLength(calls);
+        expect((await f.service.reader(second.id, 'c1')).items[0].playable.preparedAudio?.ready).toBe(true);
+      } finally {
+        await f.cleanup();
+      }
+    });
+  });
+  it('resets settings without deleting recordings and fences stale generation plans and stale cleanup previews', async () => {
+    await withPostgresSchema(harness!, 'speaker_cleanup_epoch', async (pool) => {
+      const f = await setup(pool, 1, ['c1']);
+      try {
+        const first = await f.create();
+        await f.until(async () => (await f.audio.get(first.id)).status === 'completed');
+        const saved = await f.audio.audio(first.id, 0);
+        const old = await speakerPlan(pool, 'owner', 'book', f.input, await f.catalog(), f.engines);
+        const options = { audio: false, settings: true, analysis: false };
+        const preview = await f.service.previewCleanup('book', options);
+        await f.service.cleanup('book', options, preview.fingerprint, true);
+        await expect(f.audio.create(old.plan, old.estimate.fingerprint, true)).rejects.toMatchObject({
+          statusCode: 409,
+        });
+        await expect(f.service.cleanup('book', options, preview.fingerprint, true)).rejects.toMatchObject({
+          statusCode: 409,
+        });
+        expect(await f.audio.audio(first.id, 0)).toEqual(saved);
+        const next = await f.create();
+        expect(next.id).not.toBe(first.id);
+        // Active work blocks all cleanup before any mutation.
+        const blocked = await f.service.previewCleanup('book', options);
+        expect(blocked.blockedReason).toContain('멈춘 뒤');
+        await expect(f.service.cleanup('book', options, blocked.fingerprint, true)).rejects.toMatchObject({
+          statusCode: 409,
+        });
+        await f.audio.control(next.id, 'pause');
+        const analysisOnly = { audio: false, settings: false, analysis: true };
+        expect((await f.service.previewCleanup('book', analysisOnly)).blockedReason).toContain('함께 삭제');
+        const all = { audio: true, settings: false, analysis: true };
+        const before = await f.service.previewCleanup('book', all);
+        await f.service.cleanup('book', all, before.fingerprint, true);
+        expect((await pool.query('select * from speaker_analysis')).rows).toHaveLength(0);
+        await expect(f.service.previewCleanup('other-book', all)).rejects.toMatchObject({ statusCode: 404 });
+      } finally {
+        await f.cleanup();
+      }
+    });
+  });
+  it('clears analysis independently through the HTTP contract while preserving playable audio and the reset epoch on preference saves', async () => {
+    await withPostgresSchema(harness!, 'speaker_cleanup_routes', async (pool) => {
+      const f = await setup(pool, 1, ['c1']);
+      const app = Fastify();
+      app.addHook('onRequest', async (req) => {
+        req.principal = { userId: 'owner', role: 'admin', authMethod: 'legacy-token' };
+      });
+      try {
+        const job = await f.create();
+        await f.until(async () => (await f.audio.get(job.id)).status === 'completed');
+        await registerSpeakerGenerationRoutes(app, pool, f.config, f.service, f.audio, parsePlainTTSRules);
+        const options = { audio: false, settings: false, analysis: true };
+        const url = '/api/books/book/speaker-generation/cleanup';
+        const preview = await app.inject({ method: 'POST', url: url + '/preview', payload: options });
+        expect(preview.statusCode).toBe(200);
+        const response = await app.inject({
+          method: 'POST',
+          url,
+          payload: { ...options, fingerprint: preview.json().fingerprint, confirm: true },
+        });
+        expect(response.statusCode).toBe(200);
+        expect(response.json()).toMatchObject({ removedJobs: 0, removedAssignments: 0, removedAnalyses: 1 });
+        expect((await f.service.reader(job.id, 'c1')).items[0].playable.preparedAudio?.ready).toBe(true);
+        const epoch = (await pool.query("select value->>'generationEpoch' epoch from speaker_generation_preferences"))
+          .rows[0].epoch;
+        const saved = await app.inject({
+          method: 'PUT',
+          url: '/api/books/book/speaker-generation/preferences',
+          payload: {
+            engineId: f.engine.id,
+            narratorVoiceId: 'n',
+            characterVoiceIds: ['a'],
+            generationEpoch: 'untrusted',
+          },
+        });
+        expect(saved.statusCode).toBe(200);
+        expect(
+          (await pool.query("select value->>'generationEpoch' epoch from speaker_generation_preferences")).rows[0]
+            .epoch,
+        ).toBe(epoch);
+      } finally {
+        await app.close();
+        await f.cleanup();
+      }
+    });
+  });
   it('batches Gemini narration through generation, playback and revoice without replacing original audio', async () => {
     await withPostgresSchema(harness!, 'speaker_batch_roundtrip', async (pool) => {
       const f = await setup(pool, 1, ['c1']);
@@ -576,7 +706,7 @@ async function setup(pool: pg.Pool, concurrency: 1 | 2 = 1, chapterIds = ['c1', 
         await f.service.remove(second.id);
         expect(Number((await pool.query('select count(*) n from speaker_analysis')).rows[0].n)).toBe(2);
         await f.service.remove(job.id);
-        expect(Number((await pool.query('select count(*) n from speaker_analysis')).rows[0].n)).toBe(0);
+        expect(Number((await pool.query('select count(*) n from speaker_analysis')).rows[0].n)).toBe(2);
       } finally {
         await f.cleanup();
       }
@@ -919,7 +1049,7 @@ function gate() {
 }
 
 (harness ? describe : describe.skip)('parallel A preparation and sequential identity persistence', () => {
-  it('dispatches B1 while A2 is held within total concurrency 2, shares cache and preserves it until the final voice variant is removed', async () => {
+  it('dispatches B1 while A2 is held within total concurrency 2, shares cache and preserves it after the final voice variant is removed', async () => {
     await withPostgresSchema(harness!, 'speaker_parallel_order', async (pool) => {
       const f = await setup(pool);
       const gates = { c1: gate(), c2: gate() };
@@ -1004,7 +1134,7 @@ function gate() {
         await f.service.remove(job.id);
         expect((await pool.query('select count(*)::int n from speaker_analysis')).rows[0].n).toBe(4);
         await f.service.remove(variant.id);
-        expect((await pool.query('select count(*)::int n from speaker_analysis')).rows[0].n).toBe(0);
+        expect((await pool.query('select count(*)::int n from speaker_analysis')).rows[0].n).toBe(4);
       } finally {
         gates.c1.resolve();
         gates.c2.resolve();

@@ -352,6 +352,17 @@ export class AudiobookService {
     try {
       await client.query('begin');
       await client.query('select pg_advisory_xact_lock(hashtextextended($1,0))', [`audiobook:${this.owner}`]);
+      if (plan.generationEpoch !== undefined) {
+        const epoch =
+          (
+            await client.query(
+              "select value->>'generationEpoch' epoch from speaker_generation_preferences where book_id=$1 and user_id=$2",
+              [plan.bookId, this.owner],
+            )
+          ).rows[0]?.epoch ?? null;
+        if (epoch !== plan.generationEpoch)
+          throw audiobookError(409, '음성 설정이 초기화됐어요. 생성 전 확인을 다시 해 주세요.');
+      }
       const old = (
         await client.query('select * from saved_audiobooks where user_id=$1 and fingerprint=$2', [
           this.owner,

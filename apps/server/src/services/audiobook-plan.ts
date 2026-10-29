@@ -25,6 +25,8 @@ export interface AudiobookPlanItem {
   playable: PlayableTtsSegment;
 }
 export interface AudiobookPlan {
+  /** Server-only cleanup fence; never changes reusable analysis keys. */
+  generationEpoch?: string | null;
   /** Trusted updates committed atomically with a new revoice job. */
   bookVoiceUpdates?: BookVoiceUpdate[];
   planningComplete?: boolean;

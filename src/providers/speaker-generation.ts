@@ -3,6 +3,27 @@ import type { PlainTTSModel, PlainTTSVoices } from './plain-tts';
 import type { SpeakerEnginesPort } from './speaker-engine';
 import type { SpeakerCastingOptions, VoiceLibraryPort, BookVoiceAssignment } from './voice-library';
 
+/** Independent book-wide cleanup choices. Shared connections and the account voice library are never deleted. */
+export interface SpeakerCleanupOptions {
+  audio: boolean;
+  settings: boolean;
+  analysis: boolean;
+}
+export interface SpeakerCleanupPreview {
+  fingerprint: string;
+  jobCount: number;
+  audioBytes: number;
+  assignmentCount: number;
+  analysisCount: number;
+  blockedReason?: string;
+}
+export interface SpeakerCleanupResult {
+  removedJobs: number;
+  removedAssignments: number;
+  removedAnalyses: number;
+  preferences?: SpeakerGenerationPreferences;
+}
+
 /** The regular narrator voice is also the conservative fallback for uncertain attribution. */
 export interface SpeakerGenerationInput {
   /** Opt-in grouping of adjacent Gemini speech with identical voice and delivery; absent means off. */
@@ -102,6 +123,13 @@ export interface SpeakerGenerationPort {
   remove(id: string): Promise<void>;
   castings?(id: string, signal?: AbortSignal): Promise<BookVoiceAssignment[]>;
   assign?(id: string, speakerId: string, voiceId: string, signal?: AbortSignal): Promise<void>;
+  previewCleanup?(options: SpeakerCleanupOptions, signal?: AbortSignal): Promise<SpeakerCleanupPreview>;
+  cleanup?(
+    options: SpeakerCleanupOptions,
+    fingerprint: string,
+    confirm: boolean,
+    signal?: AbortSignal,
+  ): Promise<SpeakerCleanupResult>;
   revoiceSource?(id: string, signal?: AbortSignal): Promise<SpeakerRevoiceSource>;
   estimateRevoice?(id: string, input: SpeakerRevoiceInput, signal?: AbortSignal): Promise<SpeakerRevoiceEstimate>;
   revoice?(

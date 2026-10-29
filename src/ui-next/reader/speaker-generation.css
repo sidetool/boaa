@@ -1030,3 +1030,20 @@
 .un-recast .un-recast-body .un-cast-mode select:not([multiple]) {
   background-color: rgb(255 255 255 / 6%);
 }
+
+/* 초기화·삭제: three independent choices inside one confirmation card. */
+.un-cleanup {
+  display: grid;
+  gap: 10px;
+}
+
+.un-cleanup .un-book-ack.un-cast-toggle {
+  background: rgb(255 255 255 / 4%);
+}
+
+.un-cleanup-count {
+  margin-left: 6px;
+  color: var(--un-text-3);
+  font-size: 12px;
+  font-weight: 650;
+}

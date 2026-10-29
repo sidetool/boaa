@@ -5,6 +5,7 @@ import { requireAdmin } from '../../auth.js';
 import { SpeakerGenerationService } from '../../services/speaker-generation-service.js';
 import type { AudiobookService } from '../../services/audiobook-service.js';
 import type {
+  SpeakerCleanupOptions,
   SpeakerGenerationInput,
   SpeakerGenerationPreferences,
   SpeakerRevoiceInput,
@@ -121,13 +122,30 @@ export async function registerSpeakerGenerationRoutes(
         const written = await pool.query(
           `insert into speaker_generation_preferences(book_id,user_id,value)
         select id,user_id,$3::jsonb from library_books where id=$1 and user_id=$2 and deleted_at is null
-        on conflict(book_id) do update set value=excluded.value,updated_at=now() where speaker_generation_preferences.user_id=excluded.user_id`,
+        on conflict(book_id) do update set value=excluded.value || jsonb_strip_nulls(jsonb_build_object('generationEpoch',speaker_generation_preferences.value->'generationEpoch')),updated_at=now() where speaker_generation_preferences.user_id=excluded.user_id`,
           [req.params.bookId, config.defaultUserId, JSON.stringify(value)],
         );
         if (!written.rowCount) throw audiobookError(404, '작품을 찾을 수 없어요.');
         return { ok: true };
       },
     );
+    routes.post<{ Params: { bookId: string }; Body: SpeakerCleanupOptions }>(
+      '/api/books/:bookId/speaker-generation/cleanup/preview',
+      { bodyLimit: 4096 },
+      async (req) => service.previewCleanup(req.params.bookId, req.body),
+    );
+    routes.post<{
+      Params: { bookId: string };
+      Body: SpeakerCleanupOptions & { fingerprint: string; confirm: boolean };
+    }>('/api/books/:bookId/speaker-generation/cleanup', { bodyLimit: 4096 }, async (req) => {
+      const release = app.beginBackgroundWork ? app.beginBackgroundWork() : () => {};
+      if (!release) throw audiobookError(503, '서버 업데이트 중이에요. 잠시 후 다시 시도해 주세요.');
+      try {
+        return await service.cleanup(req.params.bookId, req.body, req.body?.fingerprint, req.body?.confirm === true);
+      } finally {
+        release();
+      }
+    });
     routes.post<{ Params: { bookId: string }; Body: unknown }>(
       '/api/books/:bookId/speaker-generation/estimate',
       { bodyLimit: 256 * 1024 },

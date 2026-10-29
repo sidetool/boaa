@@ -4,6 +4,7 @@ import type { AudiobookStatus } from '../../providers/plain-audiobook';
 import type { PlainTTSProviderStatus, PlainTTSVoice } from '../../providers/plain-tts';
 import type { SpeakerEngine } from '../../providers/speaker-engine';
 import type {
+  SpeakerCleanupOptions,
   SpeakerGenerationEstimate,
   SpeakerGenerationInput,
   SpeakerGenerationJob,
@@ -12,6 +13,7 @@ import type {
 } from '../../providers/speaker-generation';
 import { formatBytes, formatCount } from '../../utils/format';
 import { cx } from '../components/primitives';
+import SpeakerCleanup from './SpeakerCleanup';
 import SpeakerJobProgress from './SpeakerJobProgress';
 import { ChapterScopeFields, chapterScopeSummary, useChapterScope } from './chapter-scope';
 import { speakerPreferenceQueue } from './speaker-generation-preferences';
@@ -51,6 +53,11 @@ const STEPS = [
 ] as const;
 const message = (error: unknown, fallback: string) =>
   error instanceof Error && error.message && error.name !== 'AbortError' ? error.message : fallback;
+/** A cleanup reset saves no narrator and no pool: both fall back to the defaults, unlike a pool emptied by hand. */
+const savedPool = (value?: SpeakerGenerationPreferences) =>
+  value && !(value.narratorVoiceId === '' && value.characterVoiceIds.length === 0)
+    ? value.characterVoiceIds
+    : undefined;
 const isAbort = (error: unknown) => error instanceof DOMException && error.name === 'AbortError';
 
 export interface UiNextSpeakerGenerationPanelProps {
@@ -148,7 +155,7 @@ function Body({
   const [prefs, setPrefs] = useState<'loading' | 'ready' | 'failed'>(restored ? 'ready' : 'loading');
   const [engineChoice, setEngineChoice] = useState(restored?.engineId || undefined);
   const [narratorChoice, setNarratorChoice] = useState(restored?.narratorVoiceId || undefined);
-  const [poolChoice, setPoolChoice] = useState<readonly string[] | undefined>(restored?.characterVoiceIds);
+  const [poolChoice, setPoolChoice] = useState<readonly string[] | undefined>(savedPool(restored));
   const [castingChoice, setCastingChoice] = useState<SpeakerCastingOptions | undefined>(restored?.casting);
   const [actingChoice, setActingChoice] = useState<boolean | undefined>(restored?.autoActing);
   // Off unless the person turns it on; no saved choice means off.
@@ -185,7 +192,7 @@ function Body({
         if (value) {
           setEngineChoice((current) => current ?? (value.engineId || undefined));
           setNarratorChoice((current) => current ?? (value.narratorVoiceId || undefined));
-          setPoolChoice((current) => current ?? value.characterVoiceIds);
+          setPoolChoice((current) => current ?? savedPool(value));
           setCastingChoice((current) => current ?? value.casting);
           setActingChoice((current) => current ?? value.autoActing);
           setBatchChoice((current) => current ?? value.batchAudio);
@@ -422,6 +429,36 @@ function Body({
       creating.current = false;
       if (createRun.current === run) setWorking(undefined);
       if (!run.signal.aborted) void refresh();
+    }
+  };
+
+  // ───────── cleanup ─────────
+  // Choices are frozen (as while loading) so no save races the reset; pending saves land first.
+  const runCleanup = async (options: SpeakerCleanupOptions, fingerprint: string) => {
+    const before = prefs;
+    let reset = false;
+    setPrefs('loading');
+    try {
+      await queue.idle();
+      const result = await latest.current.port.cleanup!(options, fingerprint, true);
+      if (options.settings) {
+        // Back to the defaults computed here (narrator from the listen settings, pool from its engine).
+        setNarratorChoice(undefined);
+        setPoolChoice(undefined);
+        setCastingChoice(undefined);
+        setActingChoice(undefined);
+        setBatchChoice(undefined);
+        if (result.preferences?.engineId) setEngineChoice(result.preferences.engineId);
+        queue.replace(result.preferences);
+        reset = true;
+      }
+      setEstimate(undefined);
+      return result;
+    } finally {
+      if (alive.current) {
+        setPrefs(reset ? 'ready' : before);
+        void refresh();
+      }
     }
   };
 
@@ -916,6 +953,8 @@ function Body({
           </ul>
         )}
       </section>
+
+      <SpeakerCleanup port={controls.port} locked={busy} onRun={runCleanup} />
     </div>
   );
 }
@@ -1022,7 +1061,7 @@ function JobItem({
         >
           <p>
             {confirm === 'remove'
-              ? `만든 음성 ${formatBytes(item.bytes)}를 서버에서 지워요. 되돌릴 수 없어요.`
+              ? `이 작업의 음성 ${formatBytes(item.bytes)}만 지워요. 화자 분석 기록은 남아요. 되돌릴 수 없어요.`
               : `${item.planningComplete === false || item.itemCount === 0 ? '남은 회차를 이어서 만들어요.' : `남은 ${formatCount(remaining)}개 구간을 이어서 만들어요.`} 유료 API 요금이 나올 수 있어요.`}
           </p>
           <div className="un-book-actions">
@@ -1065,7 +1104,7 @@ function JobItem({
               className="un-icon-btn is-sm un-book-remove"
               onClick={() => onRemove()}
               disabled={pending}
-              aria-label="음성 삭제"
+              aria-label="음성만 삭제"
             >
               <Trash2 size={15} />
             </button>
