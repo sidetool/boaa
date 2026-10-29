@@ -6011,6 +6011,15 @@ export default function App() {
                         engines: speakerEngines,
                         voiceLibrary,
                         beforePreview: () => stopTTS(),
+                        previewVoice:
+                          readerRuntime.mode === 'remote' && providerApiClient && plainTTS.catalog?.revision
+                            ? (voiceId, signal) =>
+                                providerApiClient.synthesizePlainTTS(
+                                  undefined,
+                                  { voiceId, modelRevision: plainTTS.catalog!.revision!, rate: 1 },
+                                  signal,
+                                )
+                            : undefined,
                         chapters: [...chapters]
                           .sort((a, b) => a.index - b.index)
                           .map(({ id, title }) => ({ id, title })),

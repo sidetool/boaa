@@ -16,6 +16,7 @@ import Panel from '${root}src/ui-next/reader/UiNextAudiobookPanel.tsx';
 import Library from '${root}src/ui-next/reader/UiNextVoiceLibrary.tsx';
 import Revoice from '${root}src/ui-next/reader/UiNextSpeakerRevoice.tsx';
 import SpeakerPanel from '${root}src/ui-next/reader/UiNextSpeakerGenerationPanel.tsx';
+import {createVoicePreview} from '${root}src/ui-next/reader/voice-preview.ts';
 import {Sheet} from '${root}src/ui-next/components/primitives.tsx';
 import {RemoteApiClient} from '${root}src/services/remote/remote-api-client.ts';
 import {createAudiobookPort} from '${root}src/services/remote/audiobook-client.ts';
@@ -73,10 +74,12 @@ const revoicePort={revoiceSource:async()=>({chapterCount:1,itemCount:12,...(acti
   ...(input.designSpeakerIds?{recastCharacters:input.designSpeakerIds.length,selectionModelLabel:'선정 A',maxDesignedVoices:input.designSpeakerIds.length}:{})};},
  revoice:async(id,input,fingerprint,confirmPaid)=>{reviewCalls.push({kind:'create',input,confirmPaid});return {id:'variant',revoiceFrom:id};}};
 Object.assign(speakerPort,{revoiceSource:revoicePort.revoiceSource,estimateRevoice:revoicePort.estimateRevoice,revoice:revoicePort.revoice});
+// Real sample path: the HTTP client's fixed-sentence sample, one shared player, body stop counted.
+const samplePreview=createVoicePreview((voiceId,signal)=>client.synthesizePlainTTS(undefined,{voiceId,modelRevision:'rev',rate:1},signal),()=>{window.bodyStops=(window.bodyStops||0)+1;});
 function ReviewFixture(){const review=q.get('review');return <div className="ui-next"><Sheet open title={review==='library'?'목소리 보관함':'화자별 미리 생성하기'} onClose={()=>{}}>{review==='library'?<Library port={reviewPort} voices={reviewVoices} onChanged={()=>{}}/>
  :review==='acting'?<SpeakerPanel controls={{key:'acting',port:speakerPort,engines:enginesPort,...(design?{voiceLibrary:designLibrary}:{}),chapters:[{id:'c1',title:'1화'}],currentChapterId:'c1',narratorVoiceId:q.get('narrator')||'g1',rules:[],footnotePlayback:'skip',
   voices:{available:true,defaultVoiceId:'g1',voices:actVoices,providers:[{id:'g',name:'연기 엔진',available:true,paid:true},{id:'x',name:'일반 엔진',available:true,paid:false},{id:'d1',name:'Gemini 3.8 제작',available:true,paid:true}]},listen(){},refreshVoices(){}}}/>
- :<div className="un-book-item"><Revoice job={{id:'source',status:'paused',chapterCount:2,itemCount:12,planningComplete:false}} port={revoicePort} voices={acting?actVoices:reviewVoices} library={reviewRows} engines={allEngines} designers={design?designers:[]} onCreated={()=>reviewCalls.push({kind:'reload'})}/></div>}</Sheet></div>}
+ :<div className="un-book-item"><Revoice job={{id:'source',status:'paused',chapterCount:2,itemCount:12,planningComplete:false}} port={revoicePort} voices={acting?actVoices:reviewVoices} library={reviewRows} engines={allEngines} designers={design?designers:[]} preview={samplePreview} previewRevision="rev" onCreated={()=>reviewCalls.push({kind:'reload'})}/></div>}</Sheet></div>}
 function Fixture(){
  const [open,setOpen]=useState(true);
  const [choice,setChoice]=useState(); const [chapter,setChapter]=useState('c1'); const [done,setDone]=useState(false);
@@ -193,6 +196,10 @@ const server = createServer(async (request, response) => {
         return response.end(JSON.stringify(job));
       }
       return response.end(JSON.stringify({ audiobooks: jobs }));
+    }
+    if (pathname === '/api/tts/plain/sample') {
+      response.setHeader('Content-Type', 'audio/wav');
+      return response.end(audio);
     }
     if (pathname === '/api/tts/plain/voices')
       return response.end(JSON.stringify({ available: false, voices: [], revision: 'offline' }));
@@ -368,6 +375,26 @@ try {
       await page.getByRole('combobox', { name: `${longName} 새 목소리`, exact: true }).selectOption('b');
       assert.equal(await applyToggle().isChecked(), true);
       await page.getByText('이 작품의 인물 목소리도 바뀌어요.').waitFor();
+      // Samples: nothing is fetched until a press; the picked voice plays through the shared player.
+      // The request log spans widths; count from here.
+      const sampleBase = calls.filter((x) => x.path === '/api/tts/plain/sample').length;
+      const sampleCalls = () => calls.filter((x) => x.path === '/api/tts/plain/sample').slice(sampleBase);
+      assert.equal(sampleCalls().length, 0);
+      const pickSample = page
+        .locator('.un-recast-pick')
+        .getByRole('button', { name: '아주 긴 이름을 가진 두 번째 목소리 미리듣기', exact: true });
+      await pickSample.click();
+      await page.waitForFunction(() => window.bodyStops === 1);
+      await page.waitForFunction(() => !document.querySelector('.un-recast-play[aria-busy="true"]'));
+      assert.equal(sampleCalls().length, 1);
+      assert.deepEqual(sampleCalls()[0].body, { voiceId: 'b', modelRevision: 'rev', rate: 1 });
+      await noOverflow('.un-recast-voice, .un-recast-pick');
+      await bounded();
+      await page.screenshot({ path: `${artifacts}/revoice-sample-${width}.png` });
+      // Again: stops or replays from the session cache, never a second request.
+      await pickSample.click();
+      await page.waitForTimeout(300);
+      assert.equal(sampleCalls().length, 1);
       // Manual directions stay folded under scene acting until asked for.
       assert.equal(await page.getByRole('textbox').count(), 0);
       await page.getByText('인물별 말투 직접 적기').click();

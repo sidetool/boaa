@@ -24,6 +24,7 @@ import UiNextCastingOptions, {
 } from './UiNextCastingOptions';
 import UiNextBookVoices from './UiNextBookVoices';
 import UiNextSpeakerRevoice from './UiNextSpeakerRevoice';
+import { createVoicePreview } from './voice-preview';
 import type { SpeakerCastingOptions, LibraryVoice, VoiceDesignProvider } from '../../providers/voice-library';
 import './audiobook.css';
 import './speaker-generation.css';
@@ -84,6 +85,23 @@ function Body({
       alive.current = false;
     };
   }, []);
+
+  // One sample player for every job card: one plays at a time, and a sample is fetched once per revision.
+  // The page is keyed by account and book, so another account starts with an empty cache.
+  const [voicePreview] = useState(() =>
+    createVoicePreview(
+      (voiceId, signal) => {
+        const load = latest.current.previewVoice;
+        if (!load) throw new Error('미리듣기를 쓸 수 없어요.');
+        return load(voiceId, signal);
+      },
+      () => latest.current.beforePreview?.(),
+    ),
+  );
+  useEffect(() => () => voicePreview.dispose(), [voicePreview]);
+  // A new catalog revision may change any voice: an old sample must not keep playing or be replayed.
+  const previewRevision = controls.voices?.revision;
+  useEffect(() => voicePreview.reset(), [voicePreview, previewRevision]);
 
   // ───────── jobs ─────────
   const [items, setItems] = useState<readonly SpeakerGenerationJob[]>();
@@ -876,6 +894,8 @@ function Body({
                     library={library?.voices}
                     engines={engines}
                     designers={library?.designers}
+                    preview={controls.previewVoice ? voicePreview : undefined}
+                    previewRevision={catalog?.revision}
                     onCreated={() => void refresh()}
                   />
                 }

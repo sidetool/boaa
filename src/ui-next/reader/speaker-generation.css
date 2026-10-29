@@ -349,7 +349,7 @@
 /* Above .un-book select, whose bg-2 would vanish on this bg-2 box. */
 .un-cast .un-cast-mode select,
 .un-cast-mode select {
-  background: var(--un-bg-3);
+  background-color: var(--un-bg-3);
 }
 
 .un-cast-mode .un-cast-options > summary {
@@ -606,7 +606,7 @@
   min-width: 0;
   border: 1px solid var(--un-line-2);
   border-radius: 10px;
-  background: var(--un-bg-3);
+  background-color: var(--un-bg-3);
   color: var(--un-text);
   font: inherit;
   font-size: 14px;
@@ -885,7 +885,7 @@
 }
 
 .un-recast .un-recast-body .un-cast-mode select {
-  background: rgb(255 255 255 / 6%);
+  background-color: rgb(255 255 255 / 6%);
 }
 
 .un-recast .un-book-ack > span > small {
@@ -944,4 +944,89 @@
 /* Optional settings inside 목소리 바꾸기 stay neutral; amber is for cost consent only. */
 .un-recast .un-book-ack.un-cast-toggle {
   background: var(--un-bg-2);
+}
+
+/* 목소리 바꾸기 samples: a small pill beside the voice it plays. */
+.un-recast-play {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 4px;
+  height: 26px;
+  padding: 0 9px;
+  border: 1px solid var(--un-line-2);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--un-text-2);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 650;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.un-recast-play:hover {
+  color: var(--un-text);
+}
+
+.un-recast-play.is-on {
+  border-color: rgb(91 140 255 / 55%);
+  background: var(--un-accent-soft);
+  color: var(--un-accent-2);
+}
+
+.un-recast-play:focus-visible {
+  outline: 2px solid var(--un-accent);
+  outline-offset: 2px;
+}
+
+.un-recast-play .un-spin {
+  animation: un-cast-working 0.9s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .un-recast-play .un-spin {
+    animation: none;
+  }
+}
+
+.un-recast-pick {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+}
+
+.un-recast-pick > .un-recast-play {
+  height: 40px;
+  padding: 0 12px;
+  border-radius: 10px;
+}
+
+/*
+ * Drop-down cue: the kit's `:is(.ui-next, .un-kit) :is(input.text-input, select)` background shorthand
+ * (0,2,1) outranks its own chevron rule, and .un-book select's shorthand drops it too. `:not([multiple])`
+ * lifts these past both without touching other pages.
+ */
+.ui-next .un-cast select:not([multiple]),
+.un-recast .un-recast-body select:not([multiple]) {
+  padding-right: 34px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' fill='none' stroke='%23f5f5f7' stroke-opacity='.55' stroke-width='2' stroke-linecap='round' stroke-linejoin='round' viewBox='0 0 24 24'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  background-position: right 12px center;
+  background-repeat: no-repeat;
+  appearance: none;
+}
+
+/* Inside a card the field needs its own edge and surface, as the kit's transparent border would hide it. */
+.un-recast .un-recast-body select:not([multiple]) {
+  border-color: var(--un-line-2);
+  background-color: var(--un-bg-3);
+}
+
+.un-cast .un-cast-mode select:not([multiple]) {
+  background-color: var(--un-bg-3);
+}
+
+.un-recast .un-recast-body .un-cast-mode select:not([multiple]) {
+  background-color: rgb(255 255 255 / 6%);
 }

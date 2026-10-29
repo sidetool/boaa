@@ -1,5 +1,5 @@
-import { AlertCircle, ArrowRight, Mic2, X } from 'lucide-react';
-import { useEffect, useId, useRef, useState } from 'react';
+import { AlertCircle, ArrowRight, LoaderCircle, Mic2, Play, Square, X } from 'lucide-react';
+import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
 import type { PlainTTSVoice } from '../../providers/plain-tts';
 import type { SpeakerEngine } from '../../providers/speaker-engine';
 import type {
@@ -13,6 +13,7 @@ import type { LibraryVoice, VoiceDesignProvider } from '../../providers/voice-li
 import { formatCount } from '../../utils/format';
 import { cx } from '../components/primitives';
 import { BatchAudioToggle, batchable, flashDesigner, SelectionModelField } from './UiNextCastingOptions';
+import { useVoicePreview, type VoicePreview } from './voice-preview';
 
 type Speaker = SpeakerRevoiceSource['voices'][number];
 /** keep: the captured voice. swap: another listed voice. design: a new Gemini 3.8 Flash TTS voice. */
@@ -43,6 +44,8 @@ export default function UiNextSpeakerRevoice({
   library,
   engines,
   designers,
+  preview,
+  previewRevision,
   onCreated,
 }: {
   job: SpeakerGenerationJob;
@@ -54,6 +57,10 @@ export default function UiNextSpeakerRevoice({
   designers?: readonly VoiceDesignProvider[];
   /** Labels only; descriptions are never sent as acting directions. */
   library?: readonly LibraryVoice[];
+  /** Page-wide sample player; absent where samples cannot be made (no server catalog). */
+  preview?: VoicePreview;
+  /** Catalog revision: part of the sample cache key, so a changed connection is heard anew. */
+  previewRevision?: string;
   /** Reloads the parent job list; it must not start playback. */
   onCreated(): void;
 }) {
@@ -92,6 +99,13 @@ export default function UiNextSpeakerRevoice({
     }
   }, [open, stopped]);
   const available = !!(port.revoiceSource && port.estimateRevoice && port.revoice) && job.itemCount > 0;
+  const previewState = useVoicePreview(preview);
+  const mine = `${job.id}:`;
+  // Closing, a resumed source or leaving the page stops this card's sample; other cards keep theirs.
+  useEffect(() => {
+    if (!open || !stopped) preview?.stop((token) => token.startsWith(mine));
+  }, [open, stopped, preview, mine]);
+  useEffect(() => () => preview?.stop((token) => token.startsWith(mine)), [preview, mine]);
 
   useEffect(() => {
     if (!open || !available || !stopped || !port.revoiceSource) return;
@@ -226,8 +240,10 @@ export default function UiNextSpeakerRevoice({
     setAck(false);
     setError(undefined);
   }, [inputKey]);
+  const stopRow = (speakerId: string) => preview?.stop((token) => token.startsWith(`${mine}${speakerId}:`));
   const setRow = (v: Speaker, next: Partial<Row>) => {
     setCreated(false);
+    stopRow(v.speakerId);
     setRows((current) => ({ ...current, [v.speakerId]: { ...rowOf(v), ...next } }));
   };
   const choosePlan = (v: Speaker, plan: Plan) => {
@@ -244,6 +260,7 @@ export default function UiNextSpeakerRevoice({
   const bulkLabel = speakers.some((v) => v.importance) ? '주요·조연 새로 만들기' : '인물 모두 새로 만들기';
   const designAll = () => {
     setCreated(false);
+    preview?.stop((token) => token.startsWith(mine));
     setRows((current) => {
       const next = { ...current };
       for (const v of bulkTargets) next[v.speakerId] = { ...rowOf(v), plan: 'design' };
@@ -252,8 +269,31 @@ export default function UiNextSpeakerRevoice({
   };
   const reset = () => {
     setCreated(false);
+    preview?.stop((token) => token.startsWith(mine));
     setRows({});
   };
+  // Samples exist only for listed voices; a character still waiting for its new voice has nothing to play.
+  const listen = (v: Speaker) =>
+    preview
+      ? (voiceId: string, which: 'now' | 'pick') => {
+          const voice = catalog(voiceId);
+          if (!voice) return null;
+          const token = `${mine}${v.speakerId}:${which}:${voiceId}`;
+          const key = JSON.stringify([previewRevision, voiceId, voice.model?.revision]);
+          return (
+            <PreviewButton
+              name={label(voiceId)}
+              phase={previewState.token === token ? previewState.phase : undefined}
+              onClick={() => void preview.play(token, key, voiceId)}
+            />
+          );
+        }
+      : undefined;
+  const previewError = (v: Speaker) =>
+    previewState.error?.token.startsWith(`${mine}${v.speakerId}:`) ? previewState.error.message : undefined;
+  const paidSample =
+    !!preview &&
+    speakers.some((v) => catalog(v.voiceId)?.paid || (rowOf(v).plan === 'swap' && catalog(rowOf(v).voiceId)?.paid));
 
   const runEstimate = async () => {
     if (!input || problem || creating.current || !port.estimateRevoice) return;
@@ -390,11 +430,14 @@ export default function UiNextSpeakerRevoice({
                 label={label}
                 canDesign={canDesign && v.speakerId !== NARRATOR}
                 designFull={full}
+                listen={listen(v)}
+                listenError={previewError(v)}
                 onPlan={(plan) => choosePlan(v, plan)}
                 onVoice={(voiceId) => setRow(v, { voiceId })}
               />
             ))}
           </ul>
+          {paidSample && <p className="un-book-note">유료 목소리는 처음 들을 때 짧은 샘플 요금이 나올 수 있어요.</p>}
           {full && <p className="un-book-note">한 번에 {MAX_DESIGN}명까지 새로 만들 수 있어요.</p>}
           {designIds.length > 0 && designer && (
             <div className="un-cast-mode">
@@ -659,6 +702,8 @@ function CastRow({
   label,
   canDesign,
   designFull,
+  listen,
+  listenError,
   onPlan,
   onVoice,
 }: {
@@ -670,6 +715,9 @@ function CastRow({
   label(id: string): string;
   canDesign: boolean;
   designFull: boolean;
+  /** Renders a sample button for a listed voice: the current one, or the one picked below. */
+  listen?(voiceId: string, which: 'now' | 'pick'): ReactNode;
+  listenError?: string;
   onPlan(plan: Plan): void;
   onVoice(voiceId: string): void;
 }) {
@@ -691,15 +739,16 @@ function CastRow({
         {v.designed && <span className="un-recast-badge">만든 목소리</span>}
         <small>{formatCount(v.itemCount)}개 구간</small>
       </div>
-      <p className="un-recast-voice">
+      <div className="un-recast-voice">
         <span>{label(v.voiceId)}</span>
+        {listen?.(v.voiceId, 'now')}
         {plan !== 'keep' && (
           <>
             <ArrowRight size={13} aria-hidden="true" />
             <b>{plan === 'design' ? '새 목소리' : label(row.voiceId)}</b>
           </>
         )}
-      </p>
+      </div>
       <div className="un-seg" role="radiogroup" aria-label={`${v.name} 목소리`}>
         {options.map(([value, text]) => {
           const off = value === 'design' && designFull && tapped !== 'design';
@@ -719,15 +768,23 @@ function CastRow({
         })}
       </div>
       {tapped === 'swap' && (
-        <select aria-label={`${v.name} 새 목소리`} value={row.voiceId} onChange={(e) => onVoice(e.target.value)}>
-          {!listed && <option value={row.voiceId}>{row.voiceId} · 목록에 없음</option>}
-          {voices.map((item) => (
-            <option key={item.id} value={item.id}>
-              {[label(item.id), item.providerName ?? item.providerId].filter(Boolean).join(' · ')}
-              {item.id === v.voiceId ? ' · 지금' : ''}
-            </option>
-          ))}
-        </select>
+        <div className="un-recast-pick">
+          <select aria-label={`${v.name} 새 목소리`} value={row.voiceId} onChange={(e) => onVoice(e.target.value)}>
+            {!listed && <option value={row.voiceId}>{row.voiceId} · 목록에 없음</option>}
+            {voices.map((item) => (
+              <option key={item.id} value={item.id}>
+                {[label(item.id), item.providerName ?? item.providerId].filter(Boolean).join(' · ')}
+                {item.id === v.voiceId ? ' · 지금' : ''}
+              </option>
+            ))}
+          </select>
+          {listen?.(row.voiceId, 'pick')}
+        </div>
+      )}
+      {listenError && (
+        <small className="un-book-error" role="alert">
+          {listenError}
+        </small>
       )}
       {tapped === 'design' && (
         <small className="un-book-note">
@@ -735,6 +792,29 @@ function CastRow({
         </small>
       )}
     </li>
+  );
+}
+
+/** Sample button: plays on press only, and the same press stops it or cancels a sample still loading. */
+function PreviewButton({ name, phase, onClick }: { name: string; phase?: 'loading' | 'playing'; onClick(): void }) {
+  return (
+    <button
+      type="button"
+      className={cx('un-recast-play', phase && 'is-on')}
+      aria-label={`${name} 미리듣기`}
+      aria-pressed={!!phase}
+      aria-busy={phase === 'loading' || undefined}
+      onClick={onClick}
+    >
+      {phase === 'loading' ? (
+        <LoaderCircle size={13} className="un-spin" aria-hidden="true" />
+      ) : phase === 'playing' ? (
+        <Square size={12} fill="currentColor" aria-hidden="true" />
+      ) : (
+        <Play size={12} fill="currentColor" aria-hidden="true" />
+      )}
+      <span>{phase === 'loading' ? '불러오는 중' : phase === 'playing' ? '정지' : '듣기'}</span>
+    </button>
   );
 }
 

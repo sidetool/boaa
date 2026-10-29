@@ -9,6 +9,7 @@ import type {
 import type { SpeakerEngine } from '../../providers/speaker-engine';
 import type { VoiceDesignProvider } from '../../providers/voice-library';
 import UiNextSpeakerRevoice from './UiNextSpeakerRevoice';
+import type { VoicePreview, VoicePreviewState } from './voice-preview';
 
 // Neutral synthetic fixtures only.
 const voices: PlainTTSVoice[] = [
@@ -541,6 +542,85 @@ describe('UiNextSpeakerRevoice request batching', () => {
     await flush();
     expect(text(root)).toContain('원래 음성도 묶어서 만들었어요.');
     expect(text(root)).toContain('바꿀 인물을 골라 주세요.');
+  });
+});
+
+describe('UiNextSpeakerRevoice voice samples', () => {
+  function fakePreview() {
+    let state: VoicePreviewState = {};
+    const listeners = new Set<() => void>();
+    const preview = {
+      get state() {
+        return state;
+      },
+      subscribe: (l: () => void) => (listeners.add(l), () => listeners.delete(l)),
+      play: vi.fn(async () => {}),
+      stop: vi.fn(),
+      reset: vi.fn(),
+      dispose: vi.fn(),
+      emit(next: VoicePreviewState) {
+        state = next;
+        listeners.forEach((l) => l());
+      },
+    };
+    return preview as typeof preview & VoicePreview;
+  }
+  const samples = (root: ReactTestInstance) =>
+    root.findAll((n) => n.type === 'button' && String(n.props['aria-label']).endsWith(' 미리듣기'));
+
+  it('offers samples only on press, for the current and the picked voice, never for a voice not made yet', async () => {
+    const preview = fakePreview();
+    const root = await mount(fixture(flashSource()), { ...flashProps(), preview, previewRevision: 'rev-1' });
+    expect(preview.play).not.toHaveBeenCalled();
+    // Narrator f1, three characters: each current voice is listed.
+    expect(samples(root).map((n) => n.props['aria-label'])).toEqual([
+      '플래시 1 미리듣기',
+      '목소리 2 미리듣기',
+      '목소리 1 미리듣기',
+      '목소리 2 미리듣기',
+    ]);
+    await click(samples(root)[1]);
+    expect(preview.play).toHaveBeenLastCalledWith('job-1:s1:now:a2', JSON.stringify(['rev-1', 'a2', undefined]), 'a2');
+
+    await choose(root, '조연 1', 'swap');
+    await change(byLabel(root, '조연 1 새 목소리')[0], 'b1');
+    // Changing a row stops that row's sample.
+    expect(preview.stop).toHaveBeenCalled();
+    const picked = samples(root).find((n) => n.props['aria-label'] === '외부 1 미리듣기')!;
+    await click(picked);
+    expect(preview.play).toHaveBeenLastCalledWith('job-1:s2:pick:b1', expect.any(String), 'b1');
+    expect(text(root)).toContain('유료 목소리는 처음 들을 때 짧은 샘플 요금이 나올 수 있어요.');
+
+    // A new voice to be made has no sample; its current one still does.
+    await choose(root, '주연 1', 'design');
+    expect(samples(root).filter((n) => n.props['aria-label'] === '목소리 2 미리듣기')).toHaveLength(2);
+    expect(text(root)).not.toContain('새 목소리 미리듣기');
+
+    // Playing and failure states land on the pressed button only.
+    act(() => preview.emit({ token: 'job-1:s2:pick:b1', phase: 'loading' }));
+    expect(picked.props['aria-pressed']).toBe(true);
+    expect(text(picked)).toContain('불러오는 중');
+    act(() => preview.emit({ error: { token: 'job-1:s2:pick:b1', message: '요청 제한으로 대기 중' } }));
+    expect(byLabel(root, '조연 1 목소리')).toHaveLength(1);
+    expect(text(root)).toContain('요청 제한으로 대기 중');
+
+    // Closing stops this card's samples.
+    vi.mocked(preview.stop).mockClear();
+    await click(button(root, '목소리 바꾸기 닫기'));
+    const match = vi.mocked(preview.stop).mock.calls.at(-1)![0] as (t: string) => boolean;
+    expect(match('job-1:s1:now:a2')).toBe(true);
+    expect(match('job-2:s1:now:a2')).toBe(false);
+  });
+
+  it('shows no sample buttons without a sample source or for unlisted voices', async () => {
+    let root = await mount(fixture(), {});
+    expect(samples(root)).toHaveLength(0);
+    act(() => renderer!.unmount());
+    root = await mount(
+      fixture(source({ voices: [{ speakerId: 's1', name: '인물 1', voiceId: 'gone', itemCount: 2 }] })),
+      { preview: fakePreview() },
+    );
+    expect(samples(root)).toHaveLength(0);
   });
 });
 

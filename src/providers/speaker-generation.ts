@@ -126,6 +126,8 @@ export interface TTSSpeakerGenerationControls {
   engines: SpeakerEnginesPort;
   voiceLibrary?: VoiceLibraryPort;
   beforePreview?(): void | Promise<void>;
+  /** Fixed-sentence sample of a listed voice; read-only, never touches the library or assignments. */
+  previewVoice?(voiceId: string, signal: AbortSignal): Promise<Blob>;
   chapters: readonly { id: string; title: string }[];
   currentChapterId?: string;
   voices?: PlainTTSVoices;
