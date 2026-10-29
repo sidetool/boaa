@@ -576,7 +576,7 @@ export class SpeakerGenerationService {
           );
           return;
         }
-        response = await this.engines.transport.generate(engine, request, deadline);
+        response = await this.engines.transport.generate(engine, request, signal);
       } catch (e) {
         if ((e as { statusCode?: number }).statusCode === 429) {
           await client.query(

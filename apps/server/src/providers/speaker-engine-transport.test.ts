@@ -22,6 +22,79 @@ const request = {
   schema: { type: 'OBJECT' },
 };
 describe('speaker model transport', () => {
+  it('accepts a chapter analysis taking over three minutes without dispatching again', async () => {
+    vi.useFakeTimers();
+    const timeout = vi.spyOn(AbortSignal, 'timeout').mockImplementation((ms) => {
+      const c = new AbortController();
+      setTimeout(() => c.abort(new DOMException('Timed out', 'TimeoutError')), ms);
+      return c.signal;
+    });
+    try {
+      const fetchImpl = vi.fn(
+        (_url: unknown, init: RequestInit = {}) =>
+          new Promise<Response>((resolve, reject) => {
+            init.signal!.addEventListener('abort', () => reject(init.signal!.reason), { once: true });
+            setTimeout(
+              () =>
+                resolve(Response.json({ choices: [{ finish_reason: 'stop', message: { content: '{"ok":true}' } }] })),
+              240_000,
+            );
+          }),
+      );
+      const t = new SpeakerEngineTransport({ fetchImpl, lookup: async () => [{ address: '192.168.1.10', family: 4 }] });
+      const result = t.generate(config, request, new AbortController().signal);
+      await vi.advanceTimersByTimeAsync(240_001);
+      expect(await result).toBe('{"ok":true}');
+      expect(fetchImpl).toHaveBeenCalledTimes(1);
+    } finally {
+      timeout.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+  it.each(['attribution', 'identity', 'cancel'] as const)(
+    'bounds %s without retrying or reporting a TTS playback error',
+    async (stage) => {
+      vi.useFakeTimers();
+      const timeout = vi.spyOn(AbortSignal, 'timeout').mockImplementation((ms) => {
+        const c = new AbortController();
+        setTimeout(() => c.abort(new DOMException('Timed out', 'TimeoutError')), ms);
+        return c.signal;
+      });
+      try {
+        const fetchImpl = vi.fn(
+          (_url: unknown, init: RequestInit = {}) =>
+            new Promise<Response>((_resolve, reject) => {
+              init.signal!.addEventListener('abort', () => reject(init.signal!.reason), { once: true });
+            }),
+        );
+        const t = new SpeakerEngineTransport({
+          fetchImpl,
+          lookup: async () => [{ address: '192.168.1.10', family: 4 }],
+        });
+        const caller = new AbortController();
+        const result = t.generate(
+          config,
+          { ...request, stage: stage === 'identity' ? 'identity' : 'attribution' },
+          caller.signal,
+        );
+        const checked =
+          stage === 'cancel'
+            ? expect(result).rejects.toMatchObject({ name: 'AbortError' })
+            : expect(result).rejects.toMatchObject({
+                statusCode: 504,
+                message: expect.stringContaining(stage === 'identity' ? '인물 연결 분석' : '화자 찾기 분석'),
+              });
+        await vi.advanceTimersByTimeAsync(1);
+        if (stage === 'cancel') caller.abort();
+        else await vi.advanceTimersByTimeAsync(600_000);
+        await checked;
+        expect(fetchImpl).toHaveBeenCalledTimes(1);
+      } finally {
+        timeout.mockRestore();
+        vi.useRealTimers();
+      }
+    },
+  );
   it('uses the deployment token only for the exact default engine and lets explicit credentials override it', async () => {
     const fetchImpl = vi.fn(async () => Response.json({ protocol: SPEAKER_ENGINE_PROTOCOL, engineVersion: 'v' }));
     const t = new SpeakerEngineTransport(

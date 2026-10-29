@@ -118,7 +118,7 @@ export async function prepareAttributionBatch(options: {
             );
             return false;
           }
-          response = await transport.generate(engine, request, deadline());
+          response = await transport.generate(engine, request, signal);
         } catch (error) {
           if ((error as { statusCode?: number }).statusCode === 429)
             await pool.query(
