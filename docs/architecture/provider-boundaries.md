@@ -389,6 +389,12 @@ ServerAIProvider
   직접 공유하며 앱을 다시 열면 기록은 사라진다. 이 진단은 재생 방식을 변경하지 않는다.
   저장된 짧은 음성은 여전히 파일마다 JS 기반 전환을 거친다. 데스크톱의 lifecycle 시뮬레이션은
   Android 설치형 PWA의 실제 중단 원인을 재현한 검증이 아니다.
+- 준비된 음성의 미리 읽기는 다음 한 파일에서 최대 6개 파일(본문 합계 1,400자 이내)로 확대했다.
+  가까운 파일부터 순서대로 읽고, 긴 파일은 첫 다음 파일을 우선한다. 기존 8개/32MiB 메모리 캐시를
+  공유하므로 재생 중 파일과 다음 회차 첫 파일의 공간도 남긴다. 추가 미리 읽기는 `ready` 파일만
+  허용하며 미완성 구간에서 멈춘다. 바로 다음 구간의 기존 한 건 준비는 유지하되 그 너머의 합성을
+  시작하지 않는다. 합성 요청 묶기·화자·재생 구간·간격·수면 타이머는 바꾸지 않는다.
+  실제 App이 주입하는 오디오 세션에도 진단을 연결해 미디어 상태/재생 이벤트를 함께 기록한다.
 
 - browser/WebView마다 voice availability가 다르다.
 - 별도 OS 음성용 `DesktopSystemTTSProvider`/`AndroidTTSProvider`는 아직 없다. 다만 secure-local cloud/local-endpoint TTS adapter는 `desktop_tts_synthesize` 경계로 구현되어 있다.

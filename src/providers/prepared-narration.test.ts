@@ -6,6 +6,7 @@ import { buildPlainTTSBatch, buildPlainTTSItems } from './plain-tts';
 import { preparedNarrationJump, preparedNarrationSession } from './prepared-narration';
 import { runTTSPlaybackSession } from './tts-playback-session-runner';
 import { ttsQueueItemFingerprint } from './tts-playback-resume';
+import { PlainTTSSessionCache } from './plain-tts-session-cache';
 
 const paragraphs = ['첫 문단입니다.', '둘째 문단입니다.', '마지막 문단입니다.'].map(
   (text, index) => ({ id: `p${index}`, index: index + 1, chapterId: 'c', novelId: 'b', text }) as Paragraph,
@@ -32,6 +33,128 @@ const plan: PreparedNarration = {
     },
   ],
 };
+
+it('buffers six saved clips during the first clip and keeps playing those clips while later downloads fail', async () => {
+  const cache = new PlainTTSSessionCache();
+  const sources = Array.from({ length: 9 }, (_, i) => ({ ...paragraphs[0], id: `p${i}`, index: i + 1 }));
+  const saved: PreparedNarration = {
+    ...plan,
+    items: sources.map((paragraph, ordinal) => ({
+      ordinal,
+      paragraphIndex: ordinal,
+      nextParagraphIndex: ordinal + 1,
+      playable: {
+        ...buildPlainTTSItems({ paragraph, rate: 1, chunking: 'sentence' })[0],
+        preparedAudio: { id: 'recorded', ordinal, ready: true },
+      },
+    })),
+  };
+  let online = true;
+  let cancelled = false;
+  const downloads: number[] = [];
+  const spoken: number[] = [];
+  let finishFirst!: () => void;
+  const firstPlaying = new Promise<void>((resolve) => {
+    finishFirst = resolve;
+  });
+  const load = (ordinal: number) =>
+    cache.getOrCreate({
+      key: String(ordinal),
+      scope: 'saved',
+      chapter: 'c',
+      positions: [ordinal],
+      readOnly: true,
+      fetch: async () => {
+        if (!online) throw Error('background download delayed');
+        downloads.push(ordinal);
+        return new Blob([String(ordinal)]);
+      },
+    });
+  const running = runTTSPlaybackSession({
+    ...preparedNarrationSession(saved, 0, async (index) => sources[index]),
+    shouldContinue: () => !cancelled,
+    waitForResume: async () => true,
+    buildPlayableSegments: () => [],
+    allowSystemFallback: false,
+    buildSystemFallbackInput: () => ({ text: 'unused', rate: 1 }),
+    speakSystem: vi.fn(),
+    hostedPrefetchDepth: () => 6,
+    prefetchHostedSegment: async (playable) => {
+      try {
+        await load(playable.preparedAudio!.ordinal);
+      } catch {
+        /* speculative */
+      }
+    },
+    playHostedSegment: async (playable) => {
+      const ordinal = playable.preparedAudio!.ordinal;
+      await load(ordinal);
+      spoken.push(ordinal);
+      if (ordinal === 0) await firstPlaying;
+      return true;
+    },
+    shouldStopAfterItem: () => spoken.length === 7,
+  });
+  try {
+    await vi.waitFor(() => expect(downloads).toEqual([0, 1, 2, 3, 4, 5, 6]));
+    expect(spoken).toEqual([0]);
+    online = false;
+    finishFirst();
+    await expect(running).resolves.toMatchObject({ stopReason: 'timer' });
+    expect(spoken).toEqual([0, 1, 2, 3, 4, 5, 6]);
+    expect(downloads).toEqual([0, 1, 2, 3, 4, 5, 6]);
+  } finally {
+    cancelled = true;
+    finishFirst();
+    await running;
+    cache.clear();
+  }
+});
+
+it.each([
+  { pending: 2, length: 10, expected: [1] },
+  { pending: 1, length: 10, expected: [1] },
+  { pending: 8, length: 700, expected: [1, 2] },
+  { pending: 8, length: 1500, expected: [1] },
+])('bounds saved read-ahead before pending synthesis and long batches: %j', async ({ pending, length, expected }) => {
+  const items = Array.from({ length: 8 }, (_, ordinal) => ({
+    ordinal,
+    paragraphIndex: 0,
+    nextParagraphIndex: 1,
+    playable: {
+      ...first,
+      text: '가'.repeat(length),
+      preparedAudio: { id: 'saved', ordinal, ready: ordinal !== pending },
+    },
+  }));
+  let finish!: () => void;
+  const held = new Promise<boolean>((resolve) => {
+    finish = () => resolve(true);
+  });
+  const prefetched: number[] = [];
+  const running = runTTSPlaybackSession({
+    ...preparedNarrationSession({ ...plan, items }, 0, async () => paragraphs[0]),
+    shouldContinue: () => true,
+    waitForResume: async () => true,
+    shouldStopAfterItem: () => true,
+    buildPlayableSegments: () => [],
+    allowSystemFallback: false,
+    buildSystemFallbackInput: () => ({ text: 'unused', rate: 1 }),
+    speakSystem: vi.fn(),
+    playHostedSegment: () => held,
+    hostedPrefetchDepth: () => 6,
+    prefetchHostedSegment: async (playable) => {
+      prefetched.push(playable.preparedAudio!.ordinal);
+    },
+  });
+  try {
+    for (let i = 0; i < 40; i++) await Promise.resolve();
+    expect(prefetched).toEqual(expected);
+  } finally {
+    finish();
+    await running;
+  }
+});
 
 it('feeds the existing reader runner with recorded boundaries, source highlights, lookahead and completion', async () => {
   const active: string[] = [];

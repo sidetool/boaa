@@ -933,7 +933,7 @@ export default function App() {
     () => resolveTTSPlaybackSettings(settings, selectedNovel?.id),
     [selectedNovel?.id, settings],
   );
-  const ttsAudioSession = useMemo(() => new BrowserAudioSession(), []);
+  const ttsAudioSession = useMemo(() => new BrowserAudioSession(undefined, true), []);
   const fixedDocumentTextRepository = useMemo(
     () => new (createDocumentTextStore(readerRuntime.auxiliaryDatabase).IndexedDbDocumentTextRepository)(),
     [readerRuntime.auxiliaryDatabase],
@@ -4704,7 +4704,9 @@ export default function App() {
         !ttsPlaybackSettings.offlineOnly && selectedTTSPlaybackReady
           ? (playable) =>
               plainServerSelected
-                ? 1
+                ? playable.preparedAudio?.ready
+                  ? 6
+                  : 1
                 : playbackSession.adaptiveHostedTTSPrefetchDepth({
                     averageResolveLatencyMs: hostedTtsPrefetchMetricsRef.current.averageResolveLatencyMs,
                     consecutiveFailures: hostedTtsPrefetchMetricsRef.current.consecutiveFailures,

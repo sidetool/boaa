@@ -321,17 +321,57 @@ interface PrefetchInput extends RunTTSPlaybackSessionInput {
 
 async function prefetchUpcomingPlayables(input: PrefetchInput): Promise<void> {
   if (!input.prefetchHostedSegment || !input.shouldContinue()) return;
-  const depth = Math.max(
-    1,
-    Math.min(3, Math.floor(input.hostedPrefetchDepth?.(input.playableSegments[input.playableIndex]) ?? 1)),
-  );
-  const targets = input.playableSegments
-    .slice(input.playableIndex + 1)
-    .map((playable) => ({ paragraph: input.paragraph, playable }))
-    .slice(0, depth);
+  const current = input.playableSegments[input.playableIndex];
+  // The 8-entry audio cache has room for current + 6 saved clips + next chapter opening.
+  // Extra lookahead is exclusively for already-generated files; paid synthesis keeps its old limit.
+  const savedReadAhead = current.preparedAudio?.ready === true;
+  const depth = Math.max(1, Math.min(savedReadAhead ? 6 : 3, Math.floor(input.hostedPrefetchDepth?.(current) ?? 1)));
+  const targets: { paragraph: Paragraph; playable: PlayableTtsSegment }[] = [];
+  let full = false;
+  let characters = 0;
+  const allowedByChapter = new Map<string, Promise<boolean>>();
+  const prefetch = async (target: (typeof targets)[number]) => {
+    if (!input.shouldContinue()) return;
+    if (input.canPrefetchHostedSegment) {
+      const allowed =
+        allowedByChapter.get(target.paragraph.chapterId) ??
+        Promise.resolve(input.canPrefetchHostedSegment(target.playable, target.paragraph));
+      allowedByChapter.set(target.paragraph.chapterId, allowed);
+      if (!(await allowed)) return;
+    }
+    await input.prefetchHostedSegment?.(target.playable, target.paragraph);
+  };
+  const add = async (paragraph: Paragraph, playable: PlayableTtsSegment) => {
+    if (!input.shouldContinue()) {
+      full = true;
+      return;
+    }
+    if (savedReadAhead && !playable.preparedAudio?.ready) {
+      // Preserve the existing single next-item preparation, but never synthesize farther ahead.
+      if (targets.length === 0) await prefetch({ paragraph, playable });
+      full = true;
+      return;
+    }
+    // Long recorded batches already provide ample download time. Avoid filling the byte cache
+    // with six large files and evicting the nearest one; the next item is always eligible.
+    if (savedReadAhead && targets.length > 0 && characters + playable.text.length > 1_400) {
+      full = true;
+      return;
+    }
+    targets.push({ paragraph, playable });
+    characters += playable.text.length;
+    full = targets.length >= depth;
+    // Start the nearest read before loading source paragraphs for farther clips. Overlapping
+    // passes reuse cached/in-flight GETs, and no six-way speculative download burst is needed.
+    if (savedReadAhead) await prefetch({ paragraph, playable });
+  };
+  for (const playable of input.playableSegments.slice(input.playableIndex + 1)) {
+    await add(input.paragraph, playable);
+    if (full) break;
+  }
   for (
     let paragraphIndex = input.nextParagraphIndex;
-    targets.length < depth && paragraphIndex < input.paragraphCount;
+    !full && paragraphIndex < input.paragraphCount;
     paragraphIndex += 1
   ) {
     const paragraph = await input.getParagraph(paragraphIndex);
@@ -341,25 +381,12 @@ async function prefetchUpcomingPlayables(input: PrefetchInput): Promise<void> {
     for (const playable of (prepared?.playables ?? input.buildPlayableSegments(paragraph)).filter((item) =>
       hasSpokenContent(item.text),
     )) {
-      targets.push({ paragraph, playable });
-      if (targets.length >= depth) break;
+      await add(paragraph, playable);
+      if (full) break;
     }
     paragraphIndex = (prepared?.nextParagraphIndex ?? paragraphIndex + 1) - 1;
   }
-  const allowedByChapter = new Map<string, Promise<boolean>>();
-  await Promise.all(
-    targets.map(async (target) => {
-      if (!input.shouldContinue()) return;
-      if (input.canPrefetchHostedSegment) {
-        const allowed =
-          allowedByChapter.get(target.paragraph.chapterId) ??
-          Promise.resolve(input.canPrefetchHostedSegment(target.playable, target.paragraph));
-        allowedByChapter.set(target.paragraph.chapterId, allowed);
-        if (!(await allowed)) return;
-      }
-      await input.prefetchHostedSegment?.(target.playable, target.paragraph);
-    }),
-  );
+  if (!savedReadAhead) await Promise.all(targets.map(prefetch));
 }
 
 async function speakSystemSegment(
