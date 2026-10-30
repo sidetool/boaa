@@ -35,6 +35,8 @@ interface ActiveBrowserAudio {
   lastTime: number;
   lastProgress: number;
   recoveries: number;
+  playAttempt?: object;
+  restarting?: boolean;
   onPlaying?: (playing: boolean) => void;
   cleanup?: () => void;
 }
@@ -95,7 +97,7 @@ export class BrowserAudioSession {
         this.finish(active, true);
       };
       audio.onerror = () => this.finish(active, false);
-      const inspect = (recover = true) => {
+      const inspect = (recover = true, interrupted = false) => {
         if (this.active !== active || active.settled || active.userPaused) return;
         if (audio.ended === true) {
           this.finish(active, true);
@@ -106,15 +108,19 @@ export class BrowserAudioSession {
           active.lastTime = time;
           active.lastProgress = Date.now();
           active.recoveries = 0;
-          onPlaying?.(true);
-        } else if (recover && Date.now() - active.lastProgress >= 15_000) {
+          // A missed background timeupdate does not mean a currently paused element is playing.
+          if (audio.paused !== true) onPlaying?.(true);
+        }
+        if (audio.paused === true) onPlaying?.(false);
+        if (recover && ((interrupted && audio.paused === true) || Date.now() - active.lastProgress >= 15_000)) {
           if (active.recoveries >= 2) this.finish(active, false, true);
           else {
             active.recoveries++;
             active.lastProgress = Date.now();
-            void this.resume().then((ok) => {
-              if (!ok && this.active === active) this.finish(active, false, true);
-            });
+            onPlaying?.(false);
+            // play() is a no-op for some stalled elements that still report paused=false.
+            // Match manual pause/resume without loading a new source or losing the position.
+            this.startPlay(active, true);
           }
         }
       };
@@ -125,14 +131,14 @@ export class BrowserAudioSession {
         if (this.active === active) onPlaying?.(false);
       };
       audio.onpause = () => {
-        if (this.active !== active || active.userPaused || audio.paused !== true) return;
+        if (this.active !== active || active.userPaused || active.restarting || audio.paused !== true) return;
         onPlaying?.(false);
         // Native interruptions can pause an otherwise-live chunk without rejecting play().
         active.lastProgress = Math.min(active.lastProgress, Date.now() - 15_000);
-        inspect();
+        inspect(true, true);
       };
       const timer = globalThis.setInterval(inspect, 1_000);
-      const wake = () => inspect();
+      const wake = () => inspect(true, true);
       if (typeof document !== 'undefined') document.addEventListener('visibilitychange', wake);
       if (typeof window !== 'undefined') window.addEventListener('pageshow', wake);
       active.cleanup = () => {
@@ -145,18 +151,7 @@ export class BrowserAudioSession {
         if (this.active !== active || active.settled || !Number.isFinite(audio.duration) || !audio.duration) return;
         onProgress?.(Math.max(0, Math.min(1, (audio.currentTime ?? 0) / audio.duration)));
       };
-      try {
-        void audio.play().then(
-          () => {
-            if (this.active === active && !active.userPaused && audio.paused !== true) onPlaying?.(true);
-          },
-          () => {
-            if (this.active === active && !active.userPaused) this.finish(active, false, true);
-          },
-        );
-      } catch {
-        this.finish(active, false);
-      }
+      this.startPlay(active);
     });
   }
 
@@ -185,15 +180,44 @@ export class BrowserAudioSession {
   async resume(): Promise<boolean> {
     const active = this.active;
     if (!active) return false;
-    const audio = active.audio;
     active.userPaused = false;
+    return this.play(active);
+  }
+
+  private startPlay(active: ActiveBrowserAudio, restart = false): void {
+    const pending = this.play(active, restart);
+    const attempt = active.playAttempt;
+    void pending.then((ok) => {
+      if (!ok && this.active === active && !active.userPaused && active.playAttempt === attempt)
+        this.finish(active, false, true);
+    });
+  }
+
+  private async play(active: ActiveBrowserAudio, restart = false): Promise<boolean> {
+    const attempt = {};
+    active.playAttempt = attempt;
     active.lastProgress = Date.now();
     try {
-      await audio.play();
-      if (this.active === active && !active.userPaused) active.onPlaying?.(true);
+      if (restart && active.audio.paused !== true) {
+        active.restarting = true;
+        try {
+          active.audio.pause();
+        } finally {
+          active.restarting = false;
+        }
+      }
+      await active.audio.play();
+      if (
+        this.active === active &&
+        !active.userPaused &&
+        active.playAttempt === attempt &&
+        active.audio.paused !== true
+      )
+        active.onPlaying?.(true);
       return true;
     } catch {
-      return this.active !== active || active.userPaused;
+      // pause() can reject an older pending play() after a new attempt already started.
+      return this.active !== active || active.userPaused || active.playAttempt !== attempt;
     }
   }
 

@@ -376,6 +376,12 @@ ServerAIProvider
 
 - system TTS 기반 캐릭터 voice profile은 동작하고, hosted `openai-tts`/`elevenlabs`/`gemini-tts`/`gemini-vertex-tts`/`google-cloud-tts`/`local-endpoint` synthesis cache playback은 labeled segment 단위로 연결됐다. Reader는 active source-range highlight, next-segment/next-paragraph hosted TTS prefetch, bounded current/nearby-chapter warmup, and whole-book/background chapter-batch warmup을 지원한다. Paragraph/playable traversal and system fallback callback wiring now run through `tts-playback-session-runner.ts`; the TTS provider smoke runner is implemented. Gemini Vertex TTS live smoke passed; non-Vertex/cloud provider live smokes remain pending.
 - labeled segment 기반 다중 화자 playback queue는 paragraph 안에서 순차 재생하며, 현재 source range를 reader 본문에 표시한다. `tts-playback-session.ts`로 active range, prefetch target, voice profile composition, system fallback input 같은 순수 session helper는 분리됐다. `tts-playback-session-runner.ts`는 paragraph traversal, hosted-first handoff, next-paragraph prefetch selection, system fallback callback wiring을 injected function boundary로 분리한다. `hosted-tts-playback-runner.ts`는 hosted playback/prefetch의 resolve/poll/fetch/play loop를, `hosted-tts-warmup-runner.ts`는 hosted cache warmup의 resolve/poll/status summary loop를, `hosted-tts-background-warmup-runner.ts`는 whole-book/background chapter batch loop를 injected function boundary로 분리한다. `browser-audio-session.ts`는 browser audio element/object URL lifecycle과 pause/resume/stop을 adapter로 분리한다.
+- 브라우저 오디오가 재생 중으로 표시되지만 15초간 위치가 진행되지 않으면, 같은 파일·위치에서
+  `pause()` 후 `play()`로 복구한다. 소스를 다시 로드하거나 합성을 요청하지 않는다. 실제 pause 상태는
+  지연된 background 진행 이벤트보다 우선하며, 복귀 시 바로 확인한다. 사용자의 일시정지는 존중하고,
+  새 재생 시도 뒤 늦게 도착한 이전 시도의 거절은 무시한다. 복구는 최대 두 번으로 제한한다.
+  이는 앱 측 복구 계약이며 Android PWA의 실제 잠금 화면 장시간 재생을 보장하는 검증은 아니다.
+
 - browser/WebView마다 voice availability가 다르다.
 - 별도 OS 음성용 `DesktopSystemTTSProvider`/`AndroidTTSProvider`는 아직 없다. 다만 secure-local cloud/local-endpoint TTS adapter는 `desktop_tts_synthesize` 경계로 구현되어 있다.
 

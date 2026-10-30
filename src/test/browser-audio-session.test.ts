@@ -322,3 +322,99 @@ it('fences a late rejected resume against a replacement chunk on the same media 
   await expect(second).resolves.toBe(true);
   play.mockRestore();
 });
+
+it('restarts a stuck playing element with pause/play without replacing its source or position', async () => {
+  vi.useFakeTimers();
+  const audio = new InterruptedAudio('fixture');
+  const revoke = vi.fn();
+  const session = new BrowserAudioSession({
+    createAudio: () => audio,
+    createObjectUrl: () => 'blob:background',
+    revokeObjectUrl: revoke,
+  });
+  const result = session.playBlob(blob());
+  try {
+    audio.currentTime = 3;
+    await vi.advanceTimersByTimeAsync(1_000);
+    // Some media interruptions leave paused=false. play() alone does not restart that state.
+    expect(audio.paused).toBe(false);
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(audio.pauseCalls).toBe(1);
+    expect(audio.playCalls).toBe(2);
+    expect(audio.currentTime).toBe(3);
+    expect(audio.src).toBe('blob:background');
+    expect(audio.loadCalls).toBe(0);
+    expect(revoke).not.toHaveBeenCalled();
+    audio.currentTime = 4;
+    await vi.advanceTimersByTimeAsync(1_000);
+    session.pause();
+    const calls = audio.playCalls;
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(audio.playCalls).toBe(calls);
+    await session.resume();
+    audio.ended = true;
+    fireEnded(audio);
+    await expect(result).resolves.toBe(true);
+  } finally {
+    session.stop(false);
+  }
+});
+
+it('recovers a paused element on return even when its last background progress event was missed', async () => {
+  const documentEvents = Object.assign(new EventTarget(), { visibilityState: 'hidden' });
+  vi.stubGlobal('document', documentEvents);
+  const audio = new InterruptedAudio('fixture');
+  const session = new BrowserAudioSession({
+    createAudio: () => audio,
+    createObjectUrl: () => 'blob:resume',
+    revokeObjectUrl: vi.fn(),
+  });
+  const result = session.playBlob(blob());
+  try {
+    await Promise.resolve();
+    // Audio advanced after the last delivered timeupdate, then the browser paused it offscreen.
+    audio.currentTime = 3;
+    audio.paused = true;
+    documentEvents.visibilityState = 'visible';
+    documentEvents.dispatchEvent(new Event('visibilitychange'));
+    await Promise.resolve();
+    expect(audio.playCalls).toBe(2);
+    expect(audio.paused).toBe(false);
+    audio.ended = true;
+    fireEnded(audio);
+    await expect(result).resolves.toBe(true);
+  } finally {
+    session.stop(false);
+  }
+});
+
+it('ignores the interrupted initial play rejection after recovery has started on the same source', async () => {
+  vi.useFakeTimers();
+  const audio = new InterruptedAudio('fixture');
+  let rejectInitial!: (error: Error) => void;
+  vi.spyOn(audio, 'play').mockImplementationOnce(
+    () =>
+      new Promise((_resolve, reject) => {
+        rejectInitial = reject;
+      }),
+  );
+  const session = new BrowserAudioSession({
+    createAudio: () => audio,
+    createObjectUrl: () => 'blob:same',
+    revokeObjectUrl: vi.fn(),
+  });
+  const result = session.playBlob(blob());
+  try {
+    await vi.advanceTimersByTimeAsync(15_000);
+    rejectInitial(new DOMException('interrupted by pause', 'AbortError'));
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(session.hasActivePlayback).toBe(true);
+    expect(audio.src).toBe('blob:same');
+    audio.ended = true;
+    fireEnded(audio);
+    await expect(result).resolves.toBe(true);
+  } finally {
+    session.stop(false);
+  }
+});
