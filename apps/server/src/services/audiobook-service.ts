@@ -1,4 +1,5 @@
 import { applyBookVoiceUpdates } from './speaker-book-voices';
+import { savedAudioErrorMessage } from '../providers/gemini-audio-response';
 import { randomUUID } from 'node:crypto';
 import type pg from 'pg';
 import type { AudiobookInput, SavedAudiobook, PreparedNarration } from '../../../../src/providers/plain-audiobook';
@@ -40,7 +41,7 @@ function view(row: JobRow): SavedAudiobook {
     bytes: Number(row.bytes),
     playbackIndex: row.playback_index,
     currentChapterTitle: row.current_chapter_title ?? undefined,
-    error: row.error_message ?? undefined,
+    error: savedAudioErrorMessage(row.error_message),
     createdAt: row.created_at.toISOString(),
     updatedAt: row.updated_at.toISOString(),
   };

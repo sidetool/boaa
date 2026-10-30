@@ -1,3 +1,4 @@
+import { savedAudioErrorMessage } from '../providers/gemini-audio-response';
 import { cleanupSpeakerBook, previewSpeakerCleanup } from './speaker-cleanup.js';
 import type { SpeakerCleanupOptions } from '../../../../src/providers/speaker-generation';
 import { prepareRevoiceCasting } from './speaker-revoice-casting';
@@ -187,7 +188,7 @@ export class SpeakerGenerationService {
       bytes: Number(r.bytes),
       playbackIndex: r.playback_index,
       currentChapterTitle: r.current_chapter_title ?? undefined,
-      error: r.error_message ?? undefined,
+      error: savedAudioErrorMessage(r.error_message),
       createdAt: r.created_at.toISOString(),
       updatedAt: r.updated_at.toISOString(),
       stage: r.status === 'completed' ? 'complete' : r.stage,

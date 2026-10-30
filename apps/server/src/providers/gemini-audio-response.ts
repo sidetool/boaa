@@ -1,12 +1,84 @@
 /** Only fixed diagnostic codes leave the adapter; never retain audio or source text in errors. */
+export const INCOMPLETE_AUDIO_MESSAGE =
+  '이 구간의 음성 응답이 완전하지 않아 저장하지 못했어요. 이미 만든 음성은 남아 있어요.';
+
 export class GeminiAudioResponseError extends Error {
   readonly code = 'tts_incomplete_audio';
   constructor(
     readonly reason: string,
     readonly completion?: string,
   ) {
-    super('음성 생성이 끝까지 완료되지 않았습니다. 읽던 묶음에서 다시 시도하거나 묶음 크기를 줄여 주세요.');
+    super(audioFailureMessage(reason, completion));
   }
+}
+const reasons = new Set([
+  'empty_audio_part',
+  'invalid_wav_header',
+  'wav_length_mismatch',
+  'wav_chunk_header',
+  'wav_chunk_length',
+  'wav_format',
+  'wav_sample_alignment',
+  'missing_audio',
+  'mixed_audio_containers',
+  'mixed_wav_formats',
+  'mixed_pcm_formats',
+  'unsupported_audio_format',
+  'pcm_sample_alignment',
+  'missing_candidate',
+  'provider_finish_reason',
+  'provider_status',
+  'provider_prompt_block',
+]);
+const completions = new Set([
+  'MAX_TOKENS',
+  'SAFETY',
+  'RECITATION',
+  'OTHER',
+  'BLOCKLIST',
+  'PROHIBITED_CONTENT',
+  'SPII',
+  'CONTINUATION',
+  'in_progress',
+  'incomplete',
+  'failed',
+  'cancelled',
+  'requires_action',
+  'missing',
+  'unknown',
+]);
+/** Use the structured logger's existing safe keys; arbitrary provider strings remain excluded. */
+export function geminiAudioDiagnostics(error: GeminiAudioResponseError) {
+  return {
+    errorCode: reasons.has(error.reason) ? error.reason : 'unknown',
+    state:
+      error.completion === undefined ? 'missing' : completions.has(error.completion) ? error.completion : 'unknown',
+  };
+}
+function audioFailureMessage(reason: string, completion?: string): string {
+  if (reason === 'provider_finish_reason' || reason === 'provider_prompt_block') {
+    if (completion === 'MAX_TOKENS') return '음성 제공자의 출력 한도로 이 구간의 생성이 중단됐어요.';
+    if (completion === 'RECITATION') return '음성 제공자의 인용 콘텐츠 제한으로 이 구간을 만들지 못했어요.';
+    if (['SAFETY', 'BLOCKLIST', 'PROHIBITED_CONTENT', 'SPII'].includes(completion ?? ''))
+      return '음성 제공자의 콘텐츠 제한으로 이 구간을 만들지 못했어요.';
+    if (reason === 'provider_prompt_block') return '음성 제공자가 이 구간의 입력을 거절했어요.';
+    if (completion === 'missing') return '음성 응답의 완료 상태를 확인할 수 없어 저장하지 못했어요.';
+  }
+  if (reason === 'missing_audio' || reason === 'empty_audio_part')
+    return '음성 제공자가 재생할 수 있는 음성을 보내지 않았어요.';
+  if (reasons.has(reason) && !reason.startsWith('provider_') && reason !== 'missing_candidate')
+    return '받은 음성 데이터의 형식이 올바르지 않아 저장하지 못했어요.';
+  return INCOMPLETE_AUDIO_MESSAGE;
+}
+/** Old persisted messages incorrectly referred to live-listening settings, which cannot change saved jobs. */
+export function savedAudioErrorMessage(message: string | null | undefined): string | undefined {
+  if (
+    message ===
+      '음성 생성이 끝까지 완료되지 않았습니다. 읽던 묶음에서 다시 시도하거나 세부 청취 설정의 묶음 크기를 줄여 주세요.' ||
+    message === '음성 생성이 끝까지 완료되지 않았습니다. 읽던 묶음에서 다시 시도하거나 묶음 크기를 줄여 주세요.'
+  )
+    return INCOMPLETE_AUDIO_MESSAGE;
+  return message ?? undefined;
 }
 const incomplete = (reason: string, completion?: string) => new GeminiAudioResponseError(reason, completion);
 const safeCompletion = (value: unknown, allowed: readonly string[]) =>
@@ -90,7 +162,16 @@ function merge(parts: AudioPart[]): AudioPart {
 export function vertexAudioResponse(value: unknown): AudioPart {
   const body = record(value);
   const candidates = body.candidates;
-  if (!Array.isArray(candidates) || !candidates.length) throw incomplete('missing_candidate');
+  if (!Array.isArray(candidates) || !candidates.length) {
+    const feedback = record(body.promptFeedback ?? body.prompt_feedback);
+    const block = feedback.blockReason ?? feedback.block_reason;
+    if (block !== undefined && block !== 'BLOCK_REASON_UNSPECIFIED')
+      throw incomplete(
+        'provider_prompt_block',
+        safeCompletion(block, ['SAFETY', 'OTHER', 'BLOCKLIST', 'PROHIBITED_CONTENT']),
+      );
+    throw incomplete('missing_candidate');
+  }
   const candidate = record(candidates[0]);
   const completion = candidate.finishReason ?? candidate.finish_reason;
   if (completion !== 'STOP')

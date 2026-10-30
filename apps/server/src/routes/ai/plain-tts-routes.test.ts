@@ -617,13 +617,15 @@ it('logs only diagnostic metadata for incomplete audio', async () => {
   f.synthesize.mockRejectedValue(new GeminiAudioResponseError('provider_finish_reason', 'MAX_TOKENS'));
   const response = await f.request();
   expect(response.statusCode).toBe(502);
+  expect(response.json().error).toContain('출력 한도');
+  expect(warn).toHaveBeenCalledOnce();
   expect(warn).toHaveBeenCalledWith({
     event: 'plain_tts_failed',
     errorCategory: 'tts_incomplete_audio',
-    upstreamStatus: undefined,
-    providerId: 'supertonic',
-    audioFailureReason: 'provider_finish_reason',
-    providerCompletion: 'MAX_TOKENS',
+    component: 'local-endpoint',
+    inputCharacters: [...f.source.text].length,
+    errorCode: 'provider_finish_reason',
+    state: 'MAX_TOKENS',
   });
 });
 

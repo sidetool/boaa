@@ -1,5 +1,12 @@
 import { wavFromPcm16 } from './tts-audio.js';
-import { interactionAudioResponse } from './gemini-audio-response.js';
+import {
+  interactionAudioResponse,
+  vertexAudioResponse,
+  GeminiAudioResponseError,
+  geminiAudioDiagnostics,
+  savedAudioErrorMessage,
+  INCOMPLETE_AUDIO_MESSAGE,
+} from './gemini-audio-response.js';
 import { describe, expect, it, vi } from 'vitest';
 import { createGeminiVertexTTSGenerateContentClient } from './gemini-vertex-tts-provider.js';
 const sdk = vi.hoisted(() => ({ generate: vi.fn() }));
@@ -128,4 +135,35 @@ it('reports safe distinct reasons without echoing provider payloads', () => {
       expect(JSON.stringify(error)).not.toContain('private provider detail');
     }
   }
+});
+
+it('distinguishes prompt blocking from missing candidates without exposing provider feedback', () => {
+  expect(() =>
+    vertexAudioResponse({ promptFeedback: { blockReason: 'SAFETY', blockReasonMessage: 'private text' } }),
+  ).toThrow(
+    expect.objectContaining({
+      reason: 'provider_prompt_block',
+      completion: 'SAFETY',
+      message: expect.stringContaining('콘텐츠 제한'),
+    }),
+  );
+  expect(() => vertexAudioResponse({ candidates: [] })).toThrow(
+    expect.objectContaining({ reason: 'missing_candidate' }),
+  );
+  expect(geminiAudioDiagnostics(new GeminiAudioResponseError('private reason', 'private completion'))).toEqual({
+    errorCode: 'unknown',
+    state: 'unknown',
+  });
+});
+
+it('keeps specific failure guidance and replaces only obsolete saved-job batch instructions', () => {
+  expect(new GeminiAudioResponseError('missing_audio').message).toContain('음성을 보내지');
+  expect(new GeminiAudioResponseError('wav_length_mismatch').message).toContain('형식');
+  expect(
+    savedAudioErrorMessage(
+      '음성 생성이 끝까지 완료되지 않았습니다. 읽던 묶음에서 다시 시도하거나 세부 청취 설정의 묶음 크기를 줄여 주세요.',
+    ),
+  ).toBe(INCOMPLETE_AUDIO_MESSAGE);
+  expect(savedAudioErrorMessage('목소리를 찾지 못했어요.')).toBe('목소리를 찾지 못했어요.');
+  expect(savedAudioErrorMessage(null)).toBeUndefined();
 });

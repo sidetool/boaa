@@ -10,7 +10,11 @@ import { TTSConnectionError } from '../../providers/tts-connection-config.js';
 import type { AudiobookService } from '../../services/audiobook-service.js';
 import { registerAudiobookRoutes } from './audiobook-routes.js';
 import { AudiobookAudioStore } from '../../services/audiobook-audio.js';
-import { GeminiAudioResponseError } from '../../providers/gemini-audio-response.js';
+import {
+  GeminiAudioResponseError,
+  geminiAudioDiagnostics,
+  INCOMPLETE_AUDIO_MESSAGE,
+} from '../../providers/gemini-audio-response.js';
 import {
   MIN_PLAIN_TTS_BATCH_CHARACTERS,
   MAX_PLAIN_TTS_BATCH_CHARACTERS,
@@ -252,6 +256,14 @@ export async function registerPlainTTSRoutes(
         } catch (error) {
           // Some adapters turn deadline cancellation into AbortError. Preserve the real timeout reason.
           generationSignal.throwIfAborted();
+          if (error instanceof GeminiAudioResponseError)
+            app.log.warn({
+              event: 'plain_tts_failed',
+              errorCategory: 'tts_incomplete_audio',
+              component: adapter.providerId,
+              inputCharacters: [...text].length,
+              ...geminiAudioDiagnostics(error),
+            });
           if (classifyPlainTTSFailure(error).status === 429) {
             const failures = Math.min(3, (cooldowns.get(source.id)?.failures ?? 0) + 1);
             const hint = (error as { retryAfterSeconds?: number }).retryAfterSeconds;
@@ -582,15 +594,13 @@ export async function registerPlainTTSRoutes(
           }
           const failure = classifyPlainTTSFailure(error);
           // Never log the provider response, document text, credentials, or request body.
-          app.log.warn({
-            event: 'plain_tts_failed',
-            errorCategory: failure.code,
-            upstreamStatus: failure.upstreamStatus,
-            providerId: failureProvider,
-            ...(error instanceof GeminiAudioResponseError
-              ? { audioFailureReason: error.reason, providerCompletion: error.completion }
-              : {}),
-          });
+          if (!(error instanceof GeminiAudioResponseError))
+            app.log.warn({
+              event: 'plain_tts_failed',
+              errorCategory: failure.code,
+              upstreamStatus: failure.upstreamStatus,
+              providerId: failureProvider,
+            });
           return reply.code(failure.status).send({ error: failure.message, code: failure.code });
         }
       },
@@ -717,8 +727,7 @@ export function classifyPlainTTSFailure(error: unknown): {
     return {
       status: 502,
       code: 'tts_incomplete_audio',
-      message:
-        '음성 생성이 끝까지 완료되지 않았습니다. 읽던 묶음에서 다시 시도하거나 세부 청취 설정의 묶음 크기를 줄여 주세요.',
+      message: error instanceof GeminiAudioResponseError ? error.message : INCOMPLETE_AUDIO_MESSAGE,
     };
   const rawStatus = value.status ?? value.code;
   const upstreamStatus =
