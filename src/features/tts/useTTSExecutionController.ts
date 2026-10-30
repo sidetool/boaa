@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ActiveTTSPlayback } from '../../providers/tts-playback-session';
 import { BrowserAudioSession } from '../../providers/browser-audio-session';
+import { playbackDiagnostics, startPlaybackDiagnostics } from '../../providers/playback-diagnostics';
 import type { HostedTTSPrefetchedAudio } from '../../providers/hosted-tts-prefetch';
 import type { TTSPlaybackSnapshot, TTSProvider } from '../../providers/tts';
 import type { TTSSleepTimerPreset } from '../../domain/types';
@@ -78,7 +79,10 @@ export function useTTSExecutionController(input: TTSExecutionControllerInput) {
   const warmupOperationRef = useRef<HostedTTSOperationToken>();
   const prefetchControllersRef = useRef<Map<string, AbortController>>(new Map());
   const prefetchCacheRef = useRef(new Map<string, HostedTTSPrefetchedAudio>());
-  const audioSession = useMemo(() => input.audioSession ?? new BrowserAudioSession(), [input.audioSession]);
+  const audioSession = useMemo(
+    () => input.audioSession ?? new BrowserAudioSession(undefined, true),
+    [input.audioSession],
+  );
   const sleepTimerRef = useRef(new TTSActiveSleepTimer());
   const previousTargetRef = useRef<{ bookId?: string; chapterId?: string; owner?: object }>({
     bookId: input.bookId,
@@ -124,6 +128,7 @@ export function useTTSExecutionController(input: TTSExecutionControllerInput) {
 
   const stopAll = useCallback(
     (options: StopTTSOptions = {}) => {
+      if (playingRef.current) playbackDiagnostics.record('stop');
       const updateState = options.updateState !== false;
       sessionRef.current += 1;
       sessionTargetRef.current = undefined;
@@ -200,6 +205,14 @@ export function useTTSExecutionController(input: TTSExecutionControllerInput) {
   const beginSession = useCallback(
     (bookId: string, chapterId: string, startIndex?: number, options: { preserveSleepTimer?: boolean } = {}) => {
       if (inputRef.current.bookId !== bookId || inputRef.current.chapterId !== chapterId) return;
+      startPlaybackDiagnostics({
+        index: startIndex,
+        rate: inputRef.current.playbackRate,
+        timerMinutes:
+          typeof inputRef.current.sleepTimerPreset === 'number' ? inputRef.current.sleepTimerPreset : undefined,
+        timerChapter: inputRef.current.sleepTimerPreset === 'end_of_chapter',
+        continuing: options.preserveSleepTimer === true,
+      });
       sessionRef.current += 1;
       const sessionId = sessionRef.current;
       sessionTargetRef.current = { bookId, chapterId, owner: inputRef.current.sessionOwner };
@@ -299,6 +312,10 @@ export function useTTSExecutionController(input: TTSExecutionControllerInput) {
       } = {},
     ) => {
       if (!isSessionCurrent(sessionId, false)) return false;
+      playbackDiagnostics.record('stop', {
+        error: Boolean(options.errorMessage),
+        continuing: options.preserveSleepTimer === true,
+      });
       sessionRef.current += 1;
       sessionTargetRef.current = undefined;
       sessionAbortRef.current?.abort();
@@ -329,6 +346,7 @@ export function useTTSExecutionController(input: TTSExecutionControllerInput) {
 
   const pause = useCallback(() => {
     if (!playingRef.current) return;
+    playbackDiagnostics.record('pause');
     pausedRef.current = true;
     inputRef.current.systemTTS.pause();
     audioSession.pause();
@@ -338,6 +356,7 @@ export function useTTSExecutionController(input: TTSExecutionControllerInput) {
 
   const resume = useCallback(() => {
     if (!playingRef.current) return;
+    playbackDiagnostics.record('resume');
     const sessionId = sessionRef.current;
     pausedRef.current = false;
     if (itemActiveRef.current) sleepTimerRef.current.resume();

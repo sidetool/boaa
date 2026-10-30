@@ -1,3 +1,4 @@
+import { playbackDiagnostics, tracePlaybackWait } from './providers/playback-diagnostics';
 import { createTTSPositionWriter } from './providers/tts-position-writer';
 import {
   createSpeakerEnginesPort,
@@ -4414,12 +4415,17 @@ export default function App() {
     // Audio must not depend on mounting/measuring the visual viewport in a background tab.
     const getPlaybackParagraph = async (paragraphIndex: number) => {
       if (!chapter || !selectedNovel || !ttsExecutionController.isSessionCurrent(sessionId)) return;
-      const page = await loadSharedParagraphPage(
-        readerRepository,
-        selectedNovel.activeContentRevisionId ??
-          `${selectedNovel.id}:${chapter.id}:${chapter.textHash}:${chapter.paragraphCount}`,
-        chapter.id,
-        Math.floor(paragraphIndex / PARAGRAPHS_PER_PAGE),
+      const page = await tracePlaybackWait(
+        'paragraph',
+        () =>
+          loadSharedParagraphPage(
+            readerRepository,
+            selectedNovel.activeContentRevisionId ??
+              `${selectedNovel.id}:${chapter.id}:${chapter.textHash}:${chapter.paragraphCount}`,
+            chapter.id,
+            Math.floor(paragraphIndex / PARAGRAPHS_PER_PAGE),
+          ),
+        { index: paragraphIndex },
       );
       if (!ttsExecutionController.isSessionCurrent(sessionId)) return;
       return paragraphAtPlaybackIndex(page, paragraphIndex);
@@ -4433,18 +4439,20 @@ export default function App() {
     const choice = preparedChoiceRef.current?.owner === ttsSessionOwner ? preparedChoiceRef.current : undefined;
     const prepared =
       plainServerSelected && audiobookPort && chapter
-        ? await audiobookPort.reader(
-            chapter.id,
-            {
-              ...(choice
-                ? { id: choice.id }
-                : {
-                    voiceId:
-                      ttsPlaybackSettings.serverVoiceId ||
-                      (plainTTS.catalog?.defaultVoiceId ?? plainTTS.catalog?.voices[0]?.id),
-                  }),
-            },
-            sessionSignal,
+        ? await tracePlaybackWait('manifest', () =>
+            audiobookPort.reader(
+              chapter.id,
+              {
+                ...(choice
+                  ? { id: choice.id }
+                  : {
+                      voiceId:
+                        ttsPlaybackSettings.serverVoiceId ||
+                        (plainTTS.catalog?.defaultVoiceId ?? plainTTS.catalog?.voices[0]?.id),
+                    }),
+              },
+              sessionSignal,
+            ),
           )
         : undefined;
     if (!ttsExecutionController.isSessionCurrent(sessionId)) return;
@@ -4455,6 +4463,13 @@ export default function App() {
     if (plainServerSelected && !prepared && !plainTTS.ready)
       throw new Error('미리 만든 음성이 없는 범위입니다. 서버 목소리를 연결해 주세요.');
     preparedPlanRef.current = prepared ? { owner: ttsSessionOwner, plan: prepared } : undefined;
+    playbackDiagnostics.record('session', {
+      prepared: Boolean(prepared),
+      plainServer: plainServerSelected,
+      sentenceGap: ttsPlaybackSettings.sentencePauseMs,
+      paragraphGap: ttsPlaybackSettings.paragraphPauseMs,
+      chapterGap: ttsPlaybackSettings.chapterPauseMs,
+    });
     const preparedQueue = prepared ? preparedNarrationSession(prepared, index, getPlaybackParagraph) : undefined;
     let playbackStartIndex = index;
     let plannedParagraphs: readonly Paragraph[] | undefined;
@@ -4778,6 +4793,11 @@ export default function App() {
         showToast(`TTS 오류: ${message}`, 'danger');
       },
     });
+    playbackDiagnostics.record('runner-end', {
+      completed: result.completed,
+      timer: result.stopReason === 'timer',
+      error: Boolean(result.errorMessage),
+    });
     if (!chapter || !ttsExecutionController.isSessionCurrent(sessionId, false)) return;
     if (result.stopReason === 'timer') {
       ttsExecutionController.finishSession(sessionId);
@@ -4795,7 +4815,7 @@ export default function App() {
     let preparedNext: PreparedTTSChapter | undefined;
     if (!stopAtChapterEnd && ttsPlaybackSettings.chapterEndBehavior === 'continue') {
       try {
-        preparedNext = await prepareNext();
+        preparedNext = await tracePlaybackWait('chapter', prepareNext);
       } catch (error) {
         if (ttsExecutionController.isSessionCurrent(sessionId)) {
           ttsExecutionController.finishSession(sessionId, { preserveIndex: true });
@@ -4825,6 +4845,7 @@ export default function App() {
     });
     if (!continueAfterPause || !ttsExecutionController.isSessionCurrent(sessionId, false)) return;
     bookPlaybackCoordinator.schedule({ bookId: chapter.novelId, chapterId: nextChapter.id, startIndex: 0 });
+    playbackDiagnostics.record('chapter-open');
     ttsExecutionController.finishSession(sessionId, { preserveSleepTimer: true });
     await bookWorkspace.openChapter(nextChapter, {
       novel: preparedNext?.novel ?? selectedNovel,

@@ -1,4 +1,5 @@
 import { loadPreparedAudio } from './prepared-audio-load';
+import { tracePlaybackWait } from '../../providers/playback-diagnostics';
 import { PlainTTSSessionCache, waitForPlainTTSAudio } from '../../providers/plain-tts-session-cache';
 import { requestPlainTTSWithRetry } from '../../providers/plain-tts-retry';
 import { ttsQueueItemFingerprint } from '../../providers/tts-playback-resume';
@@ -181,27 +182,35 @@ export function usePlainTTS(input: {
           prepared: true,
         };
         if (regeneration) audioCache.remove(key);
-        const blob = await requestPlainTTSWithRetry(
+        const blob = await tracePlaybackWait(
+          'buffer',
           () =>
-            waitForPlainTTSAudio(
-              audioCache.getOrCreate({
-                key,
-                readOnly: item.ready && !regeneration,
-                chapter: paragraph.chapterId,
-                scope: scopeFor(),
-                positions: playable.plainBatchPositions?.map((p) => p.paragraphIndex) ?? [],
-                fetch: (signal) =>
-                  regeneration
-                    ? input.prepared!.resolve(item.id, item.ordinal, true, signal)
-                    : loadPreparedAudio(input.prepared!, item, signal),
-              }),
-              operation.controller.signal,
+            requestPlainTTSWithRetry(
+              () =>
+                waitForPlainTTSAudio(
+                  audioCache.getOrCreate({
+                    key,
+                    readOnly: item.ready && !regeneration,
+                    chapter: paragraph.chapterId,
+                    scope: scopeFor(),
+                    positions: playable.plainBatchPositions?.map((p) => p.paragraphIndex) ?? [],
+                    fetch: (signal) =>
+                      regeneration
+                        ? input.prepared!.resolve(item.id, item.ordinal, true, signal)
+                        : loadPreparedAudio(input.prepared!, item, signal),
+                  }),
+                  operation.controller.signal,
+                ),
+              {
+                signal: operation.controller.signal,
+                onWait: (seconds) =>
+                  input.controller.setHostedStatus(
+                    operation,
+                    `음성 제공자 대기 중 · ${Math.ceil(seconds)}초 후 다시 시도`,
+                  ),
+              },
             ),
-          {
-            signal: operation.controller.signal,
-            onWait: (seconds) =>
-              input.controller.setHostedStatus(operation, `음성 제공자 대기 중 · ${Math.ceil(seconds)}초 후 다시 시도`),
-          },
+          { prepared: true, ordinal: item.ordinal, regenerate: Boolean(regeneration) },
         );
         regeneration?.prepared();
         if (!input.controller.isSessionCurrent(sessionId)) return true;
@@ -223,28 +232,36 @@ export function usePlainTTS(input: {
       }
       // Retry at the playback consumer: an existing prefetch has no retry policy of its own.
       // The cache still owns in-flight synthesis, so stopping playback never duplicates paid work.
-      const blob = await requestPlainTTSWithRetry(
+      const blob = await tracePlaybackWait(
+        'buffer',
         () =>
-          waitForPlainTTSAudio(
-            audioCache.getOrCreate({
-              key,
-              chapter: paragraph.chapterId,
-              scope: scopeFor(request.contentRevision),
-              positions: playable.plainBatchPositions?.map((p) => p.paragraphIndex) ?? [],
-              fetch: (signal) =>
-                input.client!.synthesizePlainTTS(
-                  paragraph.chapterId,
-                  regeneration ? { ...request, regenerate: true } : request,
-                  signal,
+          requestPlainTTSWithRetry(
+            () =>
+              waitForPlainTTSAudio(
+                audioCache.getOrCreate({
+                  key,
+                  chapter: paragraph.chapterId,
+                  scope: scopeFor(request.contentRevision),
+                  positions: playable.plainBatchPositions?.map((p) => p.paragraphIndex) ?? [],
+                  fetch: (signal) =>
+                    input.client!.synthesizePlainTTS(
+                      paragraph.chapterId,
+                      regeneration ? { ...request, regenerate: true } : request,
+                      signal,
+                    ),
+                }),
+                operation.controller.signal,
+              ),
+            {
+              signal: operation.controller.signal,
+              onWait: (seconds) =>
+                input.controller.setHostedStatus(
+                  operation,
+                  `음성 제공자 대기 중 · ${Math.ceil(seconds)}초 후 다시 시도`,
                 ),
-            }),
-            operation.controller.signal,
+            },
           ),
-        {
-          signal: operation.controller.signal,
-          onWait: (seconds) =>
-            input.controller.setHostedStatus(operation, `음성 제공자 대기 중 · ${Math.ceil(seconds)}초 후 다시 시도`),
-        },
+        { prepared: false, regenerate: Boolean(regeneration) },
       );
       regeneration?.prepared();
       if (!input.controller.isSessionCurrent(sessionId)) return true;

@@ -1,4 +1,6 @@
-export async function waitForPlaybackDelay(input: {
+import { tracePlaybackWait } from './playback-diagnostics';
+
+export function waitForPlaybackDelay(input: {
   readonly durationMs: number;
   readonly shouldContinue: () => boolean;
   readonly waitForResume: () => Promise<boolean>;
@@ -6,6 +8,10 @@ export async function waitForPlaybackDelay(input: {
   readonly now?: () => number;
   readonly sleep?: (durationMs: number) => Promise<void>;
 }): Promise<boolean> {
+  return tracePlaybackWait('gap', () => runDelay(input), { durationMs: input.durationMs });
+}
+
+async function runDelay(input: Parameters<typeof waitForPlaybackDelay>[0]): Promise<boolean> {
   let remaining = Math.max(0, input.durationMs);
   const now = input.now ?? (() => performance.now());
   const sleep = input.sleep ?? ((durationMs) => new Promise((resolve) => setTimeout(resolve, durationMs)));

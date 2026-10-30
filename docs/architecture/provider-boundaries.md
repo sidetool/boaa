@@ -381,6 +381,14 @@ ServerAIProvider
   지연된 background 진행 이벤트보다 우선하며, 복귀 시 바로 확인한다. 사용자의 일시정지는 존중하고,
   새 재생 시도 뒤 늦게 도착한 이전 시도의 거절은 무시한다. 복구는 최대 두 번으로 제한한다.
   이는 앱 측 복구 계약이며 Android PWA의 실제 잠금 화면 장시간 재생을 보장하는 검증은 아니다.
+- 잠금 화면 재생 진단: `playback-diagnostics.ts`는 현재 페이지 메모리에 최근 256개 이벤트와
+  화면 복귀 직전의 최대 256개 이벤트만 보관한다. visibility capture 단계에서 실제 미디어 상태를
+  먼저 읽어 복구 코드의 영향을 구분한다. 문단·manifest·저장 음성 GET·버퍼·간격·회차 전환 대기와
+  미디어 재생/종료/복구를 기록하며, 본문·음성·URL·계정/작품 ID·오류 원문은 넣지 않는다.
+  별도 타이머·네트워크 전송·영구 저장은 없다. 듣기 → 세부 청취 설정 → 재생 진단 복사로 사용자가
+  직접 공유하며 앱을 다시 열면 기록은 사라진다. 이 진단은 재생 방식을 변경하지 않는다.
+  저장된 짧은 음성은 여전히 파일마다 JS 기반 전환을 거친다. 데스크톱의 lifecycle 시뮬레이션은
+  Android 설치형 PWA의 실제 중단 원인을 재현한 검증이 아니다.
 
 - browser/WebView마다 voice availability가 다르다.
 - 별도 OS 음성용 `DesktopSystemTTSProvider`/`AndroidTTSProvider`는 아직 없다. 다만 secure-local cloud/local-endpoint TTS adapter는 `desktop_tts_synthesize` 경계로 구현되어 있다.

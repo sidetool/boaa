@@ -39,6 +39,7 @@ import UiNextSpeakerEngines from './UiNextSpeakerEngines';
 import UiNextSpeakerGenerationPanel from './UiNextSpeakerGenerationPanel';
 import UiNextVoiceLibrary from './UiNextVoiceLibrary';
 import UiNextSpokenTextFilters from './UiNextSpokenTextFilters';
+import PlaybackDiagnostics from './PlaybackDiagnostics';
 import UiNextTTSConnections from './UiNextTTSConnections';
 import type { TTSVoice } from '../../providers/tts';
 import { cx, Segmented, Switch } from '../components/primitives';
@@ -975,6 +976,7 @@ function ListenDetails(props: TTSAddonPanelProps & { serverPlain: boolean }) {
           </ul>
         )}
       </Group>
+      <PlaybackDiagnostics />
     </>
   );
 }

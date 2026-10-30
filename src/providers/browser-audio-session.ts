@@ -1,3 +1,5 @@
+import { playbackDiagnostics } from './playback-diagnostics';
+
 export interface BrowserAudioElement {
   src: string;
   onended: HTMLAudioElement['onended'];
@@ -10,6 +12,10 @@ export interface BrowserAudioElement {
   readonly currentTime?: number;
   readonly duration?: number;
   readonly ended?: boolean;
+  readonly readyState?: number;
+  readonly networkState?: number;
+  readonly buffered?: Pick<TimeRanges, 'length' | 'start' | 'end'>;
+  readonly error?: { code: number } | null;
   play(): Promise<void>;
   pause(): void;
   removeAttribute(name: string): void;
@@ -39,6 +45,7 @@ interface ActiveBrowserAudio {
   restarting?: boolean;
   onPlaying?: (playing: boolean) => void;
   cleanup?: () => void;
+  diagnosticId: number;
 }
 
 export class BrowserAudioSession {
@@ -49,6 +56,7 @@ export class BrowserAudioSession {
 
   constructor(
     private readonly dependencies: BrowserAudioSessionDependencies = createDefaultBrowserAudioSessionDependencies(),
+    private readonly diagnostics = false,
   ) {}
 
   get hasActivePlayback(): boolean {
@@ -89,15 +97,27 @@ export class BrowserAudioSession {
         lastProgress: Date.now(),
         recoveries: 0,
         onPlaying,
+        diagnosticId: playbackDiagnostics.nextId(),
       };
       this.active = active;
+      this.record('source', active);
+      const unobserve = this.diagnostics ? playbackDiagnostics.observeMedia(() => this.snapshot(active)) : undefined;
+      let sampledAt = Date.now();
       audio.onended = () => {
         // The reused element can dispatch an old queued event after its source changes.
         if (this.active !== active || audio.ended === false) return;
+        this.record('ended', active);
         this.finish(active, true);
       };
-      audio.onerror = () => this.finish(active, false);
+      audio.onerror = () => {
+        this.record('media-error', active);
+        this.finish(active, false);
+      };
       const inspect = (recover = true, interrupted = false) => {
+        if (Date.now() - sampledAt >= 5_000) {
+          this.record('sample', active);
+          sampledAt = Date.now();
+        }
         if (this.active !== active || active.settled || active.userPaused) return;
         if (audio.ended === true) {
           this.finish(active, true);
@@ -125,12 +145,15 @@ export class BrowserAudioSession {
         }
       };
       audio.onplaying = () => {
+        this.record('playing', active);
         if (this.active === active && !active.userPaused) onPlaying?.(true);
       };
       audio.onwaiting = () => {
+        this.record('waiting', active);
         if (this.active === active) onPlaying?.(false);
       };
       audio.onpause = () => {
+        this.record('media-pause', active);
         if (this.active !== active || active.userPaused || active.restarting || audio.paused !== true) return;
         onPlaying?.(false);
         // Native interruptions can pause an otherwise-live chunk without rejecting play().
@@ -142,6 +165,7 @@ export class BrowserAudioSession {
       if (typeof document !== 'undefined') document.addEventListener('visibilitychange', wake);
       if (typeof window !== 'undefined') window.addEventListener('pageshow', wake);
       active.cleanup = () => {
+        unobserve?.();
         globalThis.clearInterval(timer);
         if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', wake);
         if (typeof window !== 'undefined') window.removeEventListener('pageshow', wake);
@@ -197,6 +221,7 @@ export class BrowserAudioSession {
     const attempt = {};
     active.playAttempt = attempt;
     active.lastProgress = Date.now();
+    this.record(restart ? 'recovery' : 'play-call', active);
     try {
       if (restart && active.audio.paused !== true) {
         active.restarting = true;
@@ -207,6 +232,7 @@ export class BrowserAudioSession {
         }
       }
       await active.audio.play();
+      this.record('play-resolved', active);
       if (
         this.active === active &&
         !active.userPaused &&
@@ -215,7 +241,11 @@ export class BrowserAudioSession {
       )
         active.onPlaying?.(true);
       return true;
-    } catch {
+    } catch (error) {
+      this.record('play-rejected', active, {
+        autoplay: (error as { name?: string } | null)?.name === 'NotAllowedError',
+        aborted: (error as { name?: string } | null)?.name === 'AbortError',
+      });
       // pause() can reject an older pending play() after a new attempt already started.
       return this.active !== active || active.userPaused || active.playAttempt !== attempt;
     }
@@ -233,6 +263,7 @@ export class BrowserAudioSession {
 
   private finish(active: ActiveBrowserAudio, played: boolean, clearSource = false): void {
     if (active.settled) return;
+    this.record('media-finish', active);
     active.settled = true;
     active.cleanup?.();
     active.onPlaying?.(false);
@@ -257,6 +288,38 @@ export class BrowserAudioSession {
       this.dependencies.revokeObjectUrl(url);
     } catch {
       // Object URL cleanup must not turn playback completion into a user-visible TTS error.
+    }
+  }
+
+  private snapshot(active: ActiveBrowserAudio) {
+    const audio = active.audio;
+    const buffered = audio.buffered;
+    return {
+      source: active.diagnosticId,
+      current: this.active === active,
+      time: audio.currentTime,
+      duration: audio.duration,
+      paused: audio.paused,
+      ended: audio.ended,
+      userPaused: active.userPaused,
+      ready: audio.readyState,
+      network: audio.networkState,
+      rate: audio.playbackRate,
+      error: audio.error?.code,
+      bufferedEnd: buffered?.length ? buffered.end(buffered.length - 1) : undefined,
+    };
+  }
+
+  private record(
+    event: Parameters<typeof playbackDiagnostics.record>[0],
+    active: ActiveBrowserAudio,
+    values = {},
+  ): void {
+    if (!this.diagnostics) return;
+    try {
+      playbackDiagnostics.record(event, { ...this.snapshot(active), ...values });
+    } catch {
+      /* Observation only. */
     }
   }
 }
