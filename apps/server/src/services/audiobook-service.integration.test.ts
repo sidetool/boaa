@@ -1,3 +1,4 @@
+import { TransientTTSError } from '../providers/tts-transient-error.js';
 import { GeminiAudioResponseError } from '../providers/gemini-audio-response.js';
 import { afterAll, describe, expect, it, vi } from 'vitest';
 import Fastify from 'fastify';
@@ -54,6 +55,9 @@ async function setup(pool: pg.Pool, concurrency: 1 | 2 = 1) {
   await pool.query(await readFile(new URL('../db/migrations/0069_voice_library.sql', import.meta.url), 'utf8'));
   await pool.query(
     await readFile(new URL('../db/migrations/0070_audiobook_content_blocks.sql', import.meta.url), 'utf8'),
+  );
+  await pool.query(
+    await readFile(new URL('../db/migrations/0071_audiobook_transient_retries.sql', import.meta.url), 'utf8'),
   );
   for (const chapterId of ['c1', 'c2'])
     for (let index = 1; index <= 2; index++) {
@@ -469,7 +473,7 @@ async function setup(pool: pg.Pool, concurrency: 1 | 2 = 1) {
           revision: 'stable',
         });
         await service.tick();
-        expect(deadline).toHaveBeenCalledWith(120_000);
+        expect(deadline).toHaveBeenCalledWith(180_000);
         revision = 'unrelated-settings-timestamp';
         extra = true;
         await service.tick();
@@ -652,6 +656,130 @@ async function setup(pool: pg.Pool, concurrency: 1 | 2 = 1) {
       }
     });
   });
+  it('waits durably for transient audio failures, probes singly and bounds retries without regenerating saved siblings', async () => {
+    await withPostgresSchema(harness!, 'audio_transient_retry', async (pool) => {
+      const f = await setup(pool, 2);
+      const original = f.render.getMockImplementation()!;
+      f.render.mockImplementation(async (...args) => {
+        if (args[1].paragraphId === 'c1-1') throw new TransientTTSError('timeout');
+        return original(...args);
+      });
+      const fresh = () =>
+        new AudiobookService(
+          pool,
+          'owner',
+          f.store,
+          catalog,
+          f.render,
+          classifyPlainTTSFailure,
+          undefined,
+          async () => 2,
+        );
+      try {
+        const plan = await f.service.plan('book', settings);
+        const job = await f.service.create(plan, plan.estimate.fingerprint, true);
+        for (let attempt = 0; attempt <= 5; attempt++) {
+          const service = fresh();
+          await service.tick();
+          const row = (
+            await pool.query(
+              'select status,audio_retry_attempts,rate_limit_attempts,completed_items,extract(epoch from retry_at-now()) seconds from saved_audiobooks where id=$1',
+              [job.id],
+            )
+          ).rows[0];
+          expect(row).toMatchObject({
+            status: attempt < 5 ? 'queued' : 'failed',
+            audio_retry_attempts: Math.min(attempt + 1, 5),
+            rate_limit_attempts: 0,
+            completed_items: 1,
+          });
+          expect(f.render).toHaveBeenCalledTimes(attempt + 2);
+          if (attempt < 5) expect(Number(row.seconds)).toBeGreaterThan(15 * 2 ** attempt - 3);
+          else expect(row.seconds).toBeNull();
+          expect(await fresh().tick()).toBe(false);
+          expect(f.render).toHaveBeenCalledTimes(attempt + 2);
+          if (attempt < 5)
+            await pool.query("update saved_audiobooks set retry_at=now()-interval '1 second' where id=$1", [job.id]);
+        }
+        expect((await f.service.list('book'))[0].error).toContain('자동 재시도 5회');
+        await f.service.control(job.id, 'resume', true);
+        expect(
+          (await pool.query('select audio_retry_attempts from saved_audiobooks where id=$1', [job.id])).rows[0]
+            .audio_retry_attempts,
+        ).toBe(0);
+        f.render.mockImplementation(original);
+        while (await f.service.tick()) {
+          /* Drain only the three unsaved items. */
+        }
+        expect((await f.service.list('book'))[0]).toMatchObject({ status: 'completed', completedItems: 4 });
+        expect(f.render.mock.calls.filter((call) => call[1].paragraphId === 'c1-2')).toHaveLength(1);
+      } finally {
+        await f.cleanup();
+      }
+    });
+  });
+
+  it('schedules one retry when listening joins a background request that times out', async () => {
+    await withPostgresSchema(harness!, 'audio_joined_retry', async (pool) => {
+      const f = await setup(pool);
+      let fail!: () => void;
+      f.render.mockImplementation(
+        () =>
+          new Promise((_resolve, reject) => {
+            fail = () => reject(new TransientTTSError('timeout'));
+          }),
+      );
+      try {
+        const plan = await f.service.plan('book', settings);
+        const job = await f.service.create(plan, plan.estimate.fingerprint, true);
+        const background = f.service.tick();
+        await vi.waitFor(() => expect(f.render).toHaveBeenCalledOnce());
+        vi.spyOn(f.service, 'get').mockResolvedValueOnce(await f.service.get(job.id));
+        const foreground = expect(f.service.resolve(job.id, 0)).rejects.toBeInstanceOf(TransientTTSError);
+        await Promise.resolve(); // Let the listener join before the shared request settles.
+        fail();
+        await Promise.all([background, foreground]);
+        expect(
+          (await pool.query('select status,audio_retry_attempts from saved_audiobooks where id=$1', [job.id])).rows[0],
+        ).toEqual({ status: 'queued', audio_retry_attempts: 1 });
+        expect(await f.service.tick()).toBe(false);
+        expect(f.render).toHaveBeenCalledOnce();
+      } finally {
+        await f.cleanup();
+      }
+    });
+  });
+
+  it('keeps user pause authoritative when an in-flight audio request times out', async () => {
+    await withPostgresSchema(harness!, 'audio_retry_pause', async (pool) => {
+      const f = await setup(pool);
+      let fail!: () => void;
+      f.render.mockImplementation(
+        () =>
+          new Promise((_resolve, reject) => {
+            fail = () => reject(new TransientTTSError('timeout'));
+          }),
+      );
+      try {
+        const plan = await f.service.plan('book', settings);
+        const job = await f.service.create(plan, plan.estimate.fingerprint, true);
+        const running = f.service.tick();
+        await vi.waitFor(() => expect(f.render).toHaveBeenCalledOnce());
+        await f.service.control(job.id, 'pause');
+        fail();
+        await running;
+        expect(
+          (await pool.query('select status,retry_at,audio_retry_attempts from saved_audiobooks where id=$1', [job.id]))
+            .rows[0],
+        ).toEqual({ status: 'paused', retry_at: null, audio_retry_attempts: 0 });
+        expect(await f.service.tick()).toBe(false);
+        expect(f.render).toHaveBeenCalledOnce();
+      } finally {
+        await f.cleanup();
+      }
+    });
+  });
+
   it('retries known 429 failures on the same item and stops before dispatch when the quota is full', async () => {
     await withPostgresSchema(harness!, 'audiobook_limits', async (pool) => {
       const f = await setup(pool);

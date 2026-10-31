@@ -74,6 +74,11 @@ function audioFailureMessage(reason: string, completion?: string): string {
 export function savedAudioErrorMessage(message: string | null | undefined): string | undefined {
   if (
     message ===
+    '음성 생성 응답이 늦어 중단되었습니다. 잠시 후 다시 재생하세요. 긴 문단은 문장 단위로 바꾸면 도움이 될 수 있습니다.'
+  )
+    return '음성 서비스의 응답이 늦어 작업이 멈췄어요. 이어 만들기를 누르면 미완료 구간부터 다시 시도해요.';
+  if (
+    message ===
       '음성 생성이 끝까지 완료되지 않았습니다. 읽던 묶음에서 다시 시도하거나 세부 청취 설정의 묶음 크기를 줄여 주세요.' ||
     message === '음성 생성이 끝까지 완료되지 않았습니다. 읽던 묶음에서 다시 시도하거나 묶음 크기를 줄여 주세요.'
   )

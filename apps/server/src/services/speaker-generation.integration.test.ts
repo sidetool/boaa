@@ -1,3 +1,4 @@
+import { TransientTTSError } from '../providers/tts-transient-error.js';
 import { GeminiAudioResponseError } from '../providers/gemini-audio-response.js';
 import { preparedNarrationSession } from '../../../../src/providers/prepared-narration';
 import { runTTSPlaybackSession } from '../../../../src/providers/tts-playback-session-runner';
@@ -60,6 +61,7 @@ async function setup(pool: pg.Pool, concurrency: 1 | 2 = 1, chapterIds = ['c1', 
     '0068_speaker_generation.sql',
     '0069_voice_library.sql',
     '0070_audiobook_content_blocks.sql',
+    '0071_audiobook_transient_retries.sql',
   ])
     await pool.query(await readFile(new URL('../db/migrations/' + name, import.meta.url), 'utf8'));
   for (const [index, id] of chapterIds.entries()) {
@@ -248,6 +250,31 @@ async function setup(pool: pg.Pool, concurrency: 1 | 2 = 1, chapterIds = ['c1', 
   };
 }
 (harness ? describe : describe.skip)('speaker background generation with real preset35 and PostgreSQL', () => {
+  it('automatically continues cast audio after a transient provider outage without manual analysis resume', async () => {
+    await withPostgresSchema(harness!, 'cast_transient_retry', async (pool) => {
+      const f = await setup(pool, 2);
+      f.synthesize.mockRejectedValueOnce(new TransientTTSError('unavailable', 503, 60));
+      try {
+        const job = await f.create();
+        await f.until(async () => !!(await f.service.list('book'))[0].retryAt);
+        const waiting = (await f.service.list('book'))[0];
+        expect(waiting.status).toBe('queued');
+        expect(waiting.error).toContain('음성 서비스 연결을 기다리는 중');
+        const calls = f.synthesize.mock.calls.length;
+        expect(await f.audio.tick()).toBe(false);
+        expect(f.synthesize).toHaveBeenCalledTimes(calls);
+        await pool.query("update saved_audiobooks set retry_at=now()-interval '1 second' where id=$1", [job.id]);
+        await f.until(async () => (await f.audio.get(job.id)).status === 'completed');
+        const done = (await f.service.list('book'))[0];
+        expect(done.completedItems).toBe(done.itemCount);
+        expect(done.skippedItems).toBe(0);
+        expect(done.readyChapterIds.sort()).toEqual(['c1', 'c2']);
+      } finally {
+        await f.cleanup();
+      }
+    });
+  });
+
   it('preserves speaker analysis and exposes omitted ranges when continuing content-blocked audio', async () => {
     await withPostgresSchema(harness!, 'speaker_policy_skip', async (pool) => {
       const f = await setup(pool, 2);

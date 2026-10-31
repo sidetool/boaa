@@ -1,3 +1,4 @@
+import { TransientTTSError, transientTTSFailure } from '../../providers/tts-transient-error.js';
 import { ttsContentBlockReason, CONTENT_BLOCK_MESSAGE } from '../../providers/tts-content-block.js';
 import { isGeminiActingModel } from '../../../../../src/providers/tts-performance';
 import { SpeakerEngineStore } from '../../providers/speaker-engine-store.js';
@@ -244,6 +245,7 @@ export async function registerPlainTTSRoutes(
           );
         let result;
         const generationSignal = AbortSignal.timeout(timeoutMs);
+        const generationStarted = Date.now();
         try {
           result = await adapter.synthesize({
             text,
@@ -254,9 +256,24 @@ export async function registerPlainTTSRoutes(
             signal: generationSignal,
           });
           if ((cooldowns.get(source.id)?.until ?? 0) <= Date.now()) cooldowns.delete(source.id);
-        } catch (error) {
+        } catch (caught) {
           // Some adapters turn deadline cancellation into AbortError. Preserve the real timeout reason.
-          generationSignal.throwIfAborted();
+          const error =
+            generationSignal.aborted && (caught as { name?: string })?.name === 'AbortError'
+              ? generationSignal.reason
+              : caught;
+          const transient = transientTTSFailure(error);
+          if (transient) {
+            app.log.warn({
+              event: 'plain_tts_failed',
+              errorCategory: transient.kind === 'timeout' ? 'tts_timeout' : 'tts_temporarily_unavailable',
+              component: adapter.providerId,
+              upstreamStatus: transient.upstreamStatus,
+              inputCharacters: [...text].length,
+              durationMs: Date.now() - generationStarted,
+            });
+            throw transient;
+          }
           if (error instanceof GeminiAudioResponseError)
             app.log.warn({
               event: 'plain_tts_failed',
@@ -623,7 +640,7 @@ export async function registerPlainTTSRoutes(
       catalog,
       render: (chapterId, request, model) =>
         // Preparing ahead can wait longer than interactive narration; still one bounded request, never a replay.
-        render(chapterId, request as unknown as Record<string, unknown>, false, undefined, model, 120_000),
+        render(chapterId, request as unknown as Record<string, unknown>, false, undefined, model, 180_000),
       resolveModel: async (settings, probe) =>
         (
           await prepare(
@@ -656,7 +673,7 @@ export async function registerPlainTTSRoutes(
           );
         const selected = (await voices(current)).find((v) => voiceKey(current, v.id) === voiceId);
         if (!selected) throw new PlainTTSError(409, '배정한 목소리를 찾지 못했어요.');
-        const audio = await synthesize(key, text, selected.id, 1, current, regenerate, 120_000, instructions);
+        const audio = await synthesize(key, text, selected.id, 1, current, regenerate, 180_000, instructions);
         const after = (await sources()).find((s) => s.id === expected.providerId);
         if (!after || structuredIntegrityHash(sourceModel(after)) !== structuredIntegrityHash(expected))
           throw new PlainTTSError(409, '생성 중 모델 연결이 바뀌었어요.');
@@ -727,6 +744,13 @@ export function classifyPlainTTSFailure(error: unknown): {
   upstreamStatus?: number;
 } {
   if (ttsContentBlockReason(error)) return { status: 422, code: 'tts_content_blocked', message: CONTENT_BLOCK_MESSAGE };
+  if (error instanceof TransientTTSError)
+    return {
+      status: error.kind === 'timeout' ? 504 : 503,
+      code: error.kind === 'timeout' ? 'tts_timeout' : 'tts_temporarily_unavailable',
+      message: error.message,
+      upstreamStatus: error.upstreamStatus,
+    };
   if (error instanceof TTSConnectionError)
     return { status: error.statusCode, code: 'tts_connection_failed', message: error.message };
   const value =

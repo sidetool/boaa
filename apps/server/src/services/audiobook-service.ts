@@ -1,3 +1,5 @@
+import { TransientTTSError } from '../providers/tts-transient-error.js';
+import { AUDIO_RETRY_LIMIT, batchFailure, retryDelay } from './audiobook-retry.js';
 import { ttsContentBlockReason } from '../providers/tts-content-block.js';
 import { audioOutcomeColumns, audioOutcomes, AudioSkipped } from './audiobook-outcomes.js';
 import { applyBookVoiceUpdates } from './speaker-book-voices';
@@ -28,6 +30,7 @@ type JobRow = {
   blocked_audio?: SavedAudiobook['blockedAudio'];
   skipped_audio?: SavedAudiobook['skippedAudio'];
   rate_limit_attempts: number;
+  audio_retry_attempts: number;
   bytes: string;
   playback_index: number;
   current_chapter_title?: string;
@@ -223,6 +226,10 @@ export class AudiobookService {
       }
     } catch (error) {
       if (error instanceof AudioSkipped) throw error;
+      if (error instanceof TransientTTSError) {
+        if (!this.closing) await this.queueAudioRetry(id, error);
+        throw error;
+      }
       // Do not let the background runner automatically repeat an ambiguous foreground failure.
       const failure = this.failure(error);
       const status = (error as { statusCode?: number })?.statusCode ?? failure.status;
@@ -527,7 +534,7 @@ export class AudiobookService {
         await client.query('begin');
         const row = (
           await client.query(
-            `update saved_audiobooks set status='queued',error_message=null,retry_at=null,rate_limit_attempts=0,updated_at=now()
+            `update saved_audiobooks set status='queued',error_message=null,retry_at=null,rate_limit_attempts=0,audio_retry_attempts=0,updated_at=now()
           where id=$1 and user_id=$2 and status in ('paused','failed') returning id`,
             [id, this.owner],
           )
@@ -571,7 +578,7 @@ export class AudiobookService {
       if (!changed.rowCount) throw audiobookError(409, '건너뛸 차단 구간이 없어요.');
       await client.query(
         `update saved_audiobooks set settings=jsonb_set(settings,'{skipBlockedAudio}','true'::jsonb),
-         status='queued',error_message=null,retry_at=null,rate_limit_attempts=0,updated_at=now() where id=$1`,
+         status='queued',error_message=null,retry_at=null,rate_limit_attempts=0,audio_retry_attempts=0,updated_at=now() where id=$1`,
         [id],
       );
       await client.query('commit');
@@ -632,6 +639,30 @@ export class AudiobookService {
     ]);
   }
 
+  /** Joined foreground/background failures schedule once; waiting state survives process restarts. */
+  private async queueAudioRetry(id: string, error: TransientTTSError) {
+    const label = error.kind === 'timeout' ? '음성 서비스 응답을 기다리는 중' : '음성 서비스 연결을 기다리는 중';
+    await this.pool.query(
+      `update saved_audiobooks set
+       status=case when status='pausing' then 'paused' when audio_retry_attempts >= $2::integer then 'failed' else 'queued' end,
+       retry_at=case when status='pausing' or audio_retry_attempts >= $2::integer then null
+         else now()+(greatest(15 * power(2,audio_retry_attempts),$3) * interval '1 second') end,
+       audio_retry_attempts=case when status='pausing' or audio_retry_attempts >= $2::integer then audio_retry_attempts else audio_retry_attempts+1 end,
+       error_message=case when status='pausing' then null when audio_retry_attempts >= $2::integer then $5
+         else $4 || ' · 잠시 후 자동으로 다시 시도해요. (' || (audio_retry_attempts+1)::text || '/' || $2::integer::text || ')' end,
+       updated_at=now() where id=$1 and user_id=$6 and status in ('queued','running','pausing')
+       and (retry_at is null or retry_at<=now())`,
+      [
+        id,
+        AUDIO_RETRY_LIMIT,
+        retryDelay(error),
+        label,
+        '음성 서비스 응답이 계속 불안정해 자동 재시도 5회 후 멈췄어요. 만든 음성은 보관돼 있어요. 잠시 후 이어 만들 수 있어요.',
+        this.owner,
+      ],
+    );
+  }
+
   /** Drain already committed speech while the next analysis step waits for its provider. */
   private async advanceWithAudio(job: JobRow, signal: AbortSignal) {
     let finished = false;
@@ -660,7 +691,9 @@ export class AudiobookService {
                   [
                     job.id,
                     current.settings.cast?.autoActing === true,
-                    current.rate_limit_attempts > 0 ? 1 : await this.backgroundConcurrency(current.settings),
+                    current.rate_limit_attempts > 0 || current.audio_retry_attempts > 0
+                      ? 1
+                      : await this.backgroundConcurrency(current.settings),
                   ],
                 )
               ).rows;
@@ -695,15 +728,7 @@ export class AudiobookService {
     }
     // Never release the runner lock or requeue while either lane still has a paid request in flight.
     const result = await analysis;
-    const permanent = failures.find((error) => this.failure(error).status !== 429);
-    if (permanent) throw permanent;
-    if (failures.length) {
-      const retryAfter = (error: unknown) => {
-        const detail = error as { retryAfterSeconds?: number; payload?: { retryAfterSeconds?: number } };
-        return detail.retryAfterSeconds ?? detail.payload?.retryAfterSeconds ?? 0;
-      };
-      throw failures.reduce((a, b) => (retryAfter(a) >= retryAfter(b) ? a : b));
-    }
+    if (failures.length) throw batchFailure(failures, this.failure);
     return result;
   }
 
@@ -765,8 +790,11 @@ export class AudiobookService {
             return false;
           }
         }
-        // After a rate limit, probe with one request before restoring parallel work.
-        const width = job.rate_limit_attempts > 0 ? 1 : await this.backgroundConcurrency(job.settings);
+        // After a quota wait or transient failure, probe with one request before restoring parallel work.
+        const width =
+          job.rate_limit_attempts > 0 || job.audio_retry_attempts > 0
+            ? 1
+            : await this.backgroundConcurrency(job.settings);
         const items = (
           await client.query(
             "select * from saved_audiobook_items where audiobook_id=$1 and status not in ('ready','skipped') order by ordinal limit $2",
@@ -776,7 +804,7 @@ export class AudiobookService {
         const item = items[0];
         if (!item) {
           await client.query(
-            "update saved_audiobooks set status=case when status='pausing' then 'paused' when planning_complete and not exists(select 1 from saved_audiobook_items i where i.audiobook_id=saved_audiobooks.id and i.status not in ('ready','skipped')) then 'completed' else 'queued' end,error_message=null,retry_at=null,rate_limit_attempts=0,updated_at=now() where id=$1 and status in ('running','pausing')",
+            "update saved_audiobooks set status=case when status='pausing' then 'paused' when planning_complete and not exists(select 1 from saved_audiobook_items i where i.audiobook_id=saved_audiobooks.id and i.status not in ('ready','skipped')) then 'completed' else 'queued' end,error_message=null,retry_at=null,rate_limit_attempts=0,audio_retry_attempts=0,updated_at=now() where id=$1 and status in ('running','pausing')",
             [job.id],
           );
           return false;
@@ -802,19 +830,10 @@ export class AudiobookService {
         const failures = results.flatMap((result) =>
           result.status === 'rejected' && !(result.reason instanceof AudioSkipped) ? [result.reason] : [],
         );
-        // An ambiguous failure must never become an automatic retry just because its sibling hit 429.
-        const permanent = failures.find(
-          (error) => !(error instanceof BackgroundYield) && this.failure(error).status !== 429,
-        );
-        if (permanent) throw permanent;
-        const limited = failures.filter((error) => this.failure(error).status === 429);
-        if (limited.length) {
-          const retryAfter = (error: { retryAfterSeconds?: number; payload?: { retryAfterSeconds?: number } }) =>
-            error.retryAfterSeconds ?? error.payload?.retryAfterSeconds ?? 0;
-          throw limited.reduce((a, b) => (retryAfter(a) >= retryAfter(b) ? a : b));
-        }
+        const actionable = failures.filter((error) => !(error instanceof BackgroundYield));
+        if (actionable.length) throw batchFailure(actionable, this.failure);
         await client.query(
-          `update saved_audiobooks set error_message=null,retry_at=null,rate_limit_attempts=0,
+          `update saved_audiobooks set error_message=null,retry_at=null,rate_limit_attempts=0,audio_retry_attempts=0,
           status=case when status='pausing' then 'paused' else 'queued' end,updated_at=now()
           where id=$1 and status in ('running','pausing')`,
           [job.id],
@@ -822,6 +841,17 @@ export class AudiobookService {
         return results.some((result) => result.status === 'fulfilled');
       } catch (error) {
         await client.query('rollback');
+        if (error instanceof BackgroundYield || (abort.signal.aborted && this.closing)) {
+          await client.query(
+            "update saved_audiobooks set status=case when status='pausing' then 'paused' else 'queued' end where id=$1 and status in ('running','pausing')",
+            [job.id],
+          );
+          return false;
+        }
+        if (error instanceof TransientTTSError) {
+          await this.queueAudioRetry(job.id, error);
+          return false;
+        }
         if (this.failure(error).status === 429) {
           if (
             (error as { requestStage?: string; voiceCreationQuota?: number }).requestStage === 'voice_design' &&
@@ -879,13 +909,6 @@ export class AudiobookService {
             error_message=case when status='pausing' then null else $3 end,updated_at=now()
             where id=$1 and status in ('running','pausing')`,
             [job.id, seconds, `${label} 요청 제한으로 대기 중 · ${Math.ceil(seconds)}초 후 자동으로 이어 만들어요.`],
-          );
-          return false;
-        }
-        if (error instanceof BackgroundYield || (abort.signal.aborted && this.closing)) {
-          await client.query(
-            "update saved_audiobooks set status=case when status='pausing' then 'paused' else 'queued' end where id=$1 and status in ('running','pausing')",
-            [job.id],
           );
           return false;
         }
