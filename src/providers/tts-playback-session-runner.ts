@@ -85,8 +85,8 @@ export async function runTTSPlaybackSession(
     const prepared = await input.prepareParagraph?.(paragraphIndex, paragraph);
     if (!input.shouldContinue()) return stopped(paragraphIndex);
     const nextParagraphIndex = prepared?.nextParagraphIndex ?? paragraphIndex + 1;
-    const playableSegments = (prepared?.playables ?? input.buildPlayableSegments(paragraph)).filter((item) =>
-      hasSpokenContent(item.text),
+    const playableSegments = (prepared?.playables ?? input.buildPlayableSegments(paragraph)).filter(
+      (item) => !item.preparedAudio?.skipped && hasSpokenContent(item.text),
     );
     if (!playableSegments.length) {
       paragraphIndex = nextParagraphIndex - 1;
@@ -196,7 +196,9 @@ async function runSystemSequence(input: RunTTSPlaybackSessionInput): Promise<TTS
     const paragraph = await input.getParagraph(paragraphIndex);
     if (!input.shouldContinue()) return stopped(paragraphIndex);
     if (!paragraph) return missingSource(input, paragraphIndex);
-    const playableSegments = input.buildPlayableSegments(paragraph).filter((item) => hasSpokenContent(item.text));
+    const playableSegments = input
+      .buildPlayableSegments(paragraph)
+      .filter((item) => !item.preparedAudio?.skipped && hasSpokenContent(item.text));
     const requestedPlayableIndex =
       paragraphIndex === input.startIndex && input.startQueueItemFingerprint && input.queueItemFingerprint
         ? playableSegments.findIndex(
@@ -342,6 +344,7 @@ async function prefetchUpcomingPlayables(input: PrefetchInput): Promise<void> {
     await input.prefetchHostedSegment?.(target.playable, target.paragraph);
   };
   const add = async (paragraph: Paragraph, playable: PlayableTtsSegment) => {
+    if (playable.preparedAudio?.skipped) return;
     if (!input.shouldContinue()) {
       full = true;
       return;
@@ -378,8 +381,8 @@ async function prefetchUpcomingPlayables(input: PrefetchInput): Promise<void> {
     if (!paragraph || !input.shouldContinue()) break;
     const prepared = await input.prepareParagraph?.(paragraphIndex, paragraph);
     if (!input.shouldContinue()) break;
-    for (const playable of (prepared?.playables ?? input.buildPlayableSegments(paragraph)).filter((item) =>
-      hasSpokenContent(item.text),
+    for (const playable of (prepared?.playables ?? input.buildPlayableSegments(paragraph)).filter(
+      (item) => !item.preparedAudio?.skipped && hasSpokenContent(item.text),
     )) {
       await add(paragraph, playable);
       if (full) break;

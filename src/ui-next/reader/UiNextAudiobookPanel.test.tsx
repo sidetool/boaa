@@ -180,6 +180,69 @@ describe('UiNextAudiobookPanel creating', () => {
 });
 
 describe('UiNextAudiobookPanel saved jobs', () => {
+  it('offers only a confirmed skip for content-blocked segments and says when the list is cut short', async () => {
+    const blockedAudio = Array.from({ length: 8 }, (_, index) => ({
+      ordinal: index + 1,
+      chapterTitle: '2화',
+      reason: 'SAFETY',
+    }));
+    const api = port(async () => [
+      saved({
+        status: 'failed',
+        itemCount: 20,
+        completedItems: 6,
+        blockedItems: 9,
+        blockedAudio,
+        error: '음성 제공자가 콘텐츠 제한으로 이 구간의 생성을 거절했어요.',
+      }),
+    ]);
+    const root = await mount(controls({ port: api }));
+    expect(hasButton(root, '이어 만들기')).toBe(false);
+    expect(text(root)).toContain('콘텐츠 제한 구간 9개');
+    expect(text(root)).toContain('작업 내 2번 구간');
+    expect(text(root)).toContain('앞 8개만 보여요 · 전체 9개');
+    expect(text(root)).not.toContain('SAFETY');
+    expect(text(root)).not.toContain('생성을 거절했어요.');
+
+    // Free jobs still confirm that segments will stay silent.
+    await click(button(root, '건너뛰고 계속'));
+    expect(api.control).not.toHaveBeenCalled();
+    expect(text(root)).toContain('남은 5개 구간');
+    expect(text(root)).toContain('본문은 그대로 보여요');
+    expect(text(root)).not.toContain('요금');
+    await click(button(root, '건너뛰고 계속'));
+    expect(api.control).toHaveBeenCalledWith('book-1', 'skip-blocked', false);
+  });
+
+  it('still shows a job error that is not the fixed content-block wording', async () => {
+    const root = await mount(
+      controls({
+        port: port(async () => [saved({ status: 'failed', blockedItems: 1, error: '음성 파일을 저장하지 못했어요.' })]),
+      }),
+    );
+    expect(text(root)).toContain('콘텐츠 제한 구간 1개');
+    expect(text(root)).toContain('음성 파일을 저장하지 못했어요.');
+  });
+
+  it('keeps silent segments visible after a finished job', async () => {
+    const skippedAudio = [
+      { ordinal: 2, chapterTitle: '2화', reason: 'SAFETY' },
+      { ordinal: 4, chapterTitle: '3화', reason: 'PROHIBITED_CONTENT' },
+    ];
+    const root = await mount(
+      controls({
+        port: port(async () => [
+          saved({ itemCount: 6, completedItems: 4, skippedItems: 2, skipBlockedAudio: true, skippedAudio }),
+        ]),
+      }),
+    );
+    expect(text(root)).toContain('완료 · 누락 2');
+    expect(text(root)).toContain('처리 6 / 6 구간');
+    expect(text(root)).toContain('음성 없이 넘긴 구간 2개');
+    expect(text(root)).toContain('5번 구간');
+    expect(text(root)).not.toContain('자동으로 넘겨요');
+  });
+
   it('pauses a running job and offers delete only after it stops', async () => {
     const api = port(async () => [saved({ status: 'running', completedItems: 2 })]);
     const root = await mount(controls({ port: api }));

@@ -205,7 +205,7 @@ export async function registerSpeakerGenerationRoutes(
     );
     routes.post<{
       Params: { bookId: string; id: string };
-      Body: { action: 'pause' | 'resume'; confirmPaid?: boolean };
+      Body: { action: 'pause' | 'resume' | 'skip-blocked'; confirmPaid?: boolean };
     }>('/api/books/:bookId/speaker-generation/:id/control', async (req) => {
       if (!(await service.list(req.params.bookId)).some((j) => j.id === req.params.id))
         throw audiobookError(404, '생성 작업을 찾을 수 없어요.');

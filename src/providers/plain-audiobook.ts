@@ -5,6 +5,8 @@ import type { SpeakerGenerationSettings } from './speaker-generation';
 
 /** Ordinary narration saved on the account's server, independently of disposable caches. */
 export interface AudiobookInput {
+  /** Server-owned, enabled only by the explicit skip-blocked control action. */
+  skipBlockedAudio?: boolean;
   /** Trusted server plan only. Ordinary creation routes never accept this field. */
   cast?: SpeakerGenerationSettings;
   chapterIds: string[];
@@ -22,6 +24,7 @@ export interface PreparedNarration {
   id: string;
   chapterId: string;
   contentRevision?: string;
+  skippedItems?: number;
   voiceLabel: string;
   items: { ordinal: number; paragraphIndex: number; nextParagraphIndex: number; playable: PlayableTtsSegment }[];
 }
@@ -46,6 +49,11 @@ export interface SavedAudiobook extends AudiobookEstimate {
   title: string;
   status: AudiobookStatus;
   completedItems: number;
+  blockedItems?: number;
+  skippedItems?: number;
+  skipBlockedAudio?: boolean;
+  blockedAudio?: { ordinal: number; chapterTitle: string; reason: string }[];
+  skippedAudio?: { ordinal: number; chapterTitle: string; reason: string }[];
   bytes: number;
   playbackIndex: number;
   currentChapterTitle?: string;
@@ -63,7 +71,7 @@ export interface AudiobookPort {
     confirmPaid: boolean,
     signal?: AbortSignal,
   ): Promise<SavedAudiobook>;
-  control(id: string, action: 'pause' | 'resume', confirmPaid?: boolean): Promise<SavedAudiobook>;
+  control(id: string, action: 'pause' | 'resume' | 'skip-blocked', confirmPaid?: boolean): Promise<SavedAudiobook>;
   remove(id: string): Promise<void>;
   audio(id: string, index: number, signal?: AbortSignal): Promise<Blob>;
   progress(id: string, index: number): Promise<void>;

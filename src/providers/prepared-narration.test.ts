@@ -236,3 +236,40 @@ it('honors the normal queue cursor, timer and cancellation for prepared sentence
   });
   expect(play).not.toHaveBeenCalled();
 });
+
+it('omitted recordings are neither played nor prefetched, including a chapter with only omissions', async () => {
+  const skipped: PreparedNarration = {
+    ...plan,
+    skippedItems: 1,
+    items: plan.items.map((item, index) => ({
+      ...item,
+      playable: {
+        ...item.playable,
+        preparedAudio: { id: plan.id, ordinal: index, ready: index === 1, skipped: index === 0 },
+      },
+    })),
+  };
+  const play = vi.fn(async (_playable: PreparedNarration['items'][number]['playable']) => true),
+    prefetch = vi.fn(),
+    system = vi.fn();
+  const run = (value: PreparedNarration) =>
+    runTTSPlaybackSession({
+      ...preparedNarrationSession(value, 0, async (index) => paragraphs[index]),
+      buildPlayableSegments: () => [],
+      shouldContinue: () => true,
+      waitForResume: async () => true,
+      playHostedSegment: play,
+      prefetchHostedSegment: prefetch,
+      allowSystemFallback: false,
+      buildSystemFallbackInput: () => ({ text: 'unused', rate: 1 }),
+      speakSystem: system,
+    });
+  expect(await run(skipped)).toMatchObject({ completed: true });
+  expect(play).toHaveBeenCalledOnce();
+  expect(play.mock.calls[0][0].preparedAudio!.ordinal).toBe(1);
+  expect(prefetch).not.toHaveBeenCalled();
+  expect(system).not.toHaveBeenCalled();
+  play.mockClear();
+  expect(await run({ ...skipped, items: [skipped.items[0]] })).toMatchObject({ completed: true });
+  expect(play).not.toHaveBeenCalled();
+});

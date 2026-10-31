@@ -16,6 +16,13 @@
 `src/providers/browser-audio-session.ts`, `apps/server/src/routes/ai/plain-tts-routes.ts`와
 `apps/server/src/providers/`에 있다. 회귀 검증은 해당 모듈의 행동 테스트를 따른다.
 
+### 콘텐츠 차단 구간 건너뛰기
+
+- 저장된 일반 음성·화자별 음성에 공통 적용한다. Gemini의 고정 정책 종료 코드(`SAFETY`, `RECITATION`, `BLOCKLIST`, `PROHIBITED_CONTENT`, `SPII`)와 OpenAI·호환/연결형·ElevenLabs API의 명시적 `content_policy_violation`/`content_filter` 오류 코드만 구간 차단으로 기록한다. 임의 오류 문구, 인증 거절, 429, 시간 초과, 출력 한도 및 잘린 파일은 대상이 아니다.
+- 기본은 차단 시 중단이다. 해당 작업에서 사용자가 누락과 이후 생성 비용을 확인하고 `skip-blocked`를 선택하면 현재 차단 구간을 건너뛰고, 그 작업의 이후 정책 차단도 음성 없이 건너뛴다. 새 작업과 목소리 바꾸기로 만든 작업에는 선택을 물려주지 않는다. 일반 재시도는 알려진 차단 구간을 다시 과금 요청하지 않는다.
+- migration 0070의 `blocked`/`skipped` 상태와 고정 `block_reason`으로 저장한다. 실제 음성 개수와 건너뛴 개수는 분리하며, `ready` 또는 `skipped`로 모든 구간의 처리가 끝나면 작업을 완료한다. 들을 수 있는 회차는 미처리 구간이 없고 실제 저장 음성이 하나 이상 있어야 한다. 화면에는 누락 개수·위치를 유지한다.
+- 본문·분석·기존 음성 파일을 수정하지 않는다. 건너뛴 구간에는 가짜 무음 파일이나 대체 목소리를 만들지 않는다. 재생 목록과 미리 받기에서 제외하고 회차 시작 때 누락 안내를 보여 준다. 이전 재생 목록에서 뒤늦게 건너뛴 구간을 요청해도 서버의 명시적 `tts_audio_skipped` 응답만 생략으로 처리하며, 일반 파일 손상/404/410을 생략하지 않는다.
+
 ### 추가 TTS 서버
 
 듣기 → TTS 엔진 연결 → **TTS 서버**에서 로컬 JSON 엔진과 OpenAI 호환 음성 API를 여러 개

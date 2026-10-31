@@ -1,4 +1,4 @@
-import { ttsHttpError } from './tts-http-error.js';
+import { ttsPolicyHttpError } from './tts-http-error.js';
 import { namedVoices } from './tts-voices.js';
 import type { TTSSynthesisInput, TTSSynthesisProvider, TTSSynthesisResult } from '../../../../src/providers/tts';
 
@@ -76,8 +76,7 @@ export class OpenAITTSProvider implements TTSSynthesisProvider {
       signal: input.signal,
     });
     if (!response.ok) {
-      await response.body?.cancel().catch(() => undefined);
-      throw ttsHttpError(`OpenAI TTS request failed with ${response.status}`, response);
+      throw await ttsPolicyHttpError(`OpenAI TTS request failed with ${response.status}`, response);
     }
 
     return {

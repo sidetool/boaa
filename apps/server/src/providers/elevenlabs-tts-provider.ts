@@ -1,3 +1,4 @@
+import { ttsPolicyHttpError } from './tts-http-error.js';
 import { wavFromPcm16 } from './tts-audio.js';
 import type { TTSVoice } from '../../../../src/providers/tts';
 import type { TTSSynthesisInput, TTSSynthesisProvider, TTSSynthesisResult } from '../../../../src/providers/tts';
@@ -88,8 +89,7 @@ export class ElevenLabsTTSProvider implements TTSSynthesisProvider {
       signal: input.signal,
     });
     if (!response.ok) {
-      const errorText = await response.text().catch(() => '');
-      throw new Error(`ElevenLabs TTS request failed with ${response.status}: ${errorText.slice(0, 500)}`);
+      throw await ttsPolicyHttpError(`ElevenLabs TTS request failed with ${response.status}`, response);
     }
 
     const raw = Buffer.from(await response.arrayBuffer());

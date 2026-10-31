@@ -247,6 +247,12 @@
   color: var(--un-danger);
 }
 
+/* Finished, but some segments have no audio: never the plain green 완료. */
+.un-book-badge.is-completed.is-partial {
+  background: rgb(245 184 75 / 12%);
+  color: #f5b84b;
+}
+
 .un-book-meta {
   color: var(--un-text-3);
   font-size: 12.5px;
@@ -286,6 +292,133 @@
 
 .un-btn.un-book-danger:hover {
   background: rgb(255 90 106 / 24%);
+}
+
+/* ───────── segments without audio ───────── */
+
+.un-book-gaps {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgb(255 255 255 / 4%);
+}
+
+.un-book-gaps.is-blocked {
+  background: rgb(245 184 75 / 9%);
+}
+
+.un-book-gaps-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  color: #f5b84b;
+  font-size: 13.5px;
+}
+
+.un-book-gaps-head > svg {
+  flex: none;
+}
+
+.un-book-gaps-head b {
+  color: var(--un-text);
+  font-weight: 700;
+}
+
+.un-book-gaps > small {
+  color: var(--un-text-2);
+  font-size: 12.5px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.un-book-gaps summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  list-style: none;
+  cursor: pointer;
+}
+
+.un-book-gaps summary::-webkit-details-marker {
+  display: none;
+}
+
+.un-book-gaps summary::after {
+  content: '';
+  flex: none;
+  width: 7px;
+  height: 7px;
+  margin-right: 3px;
+  border-right: 1.5px solid var(--un-text-3);
+  border-bottom: 1.5px solid var(--un-text-3);
+  transform: translateY(-2px) rotate(45deg);
+  transition: transform 0.15s;
+}
+
+.un-book-gaps[open] summary::after {
+  transform: translateY(2px) rotate(-135deg);
+}
+
+.un-book-gaps summary > span {
+  display: grid;
+  gap: 1px;
+  min-width: 0;
+}
+
+.un-book-gaps summary b {
+  color: var(--un-text-2);
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.un-book-gaps summary small {
+  color: var(--un-text-3);
+  font-size: 12px;
+}
+
+.un-book-gap-list {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.un-book-gap-list li {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+  padding: 5px 0;
+  font-size: 12.5px;
+}
+
+.un-book-gap-list li + li {
+  border-top: 1px solid rgb(255 255 255 / 6%);
+}
+
+.un-book-gap-list span {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--un-text-2);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.un-book-gap-list small {
+  flex: none;
+  color: var(--un-text-3);
+  font-variant-numeric: tabular-nums;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .un-book-gaps summary::after {
+    transition: none;
+  }
 }
 
 /* ───────── saved playback ───────── */

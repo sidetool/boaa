@@ -1,3 +1,4 @@
+import { RemoteApiError } from '../../services/remote/remote-api-contracts';
 import { act, create, type ReactTestRenderer } from 'react-test-renderer';
 import { expect, it, vi } from 'vitest';
 import { usePlainTTS } from './usePlainTTS';
@@ -454,5 +455,58 @@ it('releases a stalled prepared GET shared with prefetch and rereads without syn
   } finally {
     if (root) act(() => root!.unmount());
     vi.useRealTimers();
+  }
+});
+
+it('continues an old prepared snapshot only for a confirmed omission, not other missing audio', async () => {
+  const resolve = vi.fn().mockRejectedValue(new RemoteApiError('omitted', 410, { code: 'tts_audio_skipped' }));
+  const audio = vi.fn().mockRejectedValue(new RemoteApiError('pending', 404));
+  const playAudio = vi.fn(async () => true),
+    onError = vi.fn();
+  const controller = {
+    beginHostedPlayback: () => ({ controller: new AbortController() }),
+    isSessionCurrent: () => true,
+    setHostedStatus: vi.fn(),
+    playAudio,
+    finishOperation: vi.fn(),
+    stopAll: vi.fn(),
+  } as unknown as Input['controller'];
+  const paragraph = { id: 'p', index: 1, chapterId: 'c', novelId: 'b', text: '누락된 부분입니다.' } as Paragraph;
+  const playable = {
+    ...buildPlainTTSItems({ paragraph, rate: 1 })[0],
+    preparedAudio: { id: 'saved', ordinal: 0, ready: false },
+  };
+  let hook!: ReturnType<typeof usePlainTTS>, root!: ReactTestRenderer;
+  const owner = {};
+  function Harness() {
+    hook = usePlainTTS({
+      enabled: true,
+      owner,
+      settings: DEFAULT_TTS_PLAYBACK_SETTINGS,
+      rules: [],
+      controller,
+      systemTTS: { stop: vi.fn() } as unknown as Input['systemTTS'],
+      onError,
+      prepared: { audio, resolve } as unknown as Input['prepared'],
+    });
+    return null;
+  }
+  await act(async () => {
+    root = create(<Harness />);
+  });
+  try {
+    await act(async () => {
+      expect(await hook.play(playable, paragraph, 1)).toBe(true);
+    });
+    expect(playAudio).not.toHaveBeenCalled();
+    expect(onError).toHaveBeenCalledWith(expect.stringContaining('건너뛴'));
+    resolve.mockRejectedValue(new RemoteApiError('missing file', 410));
+    await act(async () => {
+      expect(await hook.play(playable, paragraph, 1)).toBe(false);
+    });
+    expect(playAudio).not.toHaveBeenCalled();
+    expect(resolve).toHaveBeenCalledTimes(2);
+  } finally {
+    await act(async () => root.unmount());
   }
 });

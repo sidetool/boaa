@@ -50,6 +50,7 @@ export interface AudiobookPlan {
 export function validateAudiobookInput(input: AudiobookInput): void {
   if (
     !input ||
+    input.skipBlockedAudio !== undefined ||
     !Array.isArray(input.chapterIds) ||
     !input.chapterIds.length ||
     input.chapterIds.length > 2000 ||

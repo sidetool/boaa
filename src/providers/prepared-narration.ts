@@ -5,6 +5,7 @@ import type { Paragraph } from '../domain/types';
 export function preparedNarrationQueue(plan: PreparedNarration, requestedIndex: number) {
   const groups: { paragraphIndex: number; playables: PreparedNarration['items'][number]['playable'][] }[] = [];
   for (const item of plan.items) {
+    if (item.playable.preparedAudio?.skipped) continue;
     const last = groups[groups.length - 1];
     if (last?.paragraphIndex === item.paragraphIndex) last.playables.push(item.playable);
     else groups.push({ paragraphIndex: item.paragraphIndex, playables: [item.playable] });

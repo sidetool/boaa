@@ -4462,6 +4462,8 @@ export default function App() {
       throw new Error('선택한 음성의 생성 범위를 벗어났어요. 미리 생성하기에서 이 회차를 선택해 주세요.');
     if (plainServerSelected && !prepared && !plainTTS.ready)
       throw new Error('미리 만든 음성이 없는 범위입니다. 서버 목소리를 연결해 주세요.');
+    if ((prepared?.skippedItems ?? 0) > 0)
+      showToast(`이 회차는 콘텐츠 제한으로 ${prepared!.skippedItems}개 구간의 음성이 빠져 있어요.`, 'info');
     preparedPlanRef.current = prepared ? { owner: ttsSessionOwner, plan: prepared } : undefined;
     playbackDiagnostics.record('session', {
       prepared: Boolean(prepared),

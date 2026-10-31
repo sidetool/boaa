@@ -1,4 +1,4 @@
-import { AlertCircle, FlaskConical, Pause, Play, RefreshCw, Settings2, Trash2 } from 'lucide-react';
+import { AlertCircle, FlaskConical, Pause, Play, RefreshCw, Settings2, SkipForward, Trash2 } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { AudiobookStatus } from '../../providers/plain-audiobook';
 import type { PlainTTSProviderStatus, PlainTTSVoice } from '../../providers/plain-tts';
@@ -15,6 +15,7 @@ import { formatBytes, formatCount } from '../../utils/format';
 import { cx } from '../components/primitives';
 import SpeakerCleanup from './SpeakerCleanup';
 import SpeakerJobProgress from './SpeakerJobProgress';
+import { AudioBadge, AudioGaps, audioCounts, skipBlockedText, visibleError } from './AudioGaps';
 import { ChapterScopeFields, chapterScopeSummary, useChapterScope } from './chapter-scope';
 import { speakerPreferenceQueue } from './speaker-generation-preferences';
 import UiNextCastingOptions, {
@@ -31,7 +32,7 @@ import type { SpeakerCastingOptions, LibraryVoice, VoiceDesignProvider } from '.
 import './audiobook.css';
 import './speaker-generation.css';
 
-type Confirm = { id: string; action: 'resume' | 'remove' };
+type Confirm = { id: string; action: 'resume' | 'skip' | 'remove' };
 
 const POLL_MS = 4000;
 const STATUS_LABEL: Record<AudiobookStatus, string> = {
@@ -492,6 +493,11 @@ function Body({
     if (item.paid && !confirmed) return setConfirm({ id: item.id, action: 'resume' });
     void act(item.id, () => latest.current.port.control(item.id, 'resume', item.paid && confirmed));
   };
+  // Leaving segments silent is always asked first, paid or not.
+  const skipBlocked = (item: SpeakerGenerationJob, confirmed = false) => {
+    if (!confirmed) return setConfirm({ id: item.id, action: 'skip' });
+    void act(item.id, () => latest.current.port.control(item.id, 'skip-blocked', item.paid));
+  };
   const listen = async (item: SpeakerGenerationJob) => {
     setActionError(undefined);
     try {
@@ -942,6 +948,7 @@ function Body({
                 onPlay={() => void listen(item)}
                 onPause={() => void act(item.id, () => latest.current.port.control(item.id, 'pause'))}
                 onResume={(confirmed) => resume(item, confirmed)}
+                onSkipBlocked={(confirmed) => skipBlocked(item, confirmed)}
                 onRemove={(confirmed) =>
                   confirmed
                     ? void act(item.id, () => latest.current.port.remove(item.id))
@@ -990,6 +997,7 @@ function JobItem({
   onPlay,
   onPause,
   onResume,
+  onSkipBlocked,
   onRemove,
   onCancel,
 }: {
@@ -1002,6 +1010,7 @@ function JobItem({
   onPlay(): void;
   onPause(): void;
   onResume(confirmed?: boolean): void;
+  onSkipBlocked(confirmed?: boolean): void;
   onRemove(confirmed?: boolean): void;
   onCancel(): void;
 }) {
@@ -1010,7 +1019,10 @@ function JobItem({
   const removable = !generating && item.status !== 'pausing' && item.status !== 'deleting';
   const ready = item.readyChapterIds.length;
   const playable = item.status !== 'deleting' && ready > 0;
-  const remaining = Math.max(0, item.itemCount - item.completedItems);
+  const { remaining, blocked } = audioCounts(item);
+  const jobError = visibleError(item);
+  const openPlan = item.planningComplete === false || item.itemCount === 0;
+  const label = confirm === 'remove' ? '삭제' : confirm === 'skip' ? '건너뛰고 계속' : '이어 만들기';
   // The job does not say whether it acts, so the acting step is listed only while it runs.
   const steps = STEPS.filter(([stage]) => stage !== 'performance' || item.stage === 'performance');
   const step = steps.findIndex(([stage]) => stage === item.stage);
@@ -1020,9 +1032,10 @@ function JobItem({
     <li className="un-book-item">
       <div className="un-book-item-head">
         <b>{rangeLabel(item)}</b>
-        <span className={cx('un-book-badge', `is-${item.status}`)}>
-          {item.status === 'queued' && item.retryAt ? '재시도 대기' : STATUS_LABEL[item.status]}
-        </span>
+        <AudioBadge
+          item={item}
+          label={item.status === 'queued' && item.retryAt ? '재시도 대기' : STATUS_LABEL[item.status]}
+        />
       </div>
       <small className="un-book-meta">
         {formatCount(item.chapterCount)}개 회차 · {item.voiceLabel} · {item.providerName}
@@ -1042,36 +1055,37 @@ function JobItem({
         </ol>
       )}
       <SpeakerJobProgress item={item} />
-      {(error || (item.error && !(item.status === 'queued' && item.retryAt))) && (
+      {(error || (jobError && !(item.status === 'queued' && item.retryAt))) && (
         <p
           className={!error && item.status === 'queued' ? 'un-book-meta' : 'un-book-error'}
           role={!error && item.status === 'queued' ? 'status' : 'alert'}
         >
           <AlertCircle size={15} aria-hidden="true" />
-          {error ?? item.error}
+          {error ?? jobError}
         </p>
       )}
+      <AudioGaps item={item} />
       {revoice}
       {bookVoices}
       {confirm ? (
-        <div
-          className="un-book-confirm"
-          role="group"
-          aria-label={confirm === 'remove' ? '삭제 확인' : '이어 만들기 확인'}
-        >
+        <div className="un-book-confirm" role="group" aria-label={`${label} 확인`}>
           <p>
             {confirm === 'remove'
               ? `이 작업의 음성 ${formatBytes(item.bytes)}만 지워요. 화자 분석 기록은 남아요. 되돌릴 수 없어요.`
-              : `${item.planningComplete === false || item.itemCount === 0 ? '남은 회차를 이어서 만들어요.' : `남은 ${formatCount(remaining)}개 구간을 이어서 만들어요.`} 유료 API 요금이 나올 수 있어요.`}
+              : confirm === 'skip'
+                ? skipBlockedText(item, openPlan ? '남은 회차' : `남은 ${formatCount(remaining - blocked)}개 구간`)
+                : `${openPlan ? '남은 회차를 이어서 만들어요.' : `남은 ${formatCount(remaining)}개 구간을 이어서 만들어요.`} 유료 API 요금이 나올 수 있어요.`}
           </p>
           <div className="un-book-actions">
             <button
               type="button"
               className={cx('un-btn is-sm', confirm === 'remove' ? 'un-book-danger' : 'is-primary')}
-              onClick={() => (confirm === 'remove' ? onRemove(true) : onResume(true))}
+              onClick={() =>
+                confirm === 'remove' ? onRemove(true) : confirm === 'skip' ? onSkipBlocked(true) : onResume(true)
+              }
               disabled={pending}
             >
-              {confirm === 'remove' ? '삭제' : '이어 만들기'}
+              {label}
             </button>
             <button type="button" className="un-btn is-text is-sm" onClick={onCancel} disabled={pending}>
               취소
@@ -1092,11 +1106,19 @@ function JobItem({
               멈추기
             </button>
           )}
-          {stopped && (
-            <button type="button" className="un-btn is-text is-sm" onClick={() => onResume()} disabled={pending}>
-              <Play size={14} aria-hidden="true" />
-              {item.status === 'failed' ? '다시 시도' : '이어 만들기'}
+          {/* Resending a policy refusal costs the same and is refused again; skipping is the only way on. */}
+          {stopped && blocked > 0 ? (
+            <button type="button" className="un-btn is-text is-sm" onClick={() => onSkipBlocked()} disabled={pending}>
+              <SkipForward size={14} aria-hidden="true" />
+              건너뛰고 계속
             </button>
+          ) : (
+            stopped && (
+              <button type="button" className="un-btn is-text is-sm" onClick={() => onResume()} disabled={pending}>
+                <Play size={14} aria-hidden="true" />
+                {item.status === 'failed' ? '다시 시도' : '이어 만들기'}
+              </button>
+            )
           )}
           {removable && (
             <button

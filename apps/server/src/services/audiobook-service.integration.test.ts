@@ -1,3 +1,4 @@
+import { GeminiAudioResponseError } from '../providers/gemini-audio-response.js';
 import { afterAll, describe, expect, it, vi } from 'vitest';
 import Fastify from 'fastify';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
@@ -51,6 +52,9 @@ async function setup(pool: pg.Pool, concurrency: 1 | 2 = 1) {
   await pool.query(await readFile(new URL('../db/migrations/0067_audiobook_retry.sql', import.meta.url), 'utf8'));
   await pool.query(await readFile(new URL('../db/migrations/0068_speaker_generation.sql', import.meta.url), 'utf8'));
   await pool.query(await readFile(new URL('../db/migrations/0069_voice_library.sql', import.meta.url), 'utf8'));
+  await pool.query(
+    await readFile(new URL('../db/migrations/0070_audiobook_content_blocks.sql', import.meta.url), 'utf8'),
+  );
   for (const chapterId of ['c1', 'c2'])
     for (let index = 1; index <= 2; index++) {
       const paragraph = {
@@ -93,6 +97,122 @@ async function setup(pool: pg.Pool, concurrency: 1 | 2 = 1) {
 }
 
 (harness ? describe : describe.skip)('durable ordinary audiobooks', () => {
+  it('skips confirmed content blocks only after consent, persists omissions and never resends them', async () => {
+    await withPostgresSchema(harness!, 'audio_policy_skip', async (pool) => {
+      const f = await setup(pool, 2);
+      const app = Fastify();
+      app.addHook('onRequest', async (request) => {
+        request.principal = { userId: 'owner', role: 'admin', authMethod: 'session', sessionContext: 'test' };
+      });
+      await registerAudiobookRoutes(app, pool, { defaultUserId: 'owner' } as ServerConfig, {
+        audioStore: f.store,
+        catalog,
+        render: f.render,
+        rules: parsePlainTTSRules,
+        failure: classifyPlainTTSFailure,
+        background: false,
+      });
+      const original = f.render.getMockImplementation()!;
+      f.render.mockImplementation(async (...args) => {
+        if (args[1].paragraphId.endsWith('-1')) throw new GeminiAudioResponseError('provider_finish_reason', 'SAFETY');
+        return original(...args);
+      });
+      try {
+        await expect(f.service.plan('book', { ...settings, skipBlockedAudio: true })).rejects.toThrow();
+        const plan = await f.service.plan('book', settings);
+        const job = await f.service.create(plan, plan.estimate.fingerprint, true);
+        await f.service.tick();
+        expect((await f.service.list('book'))[0]).toMatchObject({
+          status: 'failed',
+          completedItems: 1,
+          blockedItems: 1,
+          skippedItems: 0,
+          blockedAudio: [{ ordinal: 0, chapterTitle: 'First', reason: 'SAFETY' }],
+        });
+        await expect(f.service.control(job.id, 'resume', true)).rejects.toThrow('건너뛰기');
+        await expect(f.service.control(job.id, 'skip-blocked', false)).rejects.toThrow('비용');
+        const other = new AudiobookService(pool, 'other', f.store, catalog, f.render, classifyPlainTTSFailure);
+        await expect(other.control(job.id, 'skip-blocked', true)).rejects.toThrow();
+        expect(f.render).toHaveBeenCalledTimes(2);
+        const skippedResponse = await app.inject({
+          method: 'POST',
+          url: `/api/audiobooks/${job.id}/control`,
+          payload: { action: 'skip-blocked', confirmPaid: true },
+        });
+        expect(skippedResponse.statusCode).toBe(200);
+        // A new service process honors the saved decision; current and later refusals are separate from audio.
+        const restarted = new AudiobookService(
+          pool,
+          'owner',
+          f.store,
+          catalog,
+          f.render,
+          classifyPlainTTSFailure,
+          undefined,
+          async () => 2,
+        );
+        await restarted.tick();
+        await restarted.tick();
+        const complete = (await restarted.list('book'))[0];
+        expect(complete).toMatchObject({
+          status: 'completed',
+          completedItems: 2,
+          itemCount: 4,
+          blockedItems: 0,
+          skippedItems: 2,
+          skipBlockedAudio: true,
+        });
+        expect(complete.skippedAudio?.map((i) => i.ordinal)).toEqual([0, 2]);
+        expect(f.render).toHaveBeenCalledTimes(4);
+        expect(await f.store.get(job.id, 0)).toBeUndefined();
+        await expect(restarted.resolve(job.id, 0, true)).rejects.toThrow('건너뛴');
+        const staleReader = await app.inject({
+          method: 'POST',
+          url: `/api/audiobooks/${job.id}/resolve/0`,
+          payload: {},
+        });
+        expect(staleReader.statusCode).toBe(410);
+        expect(staleReader.json().code).toBe('tts_audio_skipped');
+        await expect(restarted.audio(job.id, 0)).rejects.toThrow();
+        expect(f.render).toHaveBeenCalledTimes(4);
+        const reader = await restarted.reader('book', 'c1', { id: job.id });
+        expect(reader).toMatchObject({ skippedItems: 1 });
+        expect(reader?.items[0].playable.preparedAudio).toMatchObject({ ready: false, skipped: true });
+        expect(reader?.items[1].playable.preparedAudio).toMatchObject({ ready: true, skipped: false });
+      } finally {
+        await app.close();
+        await f.cleanup();
+      }
+    });
+  });
+  it('does not skip timeout, quota or malformed audio even with content skipping enabled', async () => {
+    await withPostgresSchema(harness!, 'audio_policy_not_transport', async (pool) => {
+      const f = await setup(pool);
+      try {
+        const plan = await f.service.plan('book', settings);
+        const job = await f.service.create(plan, plan.estimate.fingerprint, true);
+        await pool.query(
+          "update saved_audiobooks set settings=jsonb_set(settings,'{skipBlockedAudio}','true') where id=$1",
+          [job.id],
+        );
+        for (const error of [
+          new GeminiAudioResponseError('wav_length_mismatch'),
+          new DOMException('timeout', 'TimeoutError'),
+          { status: 429 },
+        ]) {
+          f.render.mockRejectedValue(error);
+          await f.service.tick();
+          const item = (await f.service.list('book'))[0];
+          expect(item).toMatchObject({ blockedItems: 0, skippedItems: 0, completedItems: 0 });
+          await expect(f.service.control(job.id, 'skip-blocked', true)).rejects.toThrow();
+          await pool.query("update saved_audiobooks set status='queued',retry_at=null where id=$1", [job.id]);
+        }
+      } finally {
+        await f.cleanup();
+      }
+    });
+  });
+
   it('runs at most two, saves out-of-order results, shares playback and preserves the original anchors', async () => {
     await withPostgresSchema(harness!, 'prepared_parallel', async (pool) => {
       const f = await setup(pool, 2);

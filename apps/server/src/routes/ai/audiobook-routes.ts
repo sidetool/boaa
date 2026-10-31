@@ -1,3 +1,4 @@
+import { AudioSkipped } from '../../services/audiobook-outcomes.js';
 import type { FastifyInstance } from 'fastify';
 import type pg from 'pg';
 import type { SpokenTextRule } from '@boaa/contracts';
@@ -99,6 +100,8 @@ export async function registerAudiobookRoutes(
           );
           return reply.header('Cache-Control', 'private, no-store').type(audio.contentType).send(audio.data);
         } catch (error) {
+          if (error instanceof AudioSkipped)
+            return reply.code(410).send({ error: error.message, code: 'tts_audio_skipped' });
           if ((error as { statusCode?: number }).statusCode) throw error;
           const failure = options.failure(error);
           return reply.code(failure.status).send({
@@ -130,14 +133,14 @@ export async function registerAudiobookRoutes(
           request.body.confirmPaid === true,
         ),
     );
-    routes.post<{ Params: { id: string }; Body: { action: 'pause' | 'resume'; confirmPaid?: boolean } }>(
-      '/api/audiobooks/:id/control',
-      async (request) => {
-        if (!request.body || !['pause', 'resume'].includes(request.body.action))
-          throw audiobookError(400, '작업을 확인해 주세요.');
-        return service.control(request.params.id, request.body.action, request.body.confirmPaid === true);
-      },
-    );
+    routes.post<{
+      Params: { id: string };
+      Body: { action: 'pause' | 'resume' | 'skip-blocked'; confirmPaid?: boolean };
+    }>('/api/audiobooks/:id/control', async (request) => {
+      if (!request.body || !['pause', 'resume', 'skip-blocked'].includes(request.body.action))
+        throw audiobookError(400, '작업을 확인해 주세요.');
+      return service.control(request.params.id, request.body.action, request.body.confirmPaid === true);
+    });
     routes.delete<{ Params: { id: string } }>('/api/audiobooks/:id', async (request) => {
       await service.remove(request.params.id);
       return { ok: true };

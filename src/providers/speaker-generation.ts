@@ -53,7 +53,7 @@ export interface SpeakerGenerationJob extends SavedAudiobook {
   stage: 'waiting' | 'attribution' | 'identity' | 'casting' | 'performance' | 'audio' | 'complete';
   analyzedChapters: number;
   contextChapterCount: number;
-  /** Chapters whose entire committed audio plan is saved; a partial recording is not ready. */
+  /** All planned segments are saved or explicitly skipped, with at least one saved audio file. */
   readyChapterIds: string[];
   castVoiceIds?: string[];
   /** Includes earlier chapters needed to identify recurring characters. */
@@ -120,7 +120,11 @@ export interface SpeakerGenerationPort {
     confirmPaid: boolean,
     signal?: AbortSignal,
   ): Promise<SpeakerGenerationJob>;
-  control(id: string, action: 'pause' | 'resume', confirmPaid?: boolean): Promise<SpeakerGenerationJob>;
+  control(
+    id: string,
+    action: 'pause' | 'resume' | 'skip-blocked',
+    confirmPaid?: boolean,
+  ): Promise<SpeakerGenerationJob>;
   remove(id: string): Promise<void>;
   castings?(id: string, signal?: AbortSignal): Promise<BookVoiceAssignment[]>;
   assign?(id: string, speakerId: string, voiceId: string, signal?: AbortSignal): Promise<void>;

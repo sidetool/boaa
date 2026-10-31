@@ -1,4 +1,4 @@
-import { ttsHttpError } from './tts-http-error.js';
+import { ttsPolicyHttpError } from './tts-http-error.js';
 import type {
   TTSSynthesisInput,
   TTSSynthesisProvider,
@@ -89,8 +89,7 @@ export class LocalEndpointTTSProvider implements TTSSynthesisProvider {
       this.options,
     );
     if (!response.ok) {
-      await response.body?.cancel().catch(() => undefined);
-      throw ttsHttpError(`Local TTS endpoint request failed with status ${response.status}`, response);
+      throw await ttsPolicyHttpError(`Local TTS endpoint request failed with status ${response.status}`, response);
     }
 
     const contentType = response.headers.get('content-type') ?? '';

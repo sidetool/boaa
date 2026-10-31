@@ -339,6 +339,7 @@ export async function planSpeakerRevoice(
     },
     settings: {
       ...source.settings,
+      skipBlockedAudio: undefined,
       chapterIds,
       voiceId: narrator,
       cast: {

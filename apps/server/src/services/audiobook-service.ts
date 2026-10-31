@@ -1,3 +1,5 @@
+import { ttsContentBlockReason } from '../providers/tts-content-block.js';
+import { audioOutcomeColumns, audioOutcomes, AudioSkipped } from './audiobook-outcomes.js';
 import { applyBookVoiceUpdates } from './speaker-book-voices';
 import { savedAudioErrorMessage } from '../providers/gemini-audio-response';
 import { randomUUID } from 'node:crypto';
@@ -21,6 +23,10 @@ type JobRow = {
   estimate: SavedAudiobook;
   status: SavedAudiobook['status'];
   completed_items: number;
+  blocked_items?: number;
+  skipped_items?: number;
+  blocked_audio?: SavedAudiobook['blockedAudio'];
+  skipped_audio?: SavedAudiobook['skippedAudio'];
   rate_limit_attempts: number;
   bytes: string;
   playback_index: number;
@@ -32,6 +38,7 @@ type JobRow = {
 function view(row: JobRow): SavedAudiobook {
   return {
     ...row.estimate,
+    ...audioOutcomes(row),
     id: row.id,
     bookId: row.book_id,
     chapterIds: row.settings.chapterIds,
@@ -94,7 +101,7 @@ export class AudiobookService {
   async list(bookId: string): Promise<SavedAudiobook[]> {
     return (
       await this.pool.query(
-        `select a.* from saved_audiobooks a join library_books b on b.id=a.book_id
+        `select a.*,${audioOutcomeColumns} from saved_audiobooks a join library_books b on b.id=a.book_id
       where a.book_id=$1 and a.user_id=$2 and b.user_id=$2 and b.deleted_at is null and not(a.settings ? 'cast') order by a.created_at desc limit 50`,
         [bookId, this.owner],
       )
@@ -104,7 +111,7 @@ export class AudiobookService {
     if (!/^[a-f0-9-]{36}$/.test(id)) throw audiobookError(400, '오디오북 ID가 올바르지 않습니다.');
     const row = (
       await this.pool.query(
-        `select a.* from saved_audiobooks a join library_books b on b.id=a.book_id
+        `select a.*,${audioOutcomeColumns} from saved_audiobooks a join library_books b on b.id=a.book_id
       where a.id=$1 and a.user_id=$2 and b.user_id=$2 and b.deleted_at is null`,
         [id, this.owner],
       )
@@ -120,13 +127,13 @@ export class AudiobookService {
   ): Promise<PreparedNarration | undefined> {
     const row = (
       await this.pool.query(
-        `select a.* from saved_audiobooks a join library_books b on b.id=a.book_id
+        `select a.*,${audioOutcomeColumns} from saved_audiobooks a join library_books b on b.id=a.book_id
       where a.book_id=$1 and a.user_id=$2 and b.user_id=$2 and b.deleted_at is null and a.status<>'deleting'
       and a.content_revision is not distinct from b.active_content_revision_id
       and (exists(select 1 from saved_audiobook_items i where i.audiobook_id=a.id and i.chapter_id=$3) or (a.settings ? 'cast' and a.settings->'chapterIds' ? $3))
       and ($4::text is null or a.id::text=$4) and ($4::text is not null or a.settings->>'voiceId'=$5)
       order by (exists(select 1 from saved_audiobook_items i where i.audiobook_id=a.id and i.chapter_id=$3)
-        and not exists(select 1 from saved_audiobook_items i where i.audiobook_id=a.id and i.chapter_id=$3 and i.status<>'ready')) desc,
+        and not exists(select 1 from saved_audiobook_items i where i.audiobook_id=a.id and i.chapter_id=$3 and i.status not in ('ready','skipped'))) desc,
         a.created_at desc limit 1`,
         [bookId, this.owner, chapterId, choice.id ?? null, choice.voiceId ?? null],
       )
@@ -136,7 +143,11 @@ export class AudiobookService {
       if (!this.speaker) throw audiobookError(503, '화자별 음성 연결을 준비 중이에요.');
       return this.speaker.reader(row.id, chapterId);
     }
-    const plan = await planAudiobook(this.pool, this.owner, bookId, { ...row.settings, chapterIds: [chapterId] });
+    const plan = await planAudiobook(this.pool, this.owner, bookId, {
+      ...row.settings,
+      skipBlockedAudio: undefined,
+      chapterIds: [chapterId],
+    });
     const saved = (
       await this.pool.query(
         'select ordinal,request,status from saved_audiobook_items where audiobook_id=$1 and chapter_id=$2 order by ordinal',
@@ -150,6 +161,7 @@ export class AudiobookService {
       chapterId,
       contentRevision: row.content_revision ?? undefined,
       voiceLabel: row.estimate.voiceLabel,
+      skippedItems: saved.filter((item) => item.status === 'skipped').length,
       items: plan.items.map((item, index) => {
         const old = saved[index];
         if (
@@ -164,7 +176,12 @@ export class AudiobookService {
           playable: {
             ...item.playable,
             speakerLabel: row.estimate.voiceLabel,
-            preparedAudio: { id: row.id, ordinal: old.ordinal, ready: old.status === 'ready' },
+            preparedAudio: {
+              id: row.id,
+              ordinal: old.ordinal,
+              ready: old.status === 'ready',
+              skipped: old.status === 'skipped',
+            },
           },
         };
       }),
@@ -205,6 +222,7 @@ export class AudiobookService {
         return await this.ensureItem(job, ordinal, regenerate);
       }
     } catch (error) {
+      if (error instanceof AudioSkipped) throw error;
       // Do not let the background runner automatically repeat an ambiguous foreground failure.
       const failure = this.failure(error);
       const status = (error as { statusCode?: number })?.statusCode ?? failure.status;
@@ -255,6 +273,9 @@ export class AudiobookService {
         )
       ).rows[0];
       if (!item) throw audiobookError(409, '본문 또는 미리 만든 음성의 위치가 변경됐습니다.');
+      if (item.status === 'skipped') throw new AudioSkipped();
+      if (item.status === 'blocked')
+        throw audiobookError(409, '콘텐츠 제한으로 차단된 구간이에요. 생성 목록에서 건너뛰기를 선택할 수 있어요.');
       const stored = regenerate ? undefined : await this.audioStore.get(job.id, ordinal);
       if (stored && item.status === 'ready') return stored;
       if (!stored && item.status === 'dispatching')
@@ -308,11 +329,15 @@ export class AudiobookService {
                 model,
               );
         } catch (error) {
-          await client.query('update saved_audiobook_items set status=$3 where audiobook_id=$1 and ordinal=$2', [
-            job.id,
-            ordinal,
-            item.status === 'ready' ? 'ready' : 'pending',
-          ]);
+          const reason = item.status === 'ready' ? undefined : ttsContentBlockReason(error);
+          const result = await client.query(
+            `update saved_audiobook_items i set
+             status=case when $4::text is null then $3 when a.settings->>'skipBlockedAudio'='true' then 'skipped' else 'blocked' end,
+             block_reason=$4
+             from saved_audiobooks a where i.audiobook_id=a.id and i.audiobook_id=$1 and i.ordinal=$2 returning i.status`,
+            [job.id, ordinal, item.status === 'ready' ? 'ready' : 'pending', reason ?? null],
+          );
+          if (result.rows[0]?.status === 'skipped') throw new AudioSkipped();
           throw error;
         }
       }
@@ -329,13 +354,13 @@ export class AudiobookService {
       if (!current) throw audiobookError(409, '생성 중 본문 또는 작업이 변경됐습니다.');
       await this.audioStore.put(job.id, ordinal, audio);
       await client.query(
-        "update saved_audiobook_items set status='ready',cache_key=$3,bytes=$4 where audiobook_id=$1 and ordinal=$2",
+        "update saved_audiobook_items set status='ready',block_reason=null,cache_key=$3,bytes=$4 where audiobook_id=$1 and ordinal=$2",
         [job.id, ordinal, audio.key, audio.data.length],
       );
       await client.query(
         `update saved_audiobooks a set completed_items=x.n,bytes=x.bytes,
-        status=case when x.n=a.total_items and a.planning_complete then 'completed' else a.status end,updated_at=now()
-        from (select count(*)::int n,coalesce(sum(bytes),0) bytes from saved_audiobook_items where audiobook_id=$1 and status='ready') x where a.id=$1`,
+        status=case when x.n+x.skipped=a.total_items and a.planning_complete then 'completed' else a.status end,updated_at=now()
+        from (select count(*) filter(where status='ready')::int n,count(*) filter(where status='skipped')::int skipped,coalesce(sum(bytes) filter(where status='ready'),0) bytes from saved_audiobook_items where audiobook_id=$1) x where a.id=$1`,
         [job.id],
       );
       await client.query('commit');
@@ -476,9 +501,11 @@ export class AudiobookService {
       client.release();
     }
   }
-  async control(id: string, action: 'pause' | 'resume', confirmPaid = false): Promise<SavedAudiobook> {
+  async control(id: string, action: 'pause' | 'resume' | 'skip-blocked', confirmPaid = false): Promise<SavedAudiobook> {
     const job = await this.get(id);
-    if (action === 'resume' && job.estimate.paid && !confirmPaid)
+    if (action === 'resume' && (job.blocked_items ?? 0) > 0)
+      throw audiobookError(409, '콘텐츠 제한으로 차단된 구간이 있어요. 건너뛰기를 선택하면 나머지를 만들 수 있어요.');
+    if ((action === 'resume' || action === 'skip-blocked') && job.estimate.paid && !confirmPaid)
       throw audiobookError(400, '이어서 생성할 때 API 비용이 발생할 수 있습니다.');
     if (action === 'pause') {
       await this.pool.query(
@@ -488,6 +515,11 @@ export class AudiobookService {
       );
       // Preserve the response to a paid analysis already in flight; pause before the next step.
       if (this.active?.id === id && !job.settings.cast) this.active.abort.abort();
+    } else if (action === 'skip-blocked') {
+      if (!['paused', 'failed'].includes(job.status) || !(job.blocked_items ?? 0))
+        throw audiobookError(409, '건너뛸 차단 구간이 있는 중단된 작업을 선택해 주세요.');
+      if (job.settings.cast) await this.speaker?.resume(id);
+      await this.skipBlocked(id);
     } else if (action === 'resume') {
       if (job.settings.cast) await this.speaker?.resume(id);
       const client = await this.pool.connect();
@@ -514,6 +546,41 @@ export class AudiobookService {
       }
     } else throw audiobookError(400, '지원하지 않는 작업입니다.');
     return view(await this.get(id));
+  }
+  private async skipBlocked(id: string) {
+    const client = await this.pool.connect();
+    try {
+      await client.query('begin');
+      const row = (
+        await client.query(
+          `select a.id from saved_audiobooks a join library_books b on b.id=a.book_id
+         where a.id=$1 and a.user_id=$2 and b.user_id=$2 and b.deleted_at is null
+         and a.content_revision is not distinct from b.active_content_revision_id
+         and a.status in ('paused','failed')
+         and not exists(select 1 from saved_audiobook_items i where i.audiobook_id=a.id and i.status='dispatching')
+         and not exists(select 1 from self_host_accounts where user_id=$2 and (role<>'admin' or status<>'active'))
+         for update of a for share of b`,
+          [id, this.owner],
+        )
+      ).rows[0];
+      if (!row) throw audiobookError(409, '작업이나 본문 상태가 바뀌었어요. 목록을 새로고침해 주세요.');
+      const changed = await client.query(
+        "update saved_audiobook_items set status='skipped' where audiobook_id=$1 and status='blocked' returning ordinal",
+        [id],
+      );
+      if (!changed.rowCount) throw audiobookError(409, '건너뛸 차단 구간이 없어요.');
+      await client.query(
+        `update saved_audiobooks set settings=jsonb_set(settings,'{skipBlockedAudio}','true'::jsonb),
+         status='queued',error_message=null,retry_at=null,rate_limit_attempts=0,updated_at=now() where id=$1`,
+        [id],
+      );
+      await client.query('commit');
+    } catch (error) {
+      await client.query('rollback');
+      throw error;
+    } finally {
+      client.release();
+    }
   }
   async remove(id: string): Promise<void> {
     await this.get(id);
@@ -588,7 +655,7 @@ export class AudiobookService {
             ? []
             : (
                 await this.pool.query(
-                  `select ordinal,chapter_title from saved_audiobook_items where audiobook_id=$1 and status<>'ready'
+                  `select ordinal,chapter_title from saved_audiobook_items where audiobook_id=$1 and status not in ('ready','skipped')
              and (not $2::boolean or request->'cast' ? 'performance') order by ordinal limit $3`,
                   [
                     job.id,
@@ -611,7 +678,11 @@ export class AudiobookService {
           items.map((item) => this.ensureItem(current, item.ordinal, false, true)),
         );
         const errors = batch.flatMap((item) =>
-          item.status === 'rejected' && !(item.reason instanceof BackgroundYield) ? [item.reason] : [],
+          item.status === 'rejected' &&
+          !(item.reason instanceof BackgroundYield) &&
+          !(item.reason instanceof AudioSkipped)
+            ? [item.reason]
+            : [],
         );
         if (errors.length) {
           stopped = true;
@@ -698,14 +769,14 @@ export class AudiobookService {
         const width = job.rate_limit_attempts > 0 ? 1 : await this.backgroundConcurrency(job.settings);
         const items = (
           await client.query(
-            "select * from saved_audiobook_items where audiobook_id=$1 and status<>'ready' order by ordinal limit $2",
+            "select * from saved_audiobook_items where audiobook_id=$1 and status not in ('ready','skipped') order by ordinal limit $2",
             [job.id, width === 2 ? 2 : 1],
           )
         ).rows;
         const item = items[0];
         if (!item) {
           await client.query(
-            "update saved_audiobooks set status=case when status='pausing' then 'paused' when planning_complete and completed_items=total_items then 'completed' else 'queued' end,error_message=null,retry_at=null,rate_limit_attempts=0,updated_at=now() where id=$1 and status in ('running','pausing')",
+            "update saved_audiobooks set status=case when status='pausing' then 'paused' when planning_complete and not exists(select 1 from saved_audiobook_items i where i.audiobook_id=saved_audiobooks.id and i.status not in ('ready','skipped')) then 'completed' else 'queued' end,error_message=null,retry_at=null,rate_limit_attempts=0,updated_at=now() where id=$1 and status in ('running','pausing')",
             [job.id],
           );
           return false;
@@ -728,7 +799,9 @@ export class AudiobookService {
         const current = (await client.query('select status from saved_audiobooks where id=$1', [job.id])).rows[0];
         if (current?.status !== 'running') throw new DOMException('Stopped', 'AbortError');
         const results = await Promise.allSettled(items.map((next) => this.ensureItem(job, next.ordinal, false, true)));
-        const failures = results.flatMap((result) => (result.status === 'rejected' ? [result.reason] : []));
+        const failures = results.flatMap((result) =>
+          result.status === 'rejected' && !(result.reason instanceof AudioSkipped) ? [result.reason] : [],
+        );
         // An ambiguous failure must never become an automatic retry just because its sibling hit 429.
         const permanent = failures.find(
           (error) => !(error instanceof BackgroundYield) && this.failure(error).status !== 429,

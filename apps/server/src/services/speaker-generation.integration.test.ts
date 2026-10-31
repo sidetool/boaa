@@ -1,3 +1,4 @@
+import { GeminiAudioResponseError } from '../providers/gemini-audio-response.js';
 import { preparedNarrationSession } from '../../../../src/providers/prepared-narration';
 import { runTTSPlaybackSession } from '../../../../src/providers/tts-playback-session-runner';
 import { VoiceLibraryStore } from './voice-library-store';
@@ -58,6 +59,7 @@ async function setup(pool: pg.Pool, concurrency: 1 | 2 = 1, chapterIds = ['c1', 
     '0067_audiobook_retry.sql',
     '0068_speaker_generation.sql',
     '0069_voice_library.sql',
+    '0070_audiobook_content_blocks.sql',
   ])
     await pool.query(await readFile(new URL('../db/migrations/' + name, import.meta.url), 'utf8'));
   for (const [index, id] of chapterIds.entries()) {
@@ -246,6 +248,39 @@ async function setup(pool: pg.Pool, concurrency: 1 | 2 = 1, chapterIds = ['c1', 
   };
 }
 (harness ? describe : describe.skip)('speaker background generation with real preset35 and PostgreSQL', () => {
+  it('preserves speaker analysis and exposes omitted ranges when continuing content-blocked audio', async () => {
+    await withPostgresSchema(harness!, 'speaker_policy_skip', async (pool) => {
+      const f = await setup(pool, 2);
+      const synth = f.synthesize.getMockImplementation()!;
+      let blocked = false;
+      f.synthesize.mockImplementation(async (...args) => {
+        if (!blocked) {
+          blocked = true;
+          throw new GeminiAudioResponseError('provider_finish_reason', 'SAFETY');
+        }
+        return synth(...args);
+      });
+      try {
+        const job = await f.create();
+        await f.until(async () => (await f.audio.get(job.id)).status === 'failed');
+        const failed = (await f.service.list('book'))[0];
+        expect(failed.blockedItems).toBe(1);
+        await expect(f.audio.control(job.id, 'resume', true)).rejects.toThrow('건너뛰기');
+        await f.audio.control(job.id, 'skip-blocked', true);
+        await f.until(async () => (await f.audio.get(job.id)).status === 'completed');
+        const done = (await f.service.list('book'))[0];
+        expect(done).toMatchObject({ blockedItems: 0, skippedItems: 1, skipBlockedAudio: true });
+        expect(done.completedItems + done.skippedItems!).toBe(done.itemCount);
+        expect(done.readyChapterIds.sort()).toEqual(['c1', 'c2']);
+        const reader = await f.service.reader(job.id, 'c1');
+        expect(reader.skippedItems).toBe(1);
+        expect(reader.items.filter((i) => i.playable.preparedAudio?.skipped)).toHaveLength(1);
+      } finally {
+        await f.cleanup();
+      }
+    });
+  });
+
   it('does not advertise partial acting chapters, prefers a complete recording and keeps preparation waits out of job failure', async () => {
     await withPostgresSchema(harness!, 'speaker_ready_chapters', async (pool) => {
       const f = await setup(pool);

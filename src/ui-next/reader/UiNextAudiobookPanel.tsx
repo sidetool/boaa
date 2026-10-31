@@ -1,4 +1,4 @@
-import { AlertCircle, Pause, Play, RefreshCw, Trash2 } from 'lucide-react';
+import { AlertCircle, Pause, Play, RefreshCw, SkipForward, Trash2 } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { TTSAudiobookControls } from '../../features/tts/TTSAddonPanel';
 import type {
@@ -9,10 +9,11 @@ import type {
 } from '../../providers/plain-audiobook';
 import { formatBytes, formatCount } from '../../utils/format';
 import { cx, Progress } from '../components/primitives';
+import { AudioBadge, AudioGaps, audioCounts, skipBlockedText, visibleError } from './AudioGaps';
 import { ChapterScopeFields, chapterScopeSummary, useChapterScope } from './chapter-scope';
 import './audiobook.css';
 
-type Confirm = { id: string; action: 'resume' | 'remove' };
+type Confirm = { id: string; action: 'resume' | 'skip' | 'remove' };
 
 const POLL_MS = 4000;
 const STATUS_LABEL: Record<AudiobookStatus, string> = {
@@ -173,6 +174,11 @@ function AudiobookBody({ controls }: { controls: TTSAudiobookControls }) {
     }
     void act(item.id, () => latest.current.port.control(item.id, 'resume', item.paid && confirmed));
   };
+  // Leaving segments silent is always asked first, paid or not.
+  const skipBlocked = (item: SavedAudiobook, confirmed = false) => {
+    if (!confirmed) return setConfirm({ id: item.id, action: 'skip' });
+    void act(item.id, () => latest.current.port.control(item.id, 'skip-blocked', item.paid));
+  };
   const remove = (item: SavedAudiobook) => {
     void act(item.id, () => latest.current.port.remove(item.id));
   };
@@ -316,6 +322,7 @@ function AudiobookBody({ controls }: { controls: TTSAudiobookControls }) {
                   onPlay={() => void listen(item)}
                   onPause={() => void act(item.id, () => latest.current.port.control(item.id, 'pause'))}
                   onResume={(confirmed) => resume(item, confirmed)}
+                  onSkipBlocked={(confirmed) => skipBlocked(item, confirmed)}
                   onRemove={(confirmed) => (confirmed ? remove(item) : setConfirm({ id: item.id, action: 'remove' }))}
                   onCancel={() => setConfirm(undefined)}
                 />
@@ -346,6 +353,7 @@ function SavedItem({
   onPlay,
   onPause,
   onResume,
+  onSkipBlocked,
   onRemove,
   onCancel,
 }: {
@@ -356,6 +364,7 @@ function SavedItem({
   onPlay(): void;
   onPause(): void;
   onResume(confirmed?: boolean): void;
+  onSkipBlocked(confirmed?: boolean): void;
   onRemove(confirmed?: boolean): void;
   onCancel(): void;
 }) {
@@ -363,55 +372,57 @@ function SavedItem({
   const stopped = item.status === 'paused' || item.status === 'failed';
   const removable = !generating && item.status !== 'pausing' && item.status !== 'deleting';
   const playable = item.status !== 'deleting';
-  const remaining = Math.max(0, item.itemCount - item.completedItems);
+  const { done, skipped, remaining, blocked } = audioCounts(item);
+  const jobError = visibleError(item);
   const created = new Date(item.createdAt);
+  const label = confirm === 'remove' ? '삭제' : confirm === 'skip' ? '건너뛰고 계속' : '이어 만들기';
 
   return (
     <li className="un-book-item">
       <div className="un-book-item-head">
         <b>{rangeLabel(item)}</b>
-        <span className={cx('un-book-badge', `is-${item.status}`)}>{STATUS_LABEL[item.status]}</span>
+        <AudioBadge item={item} label={STATUS_LABEL[item.status]} />
       </div>
       <small className="un-book-meta">
         {formatCount(item.chapterCount)}개 회차 · {item.voiceLabel} · {item.providerName}
         {Number.isNaN(created.getTime()) ? '' : ` · ${created.toLocaleDateString()}`}
       </small>
-      {item.status !== 'completed' && (
-        <Progress value={item.completedItems / Math.max(1, item.itemCount)} label="생성 진행" />
-      )}
+      {item.status !== 'completed' && <Progress value={done / Math.max(1, item.itemCount)} label="생성 진행" />}
       <small className="un-book-meta">
-        {formatCount(item.completedItems)} / {formatCount(item.itemCount)} 구간 · {formatBytes(item.bytes)}
+        {skipped > 0 ? '처리 ' : ''}
+        {formatCount(done)} / {formatCount(item.itemCount)} 구간 · {formatBytes(item.bytes)}
         {generating && item.currentChapterTitle ? ` · ${item.currentChapterTitle}` : ''}
         {item.status === 'pausing' ? ' · 지금 구간을 마치면 멈춰요' : ''}
       </small>
-      {(item.error || error) && (
+      {(error || jobError) && (
         <p
           className={!error && item.status === 'queued' ? 'un-book-meta' : 'un-book-error'}
           role={!error && item.status === 'queued' ? 'status' : 'alert'}
         >
           <AlertCircle size={15} aria-hidden="true" />
-          {error ?? item.error}
+          {error ?? jobError}
         </p>
       )}
+      <AudioGaps item={item} />
       {confirm ? (
-        <div
-          className="un-book-confirm"
-          role="group"
-          aria-label={confirm === 'remove' ? '삭제 확인' : '이어 만들기 확인'}
-        >
+        <div className="un-book-confirm" role="group" aria-label={`${label} 확인`}>
           <p>
             {confirm === 'remove'
               ? `저장된 음성 ${formatBytes(item.bytes)}를 서버에서 지워요. 되돌릴 수 없어요.`
-              : `남은 ${formatCount(remaining)}개 구간을 이어 만들어요. API 사용 요금이 발생할 수 있고, 중단된 구간은 다시 생성될 수 있어요.`}
+              : confirm === 'skip'
+                ? skipBlockedText(item, `남은 ${formatCount(remaining - blocked)}개 구간`)
+                : `남은 ${formatCount(remaining)}개 구간을 이어 만들어요. API 사용 요금이 발생할 수 있고, 중단된 구간은 다시 생성될 수 있어요.`}
           </p>
           <div className="un-book-actions">
             <button
               type="button"
               className={cx('un-btn is-sm', confirm === 'remove' ? 'un-book-danger' : 'is-primary')}
-              onClick={() => (confirm === 'remove' ? onRemove(true) : onResume(true))}
+              onClick={() =>
+                confirm === 'remove' ? onRemove(true) : confirm === 'skip' ? onSkipBlocked(true) : onResume(true)
+              }
               disabled={pending}
             >
-              {confirm === 'remove' ? '삭제' : '이어 만들기'}
+              {label}
             </button>
             <button type="button" className="un-btn is-text is-sm" onClick={onCancel} disabled={pending}>
               취소
@@ -432,11 +443,19 @@ function SavedItem({
               멈추기
             </button>
           )}
-          {stopped && remaining > 0 && (
-            <button type="button" className="un-btn is-text is-sm" onClick={() => onResume()} disabled={pending}>
-              <Play size={14} aria-hidden="true" />
-              이어 만들기
+          {stopped && blocked > 0 ? (
+            <button type="button" className="un-btn is-text is-sm" onClick={() => onSkipBlocked()} disabled={pending}>
+              <SkipForward size={14} aria-hidden="true" />
+              건너뛰고 계속
             </button>
+          ) : (
+            stopped &&
+            remaining > 0 && (
+              <button type="button" className="un-btn is-text is-sm" onClick={() => onResume()} disabled={pending}>
+                <Play size={14} aria-hidden="true" />
+                이어 만들기
+              </button>
+            )
           )}
           {removable && (
             <button

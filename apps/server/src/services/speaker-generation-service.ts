@@ -1,3 +1,4 @@
+import { audioOutcomeColumns, audioOutcomes } from './audiobook-outcomes.js';
 import { savedAudioErrorMessage } from '../providers/gemini-audio-response';
 import { cleanupSpeakerBook, previewSpeakerCleanup } from './speaker-cleanup.js';
 import type { SpeakerCleanupOptions } from '../../../../src/providers/speaker-generation';
@@ -157,8 +158,8 @@ export class SpeakerGenerationService {
   async list(bookId: string): Promise<SpeakerGenerationJob[]> {
     const rows = (
       await this.pool.query(
-        `select a.*,r.next_chapter,r.chapter_ids as context_ids,r.stage,c.title as analysis_chapter_title,
-      coalesce((select jsonb_agg(ready.chapter_id) from (select i.chapter_id from saved_audiobook_items i where i.audiobook_id=a.id group by i.chapter_id having bool_and(i.status='ready')) ready),'[]') ready_ids
+        `select a.*,${audioOutcomeColumns},r.next_chapter,r.chapter_ids as context_ids,r.stage,c.title as analysis_chapter_title,
+      coalesce((select jsonb_agg(ready.chapter_id) from (select i.chapter_id from saved_audiobook_items i where i.audiobook_id=a.id group by i.chapter_id having bool_and(i.status in ('ready','skipped')) and bool_or(i.status='ready')) ready),'[]') ready_ids
       from saved_audiobooks a join speaker_generation_runs r on r.audiobook_id=a.id join library_books b on b.id=a.book_id
       left join chapters c on c.id=(r.chapter_ids->>r.next_chapter) and c.book_id=a.book_id
       where a.book_id=$1 and a.user_id=$2 and b.user_id=$2 and b.deleted_at is null order by a.created_at desc limit 50`,
@@ -176,6 +177,7 @@ export class SpeakerGenerationService {
       : [];
     return rows.map((r) => ({
       ...r.estimate,
+      ...audioOutcomes(r),
       id: r.id,
       revoiceFrom: r.settings.cast?.revoiceFrom,
       bookId: r.book_id,
@@ -744,7 +746,8 @@ export class SpeakerGenerationService {
     if (!rows.length) throw audiobookError(425, '이 회차의 화자를 분석하고 있어요. 준비된 회차부터 들을 수 있어요.');
     if (
       run.settings.cast?.recastSpeakers?.length ||
-      (run.settings.cast?.autoActing && rows.some((r) => r.status !== 'ready' && !r.request.cast?.performance))
+      (run.settings.cast?.autoActing &&
+        rows.some((r) => !['ready', 'skipped'].includes(r.status) && !r.request.cast?.performance))
     )
       throw audiobookError(425, '이 회차의 목소리·연기 분석이 아직 끝나지 않았어요. 완성된 회차부터 재생해 주세요.');
     const byId = new Map(loaded.paragraphs.map((p) => [p.id, p]));
@@ -753,6 +756,7 @@ export class SpeakerGenerationService {
       chapterId,
       contentRevision: run.content_revision ?? undefined,
       voiceLabel: '화자별 목소리',
+      skippedItems: rows.filter((r) => r.status === 'skipped').length,
       items: rows.map((r) => {
         const p = byId.get(r.request.paragraphId);
         if (!p) throw audiobookError(409, '본문이 변경됐어요.');
@@ -763,7 +767,7 @@ export class SpeakerGenerationService {
           nextParagraphIndex: (playable.plainBatchPositions?.at(-1)?.paragraphIndex ?? p.index - 1) + 1,
           playable: {
             ...playable,
-            preparedAudio: { id, ordinal: r.ordinal, ready: r.status === 'ready' },
+            preparedAudio: { id, ordinal: r.ordinal, ready: r.status === 'ready', skipped: r.status === 'skipped' },
           },
         };
       }),

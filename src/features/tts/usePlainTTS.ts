@@ -1,3 +1,4 @@
+import { RemoteApiError } from '../../services/remote/remote-api-contracts';
 import { loadPreparedAudio } from './prepared-audio-load';
 import { tracePlaybackWait } from '../../providers/playback-diagnostics';
 import { PlainTTSSessionCache, waitForPlainTTSAudio } from '../../providers/plain-tts-session-cache';
@@ -160,6 +161,10 @@ export function usePlainTTS(input: {
     onProgress?: (fraction: number) => void,
     regeneration?: { prepared(): void },
   ): Promise<boolean> => {
+    if (playable.preparedAudio?.skipped) {
+      regeneration?.prepared();
+      return true;
+    }
     const operation = input.controller.beginHostedPlayback(sessionId, '음성 준비 중');
     if (!operation) {
       regeneration?.prepared();
@@ -268,6 +273,17 @@ export function usePlainTTS(input: {
       input.controller.setHostedStatus(operation, undefined);
       return await input.controller.playAudio(blob, sessionId, onProgress);
     } catch (error) {
+      // The snapshot may predate an omission accepted in the generation panel.
+      if (
+        playable.preparedAudio &&
+        error instanceof RemoteApiError &&
+        error.status === 410 &&
+        (error.payload as { code?: string } | undefined)?.code === 'tts_audio_skipped'
+      ) {
+        if (input.controller.isSessionCurrent(sessionId))
+          input.onError('콘텐츠 제한으로 건너뛴 구간이에요. 다음 부분을 재생합니다.');
+        return true;
+      }
       if (input.controller.isSessionCurrent(sessionId))
         input.onError(
           (error as { status?: number })?.status === 429
@@ -290,6 +306,7 @@ export function usePlainTTS(input: {
       ? latestContent.current.revision
       : input.contentRevision,
   ) => {
+    if (playable.preparedAudio?.skipped) return;
     if (playable.preparedAudio && input.prepared) {
       if (!input.controller.isSessionCurrent(sessionId)) return;
       const item = playable.preparedAudio;

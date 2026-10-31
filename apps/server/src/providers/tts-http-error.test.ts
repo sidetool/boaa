@@ -1,5 +1,7 @@
+import { ttsContentBlockReason } from './tts-content-block.js';
+import { GeminiAudioResponseError } from './gemini-audio-response.js';
 import { expect, it, vi } from 'vitest';
-import { ttsHttpError, googleTtsHttpError } from './tts-http-error.js';
+import { ttsHttpError, googleTtsHttpError, ttsPolicyHttpError } from './tts-http-error.js';
 it('preserves status and seconds/date cooldowns without response text', () => {
   const now = Date.UTC(2026, 0, 1);
   for (const header of ['600', new Date(now + 600000).toUTCString()]) {
@@ -77,4 +79,27 @@ it('retains a confirmed zero Vertex creation quota without the project or provid
   );
   expect(error).toMatchObject({ status: 429, voiceCreationQuota: 0 });
   expect(JSON.stringify(error)).not.toContain('private');
+});
+
+it('recognizes only explicit typed policy decisions, never auth, quota, timeout or error prose', async () => {
+  for (const code of ['content_policy_violation', 'content_filter']) {
+    const error = await ttsPolicyHttpError(
+      'failed',
+      Response.json({ error: { code, message: 'private novel text' } }, { status: 400 }),
+    );
+    expect(ttsContentBlockReason(error)).toBe(code);
+    expect(JSON.stringify(error)).not.toContain('private');
+  }
+  for (const [status, body] of [
+    [403, { error: { code: 'invalid_api_key', message: 'SAFETY content_filter' } }],
+    [429, { error: { code: 'content_filter' } }],
+    [503, { error: { code: 'content_filter' } }],
+    [400, { error: { code: 'invalid_request_error' } }],
+  ] as const) {
+    expect(ttsContentBlockReason(await ttsPolicyHttpError('failed', Response.json(body, { status })))).toBeUndefined();
+  }
+  expect(ttsContentBlockReason(new GeminiAudioResponseError('provider_finish_reason', 'SAFETY'))).toBe('SAFETY');
+  for (const completion of ['MAX_TOKENS', 'missing', 'OTHER', 'unknown'])
+    expect(ttsContentBlockReason(new GeminiAudioResponseError('provider_finish_reason', completion))).toBeUndefined();
+  expect(ttsContentBlockReason({ code: 'tts_content_blocked', reason: 'SAFETY' })).toBeUndefined();
 });

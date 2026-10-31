@@ -69,7 +69,7 @@ it('records safe completion diagnostics from background synthesis after producti
     const failures = lines.map((line) => JSON.parse(line)).filter((line) => line.event === 'plain_tts_failed');
     expect(failures).toEqual([
       expect.objectContaining({
-        errorCategory: 'tts_incomplete_audio',
+        errorCategory: 'tts_content_blocked',
         errorCode: 'provider_finish_reason',
         state: 'SAFETY',
         component: 'gemini-vertex-tts',

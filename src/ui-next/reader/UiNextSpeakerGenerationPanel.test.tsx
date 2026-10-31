@@ -893,6 +893,38 @@ describe('UiNextSpeakerGenerationPanel jobs', () => {
     expect(api.remove).toHaveBeenCalledWith('job-1');
   });
 
+  it('replaces retry with a confirmed skip when the voice service refused content', async () => {
+    const api = port(async () => [
+      job({
+        status: 'failed',
+        paid: true,
+        completedItems: 4,
+        blockedItems: 1,
+        blockedAudio: [{ ordinal: 4, chapterTitle: '3화', reason: 'SAFETY' }],
+      }),
+    ]);
+    const root = await mount(controls({ port: api }));
+    expect(hasButton(root, '다시 시도')).toBe(false);
+    expect(text(root)).toContain('콘텐츠 제한 구간에서 멈췄어요');
+    expect(text(root)).toContain('3화작업 내 5번 구간');
+    expect(text(root)).not.toContain('앞 1개만');
+
+    await click(button(root, '건너뛰고 계속'));
+    expect(api.control).not.toHaveBeenCalled();
+    expect(text(root)).toContain('남은 5개 구간');
+    expect(text(root)).toContain('요금');
+    await click(button(root, '건너뛰고 계속'));
+    expect(api.control).toHaveBeenCalledWith('job-1', 'skip-blocked', true);
+  });
+
+  it('counts skipped segments as progress and says later blocks skip automatically', async () => {
+    const root = await mount(
+      controls({ port: port(async () => [job({ completedItems: 4, skippedItems: 2, skipBlockedAudio: true })]) }),
+    );
+    expect(text(root)).toContain('처리 6 / 10 구간');
+    expect(text(root)).toContain('음성 없이 넘긴 구간 2개 · 콘텐츠 제한 구간은 자동으로 넘겨요');
+  });
+
   it('starts over for another account without letting the old list land', async () => {
     let release!: (jobs: SpeakerGenerationJob[]) => void;
     const slow = port(() => new Promise((resolve) => (release = resolve)));

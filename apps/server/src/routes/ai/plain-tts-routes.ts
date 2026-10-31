@@ -1,3 +1,4 @@
+import { ttsContentBlockReason, CONTENT_BLOCK_MESSAGE } from '../../providers/tts-content-block.js';
 import { isGeminiActingModel } from '../../../../../src/providers/tts-performance';
 import { SpeakerEngineStore } from '../../providers/speaker-engine-store.js';
 import { VoiceLibraryStore, voiceSourceModel } from '../../services/voice-library-store.js';
@@ -259,10 +260,18 @@ export async function registerPlainTTSRoutes(
           if (error instanceof GeminiAudioResponseError)
             app.log.warn({
               event: 'plain_tts_failed',
-              errorCategory: 'tts_incomplete_audio',
+              errorCategory: classifyPlainTTSFailure(error).code,
               component: adapter.providerId,
               inputCharacters: [...text].length,
               ...geminiAudioDiagnostics(error),
+            });
+          else if (ttsContentBlockReason(error))
+            app.log.warn({
+              event: 'plain_tts_failed',
+              errorCategory: 'tts_content_blocked',
+              component: adapter.providerId,
+              errorCode: ttsContentBlockReason(error),
+              inputCharacters: [...text].length,
             });
           if (classifyPlainTTSFailure(error).status === 429) {
             const failures = Math.min(3, (cooldowns.get(source.id)?.failures ?? 0) + 1);
@@ -594,7 +603,7 @@ export async function registerPlainTTSRoutes(
           }
           const failure = classifyPlainTTSFailure(error);
           // Never log the provider response, document text, credentials, or request body.
-          if (!(error instanceof GeminiAudioResponseError))
+          if (!(error instanceof GeminiAudioResponseError) && !ttsContentBlockReason(error))
             app.log.warn({
               event: 'plain_tts_failed',
               errorCategory: failure.code,
@@ -717,6 +726,7 @@ export function classifyPlainTTSFailure(error: unknown): {
   message: string;
   upstreamStatus?: number;
 } {
+  if (ttsContentBlockReason(error)) return { status: 422, code: 'tts_content_blocked', message: CONTENT_BLOCK_MESSAGE };
   if (error instanceof TTSConnectionError)
     return { status: error.statusCode, code: 'tts_connection_failed', message: error.message };
   const value =
