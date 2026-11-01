@@ -130,6 +130,7 @@ const extraFilters = [
   'apps/server/src/routes/books/document-annotation-routes.test.ts',
   'apps/server/src/routes/books/request-contracts.test.ts',
   'src/features/external-sources/purged-source-library.test.ts',
+  'src/features/external-sources/use-cached-source-library.test.tsx',
   'src/features/import/import-controller.test.ts',
   'src/repositories/remote-document-annotation-repository.test.ts',
   'src/repositories/remote-shelf-order.test.ts',

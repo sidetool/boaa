@@ -56,6 +56,7 @@ const ITEM_KEY = {
 
 async function createHarness(input: {
   onRender?: (controller: ExternalSourceController) => void;
+  startupOnly?: boolean;
   waitForReadingHistory?: () => Promise<void>;
   clearReadingHistory?: (id: string) => Promise<void>;
   saveTextPosition?: import('../../repositories/reader-repository').ReaderRepository['saveReadingPosition'];
@@ -321,6 +322,7 @@ async function createHarness(input: {
     renderer = create(<Harness />);
   });
   await act(async () => {
+    if (input.startupOnly) return;
     if (streamingFixture) controller.show(SOURCE_ID);
     await controller.selectSource(SOURCE_ID);
   });
@@ -3840,6 +3842,76 @@ describe('stream-only library works', () => {
       await act(async () => h.renderer.unmount());
     }
   });
+
+  it('shows cached streaming cards during history hydration, without fetching or reviving removed membership', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const h = await createHarness({
+      downloadedContent: '',
+      startupOnly: true,
+      subscriptions: [subscription],
+      libraryBooks: async () => [],
+      waitForReadingHistory: () => gate,
+    });
+    try {
+      expect(h.controller.libraryBootstrap?.status).toBe('loading');
+      expect(h.controller.libraryWorks.map((work) => work.id)).toContain(subscription.id);
+      expect(h.controller.libraryWorks[0]?.requestMetadata).toBeUndefined();
+      expect(h.registry.listExternalSource).not.toHaveBeenCalled();
+      vi.mocked(h.state.listSubscriptions).mockResolvedValue([]);
+      await act(async () => release());
+      expect(h.controller.libraryBootstrap?.status).toBe('ready');
+      expect(h.controller.libraryWorks).toEqual([]);
+    } finally {
+      release();
+      await act(async () => h.renderer.unmount());
+    }
+  });
+
+  it.each(['open', 'rename', 'trash'] as const)(
+    'checks hydrated membership before %s of a cached card',
+    async (action) => {
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const h = await createHarness({
+        downloadedContent: '',
+        startupOnly: true,
+        subscriptions: [subscription],
+        libraryBooks: async () => [],
+        waitForReadingHistory: () => gate,
+      });
+      let command!: Promise<unknown>;
+      try {
+        const cached = h.controller.libraryWorks[0]!;
+        await act(async () => {
+          command = (
+            action === 'open'
+              ? h.controller.openSubscription(cached)
+              : action === 'trash'
+                ? h.controller.removeLibraryWork(cached)
+                : h.controller.updateLibraryMetadata!(cached.id, { title: '변경' })
+          ).catch((error: unknown) => error);
+        });
+        expect(h.state.saveSubscription).not.toHaveBeenCalled();
+        expect(h.registry.listExternalSource).not.toHaveBeenCalled();
+        vi.mocked(h.state.listSubscriptions).mockResolvedValue([]);
+        await act(async () => {
+          release();
+          await command;
+        });
+        expect(h.state.saveSubscription).not.toHaveBeenCalled();
+        expect(h.registry.listExternalSource).not.toHaveBeenCalled();
+        expect(h.controller.libraryWorks).toEqual([]);
+      } finally {
+        release();
+        await act(async () => h.renderer.unmount());
+      }
+    },
+  );
 
   it('reports initial source membership loading and retries an unavailable library', async () => {
     const snapshots: { status?: string; count: number }[] = [];

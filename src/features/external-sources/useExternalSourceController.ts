@@ -2,6 +2,8 @@ import { sourceReadingPreferences } from '../../external-sources/source-reading-
 import { createLibraryCoverResolver } from './library-cover-resolver';
 import { isTextStream } from '../../external-sources/source-text-stream';
 import { useSourceWorkMetadata } from './use-source-work-metadata';
+import { sourceWorkMetadata } from './source-work-metadata';
+import { useCachedSourceLibrary } from './use-cached-source-library';
 import { useStreamLibraryContinuity } from './use-stream-library-continuity';
 import { useSourceLibraryReader } from './use-source-library-reader';
 
@@ -286,6 +288,12 @@ export function useExternalSourceController(options: UseExternalSourceController
     status: 'loading',
   });
   const libraryLoaded = useRef(false);
+  const [libraryOwner, setLibraryOwner] = useState<{
+    state: UseExternalSourceControllerOptions['state'];
+    settingsScope?: string;
+  }>();
+  const libraryCurrent = libraryOwner?.state === options.state && libraryOwner.settingsScope === options.settingsScope;
+  const cachedLibrary = useCachedSourceLibrary(options, libraryCurrent);
   const libraryLoadGeneration = useRef(0);
   const [readingHistoryLoading, setReadingHistoryLoading] = useState(false);
   const streamCatalog = useSourceReaderCatalog(streaming?.item, options, loading || catalogLoading);
@@ -490,6 +498,7 @@ export function useExternalSourceController(options: UseExternalSourceController
         setLinks(links);
         setNovels(novels);
         libraryLoaded.current = true;
+        setLibraryOwner({ state: loadOptions.state, settingsScope: loadOptions.settingsScope });
         setLibraryBootstrap({ status: 'ready' });
       })
       .catch(() => {
@@ -540,7 +549,9 @@ export function useExternalSourceController(options: UseExternalSourceController
       setSubscriptions(next.subscriptions);
       setReleasePreferences(next.preferences);
       libraryLoaded.current = true;
+      setLibraryOwner({ state: loadOptions.state, settingsScope: loadOptions.settingsScope });
       setLibraryBootstrap({ status: 'ready' });
+      return true;
     } catch (error) {
       if (!current()) return;
       if (!libraryLoaded.current)
@@ -551,6 +562,19 @@ export function useExternalSourceController(options: UseExternalSourceController
       );
     }
   }, [refreshRecovery]);
+
+  const prepareLibraryCommand = useCallback(async () => {
+    const current = optionsRef.current;
+    if (!libraryCurrent && !(await refreshLocalProjection()))
+      throw new Error('작품 정보를 불러온 뒤 다시 시도해 주세요.');
+    if (
+      !mountedRef.current ||
+      current.state !== optionsRef.current.state ||
+      current.settingsScope !== optionsRef.current.settingsScope
+    )
+      throw new Error('계정이 바뀌었습니다. 다시 시도해 주세요.');
+    return current;
+  }, [libraryCurrent, refreshLocalProjection]);
 
   const streamProgress = useSourceStreamProgress({
     current: () => optionsRef.current,
@@ -1367,7 +1391,7 @@ export function useExternalSourceController(options: UseExternalSourceController
     [],
   );
   const coveredLibraryWorks = useLibraryWorkCovers(
-    unresolvedLibraryWorks,
+    libraryCurrent ? unresolvedLibraryWorks : [],
     JSON.stringify([
       options.settingsScope,
       brokerRevision,
@@ -1378,15 +1402,26 @@ export function useExternalSourceController(options: UseExternalSourceController
     peekLibraryCover,
   );
 
-  const libraryWorks = useSourceWorkMetadata(coveredLibraryWorks, options, replaceSubscription);
+  const resolvedLibraryWorks = useSourceWorkMetadata(coveredLibraryWorks, options, replaceSubscription);
+  const libraryWorks = useMemo(
+    () =>
+      libraryCurrent
+        ? resolvedLibraryWorks
+        : (cachedLibrary?.subscriptions ?? []).map((work) => ({
+            ...work,
+            ...sourceWorkMetadata(work),
+            thumbnailUrl: work.thumbnailUrl ?? peekLibraryCover(work),
+          })),
+    [libraryCurrent, resolvedLibraryWorks, cachedLibrary, peekLibraryCover],
+  );
 
   const sourceWorkProgress = useSourceLibraryProgress(
     { ...options, readingActive: options.readingActive || Boolean(streaming) },
     {
-      subscriptions,
-      links,
-      preferences: releasePreferences,
-      novels,
+      subscriptions: libraryCurrent ? subscriptions : (cachedLibrary?.subscriptions ?? []),
+      links: libraryCurrent ? links : [],
+      preferences: libraryCurrent ? releasePreferences : (cachedLibrary?.preferences ?? []),
+      novels: libraryCurrent ? novels : [],
       listChapters: (novelId) => optionsRef.current.listChapters(novelId),
     },
   );
@@ -3737,7 +3772,8 @@ export function useExternalSourceController(options: UseExternalSourceController
       cancelResume();
       setBusy(true);
       try {
-        const next = await changeSourceLibraryTrash(optionsRef.current.state, id, action, clearTrashedWorkHistory);
+        const current = await prepareLibraryCommand();
+        const next = await changeSourceLibraryTrash(current.state, id, action, clearTrashedWorkHistory);
         if (!mountedRef.current) return;
         libraryLoadGeneration.current += 1;
         setSubscriptions((current) => [...current.filter((item) => item.id !== id), ...(next ? [next] : [])]);
@@ -3758,7 +3794,15 @@ export function useExternalSourceController(options: UseExternalSourceController
         if (mountedRef.current) setBusy(false);
       }
     },
-    [busy, cancelSubscriptionChecks, listAbortRef, cancelResume, clearTrashedWorkHistory, refreshLocalProjection],
+    [
+      busy,
+      cancelSubscriptionChecks,
+      listAbortRef,
+      cancelResume,
+      clearTrashedWorkHistory,
+      refreshLocalProjection,
+      prepareLibraryCommand,
+    ],
   );
   const removeLibraryWork = useCallback(
     (work: ExternalSourceSubscriptionRecord) => changeLibraryTrash(work.id, 'trash'),
@@ -3776,7 +3820,8 @@ export function useExternalSourceController(options: UseExternalSourceController
       listAbortRef.current?.abort();
       cancelResume();
       try {
-        return await batchSourceLibraryTrash(optionsRef.current.state, ids, action, (next) => {
+        const current = await prepareLibraryCommand();
+        return await batchSourceLibraryTrash(current.state, ids, action, (next) => {
           ++libraryLoadGeneration.current;
           if (mountedRef.current)
             setSubscriptions((current) => [...current.filter((work) => work.id !== next.id), next]);
@@ -3786,7 +3831,7 @@ export function useExternalSourceController(options: UseExternalSourceController
         if (mountedRef.current) setBusy(false);
       }
     },
-    [busy, cancelResume, cancelSubscriptionChecks, listAbortRef],
+    [busy, cancelResume, cancelSubscriptionChecks, listAbortRef, prepareLibraryCommand],
   );
 
   const emptyLibraryTrash = useCallback(async () => {
@@ -3794,7 +3839,8 @@ export function useExternalSourceController(options: UseExternalSourceController
     libraryTrashBusy.current = true;
     setBusy(true);
     try {
-      const trashed = (await optionsRef.current.state.listSubscriptions()).filter((work) => work.deletedAt);
+      const current = await prepareLibraryCommand();
+      const trashed = (await current.state.listSubscriptions()).filter((work) => work.deletedAt);
       for (const work of trashed)
         await changeSourceLibraryTrash(optionsRef.current.state, work.id, 'purge', clearTrashedWorkHistory);
       return trashed.length;
@@ -3803,7 +3849,7 @@ export function useExternalSourceController(options: UseExternalSourceController
       if (mountedRef.current) setBusy(false);
       await refreshLocalProjection();
     }
-  }, [busy, clearTrashedWorkHistory, refreshLocalProjection]);
+  }, [busy, clearTrashedWorkHistory, refreshLocalProjection, prepareLibraryCommand]);
 
   const subscribeCurrentWork = addCurrentWorkToLibrary;
 
@@ -3895,8 +3941,23 @@ export function useExternalSourceController(options: UseExternalSourceController
           : []),
         { label: subscription.title, parentRef: subscription.navigationRef },
       ]);
-      await refreshLocalProjection();
+      const refreshed = await refreshLocalProjection();
       if (!navigationIsCurrent(sourceId, connection, navigation)) return;
+      if (!libraryCurrent && !refreshed) {
+        setLoading(false);
+        return;
+      }
+      // A startup preview is not authority to reopen a remotely removed work.
+      if (!libraryCurrent) {
+        const fresh = (await optionsRef.current.state.listSubscriptions()).find((work) => work.id === subscription.id);
+        if (!navigationIsCurrent(sourceId, connection, navigation)) return;
+        if (!fresh || fresh.deletedAt) {
+          setLoading(false);
+          setOpen(false);
+          return;
+        }
+        subscription = fresh;
+      }
       await loadPage(
         { parentRef: subscription.navigationRef },
         false,
@@ -3918,6 +3979,7 @@ export function useExternalSourceController(options: UseExternalSourceController
       navigationIsCurrent,
       localSeriesPageSeedRef,
       refreshLocalProjection,
+      libraryCurrent,
       setBrowse,
       setCatalogLoading,
       setDetail,
@@ -4334,7 +4396,9 @@ export function useExternalSourceController(options: UseExternalSourceController
     subscriptions,
     libraryWorks,
     libraryBootstrap,
-    retryLibrary: refreshLocalProjection,
+    retryLibrary: async () => {
+      await refreshLocalProjection();
+    },
     batchLibraryTrash,
     restoreLibraryWork,
     purgeLibraryWork,
@@ -4444,7 +4508,8 @@ export function useExternalSourceController(options: UseExternalSourceController
     checkSubscriptions,
     openSubscription,
     updateLibraryMetadata: async (id, patch) => {
-      const next = await updateSourceLibraryMetadata(optionsRef.current.state, id, patch);
+      const current = await prepareLibraryCommand();
+      const next = await updateSourceLibraryMetadata(current.state, id, patch);
       ++libraryLoadGeneration.current;
       if (mountedRef.current) replaceSubscription(next);
     },
