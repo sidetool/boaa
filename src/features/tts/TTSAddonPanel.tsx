@@ -1,6 +1,4 @@
 import { Check, Play, RefreshCw, RotateCcw, Trash2, Wand2, X } from 'lucide-react';
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { projectSpokenText } from '@boaa/text-core/spoken-text';
 import type {
   Character,
   SpokenTextRule,
@@ -130,8 +128,12 @@ export interface TTSAddonPanelProps {
   /** 화자별 미리 생성하기: server-side speaker analysis and per-character narration for the open book. */
   readonly speakerGeneration?: TTSSpeakerGenerationControls;
   readonly preparedVoiceLabel?: string;
-  /** Show only the speaker and advanced section, without the panel's own intro, tabs and status. */
+  /** Show only the real-time cast section, without the panel's own intro, tabs and status. */
   readonly view?: 'advanced';
+  /** Offer real-time cast beside the ordinary voice: the earlier AI labeling tools are in use on this device. */
+  readonly realtimeCastAvailable?: boolean;
+  /** Opens the reader's AI tab with the earlier labeling tools. */
+  openAITools?(): void;
   refreshStatus(): void | Promise<unknown>;
   jump(direction: -1 | 1): void;
   start(): void | Promise<unknown>;
@@ -442,84 +444,6 @@ function VoicePoolEditor({
 
 export default function TTSAddonPanel(props: TTSAddonPanelProps) {
   const localStatic = useOptionalAppRuntime()?.product?.kind === 'local-static';
-  const [pronunciationSource, setPronunciationSource] = useState('');
-  const [pronunciationReplacement, setPronunciationReplacement] = useState('');
-  const [spokenPreviewSource, setSpokenPreviewSource] = useState('2026-08-01 12:30, API 문서를 확인했다.');
-  const [spokenRuleImpact, setSpokenRuleImpact] = useState<SpokenTextRuleImpactSummary>();
-  const [spokenRuleImpactBusy, setSpokenRuleImpactBusy] = useState(false);
-  const [spokenRuleImpactError, setSpokenRuleImpactError] = useState<string>();
-  const spokenRuleImpactControllerRef = useRef<AbortController | undefined>(undefined);
-  useEffect(() => {
-    const source = props.spokenPreviewRequest?.text.trim();
-    if (!source) return;
-    setSpokenPreviewSource(source);
-  }, [props.spokenPreviewRequest]);
-  const spokenPreview = useMemo(
-    () =>
-      projectSpokenText({
-        text: spokenPreviewSource,
-        language: props.bookLanguage ?? 'ko-KR',
-        rules: [
-          ...props.spokenTextRules,
-          ...(props.voiceProductState?.pronunciationProfile.rules ?? []).map<SpokenTextRule>((rule) => ({
-            id: rule.id,
-            scope: 'book',
-            bookId: props.voiceProductState?.novelId,
-            kind: 'replace_literal',
-            pattern: rule.sourceTerm,
-            replacement: rule.replacement,
-            enabled: true,
-            priority: 100,
-            updatedAt: props.voiceProductState?.pronunciationProfile.updatedAt ?? '',
-          })),
-        ],
-        rubyPolicy: 'reading',
-        footnotePolicy: 'skip_marker',
-      }),
-    [props.bookLanguage, props.spokenTextRules, props.voiceProductState, spokenPreviewSource],
-  );
-  const spokenPreviewPattern = spokenPreviewSource.trim();
-  const spokenPreviewAlreadySkipped = props.spokenTextRules.some(
-    (rule) => rule.enabled && rule.kind === 'skip_line' && rule.pattern === spokenPreviewPattern,
-  );
-  const activeSkipRuleSignature = props.spokenTextRules
-    .filter((rule) => rule.enabled && rule.kind.startsWith('skip_') && rule.pattern.trim())
-    .map((rule) => `${rule.id}:${rule.updatedAt}:${rule.kind}:${rule.pattern}`)
-    .join('|');
-  const hasActiveSkipRules = activeSkipRuleSignature.length > 0;
-  useEffect(() => {
-    spokenRuleImpactControllerRef.current?.abort();
-    spokenRuleImpactControllerRef.current = undefined;
-    setSpokenRuleImpact(undefined);
-    setSpokenRuleImpactError(undefined);
-    setSpokenRuleImpactBusy(false);
-  }, [activeSkipRuleSignature]);
-  useEffect(
-    () => () => {
-      spokenRuleImpactControllerRef.current?.abort();
-    },
-    [],
-  );
-  const inspectSpokenRuleImpact = async () => {
-    spokenRuleImpactControllerRef.current?.abort();
-    const controller = new AbortController();
-    spokenRuleImpactControllerRef.current = controller;
-    setSpokenRuleImpactBusy(true);
-    setSpokenRuleImpactError(undefined);
-    try {
-      const summary = await props.previewSpokenTextRuleImpact(controller.signal);
-      if (!controller.signal.aborted) setSpokenRuleImpact(summary);
-    } catch (error) {
-      if (!controller.signal.aborted) {
-        setSpokenRuleImpactError(error instanceof Error ? error.message : '책 전체 영향을 확인하지 못했습니다.');
-      }
-    } finally {
-      if (spokenRuleImpactControllerRef.current === controller) {
-        spokenRuleImpactControllerRef.current = undefined;
-        setSpokenRuleImpactBusy(false);
-      }
-    }
-  };
   const systemProfiles = props.voiceProfiles.filter((profile) => profile.providerId === 'system');
   const hostedProfiles = props.selectedHostedProvider
     ? props.voiceProfiles.filter((profile) => profile.providerId === props.selectedHostedProvider?.providerId)
@@ -553,85 +477,6 @@ export default function TTSAddonPanel(props: TTSAddonPanelProps) {
   return (
     <div className="panel-body tts-addon-body">
       <div id="tts-advanced-panel" className="tts-panel-section" role="tabpanel" hidden={false}>
-        <div className="voice-profile-section spoken-preview-section">
-          <div className="setting-line">
-            <h4>읽기 미리보기</h4>
-            <span>저장하지 않음</span>
-          </div>
-          <textarea
-            className="text-input"
-            value={spokenPreviewSource}
-            rows={3}
-            aria-label="읽기 미리보기 원문"
-            onChange={(event) => setSpokenPreviewSource(event.target.value)}
-          />
-          <div className="spoken-preview-grid">
-            <div>
-              <span>원문</span>
-              <p>{spokenPreviewSource || '—'}</p>
-            </div>
-            <div>
-              <span>실제로 읽는 문장</span>
-              <p>{spokenPreview.spokenText || '이 문장은 건너뜁니다.'}</p>
-            </div>
-          </div>
-          {spokenPreview.skipped.length > 0 && (
-            <small>{formatCount(spokenPreview.skipped.length)}개 구간이 건너뛰기 규칙으로 제외됩니다.</small>
-          )}
-          <div className="spoken-preview-actions">
-            <button
-              className="ghost-btn compact"
-              disabled={!spokenPreviewPattern || spokenPreviewAlreadySkipped}
-              aria-label={spokenPreviewAlreadySkipped ? '이미 등록된 건너뛰기 문장' : '이 문장 TTS에서 건너뛰기'}
-              onClick={() => void props.saveSpokenTextSkipRule(spokenPreviewPattern, 'skip_line')}
-            >
-              <Check size={14} /> {spokenPreviewAlreadySkipped ? '이미 건너뜀' : '이 문장 건너뛰기'}
-            </button>
-            <small>원문 전체가 일치할 때만 건너뛰어요.</small>
-          </div>
-          <div className="spoken-rule-impact" aria-live="polite">
-            <div className="setting-line">
-              <div>
-                <strong>책 전체 영향</strong>
-                <small>저장된 건너뛰기 규칙만 검사해요. 음성은 만들지 않아요.</small>
-              </div>
-              <button
-                className="ghost-btn compact"
-                disabled={!hasActiveSkipRules || spokenRuleImpactBusy}
-                aria-label="책 전체 건너뛰기 영향 확인"
-                onClick={() => void inspectSpokenRuleImpact()}
-              >
-                {spokenRuleImpactBusy ? '확인 중…' : '영향 확인'}
-              </button>
-            </div>
-            {!hasActiveSkipRules && <small>켜진 건너뛰기 규칙이 없어요.</small>}
-            {spokenRuleImpactError && <small className="error-text">{spokenRuleImpactError}</small>}
-            {spokenRuleImpact && (
-              <div className="spoken-rule-impact-result">
-                <strong>
-                  {formatCount(spokenRuleImpact.scannedParagraphCount)}개 문단 중{' '}
-                  {formatCount(spokenRuleImpact.affectedParagraphCount)}개 영향
-                </strong>
-                <small>
-                  완전 생략 {formatCount(spokenRuleImpact.fullySkippedParagraphCount)}개 · 제외 구간{' '}
-                  {formatCount(spokenRuleImpact.skippedRangeCount)}개
-                </small>
-                {spokenRuleImpact.samples.length > 0 && (
-                  <ul>
-                    {spokenRuleImpact.samples.map((sample) => (
-                      <li key={`${sample.chapterTitle}:${sample.paragraphIndex}:${sample.source}`}>
-                        <span>
-                          {sample.chapterTitle} · {sample.paragraphIndex + 1}번째 문단
-                        </span>
-                        <p>{sample.source}</p>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </div>
-            )}
-          </div>
-        </div>
         <div className="voice-profile-section">
           <div className="setting-line">
             <h4>캐릭터별 음성</h4>
@@ -841,59 +686,6 @@ export default function TTSAddonPanel(props: TTSAddonPanelProps) {
             )}
           </div>
         )}
-
-        <div className="voice-profile-section pronunciation-section">
-          <div className="setting-line">
-            <h4>발음 사전</h4>
-            <span>버전 {props.voiceProductState?.pronunciationProfile.revision ?? 0}</span>
-          </div>
-          <div className="pronunciation-editor">
-            <input
-              className="text-input"
-              value={pronunciationSource}
-              placeholder="원문 표기"
-              onChange={(event) => setPronunciationSource(event.target.value)}
-            />
-            <input
-              className="text-input"
-              value={pronunciationReplacement}
-              placeholder="읽을 발음"
-              onChange={(event) => setPronunciationReplacement(event.target.value)}
-            />
-            <button
-              className="primary-btn"
-              disabled={!pronunciationSource.trim() || !pronunciationReplacement.trim() || props.voiceProductBusy}
-              onClick={() => {
-                void props.savePronunciationRule({
-                  sourceTerm: pronunciationSource,
-                  replacement: pronunciationReplacement,
-                  mode: 'literal',
-                });
-                setPronunciationSource('');
-                setPronunciationReplacement('');
-              }}
-            >
-              <Check size={15} /> 저장
-            </button>
-          </div>
-          <div className="pronunciation-list">
-            {(props.voiceProductState?.pronunciationProfile.rules ?? []).map((rule) => (
-              <div key={rule.id}>
-                <span>
-                  <strong>{rule.sourceTerm}</strong> → {rule.replacement}
-                </span>
-                <button
-                  className="icon-btn"
-                  title="발음 규칙 삭제"
-                  aria-label={`${rule.sourceTerm} 발음 규칙 삭제`}
-                  onClick={() => void props.deletePronunciationRule(rule.id)}
-                >
-                  <Trash2 size={14} />
-                </button>
-              </div>
-            ))}
-          </div>
-        </div>
 
         {!localStatic && (
           <>

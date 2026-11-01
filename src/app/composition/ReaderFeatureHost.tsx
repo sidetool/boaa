@@ -28,6 +28,8 @@ interface ReaderFeatureHostProps extends PluginAnnotationRefreshPorts {
   readonly closeAddon: () => void;
   readonly theme: 'dark' | 'light';
   readonly trustedContext?: TrustedReaderAddonHostContext;
+  /** Registered tabs left out of the tab bar unless they are the open one; their contributions stay active. */
+  readonly hiddenTabIds?: readonly string[];
   readonly children: ReactNode;
 }
 
@@ -48,17 +50,20 @@ export function ReaderFeatureHost(props: ReaderFeatureHostProps) {
     extensionRuntime.manager.getRevision,
     extensionRuntime.manager.getRevision,
   );
+  const { addonOpen, addonTab, setAddonTab, hiddenTabIds } = props;
   const tabs = useMemo(() => {
     void revision;
     return [
       ...CORE_READER_ADDON_TABS,
-      ...extensionRuntime.trustedExtensions.getReaderAddonTabs().map(({ descriptor }) => descriptor),
+      ...extensionRuntime.trustedExtensions
+        .getReaderAddonTabs()
+        .map(({ descriptor }) => descriptor)
+        .filter((descriptor) => descriptor.id === addonTab || !hiddenTabIds?.includes(descriptor.id)),
       ...snapshot.entries
         .filter((entry) => !extensionRuntime.trustedExtensions.getReaderAddon(entry.tab.id))
         .map((entry) => entry.tab),
     ].sort((left, right) => (left.order ?? 500) - (right.order ?? 500) || left.id.localeCompare(right.id));
-  }, [extensionRuntime, revision, snapshot.entries]);
-  const { addonOpen, addonTab, setAddonTab } = props;
+  }, [extensionRuntime, revision, snapshot.entries, addonTab, hiddenTabIds]);
   useEffect(() => {
     if (addonOpen && !tabs.some((tab) => tab.id === addonTab)) setAddonTab('outline');
   }, [addonOpen, addonTab, tabs, setAddonTab]);

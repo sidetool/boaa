@@ -328,6 +328,7 @@ import { clamp, formatBytes, formatCount } from './utils/format';
 import { jsonValue } from './utils/json';
 type AddonTab = ReaderAddonTab;
 const SHOW_DEVELOPER_AI_TOOLS = import.meta.env.DEV;
+const HIDDEN_AI_TABS = [BOAA_AI_ADDON_ID] as const;
 const InstalledExtensionsPanel = lazy(() => import('./ui-next/ExtensionsPanel'));
 const ToastHost = lazy(() => import('./shared/ui/ToastHost').then((module) => ({ default: module.ToastHost })));
 const FixedDocumentScreen = lazy(() => import('./features/fixed-document/FixedDocumentScreen'));
@@ -2459,6 +2460,19 @@ export default function App() {
     Boolean(graphReview.parseError) ||
     graphReview.reviewedGraph.characters.length === 0;
   const activeBookAIWorkflow = bookAIWorkflow?.novelId === selectedNovel?.id ? bookAIWorkflow : undefined;
+  // The AI tab holds the earlier labeling workflow; speakers are prepared in 듣기 now. It joins the tab bar only while
+  // that work is in use for this book (real-time cast, an unfinished workflow, analysis/correction view) or once the
+  // tools were opened for this book, so existing work stays reachable without showing it to everyone.
+  const [aiToolsOpenedBookId, setAIToolsOpenedBookId] = useState<string>();
+  useEffect(() => {
+    if (addonOpen && addonTab === BOAA_AI_ADDON_ID) setAIToolsOpenedBookId(selectedNovel?.id);
+  }, [addonOpen, addonTab, selectedNovel?.id]);
+  const aiToolsInUse =
+    (aiToolsOpenedBookId !== undefined && aiToolsOpenedBookId === selectedNovel?.id) ||
+    ttsPlaybackSettings.mode === 'cast' ||
+    readerMode === 'analysis' ||
+    readerMode === 'correction' ||
+    Boolean(activeBookAIWorkflow && !['succeeded', 'cancelled'].includes(activeBookAIWorkflow.status));
   const activeBookAIWorkflowPlan = activeBookAIWorkflow?.plan ?? bookAIWorkflowPlan;
   const activeBookAIWorkflowProgress = bookAIWorkflowProgress(activeBookAIWorkflow);
   const activeBookAIWorkflowProgressBody = recordValue(activeBookAIWorkflow?.progress);
@@ -5972,6 +5986,7 @@ export default function App() {
           closeAddon={() => setAddonOpen(false)}
           theme={settings.theme === 'dark' ? 'dark' : 'light'}
           trustedContext={trustedReaderAddonHostContext}
+          hiddenTabIds={aiToolsInUse ? undefined : HIDDEN_AI_TABS}
         >
           {addonTab === 'outline' && (
             <Suspense fallback={null}>
@@ -6011,6 +6026,12 @@ export default function App() {
                 paused={ttsPaused}
                 speed={ttsPlaybackSettings.rate}
                 playbackSettings={ttsPlaybackSettings}
+                realtimeCastAvailable={aiToolsInUse}
+                openAITools={
+                  extensionRuntime.trustedExtensions.getReaderAddon(BOAA_AI_ADDON_ID)
+                    ? () => setAddonTab(BOAA_AI_ADDON_ID)
+                    : undefined
+                }
                 preparedVoiceLabel={activePrepared?.label}
                 plainVoices={plainTTS.catalog}
                 plainPreviewBusy={plainTTS.previewBusy}

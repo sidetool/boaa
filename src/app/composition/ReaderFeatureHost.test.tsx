@@ -2,7 +2,11 @@ import { act, create, type ReactTestRenderer } from 'react-test-renderer';
 import { afterEach, expect, it, vi } from 'vitest';
 import type { ReactNode } from 'react';
 import { ReaderFeatureHost } from './ReaderFeatureHost';
-import { ReaderScreenHandle, type ReaderScreenModel } from '../../features/reader/reader-screen-contract';
+import {
+  ReaderScreenHandle,
+  type ReaderAddonTab,
+  type ReaderScreenModel,
+} from '../../features/reader/reader-screen-contract';
 import { defaultSettings } from '../../repositories/reader-defaults';
 import type { ReaderAddonTabDescriptor } from '../../features/reader/reader-addon-contract';
 
@@ -11,12 +15,16 @@ const state = vi.hoisted(() => ({
   snapshot: { entries: [] as { tab: ReaderAddonTabDescriptor }[] },
   select: vi.fn(),
   renders: 0,
+  trustedTabs: [] as ReaderAddonTabDescriptor[],
 }));
 vi.mock('../runtime/RuntimeProvider', () => ({
   useAppRuntime: () => ({
     extensionRuntime: {
       manager: { subscribe: () => () => {}, getRevision: () => 0 },
-      trustedExtensions: { getReaderAddonTabs: () => [], getReaderAddon: () => undefined },
+      trustedExtensions: {
+        getReaderAddonTabs: () => state.trustedTabs.map((descriptor) => ({ descriptor })),
+        getReaderAddon: () => undefined,
+      },
     },
   }),
 }));
@@ -72,6 +80,7 @@ afterEach(() => {
   state.snapshot = { entries: [] };
   state.select.mockClear();
   state.renders = 0;
+  state.trustedTabs = [];
 });
 const model: ReaderScreenModel = {
   novel: { id: 'book', title: 'Book', totalChapters: 1 },
@@ -139,4 +148,39 @@ it('handles plugin snapshot changes within the Reader subtree and clears selecti
   renderer = undefined;
   expect(state.select).toHaveBeenLastCalledWith(null);
   expect(state.listeners.size).toBe(0);
+});
+
+it('leaves a hidden trusted tab out of the tab bar unless it is the open one', async () => {
+  state.trustedTabs = [{ id: 'boaa.ai.panel', label: 'AI', icon: 'wand' }];
+  const setAddonTab = vi.fn();
+  const host = (addonTab: ReaderAddonTab, hiddenTabIds?: readonly string[]) => (
+    <ReaderFeatureHost
+      model={model}
+      screenHandle={new ReaderScreenHandle()}
+      addonOpen
+      addonTab={addonTab}
+      setAddonTab={setAddonTab}
+      closeAddon={() => {}}
+      theme="light"
+      hiddenTabIds={hiddenTabIds}
+      repository={{ listBookmarks: async () => [], listHighlights: async () => [], listNotes: async () => [] }}
+      setBookmarks={() => {}}
+      setHighlights={() => {}}
+      setNotes={() => {}}
+      notify={() => {}}
+    >
+      {null}
+    </ReaderFeatureHost>
+  );
+  const labels = () => renderer!.root.findAllByType('span').map((node) => node.children.join(''));
+  await act(async () => {
+    renderer = create(host('outline', ['boaa.ai.panel']));
+  });
+  expect(labels()).not.toContain('AI');
+  // Opening it from a tool keeps it in the bar instead of bouncing back to 목차.
+  await act(async () => renderer!.update(host('boaa.ai.panel', ['boaa.ai.panel'])));
+  expect(labels()).toContain('AI');
+  expect(setAddonTab).not.toHaveBeenCalled();
+  await act(async () => renderer!.update(host('outline')));
+  expect(labels()).toContain('AI');
 });

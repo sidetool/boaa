@@ -380,30 +380,75 @@ describe('UiNextListenPanel playback', () => {
 });
 
 describe('UiNextListenPanel pages and status', () => {
-  it.each(['세부 청취 설정', '화자·고급 설정'])('enters %s and returns to the player', (label) => {
-    const { root, props } = mount();
-    click(button(root.findByProps({ 'aria-label': '더 많은 청취 설정' }), new RegExp(`^${label}`)));
-    expect(text(root.findByProps({ className: 'un-listen-page-title' }))).toBe(label);
+  it('enters 세부 청취 설정 and returns to the player', () => {
+    const { root } = mount();
+    click(button(root.findByProps({ 'aria-label': '더 많은 청취 설정' }), /^세부 청취 설정/));
+    expect(text(root.findByProps({ className: 'un-listen-page-title' }))).toBe('세부 청취 설정');
     expect(root.findAllByProps({ 'aria-label': '재생' })).toHaveLength(0);
-    if (label === '화자·고급 설정') {
-      const advanced = root.findByType(TTSAddonPanel);
-      expect(advanced.props.view).toBe('advanced');
-      expect(advanced.props.changePlaybackSettings).toBe(props.changePlaybackSettings);
-    } else expect(root.findAllByType('h3').map(text)).toContain('쉬는 간격');
+    expect(root.findAllByType('h3').map(text)).toContain('쉬는 간격');
     click(button(root, '듣기'));
     expect(button(root, '재생')).toBeDefined();
+  });
+  it('keeps real-time cast out of the main page unless it is already in use', () => {
+    const { root } = mount();
+    expect(root.findAll((node) => node.props.label === '낭독 방식')).toHaveLength(0);
+    const links = root.findByProps({ 'aria-label': '더 많은 청취 설정' }).findAllByType('button').map(text);
+    expect(links.some((label) => /화자·고급|인물별 목소리/.test(label))).toBe(false);
+    act(() => renderer!.update(<UiNextListenPanel {...fixture()} realtimeCastAvailable />));
+    expect(root.find((node) => node.props.label === '낭독 방식').props.value).toBe('plain');
+  });
+  it('opens the real-time cast page from a saved cast choice', () => {
+    const props = fixture({ playbackSettings: { ...DEFAULT_TTS_PLAYBACK_SETTINGS, mode: 'cast' } });
+    const { root } = mount(props);
+    expect(root.find((node) => node.props.label === '낭독 방식').props.value).toBe('cast');
+    click(button(root, /^인물별 목소리/));
+    expect(text(root.findByProps({ className: 'un-listen-page-title' }))).toBe('실시간 인물별 낭독');
+    const realtime = root.findByType(TTSAddonPanel);
+    expect(realtime.props.view).toBe('advanced');
+    expect(realtime.props.changePlaybackSettings).toBe(props.changePlaybackSettings);
+    click(button(root, '듣기'));
     expect(root.findAllByType(TTSAddonPanel)).toHaveLength(0);
   });
-  it('opens the advanced page for each new nonempty spoken preview request', () => {
-    const { root, props } = mount();
-    const request = { id: 1, text: '미리 읽을 문장' };
-    act(() => renderer!.update(<UiNextListenPanel {...props} spokenPreviewRequest={request} />));
-    expect(root.findByType(TTSAddonPanel).props.spokenPreviewRequest).toBe(request);
-    expect(root.findByProps({ 'aria-label': '읽기 미리보기 원문' }).props.value).toBe(request.text);
+  it('opens the filter preview for each new nonempty spoken preview request', () => {
+    const props = fixture({ saveSpokenTextFilter: vi.fn(async () => undefined), currentParagraphText: '지금 문단' });
+    const { root } = mount(props);
+    act(() =>
+      renderer!.update(<UiNextListenPanel {...props} spokenPreviewRequest={{ id: 1, text: '미리 읽을 문장' }} />),
+    );
+    expect(text(root.findByProps({ className: 'un-listen-page-title' }))).toBe('발음·문자 필터');
+    expect(root.findByProps({ 'aria-label': '미리볼 원문' }).props.value).toBe('미리 읽을 문장');
     click(button(root, '듣기'));
     expect(button(root, '재생')).toBeDefined();
     act(() => renderer!.update(<UiNextListenPanel {...props} spokenPreviewRequest={{ id: 2, text: '다음 문장' }} />));
-    expect(root.findByProps({ 'aria-label': '읽기 미리보기 원문' }).props.value).toBe('다음 문장');
+    expect(root.findByProps({ 'aria-label': '미리볼 원문' }).props.value).toBe('다음 문장');
+    // Choosing the same sentence again after typing another one is still a new request.
+    act(() => root.findByProps({ 'aria-label': '미리볼 원문' }).props.onChange({ target: { value: '직접 쓴 문장' } }));
+    act(() => renderer!.update(<UiNextListenPanel {...props} spokenPreviewRequest={{ id: 3, text: '다음 문장' }} />));
+    expect(root.findByProps({ 'aria-label': '미리볼 원문' }).props.value).toBe('다음 문장');
+  });
+  it('lists the earlier pronunciation dictionary on the filter page and removes from that store', () => {
+    const rule = {
+      id: 'legacy-1',
+      sourceTerm: 'HP',
+      replacement: '에이치피',
+      mode: 'literal' as const,
+      userConfirmed: true,
+      provenance: 'user' as const,
+      enabled: true,
+    };
+    const props = fixture({
+      saveSpokenTextFilter: vi.fn(async () => undefined),
+      voiceProductState: {
+        pronunciationProfile: { id: 'p', novelId: 'n', revision: 1, revisionId: 'r', rules: [rule], updatedAt: '' },
+      } as unknown as TTSAddonPanelProps['voiceProductState'],
+    });
+    const { root } = mount(props);
+    click(button(root.findByProps({ 'aria-label': '더 많은 청취 설정' }), /^발음·문자 필터/));
+    act(() => root.findByProps({ 'aria-label': '미리볼 원문' }).props.onChange({ target: { value: 'HP 회복' } }));
+    expect(text(root.findByProps({ className: 'un-filter-result' }))).toContain('에이치피 회복');
+    click(button(root, 'HP 발음 규칙 삭제'));
+    expect(props.deletePronunciationRule).toHaveBeenCalledExactlyOnceWith('legacy-1');
+    expect(props.deleteSpokenTextSkipRule).not.toHaveBeenCalled();
   });
   it('does not leave the player for a blank spoken preview request', () => {
     const { root } = mount(fixture({ spokenPreviewRequest: { id: 1, text: '   ' } }));

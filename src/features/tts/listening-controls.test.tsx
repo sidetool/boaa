@@ -124,6 +124,18 @@ describe('listening controls', () => {
     );
     const panel = renderer.root;
 
+    // Real-time cast stays off the main page until the earlier AI tools are in use.
+    expect(labeledSelect(panel, '낭독 방식')).toBeUndefined();
+    act(() =>
+      renderer.update(
+        <TTSAddonPanel
+          {...base}
+          playbackSettings={{ ...base.playbackSettings, mode: undefined, voiceSource: undefined }}
+          changePlaybackSettings={changePlaybackSettings}
+          realtimeCastAvailable
+        />,
+      ),
+    );
     expect(labeledSelect(panel, '낭독 방식').props.value).toBe('plain');
     expect(labeledSelect(panel, '음성 사용').props.value).toBe('system');
     expect(labeledButton(panel, '재생').props.disabled).toBe(false);
@@ -294,7 +306,9 @@ describe('listening controls', () => {
     const panel = renderer.root;
     expect(labeledSelect(panel, '낭독 방식').props.value).toBe('cast');
     expect(labeledButton(panel, '재생').props.disabled).toBe(false);
-    act(() => labeledButton(panel, '화자·고급 설정인물별 목소리, 발음 사전, 읽기 미리보기').props.onClick());
+    act(() =>
+      labeledButton(panel, '인물별 목소리AI 라벨링으로 나눈 인물을 정해 둔 목소리로 바로 읽어요').props.onClick(),
+    );
     const advanced = renderer.root.findByProps({ id: 'tts-advanced-panel' });
     expect(advanced.props.hidden).toBe(false);
     expect(advanced.findAllByType('h4').map((node) => node.children.join(''))).toEqual(

@@ -75,7 +75,8 @@ export function createAppExtensionRuntime(dependencies: AppExtensionRuntimeDepen
             defaultEnabled: true,
             canDisable: true,
             beta: true,
-            description: 'AI 분석과 화자·캐릭터 음성 준비 기능을 제공합니다.',
+            description:
+              '리더에 AI 탭을 추가해 화자 라벨링·교정과 실시간 인물별 낭독(이전 방식)을 직접 다룹니다. 화자별 미리 생성하기에는 필요 없어요.',
           },
           {
             definition: createWebNovelMetadataEnrichmentTrustedExtension(webNovelMetadataCollector),

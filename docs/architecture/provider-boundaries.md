@@ -137,6 +137,30 @@ WAV는 중립 fixture이며 실제 제공자 생성·과금이나 운영 데이�
 
 ## AI·화자별 합성과 플랫폼 경계
 
+### 기존 라벨 기반 낭독과 화자별 미리 생성의 구분
+
+기존 `BOAA AI`의 작품 분석·라벨 교정은 `LabeledSegment`/`Character`를 만들고,
+실시간 인물별 낭독은 `VoiceProfile`/`VoiceProductState`의 배정·승인·음성 풀을 사용한다.
+이 경로의 주요 인물 수·샘플 승인·단역 대체 설정은 새 **화자별 미리 생성하기**의 설정이 아니다.
+새 생성 경로는 별도 분석 캐시와 `speaker_voice_bindings`, 저장된 작업 계획을 사용한다.
+기존 도구의 화면 노출을 줄여도 분석·배정·승인 저장 데이터나 실행 API를 삭제하지 않는다.
+
+기존 발음 사전은 예외적으로 두 경로에서 계속 소비된다. `App`은 활성 literal 발음 규칙을
+`SpokenTextRule`로 투영해 새 낭독 필터와 함께 합성에 전달한다. 필터 화면을 통합할 때도
+이 규칙을 미리보기에 포함하고, 삭제는 새 필터 저장소가 아닌 기존 발음 사전으로 보낸다.
+자동 이관·중복 저장으로 두 저장소의 규칙을 섞지 않는다.
+
+청취 UI는 `화자·고급 설정` 진입을 없애고 읽기 미리보기를 **발음·문자 필터**로,
+책 전체 건너뛰기 영향 확인을 **세부 청취 설정 → 건너뛸 내용**으로 모은다.
+기존 발음 사전은 저장된 규칙이 있을 때만 필터 화면에서 별도로 관리한다.
+기존 음성 초안·승인·음성 풀·캐시는 **실시간 인물별 낭독** 도구에 남긴다.
+
+기본 읽기 도구에서는 내장 AI 탭을 숨긴다. 기존 방식을 사용 중이거나 분석 작업을 관리할 때,
+또는 **세부 청취 설정 → AI 도구**로 직접 열었을 때는 접근할 수 있다.
+`ReaderFeatureHost.hiddenTabIds`는 탭 표시만 제어하며 현재 열린 탭은 유지한다.
+익스텐션의 켜짐/꺼짐 저장값·동기화·실행 계약은 바꾸지 않으며, 명시적으로 끈 익스텐션을
+이 노출 정책으로 다시 켜지 않는다. 별도 설치 플러그인의 탭도 이 정책의 대상이 아니다.
+
 S8 voice casting boundary - 2026-07-13: importance scoring, conservative trait resolution, pool allocation and
 collision solving are deterministic provider-neutral code in `src/providers/voice-casting/`; they do not call an LLM
 or TTS service. An optional future trait micro-pass receives only bounded ambiguous evidence through the existing LLM

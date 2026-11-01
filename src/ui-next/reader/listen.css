@@ -445,6 +445,10 @@
   font-weight: 650;
 }
 
+.un-listen-note.is-danger {
+  color: var(--un-danger);
+}
+
 .un-listen-note.is-paid {
   padding: 8px 10px;
   border-radius: 10px;
@@ -453,6 +457,11 @@
 
 .un-listen-note.is-paid b {
   color: #f5b84b;
+}
+
+.un-listen-impact {
+  display: grid;
+  gap: 6px;
 }
 
 .un-listen-hint {

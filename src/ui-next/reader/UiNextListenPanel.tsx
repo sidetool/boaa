@@ -22,7 +22,6 @@ import {
   SlidersHorizontal,
   Square,
   Trash2,
-  Users,
   UsersRound,
   Volume2,
 } from 'lucide-react';
@@ -39,6 +38,7 @@ import UiNextSpeakerEngines from './UiNextSpeakerEngines';
 import UiNextSpeakerGenerationPanel from './UiNextSpeakerGenerationPanel';
 import UiNextVoiceLibrary from './UiNextVoiceLibrary';
 import UiNextSpokenTextFilters from './UiNextSpokenTextFilters';
+import UiNextSkipRuleImpact from './UiNextSkipRuleImpact';
 import PlaybackDiagnostics from './PlaybackDiagnostics';
 import UiNextTTSConnections from './UiNextTTSConnections';
 import type { TTSVoice } from '../../providers/tts';
@@ -46,7 +46,7 @@ import { cx, Segmented, Switch } from '../components/primitives';
 import './listen.css';
 
 type Page =
-  'main' | 'details' | 'advanced' | 'engines' | 'filters' | 'audiobook' | 'speaker' | 'speakerEngines' | 'voiceLibrary';
+  'main' | 'details' | 'realtime' | 'engines' | 'filters' | 'audiobook' | 'speaker' | 'speakerEngines' | 'voiceLibrary';
 // Plain catalog entries may name the engine they run on; ids stay opaque and are saved as-is.
 type EngineVoice = TTSVoice & { providerId?: string; providerName?: string; modelId?: string; paid?: boolean };
 interface EngineStatus {
@@ -59,7 +59,7 @@ interface EngineStatus {
 }
 const PAGE_TITLE: Record<Exclude<Page, 'main'>, string> = {
   details: '세부 청취 설정',
-  advanced: '화자·고급 설정',
+  realtime: '실시간 인물별 낭독',
   engines: 'TTS 엔진 연결',
   filters: '발음·문자 필터',
   audiobook: '미리 생성하기',
@@ -128,6 +128,9 @@ export default function UiNextListenPanel(props: TTSAddonPanelProps) {
   const [voiceLibraryRevision, setVoiceLibraryRevision] = useState(0);
   const settings = props.playbackSettings;
   const plainMode = !providers || settings.mode !== 'cast';
+  // Real-time cast reads the earlier AI labels as it goes. It is offered only to people already using that path;
+  // everyone else prepares speakers ahead in 화자별 미리 생성하기, so the two never compete on the main page.
+  const realtimeCastShown = providers && (!plainMode || Boolean(props.realtimeCastAvailable));
   const { changePlaybackSettings } = props;
   useEffect(() => {
     if (!providers && (settings.mode === 'cast' || settings.voiceSource === 'server'))
@@ -181,10 +184,24 @@ export default function UiNextListenPanel(props: TTSAddonPanelProps) {
   const count = props.paragraphCount;
   const index = props.paragraphIndex;
 
-  // A "hear this sentence" request from the reader lands on the spoken-text preview.
+  // A "hear this sentence" request from the reader lands on the filter preview, where a wrong reading is fixed.
+  const [previewRequest, setPreviewRequest] = useState<{ id: number; text: string }>();
+  const canFilter = Boolean(props.saveSpokenTextFilter);
   useEffect(() => {
-    if (props.spokenPreviewRequest?.text.trim()) setPage('advanced');
-  }, [props.spokenPreviewRequest]);
+    const request = props.spokenPreviewRequest;
+    const text = request?.text.trim();
+    if (!request || !text || !canFilter) return;
+    setPreviewRequest({ id: request.id, text });
+    setPage('filters');
+  }, [props.spokenPreviewRequest, canFilter]);
+  const legacyPronunciation =
+    props.voiceProductState && props.voiceProductState.pronunciationProfile.rules.length > 0
+      ? {
+          rules: props.voiceProductState.pronunciationProfile.rules,
+          updatedAt: props.voiceProductState.pronunciationProfile.updatedAt,
+          remove: props.deletePronunciationRule,
+        }
+      : undefined;
 
   const speakerGeneration = !localStatic && providers ? props.speakerGeneration : undefined;
   if (page !== 'main') {
@@ -197,6 +214,7 @@ export default function UiNextListenPanel(props: TTSAddonPanelProps) {
           onClick={() => {
             // Engine keys or models may have changed; reload the voice list the player picks from.
             if (page === 'engines') props.refreshPlainVoices?.();
+            setPreviewRequest(undefined);
             setPage(parent);
           }}
         >
@@ -237,13 +255,14 @@ export default function UiNextListenPanel(props: TTSAddonPanelProps) {
             )}
           </>
         ) : page === 'details' ? (
-          <ListenDetails {...props} serverPlain={serverPlain} />
+          <ListenDetails {...props} serverPlain={serverPlain} aiToolsShown={realtimeCastShown} />
         ) : page === 'filters' && props.saveSpokenTextFilter ? (
           <UiNextSpokenTextFilters
             rules={props.spokenTextRules}
             language={props.bookLanguage}
             currentParagraphText={props.currentParagraphText}
-            requestedText={props.spokenPreviewRequest?.text}
+            request={previewRequest}
+            legacyPronunciation={legacyPronunciation}
             save={props.saveSpokenTextFilter}
             importFilters={props.importSpokenTextFilters}
             remove={props.deleteSpokenTextSkipRule}
@@ -276,7 +295,21 @@ export default function UiNextListenPanel(props: TTSAddonPanelProps) {
             />
           </>
         ) : (
-          <TTSAddonPanel {...props} view="advanced" />
+          <>
+            <p className="un-listen-note">
+              AI 라벨링으로 나눈 인물마다 정해 둔 목소리로 바로 읽는 이전 방식이에요.
+              {speakerGeneration && (
+                <>
+                  {' '}
+                  <button type="button" className="un-listen-link" onClick={() => setPage('speaker')}>
+                    화자별 미리 생성하기
+                  </button>
+                  는 미리 만들어 두고 들어요.
+                </>
+              )}
+            </p>
+            <TTSAddonPanel {...props} view="advanced" />
+          </>
         )}
       </div>
     );
@@ -520,13 +553,13 @@ export default function UiNextListenPanel(props: TTSAddonPanelProps) {
       </Group>
 
       <Group title="목소리">
-        {providers && (
+        {realtimeCastShown && (
           <Segmented
             label="낭독 방식"
             value={plainMode ? 'plain' : 'cast'}
             options={[
               { value: 'plain', label: '기본 목소리' },
-              { value: 'cast', label: '화자별 목소리' },
+              { value: 'cast', label: '실시간 인물별' },
             ]}
             onChange={(mode) => props.changePlaybackSettings({ mode })}
           />
@@ -663,17 +696,15 @@ export default function UiNextListenPanel(props: TTSAddonPanelProps) {
             )}
           </>
         ) : (
-          <p className="un-listen-note">
-            인물마다 다른 목소리로 읽어요. 목소리는 아래 <b>화자·고급 설정</b>에서 고를 수 있어요.
-            {speakerGeneration && (
-              <>
-                {' '}
-                <button type="button" className="un-listen-link" onClick={() => setPage('speaker')}>
-                  화자별로 미리 만들기
-                </button>
-              </>
-            )}
-          </p>
+          <div className="un-listen-links">
+            <button type="button" onClick={() => setPage('realtime')}>
+              <span>
+                <b>인물별 목소리</b>
+                <small>AI 라벨링으로 나눈 인물을 정해 둔 목소리로 바로 읽어요</small>
+              </span>
+              <ChevronRight size={18} aria-hidden="true" />
+            </button>
+          </div>
         )}
       </Group>
 
@@ -718,7 +749,7 @@ export default function UiNextListenPanel(props: TTSAddonPanelProps) {
             <SpellCheck size={19} aria-hidden="true" />
             <span>
               <b>발음·문자 필터</b>
-              <small>찾을 말을 읽을 말로 바꾸기, 정규식, .ttsfilter 가져오기</small>
+              <small>잘못 읽는 말 고치기, 읽기 미리보기, .ttsfilter 가져오기</small>
             </span>
             <ChevronRight size={18} aria-hidden="true" />
           </button>
@@ -730,14 +761,6 @@ export default function UiNextListenPanel(props: TTSAddonPanelProps) {
             <small>
               {serverPlain ? '합성 단위, 음높이, 볼륨, 쉬는 간격, 건너뛸 내용' : '음높이, 볼륨, 쉬는 간격, 건너뛸 내용'}
             </small>
-          </span>
-          <ChevronRight size={18} aria-hidden="true" />
-        </button>
-        <button type="button" onClick={() => setPage('advanced')}>
-          <Users size={19} aria-hidden="true" />
-          <span>
-            <b>화자·고급 설정</b>
-            <small>인물별 목소리, 발음 사전, 읽기 미리보기</small>
           </span>
           <ChevronRight size={18} aria-hidden="true" />
         </button>
@@ -790,7 +813,7 @@ function groupByEngine(voices: readonly EngineVoice[], engines: readonly EngineS
   return groups;
 }
 
-function ListenDetails(props: TTSAddonPanelProps & { serverPlain: boolean }) {
+function ListenDetails(props: TTSAddonPanelProps & { serverPlain: boolean; aiToolsShown: boolean }) {
   const settings = props.playbackSettings;
   // Server plain voices only: one request per paragraph (≤700자) trades first-sound latency for fewer requests.
   const plainChunking: PlainChunking = settings.plainChunking ?? 'sentence';
@@ -975,7 +998,18 @@ function ListenDetails(props: TTSAddonPanelProps & { serverPlain: boolean }) {
             ))}
           </ul>
         )}
+        <UiNextSkipRuleImpact rules={props.spokenTextRules} inspect={props.previewSpokenTextRuleImpact} />
       </Group>
+      {props.openAITools && !props.aiToolsShown && (
+        // The earlier labeling tools stay reachable without a card on the main page.
+        <p className="un-listen-note">
+          AI 화자 라벨링과 실시간 인물별 낭독(이전 방식)은{' '}
+          <button type="button" className="un-listen-link" onClick={props.openAITools}>
+            AI 도구
+          </button>
+          에서 다뤄요.
+        </p>
+      )}
       <PlaybackDiagnostics />
     </>
   );

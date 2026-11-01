@@ -4,6 +4,7 @@ import { projectSpokenText } from '@boaa/text-core/spoken-text';
 import { parseTTSFilterFile, validateSpokenTextFilter } from '@boaa/text-core/spoken-text-filter';
 import type { SpokenTextRule } from '../../domain/types';
 import type { SpokenTextFilterInput } from '../../features/tts/TTSAddonPanel';
+import type { PronunciationRuleV1 } from '../../providers/voice-product';
 import { cx, Segmented, Switch } from '../components/primitives';
 
 type FilterKind = SpokenTextFilterInput['kind'];
@@ -49,7 +50,14 @@ export interface UiNextSpokenTextFiltersProps {
   readonly rules: readonly SpokenTextRule[];
   readonly language?: string;
   readonly currentParagraphText?: string;
-  readonly requestedText?: string;
+  /** A sentence the reader asked to hear; each new request (even for the same text) replaces the preview text. */
+  readonly request?: { readonly id: number; readonly text: string };
+  /** The earlier per-book pronunciation dictionary, kept in its own store. Its rules still apply when reading. */
+  readonly legacyPronunciation?: {
+    readonly rules: readonly PronunciationRuleV1[];
+    readonly updatedAt?: string;
+    remove(id: string): void | Promise<unknown>;
+  };
   save(input: SpokenTextFilterInput): Promise<void>;
   importFilters?(inputs: readonly SpokenTextFilterInput[]): Promise<void>;
   remove(id: string): void | Promise<unknown>;
@@ -58,7 +66,28 @@ export interface UiNextSpokenTextFiltersProps {
 /** Plain-TTS pronunciation filters: fix a word while listening, with a live before/after of the current paragraph. */
 export default function UiNextSpokenTextFilters(props: UiNextSpokenTextFiltersProps) {
   const filters = useMemo(() => props.rules.filter(isFilter).sort((a, b) => a.priority - b.priority), [props.rules]);
-  const otherRules = useMemo(() => props.rules.filter((rule) => !isFilter(rule)), [props.rules]);
+  const legacyRules = props.legacyPronunciation?.rules ?? [];
+  // Same rules and priorities as playback: enabled literal dictionary entries join the listener's rules.
+  const appliedLegacy = useMemo<SpokenTextRule[]>(
+    () =>
+      (props.legacyPronunciation?.rules ?? [])
+        .filter((rule) => rule.enabled && rule.mode === 'literal')
+        .map((rule, index) => ({
+          id: rule.id,
+          scope: 'book',
+          kind: 'replace_literal',
+          pattern: rule.sourceTerm,
+          replacement: rule.replacement,
+          enabled: true,
+          priority: index,
+          updatedAt: props.legacyPronunciation?.updatedAt ?? '',
+        })),
+    [props.legacyPronunciation],
+  );
+  const otherRules = useMemo(
+    () => [...appliedLegacy, ...props.rules.filter((rule) => !isFilter(rule))],
+    [appliedLegacy, props.rules],
+  );
 
   // Editor
   const [editingId, setEditingId] = useState<string>();
@@ -76,13 +105,19 @@ export default function UiNextSpokenTextFilters(props: UiNextSpokenTextFiltersPr
 
   // Preview follows the paragraph being read until the listener types their own sentence.
   // Saving stops playback, so keep the last paragraph to show the result of the fix just made.
-  const liveText = props.currentParagraphText ?? props.requestedText ?? '';
+  const liveText = props.currentParagraphText ?? props.request?.text ?? '';
   const [lastLiveText, setLastLiveText] = useState(liveText);
   useEffect(() => {
     if (liveText) setLastLiveText(liveText);
   }, [liveText]);
   const followedText = liveText || lastLiveText;
-  const [customSample, setCustomSample] = useState<string>();
+  const [customSample, setCustomSample] = useState<string | undefined>(props.request?.text || undefined);
+  const requestRef = useRef(props.request);
+  requestRef.current = props.request;
+  useEffect(() => {
+    const text = requestRef.current?.text;
+    if (text) setCustomSample(text);
+  }, [props.request?.id]);
   const sample = customSample ?? followedText;
   const draftRule =
     pattern && !draftError
@@ -100,7 +135,7 @@ export default function UiNextSpokenTextFilters(props: UiNextSpokenTextFiltersPr
   let withDraft = '';
   let previewError: string | undefined;
   try {
-    saved = sample ? project(props.rules) : '';
+    saved = sample ? project([...appliedLegacy, ...props.rules]) : '';
     withDraft =
       sample && draftRule
         ? project([...otherRules, ...filters.filter((rule) => rule.id !== editingId), draftRule])
@@ -225,7 +260,9 @@ export default function UiNextSpokenTextFilters(props: UiNextSpokenTextFiltersPr
         <div className="un-filter-preview-head">
           <b>
             {customSample !== undefined
-              ? '직접 입력'
+              ? customSample === props.request?.text
+                ? '고른 문장'
+                : '직접 입력'
               : props.currentParagraphText
                 ? '지금 읽는 문단'
                 : followedText
@@ -507,6 +544,41 @@ export default function UiNextSpokenTextFilters(props: UiNextSpokenTextFiltersPr
           재생과 미리 준비한 음성을 멈추고, 다시 재생할 때부터 새 규칙으로 읽어요.
         </p>
       </section>
+
+      {props.legacyPronunciation && legacyRules.length > 0 && (
+        // Kept in their own store: removing here edits that dictionary, never the filters above.
+        <section className="un-filter-list" aria-label="이전 발음 사전">
+          <div className="un-filter-list-head">
+            <b>이전 발음 사전</b>
+            <small>이 작품에 적용</small>
+          </div>
+          <ol className="un-filter-rules">
+            {legacyRules.map((rule) => (
+              <li key={rule.id} className={cx(!(rule.enabled && rule.mode === 'literal') && 'is-off')}>
+                <span className="un-filter-rule-text">
+                  <span>
+                    <code>{shown(rule.sourceTerm)}</code>
+                    <span aria-hidden="true"> → </span>
+                    <code>{shown(rule.replacement)}</code>
+                  </span>
+                  {!(rule.enabled && rule.mode === 'literal') && <small>적용 안 됨</small>}
+                </span>
+                <span className="un-filter-rule-tools">
+                  <button
+                    type="button"
+                    className="un-icon-btn is-sm"
+                    aria-label={`${rule.sourceTerm} 발음 규칙 삭제`}
+                    disabled={busy}
+                    onClick={() => void run(() => props.legacyPronunciation!.remove(rule.id))}
+                  >
+                    <Trash2 size={15} />
+                  </button>
+                </span>
+              </li>
+            ))}
+          </ol>
+        </section>
+      )}
     </div>
   );
 }
