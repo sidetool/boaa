@@ -40,7 +40,11 @@ export async function preparePerformance(options: {
   const { pool, owner, run, engines, signal, authority } = options;
   const rows = (
     await pool.query(
-      "select ordinal,chapter_id,request,status from saved_audiobook_items where audiobook_id=$1 and not(request->'cast' ? 'performance') order by ordinal limit 32",
+      `select ordinal,chapter_id,request,status from saved_audiobook_items
+       where audiobook_id=$1 and not(request->'cast' ? 'performance')
+       and chapter_id=(select chapter_id from saved_audiobook_items
+         where audiobook_id=$1 and not(request->'cast' ? 'performance') order by ordinal limit 1)
+       order by ordinal limit 120`,
       [run.id],
     )
   ).rows as { ordinal: number; chapter_id: string; request: CastRequest; status: string }[];
@@ -58,7 +62,8 @@ export async function preparePerformance(options: {
       throw audiobookError(409, '자동 연출을 지원하는 목소리 연결을 다시 확인해 주세요.');
   }
   const chapterId = rows[0].chapter_id,
-    batch = rows.filter((r) => r.chapter_id === chapterId);
+    // Match the attribution path's 120-target threshold and 100-target large batches.
+    batch = rows.length >= 120 ? rows.slice(0, 100) : rows;
   const loaded = await loadSpeakerChapter(pool, owner, run.book_id, chapterId, run.chapter_ids.indexOf(chapterId) + 1);
   const targets = batch.map((r) => {
     const p = loaded.paragraphs.find((p) => p.id === r.request.paragraphId);
@@ -68,10 +73,18 @@ export async function preparePerformance(options: {
       id: String(r.ordinal),
       speaker: r.request.cast.label,
       text: playable.text,
-      context: p.text.slice(Math.max(0, r.request.cast.start - 250), r.request.cast.end + 250).slice(0, 1500),
+      paragraphId: p.id,
+      startOffset: r.request.cast.start,
+      endOffset: r.request.cast.end,
     };
   });
-  const key = 'acting:' + structuredIntegrityHash({ v: 1, engine: config, chapterId, targets });
+  // The complete chapter is context once per request, including non-target narration.
+  const prompt = {
+    chapter: loaded.chapter.title,
+    paragraphs: loaded.paragraphs.map((p) => ({ id: p.id, text: p.text })),
+    targets,
+  };
+  const key = 'acting:' + structuredIntegrityHash({ v: 2, engine: config, chapterId, prompt });
   const args = [run.id, key];
   await pool.query(
     'insert into speaker_voice_decisions(audiobook_id,decision_key) values($1,$2) on conflict do nothing',
@@ -132,7 +145,7 @@ export async function preparePerformance(options: {
       response = await engines.transport.generateJson(
         engine,
         {
-          prompt: JSON.stringify({ chapter: loaded.chapter.title, targets }),
+          prompt: JSON.stringify(prompt),
           schema: {
             type: 'object',
             additionalProperties: false,

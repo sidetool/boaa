@@ -6,7 +6,7 @@ it('keeps automatic acting strict, provider-neutral and neutral instructions emp
   expect(performanceStyle(undefined)).toBeUndefined();
   expect(performanceStyle(NEUTRAL_PERFORMANCE)).toBeUndefined();
   expect(performanceStyle({ emotion: 'angry', delivery: 'normal', pace: 'fast', intensity: 'moderate' })).toBe(
-    'angry, speaking quickly',
+    'angry, speaking slightly faster than normal',
   );
   for (const value of [
     null,
@@ -26,4 +26,11 @@ it('keeps automatic acting strict, provider-neutral and neutral instructions emp
     'gemini-3.8-flash-lite-tts-fake',
   ])
     expect(isGeminiActingModel(id)).toBe(false);
+});
+
+it('keeps emotion independent of pace and bounds explicit tempo changes', () => {
+  expect(performanceStyle({ ...NEUTRAL_PERFORMANCE, emotion: 'sad' })).toBe('subtly sad, normal conversational pace');
+  expect(performanceStyle({ ...NEUTRAL_PERFORMANCE, pace: 'slow' })).toBe(
+    'subtly speaking slightly slower than normal',
+  );
 });

@@ -42,6 +42,7 @@ import {
 } from '../../../../src/providers/speaker-engine-protocol';
 import { attributionKey } from './speaker-attribution-preparation';
 import { planSpeakerRevoice } from './speaker-revoice-plan';
+import { preparePerformance } from './speaker-performance';
 import type { SpeakerGenerationInput, SpeakerRevoiceInput } from '../../../../src/providers/speaker-generation';
 
 const harness = await startPostgresIntegrationHarness();
@@ -2233,7 +2234,11 @@ const ACTING_FIXTURE: SpeakerPerformance = {
   intensity: 'subtle',
 };
 type ActingFixture = Awaited<ReturnType<typeof setup>>;
-type ActingPacket = { chapter: string; targets: { id: string; speaker: string; text: string; context: string }[] };
+type ActingPacket = {
+  chapter: string;
+  paragraphs: { id: string; text: string }[];
+  targets: { id: string; speaker: string; text: string; paragraphId: string; startOffset: number; endOffset: number }[];
+};
 const actingResponse = (packet: ActingPacket) =>
   JSON.stringify({
     performance: packet.targets.map((t) => ({
@@ -2269,6 +2274,82 @@ async function actingVariant(f: ActingFixture, original: string) {
 }
 
 (harness ? describe : describe.skip)('automatic acting durable generation', () => {
+  it('supplements a whole chapter together, splits large target sets, and preserves full context and fixed speakers', async () => {
+    await withPostgresSchema(harness!, 'acting_chapter_batch', async (pool) => {
+      const f = await actingFixture(pool, ['c1', 'c2']);
+      try {
+        const job = await f.create();
+        await f.until(async () => (await f.audio.get(job.id)).status === 'completed');
+        await f.audio.stop();
+        const originals = (
+          await pool.query(
+            "select distinct on (chapter_id) chapter_id,request from saved_audiobook_items where audiobook_id=$1 and request#>>'{cast,speakerId}'<>'narrator' order by chapter_id,ordinal",
+            [job.id],
+          )
+        ).rows;
+        expect(originals).toHaveLength(2);
+        await pool.query('delete from saved_audiobook_items where audiobook_id=$1', [job.id]);
+        await pool.query(
+          "insert into saved_audiobook_items(audiobook_id,ordinal,chapter_id,chapter_title,request) select $1,n,'c1','First',$2 from generate_series(0,120) n",
+          [job.id, originals[0].request],
+        );
+        await pool.query(
+          "insert into saved_audiobook_items(audiobook_id,ordinal,chapter_id,chapter_title,request) values($1,121,'c2','Second',$2)",
+          [job.id, originals[1].request],
+        );
+        // Non-target narration still belongs in the shared chapter context.
+        await pool.query(
+          "insert into paragraph_search values('book','c1','c1-after',2,'{}'::jsonb,'뒤늦게 그는 농담이었다고 밝혔다.')",
+        );
+        await pool.query("update saved_audiobooks set status='running' where id=$1", [job.id]);
+        const run = (
+          await pool.query('select id,book_id,content_revision,settings from saved_audiobooks where id=$1', [job.id])
+        ).rows[0];
+        run.chapter_ids = ['c1', 'c2'];
+        run.settings.cast.actingEngine = { id: f.engine.id, revision: f.engine.revision };
+        const callsBefore = f.modelCalls.length;
+        const supplement = () =>
+          preparePerformance({
+            pool,
+            owner: 'owner',
+            run,
+            engines: f.engines,
+            catalog: f.catalog,
+            signal: new AbortController().signal,
+            authority: async () => {},
+          });
+        expect(await supplement()).toBe(false);
+        expect(f.annotations.map((a) => a.targets.length)).toEqual([100]);
+        expect(await supplement()).toBe(false);
+        expect(f.annotations.map((a) => a.targets.length)).toEqual([100, 21]);
+        expect(await supplement()).toBe(true);
+        expect(f.annotations.map((a) => [a.chapter, a.targets.length])).toEqual([
+          ['First', 100],
+          ['First', 21],
+          ['Second', 1],
+        ]);
+        expect(f.annotations[0].paragraphs).toEqual(f.annotations[1].paragraphs);
+        expect(f.annotations[0].paragraphs.map((p) => p.id)).toEqual(['c1-p', 'c1-after']);
+        expect(f.annotations[0].paragraphs[1].text).toBe('뒤늦게 그는 농담이었다고 밝혔다.');
+        expect(f.annotations[2].paragraphs.map((p) => p.id)).toEqual(['c2-p']);
+        expect(f.annotations[0].targets.every((t) => t.paragraphId === 'c1-p' && !('context' in t))).toBe(true);
+        expect(f.modelCalls).toHaveLength(callsBefore);
+        const saved = (
+          await pool.query('select chapter_id,request from saved_audiobook_items where audiobook_id=$1', [job.id])
+        ).rows;
+        for (const row of saved) {
+          const original = originals.find((o) => o.chapter_id === row.chapter_id)!.request;
+          expect(row.request).toEqual({ ...original, cast: { ...original.cast, performance: ACTING_FIXTURE } });
+        }
+        expect(await supplement()).toBe(true);
+        expect(f.annotations).toHaveLength(3);
+      } finally {
+        f.annotationSpy.mockRestore();
+        await f.cleanup();
+      }
+    });
+  });
+
   it('uses the same fresh A response without an annotation call and keeps analysis identities stable when disabled', async () => {
     await withPostgresSchema(harness!, 'acting_fresh', async (pool) => {
       const f = await actingFixture(pool, ['c1', 'c2']);
@@ -2343,7 +2424,7 @@ async function actingVariant(f: ActingFixture, original: string) {
         await f.until(async () => (await f.audio.get(next.id)).status === 'completed');
         expect(f.annotations).toHaveLength(2);
         expect(f.annotations.map((a) => a.chapter)).toEqual(['First', 'Second']);
-        expect(f.annotations.every((a) => a.targets.length <= 32)).toBe(true);
+        expect(f.annotations.every((a) => a.targets.length < 120)).toBe(true);
         expect(f.modelCalls).toHaveLength(modelCalls);
         expect((await pool.query('select * from speaker_analysis order by chapter_id,analysis_key')).rows).toEqual(
           before,
