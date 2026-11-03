@@ -16,6 +16,7 @@ import { registerPlainTTSRoutes } from '../routes/ai/plain-tts-routes.js';
 import { loadPlainTTSSources } from './plain-tts-sources.js';
 import { wavFromPcm16 } from './tts-audio.js';
 import type { TTSConnectionInput } from '../../../../src/providers/tts-connections';
+import { voiceSourceModel } from '../services/voice-library-store';
 
 const harness = await startPostgresIntegrationHarness();
 afterAll(async () => {
@@ -49,6 +50,47 @@ async function setup(pool: pg.Pool) {
   return { store, config, env, fetchImpl, cleanup: () => rm(dataDir, { recursive: true, force: true }) };
 }
 (harness ? describe : describe.skip)('durable TTS connections', () => {
+  it('persists Fish gateway capabilities through encryption, catalog and library model identity', async () => {
+    await withPostgresSchema(harness!, 'tts_fish_capability', async (pool) => {
+      const f = await setup(pool),
+        app = Fastify();
+      try {
+        const saved = await f.store.save({ ...input, protocol: 'openrouter', modelId: 'fish-audio/drama-3' });
+        const fresh = new TTSConnectionStore(pool, f.config, f.env, { fetchImpl: f.fetchImpl });
+        const source = (await fresh.sources())[0];
+        expect(source.performanceFormat).toBe('fish-drama');
+        await registerPlainTTSRoutes(app, pool, f.config, { env: f.env, sources: () => fresh.sources() });
+        const catalog = (await app.inject('/api/tts/plain/voices')).json();
+        expect(catalog.voices[0]).toMatchObject({
+          instructionsSupported: true,
+          autoActingSupported: true,
+          batchAudioSupported: true,
+        });
+        expect(catalog.voices[0].model).toEqual(voiceSourceModel(source));
+        expect(f.fetchImpl).not.toHaveBeenCalled();
+        const adapter = await source.createProvider();
+        expect(adapter).not.toHaveProperty('designVoice');
+        await adapter.synthesize({
+          text: '안녕',
+          voiceProfile: { providerVoiceId: 'test-voice' },
+          providerOptions: { instructions: '차분하게' },
+        } as never);
+        expect(JSON.parse(String(f.fetchImpl.mock.calls[0][1]?.body))).toMatchObject({
+          model: 'fish-audio/drama-3',
+          input: '[차분하게] 안녕',
+        });
+        await fresh.save({ ...input, protocol: 'openai', modelId: 'relay-alias', speechModel: 'fish-s2' }, saved.id);
+        expect((await fresh.sources())[0].performanceFormat).toBe('fish-s2');
+        await expect(
+          adapter.synthesize({ text: '안녕', voiceProfile: { providerVoiceId: 'test-voice' } } as never),
+        ).rejects.toMatchObject({ statusCode: 409 });
+        expect(f.fetchImpl).toHaveBeenCalledTimes(1);
+      } finally {
+        await app.close();
+        await f.cleanup();
+      }
+    });
+  });
   it('encrypts endpoints and keys, survives a new instance, isolates owners and preserves keys only on the same origin', async () => {
     await withPostgresSchema(harness!, 'tts_connection_store', async (pool) => {
       const f = await setup(pool);

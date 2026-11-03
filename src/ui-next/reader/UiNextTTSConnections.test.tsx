@@ -242,3 +242,178 @@ it('asks for a new key or an explicit clear when the stored key would go to anot
   await submit();
   expect(p.save.mock.calls[0]![0]).toMatchObject({ url: 'http://other.local:8080', apiKey: 'sk-new' });
 });
+
+const kind = (label: string) =>
+  act(() =>
+    root.root
+      .findByProps({ role: 'radiogroup', 'aria-label': '서버 종류' })
+      .findAll((node) => node.type === 'button' && flat(node).includes(label))[0]!
+      .props.onClick(),
+  );
+const model = (label: string) =>
+  act(() =>
+    root.root
+      .findByProps({ role: 'radiogroup', 'aria-label': '모델' })
+      .findAll((node) => node.type === 'button' && flat(node) === label)[0]!
+      .props.onClick(),
+  );
+const plain = () => flat(root.root);
+const paidBox = () =>
+  root.root
+    .findAllByType('input')
+    .find((node) => node.props.type === 'checkbox' && flat(node.parent!).includes('사용량 요금이 있는 서버'))!;
+
+it('sets up Fish Audio from a preset, needs its key and an accepted model, and never picks voices itself', async () => {
+  const { p } = await setup();
+  p.probe.mockResolvedValue({
+    models: ['s2.1-pro'],
+    voices: [
+      { id: 'ref-a', label: '차분한 남성' },
+      { id: 'ref-b', label: '밝은 여성' },
+    ],
+  });
+  act(() => button('서버 추가').props.onClick());
+  kind('Fish Audio');
+  expect(field('주소').props.value).toBe('https://api.fish.audio');
+  await act(async () => button('연결 확인').props.onClick());
+  expect(p.probe).not.toHaveBeenCalled();
+  expect(text()).toContain('Fish Audio API 키를 넣어 주세요');
+
+  type('API 키', 'fish-key');
+  await act(async () => button('연결 확인').props.onClick());
+  // Neither the model nor any voice is chosen on the person's behalf.
+  expect(field('모델 ID').props.value).toBe('');
+  expect(field('목소리').props.value).toBe('');
+  expect(text()).toContain('목소리 2개를 찾았어요');
+  act(() => root.root.findByProps({ 'aria-label': '찾은 목소리' }).findAllByType('button')[1]!.props.onClick());
+  expect(field('목소리').props.value).toBe('ref-b, 밝은 여성');
+
+  model('S2.1 Pro무료');
+  expect(paidBox().props.checked).toBe(false);
+  expect(plain()).toContain('Fish S2 모델이에요');
+  type('모델 ID', 's2.1-pro-turbo');
+  await submit();
+  expect(p.save).not.toHaveBeenCalled();
+  expect(text()).toContain('Fish Audio 모델 ID는 s2-pro, s2.1-pro, s2.1-pro-free, drama-3 중 하나예요');
+  model('Drama 3');
+  expect(paidBox().props.checked).toBe(true);
+  await submit();
+  expect(p.save.mock.calls[0]![0]).toMatchObject({
+    name: 'api.fish.audio',
+    protocol: 'fish',
+    url: 'https://api.fish.audio',
+    modelId: 'drama-3',
+    apiKey: 'fish-key',
+    voices: [{ id: 'ref-b', label: '밝은 여성' }],
+    paid: true,
+  });
+  expect(p.save.mock.calls[0]![0]).not.toHaveProperty('speechModel');
+});
+
+it('carries a preset over to OpenRouter, marks only its exact free model free, and sends a manual model family', async () => {
+  const { p } = await setup();
+  act(() => button('서버 추가').props.onClick());
+  kind('Fish Audio');
+  model('S2.1 Pro무료');
+  kind('OpenRouter');
+  expect(field('주소').props.value).toBe('https://openrouter.ai/api/v1');
+  expect(field('모델 ID').props.value).toBe('fish-audio/s2.1-pro-free:free');
+  expect(paidBox().props.checked).toBe(false);
+
+  // A relay's other name is never assumed free, and the family is left for the person to set.
+  type('모델 ID', 'my-relay/fish-free');
+  expect(paidBox().props.checked).toBe(true);
+  expect(plain()).toContain('기본 낭독용 모델이에요');
+  act(() => root.root.findByType('select').props.onChange({ target: { value: 'fish-drama' } }));
+  type('API 키', 'or-key');
+  type('목소리', 'ref-a, 주인공');
+  await submit();
+  expect(p.save.mock.calls[0]![0]).toMatchObject({
+    protocol: 'openrouter',
+    modelId: 'my-relay/fish-free',
+    speechModel: 'fish-drama',
+    paid: true,
+  });
+
+  // A local server ignores the family, and an address typed by hand stays when the service changes.
+  act(() => button('서버 추가').props.onClick());
+  kind('OpenRouter');
+  type('주소', 'https://relay.example.com/v1');
+  kind('로컬 서버');
+  expect(field('주소').props.value).toBe('https://relay.example.com/v1');
+});
+
+it('turns 유료 back on when moving to a paid Fish model, but keeps a mark the person set', async () => {
+  const fish: TTSConnection = {
+    ...saved,
+    id: 'f1',
+    name: 'Fish',
+    protocol: 'fish',
+    url: 'https://api.fish.audio',
+    modelId: 's2.1-pro-free',
+    paid: false,
+  };
+  const { p } = await setup([fish]);
+  expect(plain()).toContain('Fish Audio · S2.1 Pro 무료 · 목소리 1개');
+  expect(plain()).not.toContain('유료 API');
+  act(() => button('Fish 수정').props.onClick());
+  model('S2.1 Pro');
+  expect(paidBox().props.checked).toBe(true);
+  model('S2.1 Pro무료');
+  // Back on a free model the notice stays as it was; turning it off is the person's call.
+  expect(paidBox().props.checked).toBe(true);
+  act(() => paidBox().props.onChange({ target: { checked: false } }));
+  await submit();
+  expect(p.save.mock.calls[0]![0]).toMatchObject({ modelId: 's2.1-pro-free', paid: false });
+  expect(p.save.mock.calls[0]![0]).not.toHaveProperty('apiKey');
+});
+
+it('clears finished lists, a relay override and a typed key once they belong to another server or model', async () => {
+  const { p } = await setup();
+  act(() => button('서버 추가').props.onClick());
+  kind('Fish Audio');
+  type('API 키', 'fish-key');
+  // A key typed for Fish never travels to OpenRouter's address.
+  kind('OpenRouter');
+  expect(field('주소').props.value).toBe('https://openrouter.ai/api/v1');
+  expect(field('API 키').props.value).toBe('');
+
+  type('API 키', 'or-key');
+  p.probe.mockResolvedValue({
+    models: ['fish-audio/s2.1-pro', 'openai/gpt-4o-mini-tts'],
+    voices: [{ id: 'alloy', label: 'Alloy' }],
+  });
+  type('모델 ID', 'openai/gpt-4o-mini-tts');
+  await act(async () => button('연결 확인').props.onClick());
+  expect(plain()).toContain('목소리 1개를 찾았어요');
+  expect(plain()).toContain('모델이 지원하는 목소리 이름을 넣어요');
+  expect(plain()).not.toContain('reference_id');
+
+  // OpenRouter lists voices per model: another model keeps the model list but not the old voices or status.
+  act(() => button('openai/gpt-4o-mini-tts').props.onClick());
+  expect(root.root.findAllByProps({ 'aria-label': '찾은 목소리' })).toHaveLength(1);
+  model('S2.1 Pro');
+  expect(root.root.findAllByProps({ 'aria-label': '찾은 목소리' })).toHaveLength(0);
+  expect(root.root.findAllByProps({ 'aria-label': '찾은 모델' })).toHaveLength(1);
+  expect(plain()).not.toContain('연결됐어요');
+
+  // An override chosen for an alias gives way to a recognised name.
+  type('모델 ID', 'relay/fish-alias');
+  act(() => root.root.findByType('select').props.onChange({ target: { value: 'fish-s2' } }));
+  model('Drama 3');
+  expect(root.root.findByType('select').props.disabled).toBe(true);
+  expect(plain()).toContain('Fish Drama 모델이에요');
+  type('목소리', 'ref-a');
+  await submit();
+  expect(p.save.mock.calls[0]![0]).toMatchObject({ modelId: 'fish-audio/drama-3', apiKey: 'or-key' });
+  expect(p.save.mock.calls[0]![0]).not.toHaveProperty('speechModel');
+
+  // A new address drops the finished answer entirely.
+  act(() => button('서버 추가').props.onClick());
+  type('주소', 'http://a.local:8080');
+  await act(async () => button('연결 확인').props.onClick());
+  expect(plain()).toContain('연결됐어요');
+  type('주소', 'http://b.local:8080');
+  expect(plain()).not.toContain('연결됐어요');
+  expect(root.root.findAllByProps({ 'aria-label': '찾은 모델' })).toHaveLength(0);
+});

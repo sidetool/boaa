@@ -32,8 +32,12 @@ export const flashDesigner = (voice: PlainTTSVoice | undefined, designers: reado
     ? voiceDesigners(designers).find((d) => d.id === voice.providerId)
     : undefined;
 
-/** Request batching is a Gemini 3.8 Flash / Flash-Lite TTS option; other voices are always made one span at a time. */
-export const batchable = (voice?: PlainTTSVoice) => isGeminiActingModel(voice?.modelId ?? voice?.model?.modelId);
+/**
+ * Request batching follows what the catalog says the voice supports; older catalogs without the flag still batch
+ * Gemini 3.8 Flash / Flash-Lite TTS voices. Other voices are always made one span at a time.
+ */
+export const batchable = (voice?: PlainTTSVoice) =>
+  voice?.batchAudioSupported ?? isGeminiActingModel(voice?.modelId ?? voice?.model?.modelId);
 
 /** Opt-in: fewer requests, at the cost of approximate in-batch position and no per-paragraph files. */
 export function BatchAudioToggle({
@@ -61,7 +65,7 @@ export function BatchAudioToggle({
         <small className="un-book-note">
           같은 인물이 같은 말투로 이어 말하는 부분을 한 번에 만들어 요청이 줄어요. 묶인 부분은 읽는 위치가 대략
           표시되고, 구간별 음성은 따로 남지 않아요.
-          {partial ? ' Gemini 3.8 Flash·Lite 목소리만 묶여요.' : ''}
+          {partial ? ' 묶기를 지원하는 목소리만 묶여요.' : ''}
         </small>
       </span>
     </label>

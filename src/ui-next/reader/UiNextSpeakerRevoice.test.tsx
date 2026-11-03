@@ -513,7 +513,7 @@ describe('UiNextSpeakerRevoice request batching', () => {
     const port = fixture(flashSource());
     root = await mount(port, flashProps());
     expect(toggle(root).props.checked).toBe(false);
-    expect(text(root)).toContain('Gemini 3.8 Flash·Lite 목소리만 묶여요.');
+    expect(text(root)).toContain('묶기를 지원하는 목소리만 묶여요.');
     expect(text(root)).toContain('바꿀 인물을 골라 주세요.');
     act(() => toggle(root).props.onChange({ target: { checked: true } }));
     await flush();

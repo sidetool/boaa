@@ -117,7 +117,7 @@ export async function speakerPlan(
   if (voices.some((v) => !v?.model) || !catalog.available)
     throw audiobookError(409, '선택한 서버 목소리를 다시 확인해 주세요.');
   if (input.autoActing && voices.some((v) => v?.autoActingSupported !== true))
-    throw audiobookError(400, '자동 연출은 지원되는 Gemini 3.8 TTS 목소리로만 사용할 수 있어요.');
+    throw audiobookError(400, '장면 연기를 지원하는 목소리를 선택해 주세요.');
   const engine = await engines.load(input.engineId);
   if (engine.purpose === 'casting') throw audiobookError(400, '화자 분석에는 분석용 모델 연결을 골라 주세요.');
   const casting = normalizeCasting(input.casting);

@@ -1,6 +1,7 @@
 import type pg from 'pg';
 import { structuredIntegrityHash } from '@boaa/text-core/hash';
 import { TTSConnectionStore } from './tts-connections.js';
+import type { FishSpeechModel } from '../../../../src/providers/tts-connections';
 import type { TTSSynthesisProvider } from '../../../../src/providers/tts';
 import type { AudiobookInput } from '../../../../src/providers/plain-audiobook';
 import type { ServerConfig } from '../config.js';
@@ -24,6 +25,7 @@ export interface PlainTTSSource {
   modelId?: string;
   revision: string;
   synthesisRevision?: string;
+  performanceFormat?: FishSpeechModel;
   paid: boolean;
   /** Background preparation only. Unknown/custom servers remain serial. Not part of audio identity. */
   backgroundConcurrency?: 1 | 2;

@@ -795,7 +795,8 @@ export class SpeakerGenerationService {
       throw audiobookError(425, '새 목소리 제작이 끝나면 음성을 만들 수 있어요.');
     if (run.settings.cast?.autoActing && !request.cast.performance)
       throw audiobookError(425, '연기 분석이 끝나면 이 음성을 만들 수 있어요.');
-    const effectiveInstructions = request.cast.instructions || performanceStyle(request.cast.performance);
+    const effectiveInstructions =
+      request.cast.instructions || performanceStyle(request.cast.performance, request.cast.model.performanceFormat);
     const renderRequest = { ...request, cast: { ...request.cast } };
     delete renderRequest.cast.performance;
     if (effectiveInstructions) renderRequest.cast.instructions = effectiveInstructions;

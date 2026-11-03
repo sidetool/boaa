@@ -470,7 +470,24 @@ describe('voice library casting choices', () => {
     act(() => select(root, '내레이터 목소리').props.onChange({ target: { value: 'g1' } }));
     await flush();
     expect(castingField(root, '이어지는 대사 묶어 만들기').props.checked).toBe(true);
-    expect(text(root)).toContain('Gemini 3.8 Flash·Lite 목소리만 묶여요.');
+    expect(text(root)).toContain('묶기를 지원하는 목소리만 묶여요.');
+  });
+
+  it('follows the catalog batching flag before the Gemini model name', async () => {
+    const fish = catalog();
+    fish.voices = fish.voices.map((voice) =>
+      voice.id === 'a1' ? { ...voice, modelId: 's2.1-pro', batchAudioSupported: true } : voice,
+    );
+    let root = await mount(controls({ voices: fish }));
+    expect(castingField(root, '이어지는 대사 묶어 만들기').props.checked).toBe(false);
+    act(() => renderer!.unmount());
+
+    const flash = flashCatalog();
+    flash.voices = flash.voices.map((voice) =>
+      voice.id.startsWith('g') ? { ...voice, batchAudioSupported: false } : voice,
+    );
+    root = await mount(controls({ voices: flash, narratorVoiceId: 'g1' }));
+    expect(root.findAll((n) => n.props.id === 'un-cast-batch')).toHaveLength(0);
   });
 
   it('turns automatic acting on by default for capable voices, remembers an explicit off, and stays off for others', async () => {

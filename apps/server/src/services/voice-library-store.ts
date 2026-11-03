@@ -12,6 +12,7 @@ export const voiceSourceModel = (s: PlainTTSSource) => ({
   providerId: s.id,
   modelId: s.modelId,
   revision: s.synthesisRevision ?? s.revision,
+  ...(s.performanceFormat ? { performanceFormat: s.performanceFormat } : {}),
 });
 export function voiceText(value: unknown, max: number, required = false): string {
   if (

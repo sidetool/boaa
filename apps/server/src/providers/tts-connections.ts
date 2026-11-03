@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { connectionSpeechModel } from '../../../../src/providers/tts-connections';
 import type pg from 'pg';
 import { structuredIntegrityHash } from '@boaa/text-core/hash';
 import type {
@@ -161,6 +162,7 @@ export class TTSConnectionStore {
           paid: value.paid,
           revision: structuredIntegrityHash(row.ciphertext),
           synthesisRevision,
+          ...(connectionSpeechModel(value) ? { performanceFormat: connectionSpeechModel(value) } : {}),
           createProvider: async () => {
             return new ConnectionTTSProvider(providerId, await loadCurrent(), checkCurrent, this.network);
           },
@@ -176,10 +178,14 @@ export async function discoverTTSConnection(
   network: LocalEndpointEgressOptions = {},
 ): Promise<TTSConnectionDiscovery> {
   const url = new URL(value.url);
-  const root = url.pathname.replace(value.protocol === 'openai' ? /\/audio\/speech$/ : /\/synthesize$/, '');
-  const read = async (suffix: string): Promise<unknown> => {
+  const root = url.pathname.replace(
+    value.protocol === 'fish' ? /\/v1\/tts$/ : value.protocol === 'local' ? /\/synthesize$/ : /\/audio\/speech$/,
+    '',
+  );
+  const read = async (suffix: string, query?: Record<string, string>): Promise<unknown> => {
     const target = new URL(url);
     target.pathname = root + suffix;
+    target.search = new URLSearchParams(query).toString();
     let response: Response;
     try {
       response = await requestLocalEndpoint(
@@ -189,7 +195,7 @@ export async function discoverTTSConnection(
           signal,
           headers: value.apiKey ? { Authorization: `Bearer ${value.apiKey}` } : {},
         },
-        { ...network, allowedHosts: [url.hostname], maxResponseBytes: 256 * 1024 },
+        { ...network, allowedHosts: [url.hostname], maxResponseBytes: 1024 * 1024 },
       );
     } catch {
       if (signal.aborted) throw connectionError('연결 확인을 취소했거나 응답 시간이 초과됐어요.', 408);
@@ -208,16 +214,13 @@ export async function discoverTTSConnection(
       throw connectionError(`서버가 연결 확인에 응답하지 못했어요. (HTTP ${response.status})`, 502);
     }
     const text = await response.text();
-    if (Buffer.byteLength(text) > 256 * 1024) throw connectionError('서버의 목록 응답이 너무 커요.', 502);
+    if (Buffer.byteLength(text) > 1024 * 1024) throw connectionError('서버의 목록 응답이 너무 커요.', 502);
     try {
       return JSON.parse(text);
     } catch {
       throw connectionError('서버가 올바른 목록을 보내지 않았어요. API 주소를 확인해 주세요.', 502);
     }
   };
-  const modelsBody = value.protocol === 'openai' ? await read('/models') : undefined;
-  let voicesBody = await read('/voices');
-  if (voicesBody === undefined && value.protocol === 'openai') voicesBody = await read('/audio/voices');
   const array = (body: unknown, key: string): unknown[] => {
     if (Array.isArray(body)) return body;
     if (body && typeof body === 'object') {
@@ -227,6 +230,34 @@ export async function discoverTTSConnection(
     }
     return [];
   };
+  let modelsBody: unknown;
+  let voicesBody: unknown;
+  if (value.protocol === 'fish') {
+    // /model lists voice references, not synthesis model IDs. Native Fish silently falls
+    // back on unknown model headers, so expose only the explicit supported IDs.
+    modelsBody = ['s2.1-pro', 's2.1-pro-free', 'drama-3', 's2-pro'];
+    voicesBody = array(await read('/model', { page_size: '64' }), 'items').flatMap((item) => {
+      if (!item || typeof item !== 'object') return [];
+      const voice = item as Record<string, unknown>;
+      if (voice.type !== 'tts' || voice.dmca_taken_down === true) return [];
+      return [
+        { id: voice._id, label: voice.title, lang: Array.isArray(voice.languages) ? voice.languages[0] : undefined },
+      ];
+    });
+  } else if (value.protocol === 'openrouter') {
+    modelsBody = array(await read('/models', { output_modalities: 'speech' }), 'models').filter((item) => {
+      if (!item || typeof item !== 'object') return false;
+      const architecture = (item as Record<string, unknown>).architecture as
+        { output_modalities?: unknown } | undefined;
+      return Array.isArray(architecture?.output_modalities) && architecture.output_modalities.includes('speech');
+    });
+    const selected = (modelsBody as Record<string, unknown>[]).find((item) => item.id === value.modelId);
+    voicesBody = selected?.supported_voices;
+  } else {
+    modelsBody = value.protocol === 'openai' ? await read('/models') : undefined;
+    voicesBody = await read('/voices');
+    if (voicesBody === undefined && value.protocol === 'openai') voicesBody = await read('/audio/voices');
+  }
   const valid = (v: unknown, max: number): v is string =>
     typeof v === 'string' &&
     !!v.trim() &&

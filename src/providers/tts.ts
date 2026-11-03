@@ -1,4 +1,5 @@
 import type { VoiceProfile } from '../domain/types';
+import type { FishSpeechModel } from './tts-connections';
 
 export interface TTSVoice {
   id: string;
@@ -110,6 +111,7 @@ export interface TTSSynthesisResult {
 }
 
 export interface TTSSynthesisProvider {
+  readonly performanceFormat?: FishSpeechModel;
   readonly supportsInstructions?: boolean;
   readonly supportsVoiceDesign?: boolean;
   readonly providerId: string;

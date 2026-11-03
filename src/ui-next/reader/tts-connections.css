@@ -54,12 +54,58 @@
   gap: 12px;
 }
 
-.un-tts-conn-editor > .un-segmented {
-  width: 100%;
+/* Service picker: four tiles across on wide panels, two by two on phones. */
+.un-tts-conn-kinds {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(132px, 1fr));
+  gap: 6px;
 }
 
-.un-tts-conn-editor > .un-segmented button {
-  flex: 1;
+.un-tts-conn-kinds button {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  padding: 10px 12px;
+  border: 0;
+  border-radius: 12px;
+  background: var(--un-bg-2);
+  color: var(--un-text-2);
+  font: inherit;
+  text-align: left;
+  transition:
+    background 0.15s,
+    color 0.15s;
+}
+
+.un-tts-conn-kinds button:hover:not(.is-active) {
+  background: var(--un-bg-3);
+  color: var(--un-text);
+}
+
+.un-tts-conn-kinds button.is-active {
+  background: var(--un-accent-soft);
+  box-shadow: inset 0 0 0 1px var(--un-accent);
+  color: var(--un-text);
+}
+
+.un-tts-conn-kinds :is(b, small) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.un-tts-conn-kinds b {
+  font-size: 14px;
+  font-weight: 650;
+}
+
+.un-tts-conn-kinds small {
+  color: var(--un-text-3);
+  font-size: 12px;
+}
+
+.un-tts-conn-kinds button.is-active small {
+  color: var(--un-accent-2);
 }
 
 .un-tts-conn-fields .is-wide {
@@ -98,10 +144,38 @@
   line-height: 1.45;
 }
 
-.un-tts-conn-models button {
+.un-tts-conn-models button,
+.un-tts-conn-found button {
   max-width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.un-tts-conn-free {
+  margin-left: 6px;
+  padding: 1px 6px;
+  border-radius: 6px;
+  background: var(--un-bg-3);
+  color: var(--un-text-2);
+  font-size: 11px;
+  font-weight: 650;
+  vertical-align: 1px;
+}
+
+.un-tts-conn-models button.is-active .un-tts-conn-free {
+  background: var(--un-accent);
+  color: var(--un-bg);
+}
+
+/* A hosted catalog can be long; it scrolls instead of pushing the form away. */
+.un-tts-conn-found {
+  max-height: 168px;
+  overflow-y: auto;
+}
+
+.un-tts-conn-advanced select {
+  width: 100%;
 }
 
 .un-tts-conn-editor .un-filter-check > span {

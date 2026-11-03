@@ -31,7 +31,9 @@ export function batchCastRequests(
       instructions: request.cast.instructions,
       performance: request.cast.performance,
     });
-    const eligible = isGeminiActingModel(request.cast.model.modelId) && (!autoActing || !!request.cast.performance);
+    const eligible =
+      (isGeminiActingModel(request.cast.model.modelId) || !!request.cast.model.performanceFormat) &&
+      (!autoActing || !!request.cast.performance);
     const length = [...playable.text].length;
     const separator = previous?.paragraph.id === p.id ? 1 : 2;
     if (

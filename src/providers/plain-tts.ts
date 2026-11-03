@@ -5,6 +5,7 @@ import { projectSpokenText } from '@boaa/text-core/spoken-text';
 import { integrityHash, structuredIntegrityHash } from '@boaa/text-core/hash';
 import type { PlayableTtsSegment } from './tts-playback';
 import type { TTSVoice } from './tts';
+import type { FishSpeechModel } from './tts-connections';
 
 export interface PlainTTSVoice extends TTSVoice {
   providerId?: string;
@@ -14,6 +15,7 @@ export interface PlainTTSVoice extends TTSVoice {
   /** This configured adapter supports separate acting directions, not voice cloning. */
   instructionsSupported?: boolean;
   autoActingSupported?: boolean;
+  batchAudioSupported?: boolean;
   /** Identity of this synthesis model, independent of catalog order and connection credentials. */
   model?: PlainTTSModel;
 }
@@ -22,6 +24,7 @@ export interface PlainTTSModel {
   providerId: string;
   modelId?: string;
   revision: string;
+  performanceFormat?: FishSpeechModel;
 }
 
 export interface PlainTTSProviderStatus {

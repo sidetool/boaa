@@ -1,15 +1,32 @@
 import { Pencil, Plus, RefreshCw, Search, Trash2 } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
-import type { TTSConnection, TTSConnectionDiscovery, TTSConnectionsPort } from '../../providers/tts-connections';
-import { cx, Segmented, Switch } from '../components/primitives';
+import {
+  fishSpeechModel,
+  type FishSpeechModel,
+  type TTSConnection,
+  type TTSConnectionDiscovery,
+  type TTSConnectionsPort,
+  type TTSConnectionVoice,
+} from '../../providers/tts-connections';
+import { cx, Switch } from '../components/primitives';
 import {
   draftFrom,
   emptyDraft,
   formatVoices,
   hostName,
   keyDecisionNeeded,
+  keyRequired,
+  knownFree,
+  knownPaid,
+  MODEL_PRESETS,
+  modelLabel,
   PROTOCOL_HINT,
+  PROTOCOLS,
   readDraft,
+  retarget,
+  SPEECH_MODEL_LABEL,
+  speechModelEditable,
+  switchProtocol,
   TTS_CONNECTION_FIELD_MAX,
   TTS_CONNECTION_LIMITS,
   type Draft,
@@ -42,7 +59,7 @@ const portKey = (port: TTSConnectionsPort) => {
   return key;
 };
 
-/** Saved TTS servers (local or OpenAI-compatible), edited in place on the engines page. */
+/** Saved TTS servers (local, OpenAI-compatible, Fish Audio or OpenRouter), edited in place on the engines page. */
 export default function UiNextTTSConnections(props: UiNextTTSConnectionsProps) {
   return <Connections key={portKey(props.port)} {...props} />;
 }
@@ -111,21 +128,33 @@ function Connections({ port, onChanged }: UiNextTTSConnectionsProps) {
   }, []);
 
   const current = editing ? connections?.find((connection) => connection.id === editing) : undefined;
-  const { input, parsed, probeProblem, saveProblem } = readDraft(draft, current);
+  const { input, parsed, probeProblem, saveProblem, speechModel } = readDraft(draft, current);
 
   const stopProbe = () => {
     probeController.current?.abort();
     probeController.current = undefined;
   };
   const patch = (next: Partial<Draft>) => setDraft((value) => ({ ...value, ...next }));
-  // Anything a probe was asked about makes its pending answer stale.
-  const patchTarget = (next: Partial<Pick<Draft, 'protocol' | 'url' | 'modelId' | 'apiKey' | 'clearKey' | 'paid'>>) => {
-    if (probeController.current) {
+  /**
+   * Anything a probe was asked about makes its pending answer stale. A finished answer goes too once it described
+   * another server or key ('server'), or another model on a service that lists voices per model ('voices').
+   */
+  const changeTarget = (update: (value: Draft) => Draft, forget?: 'server' | 'voices') => {
+    if (probeController.current || forget) {
       stopProbe();
       setProbeState({});
     }
-    patch(next);
+    if (forget) setFound((value) => (forget === 'voices' && value ? { ...value, voices: [] } : undefined));
+    setDraft(update);
   };
+  const patchTarget = (next: Partial<Pick<Draft, 'apiKey' | 'clearKey'>>) =>
+    changeTarget((value) => ({ ...value, ...next }), 'server');
+  const setUrl = (url: string) => changeTarget((value) => retarget(value, { url }), 'server');
+  const setModel = (modelId: string) =>
+    changeTarget(
+      (value) => retarget(value, { modelId }),
+      draft.protocol === 'openrouter' && modelId.trim() !== draft.modelId.trim() ? 'voices' : undefined,
+    );
 
   const reset = (id: string | undefined, next: Draft) => {
     stopProbe();
@@ -150,16 +179,26 @@ function Connections({ port, onChanged }: UiNextTTSConnectionsProps) {
       const result = await run((signal) => port.probe(input, signal, editing || undefined), controller);
       probeController.current = undefined;
       setFound(result);
-      setDraft((value) => ({
-        ...value,
-        ...(!value.modelId.trim() && result.models.length === 1 ? { modelId: result.models[0] } : {}),
-        ...(!value.voices.trim() && result.voices.length
-          ? { voices: formatVoices(result.voices.slice(0, TTS_CONNECTION_LIMITS.maxVoices)) }
-          : {}),
-      }));
+      // A hosted service lists far more than one reader needs and bills by model: the person picks both.
+      const hosted = keyRequired(input.protocol);
+      if (!hosted)
+        setDraft((value) => ({
+          ...value,
+          ...(!value.modelId.trim() && result.models.length === 1 ? { modelId: result.models[0] } : {}),
+          ...(!value.voices.trim() && result.voices.length
+            ? { voices: formatVoices(result.voices.slice(0, TTS_CONNECTION_LIMITS.maxVoices)) }
+            : {}),
+        }));
       setProbeState({
-        done:
-          result.models.length || result.voices.length
+        done: hosted
+          ? result.voices.length
+            ? `연결됐어요. 목소리 ${result.voices.length}개를 찾았어요. 쓸 목소리를 눌러 추가하세요.`
+            : input.protocol === 'openrouter'
+              ? input.modelId
+                ? '연결됐어요. 이 모델은 목소리 목록을 알려주지 않아요. 모델 안내의 목소리 이름을 직접 넣어 주세요.'
+                : `연결됐어요. 모델 ${result.models.length}개를 찾았어요. 모델을 고른 뒤 다시 확인하면 그 모델의 목소리를 불러와요.`
+              : '연결됐어요. 쓸 목소리의 ID를 직접 넣어 주세요.'
+          : result.models.length || result.voices.length
             ? `연결됐어요. 모델 ${result.models.length}개, 목소리 ${result.voices.length}개를 찾았어요.`
             : '연결됐어요. 이 서버는 모델·목소리 목록을 알려주지 않아요. 서버 문서의 ID를 직접 넣어 주세요.',
       });
@@ -231,14 +270,35 @@ function Connections({ port, onChanged }: UiNextTTSConnectionsProps) {
     notify();
   };
 
-  const changeProtocol = (protocol: Protocol) =>
-    patchTarget(draft.paidTouched ? { protocol } : { protocol, paid: protocol === 'openai' });
+  const changeProtocol = (protocol: Protocol) => {
+    if (protocol === draft.protocol) return;
+    // Another service's lists say nothing about this one.
+    changeTarget((value) => switchProtocol(value, protocol), 'server');
+  };
+
+  const listed = new Set(parsed.voices.map((voice) => voice.id));
+  const toggleVoice = (voice: TTSConnectionVoice) =>
+    patch({
+      voices: listed.has(voice.id)
+        ? draft.voices
+            .split('\n')
+            .filter((line) => line.split(',')[0]!.trim() !== voice.id)
+            .join('\n')
+        : [draft.voices.trimEnd(), formatVoices([voice])].filter(Boolean).join('\n'),
+    });
 
   const hint = PROTOCOL_HINT[draft.protocol];
+  const hosted = keyRequired(draft.protocol);
+  const presets = MODEL_PRESETS[draft.protocol] ?? [];
   const keyNeeded = keyDecisionNeeded(draft, current);
   // The probe note already asks for manual IDs; don't repeat it under the voices.
   const listless = Boolean(found && !found.models.length && !found.voices.length);
-  const extraVoices = found?.voices.length && formatVoices(found.voices) !== draft.voices.trim();
+  const extraVoices = !hosted && found?.voices.length && formatVoices(found.voices) !== draft.voices.trim();
+  const extraModels = found?.models.filter((model) => !presets.some((item) => item.id === model)) ?? [];
+  const autoSpeechModel = fishSpeechModel(draft.modelId.trim());
+  const free = knownFree(draft.protocol, draft.modelId);
+  // Fish voices are reference_ids; other hosted models name their own voices.
+  const fishVoices = draft.protocol === 'fish' || Boolean(speechModel);
 
   return (
     <section className="un-listen-group un-tts-conn" aria-label="TTS 서버">
@@ -255,8 +315,8 @@ function Connections({ port, onChanged }: UiNextTTSConnectionsProps) {
       {editing === undefined ? (
         <>
           <p className="un-listen-note">
-            로컬 TTS 서버나 OpenAI 호환 TTS 서버를 여러 개 저장할 수 있어요. 켜 둔 서버의 목소리가 서버 목소리 목록에
-            나타나요. 연결 정보는 계정에 암호화해 저장하고, 저장하면 바로 적용돼요.
+            로컬·OpenAI 호환 TTS 서버나 Fish Audio, OpenRouter를 여러 개 저장할 수 있어요. 켜 둔 서버의 목소리가 서버
+            목소리 목록에 나타나요. 연결 정보는 계정에 암호화해 저장하고, 저장하면 바로 적용돼요.
           </p>
           {loadError && (
             <p className="un-filter-help is-error" role="alert">
@@ -277,8 +337,8 @@ function Connections({ port, onChanged }: UiNextTTSConnectionsProps) {
                   <span className="un-tts-conn-text">
                     <b>{connection.name}</b>
                     <small>
-                      {connection.protocol === 'openai' ? 'OpenAI 호환' : '로컬'} · {connection.modelId} · 목소리{' '}
-                      {connection.voices.length}개{connection.paid ? ' · 유료 API' : ''}
+                      {PROTOCOL_HINT[connection.protocol].label} · {modelLabel(connection.protocol, connection.modelId)}{' '}
+                      · 목소리 {connection.voices.length}개{connection.paid ? ' · 유료 API' : ''}
                     </small>
                   </span>
                   <button
@@ -309,15 +369,21 @@ function Connections({ port, onChanged }: UiNextTTSConnectionsProps) {
             void save();
           }}
         >
-          <Segmented
-            label="서버 종류"
-            value={draft.protocol}
-            options={[
-              { value: 'local', label: '로컬 서버' },
-              { value: 'openai', label: 'OpenAI 호환' },
-            ]}
-            onChange={changeProtocol}
-          />
+          <div className="un-tts-conn-kinds" role="radiogroup" aria-label="서버 종류">
+            {PROTOCOLS.map((protocol) => (
+              <button
+                key={protocol}
+                type="button"
+                role="radio"
+                aria-checked={draft.protocol === protocol}
+                className={cx(draft.protocol === protocol && 'is-active')}
+                onClick={() => changeProtocol(protocol)}
+              >
+                <b>{PROTOCOL_HINT[protocol].label}</b>
+                <small>{PROTOCOL_HINT[protocol].tagline}</small>
+              </button>
+            ))}
+          </div>
           <p className="un-filter-help">{hint.note}</p>
 
           <div className="un-filter-fields un-tts-conn-fields">
@@ -340,11 +406,11 @@ function Connections({ port, onChanged }: UiNextTTSConnectionsProps) {
                 spellCheck={false}
                 placeholder={hint.url}
                 maxLength={TTS_CONNECTION_FIELD_MAX.url}
-                onChange={(event) => patchTarget({ url: event.target.value })}
+                onChange={(event) => setUrl(event.target.value)}
               />
             </label>
             <label className="is-wide">
-              <span>API 키 (선택)</span>
+              <span>{hosted ? 'API 키' : 'API 키 (선택)'}</span>
               <input
                 type="password"
                 value={draft.apiKey}
@@ -397,6 +463,23 @@ function Connections({ port, onChanged }: UiNextTTSConnectionsProps) {
             </p>
           )}
 
+          {presets.length > 0 && (
+            <div className="un-listen-chips un-tts-conn-models" role="radiogroup" aria-label="모델">
+              {presets.map((item) => (
+                <button
+                  key={item.id}
+                  type="button"
+                  role="radio"
+                  aria-checked={draft.modelId.trim() === item.id}
+                  className={cx(draft.modelId.trim() === item.id && 'is-active')}
+                  onClick={() => setModel(item.id)}
+                >
+                  {item.label}
+                  {item.free && <span className="un-tts-conn-free">무료</span>}
+                </button>
+              ))}
+            </div>
+          )}
           <div className="un-filter-fields un-tts-conn-fields">
             <label className="is-wide">
               <span>모델 ID</span>
@@ -405,27 +488,44 @@ function Connections({ port, onChanged }: UiNextTTSConnectionsProps) {
                 autoCapitalize="off"
                 autoCorrect="off"
                 spellCheck={false}
-                placeholder={draft.protocol === 'openai' ? '예: tts-1' : '서버가 쓰는 모델 이름'}
+                placeholder={
+                  presets.length
+                    ? '위에서 고르거나 직접 입력'
+                    : draft.protocol === 'openai'
+                      ? '예: tts-1'
+                      : '서버가 쓰는 모델 이름'
+                }
                 maxLength={TTS_CONNECTION_FIELD_MAX.modelId}
-                onChange={(event) => patchTarget({ modelId: event.target.value })}
+                onChange={(event) => setModel(event.target.value)}
               />
             </label>
           </div>
-          {found && found.models.length > 1 && (
+          {(hosted ? extraModels.length > 0 : found && found.models.length > 1) && (
             <div className="un-listen-chips un-tts-conn-models" role="radiogroup" aria-label="찾은 모델">
-              {found.models.map((model) => (
+              {(hosted ? extraModels : found!.models).map((model) => (
                 <button
                   key={model}
                   type="button"
                   role="radio"
                   aria-checked={draft.modelId === model}
                   className={cx(draft.modelId === model && 'is-active')}
-                  onClick={() => patchTarget({ modelId: model })}
+                  onClick={() => setModel(model)}
                 >
                   {model}
                 </button>
               ))}
             </div>
+          )}
+          {speechModel ? (
+            <p className="un-filter-help">
+              {SPEECH_MODEL_LABEL[speechModel]} 모델이에요. 장면 연기와 인물별 말투 지시를 쓸 수 있어요.
+              {free ? ' 무료 모델이라 사용 한도는 서비스 정책을 따라요.' : ''}
+            </p>
+          ) : (
+            draft.protocol === 'openrouter' &&
+            draft.modelId.trim() && (
+              <p className="un-filter-help">기본 낭독용 모델이에요. 장면 연기는 Fish 모델에서만 쓸 수 있어요.</p>
+            )
           )}
 
           <label className="un-tts-conn-voices">
@@ -436,13 +536,40 @@ function Connections({ port, onChanged }: UiNextTTSConnectionsProps) {
               autoCapitalize="off"
               autoCorrect="off"
               spellCheck={false}
-              placeholder={'한 줄에 하나씩: ID, 표시 이름, 언어\n예: alloy, 차분한 목소리, ko'}
+              placeholder={
+                fishVoices
+                  ? '한 줄에 하나씩: 목소리 ID, 표시 이름, 언어\n예: 802e3bc2b27e49c2995d23ef70e6ac89, 차분한 남성, ko'
+                  : hosted
+                    ? '한 줄에 하나씩: 목소리 ID, 표시 이름, 언어'
+                    : '한 줄에 하나씩: ID, 표시 이름, 언어\n예: alloy, 차분한 목소리, ko'
+              }
               onChange={(event) => patch({ voices: event.target.value })}
             />
           </label>
+          {hosted && found && found.voices.length > 0 && (
+            <div className="un-listen-chips un-tts-conn-found" role="group" aria-label="찾은 목소리">
+              {found.voices.map((voice) => (
+                <button
+                  key={voice.id}
+                  type="button"
+                  aria-pressed={listed.has(voice.id)}
+                  className={cx(listed.has(voice.id) && 'is-active')}
+                  disabled={!listed.has(voice.id) && parsed.voices.length >= TTS_CONNECTION_LIMITS.maxVoices}
+                  title={voice.id}
+                  onClick={() => toggleVoice(voice)}
+                >
+                  {voice.label}
+                </button>
+              ))}
+            </div>
+          )}
           <p className={cx('un-filter-help', parsed.error && 'is-error')}>
             {parsed.error ??
-              `목소리 ${parsed.voices.length}개 · 최대 ${TTS_CONNECTION_LIMITS.maxVoices}개.${listless ? '' : ' 목록을 알려주지 않는 서버는 직접 넣어 주세요.'}`}{' '}
+              (fishVoices
+                ? `목소리 ${parsed.voices.length}개 · 최대 ${TTS_CONNECTION_LIMITS.maxVoices}개. Fish Audio 목소리 페이지 주소 끝의 ID(reference_id)를 넣어요.`
+                : hosted
+                  ? `목소리 ${parsed.voices.length}개 · 최대 ${TTS_CONNECTION_LIMITS.maxVoices}개. 모델이 지원하는 목소리 이름을 넣어요.`
+                  : `목소리 ${parsed.voices.length}개 · 최대 ${TTS_CONNECTION_LIMITS.maxVoices}개.${listless ? '' : ' 목록을 알려주지 않는 서버는 직접 넣어 주세요.'}`)}{' '}
             {extraVoices ? (
               <button
                 type="button"
@@ -462,7 +589,13 @@ function Connections({ port, onChanged }: UiNextTTSConnectionsProps) {
             />
             <span>
               사용량 요금이 있는 서버
-              <small>켜 두면 이 서버 목소리를 고를 때 요금 안내를 보여줘요.</small>
+              <small>
+                {knownPaid(draft.protocol, draft.modelId)
+                  ? '이 모델은 쓴 만큼 요금이 나가요. 목소리를 고를 때 요금 안내를 보여줘요.'
+                  : free
+                    ? '무료 모델이에요. 요금이 생기면 켜 두세요.'
+                    : '켜 두면 이 서버 목소리를 고를 때 요금 안내를 보여줘요.'}
+              </small>
             </span>
           </label>
           <label className="un-filter-check">
@@ -476,6 +609,31 @@ function Connections({ port, onChanged }: UiNextTTSConnectionsProps) {
 
           <details className="un-tts-conn-advanced">
             <summary>고급 설정</summary>
+            {speechModelEditable(draft.protocol) && (
+              <>
+                <div className="un-filter-fields un-tts-conn-fields">
+                  <label className="is-wide">
+                    <span>Fish 모델 종류</span>
+                    <select
+                      value={autoSpeechModel ? '' : draft.speechModel}
+                      disabled={Boolean(autoSpeechModel)}
+                      onChange={(event) => patch({ speechModel: event.target.value as FishSpeechModel | '' })}
+                    >
+                      <option value="">
+                        자동 ({autoSpeechModel ? SPEECH_MODEL_LABEL[autoSpeechModel] : '일반 음성 모델'})
+                      </option>
+                      <option value="fish-s2">Fish S2 (S2·S2.1 Pro)</option>
+                      <option value="fish-drama">Fish Drama (Drama 3)</option>
+                    </select>
+                  </label>
+                </div>
+                <p className="un-filter-help">
+                  {autoSpeechModel
+                    ? '모델 ID로 종류를 알아봤어요.'
+                    : '중계 서비스가 Fish 모델을 다른 이름으로 부를 때만 골라요. 장면 연기와 말투 지시를 그 모델 방식으로 보내요.'}
+                </p>
+              </>
+            )}
             <div className="un-filter-fields">
               <label>
                 <span>한 번에 보낼 최대 글자 수</span>

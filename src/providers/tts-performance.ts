@@ -1,4 +1,6 @@
 /** Provider-neutral delivery labels. Never rewrite source text or infer stable vocal identity. */
+import type { FishSpeechModel } from './tts-connections';
+import { fishPerformanceStyle } from './fish-performance';
 export const PERFORMANCE_VALUES = {
   emotion: ['neutral', 'happy', 'sad', 'angry', 'afraid', 'surprised', 'sarcastic'],
   delivery: ['normal', 'whispering', 'shouting', 'crying', 'laughing', 'breathless'],
@@ -41,9 +43,10 @@ export const PERFORMANCE_INSTRUCTION = [
 
 export const isGeminiActingModel = (modelId?: string) =>
   modelId === 'gemini-3.8-flash-tts' || modelId === 'gemini-3.8-flash-lite-tts';
-export function performanceStyle(value: SpeakerPerformance | undefined): string | undefined {
+export function performanceStyle(value: SpeakerPerformance | undefined, format?: FishSpeechModel): string | undefined {
   if (!value) return;
   const p = parsePerformance(value);
+  if (format) return fishPerformanceStyle(p, format);
   const text = [
     p.emotion === 'neutral' ? '' : p.emotion,
     p.delivery === 'normal' ? '' : p.delivery,

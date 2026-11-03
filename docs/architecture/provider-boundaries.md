@@ -32,7 +32,7 @@
 
 ### 추가 TTS 서버
 
-듣기 → TTS 엔진 연결 → **TTS 서버**에서 로컬 JSON 엔진과 OpenAI 호환 음성 API를 여러 개
+듣기 → TTS 엔진 연결 → **TTS 서버**에서 로컬 JSON, OpenAI 호환, Fish Audio, OpenRouter 음성 API를 여러 개
 등록한다. 기존 `local-endpoint`, `TTS_PLAIN_*`, 기본 목소리와 provider 설정은 교체하지 않는다.
 새 연결은 일반 서버 목소리와 미리 생성하기에 참여하며 기존 화자별 provider 등록과는 별개다.
 
@@ -46,7 +46,7 @@
 - 연결 확인은 같은 서버의 모델·목소리 목록 GET만 수행한다. 합성·과금 호출은 하지 않는다.
   `/models`, `/voices`를 지원하지 않는 서버는 모델·음성 ID를 직접 입력한다. 자동 입력 한도 탐지는 없다.
   각 요청은 등록한 호스트로 DNS를 검증·고정하고, 인프라 주소 및 리다이렉트를 허용하지 않는다.
-  발견 응답은 256KiB, 합성 전송 응답은 32MiB로 제한한다.
+  발견 응답은 1MiB, 합성 전송 응답은 32MiB로 제한한다.
 - OpenAI 호환 요청은 `model/input/voice/response_format/speed`, 로컬 요청은 기존
   `modelId/text/voiceId/voiceProfile` 계약을 쓴다. 채팅 completion API는 TTS 연결이 아니다.
   기본 엔진 입력 제한은 1000자이며 긴 낭독 단위는 최대 8개 구간으로 순차 분할한다.
@@ -57,6 +57,40 @@
   각 전송 전후에 연결 존재·활성화·모델을 다시 확인한다. 삭제는 음성 파일이나 읽기 설정을 삭제하지 않는다.
 - API와 worker는 같은 DB와 암호화 키를 읽는다. 등록 후 환경변수 변경이나 재시작은 필요하지 않다.
   GPU 모델 서버의 설치·시작은 그 서버 운영 범위다.
+
+#### Fish S2.1 Pro·Drama 3와 중계 연결
+
+- 연결 프로토콜과 모델 종류를 분리한다. Fish 직접 연결은 `/v1/tts`와 `model` 헤더를 쓰고,
+  OpenRouter는 `/api/v1/audio/speech`의 `model/input/voice`를 쓴다. 다른 OpenAI 호환 중계의
+  별칭은 고급 설정 `speechModel`(`fish-s2`/`fish-drama`)으로 지정한다. 알려진 정확한 ID는 자동 판별한다.
+- 직접 연결의 허용 모델은 `s2-pro`, `s2.1-pro`, `s2.1-pro-free`, `drama-3`다. Fish가 잘못된
+  모델 헤더를 유료 기본 모델로 처리하므로 알 수 없는 ID는 전송 전에 거절한다. OpenRouter 무료 ID는
+  `fish-audio/s2.1-pro-free:free`다. 다른 모델이나 서버로 자동 대체하지 않는다.
+- Fish의 `/model?page_size=64`에서 TTS 목소리를 조회한다. OpenRouter는
+  `/models?output_modalities=speech`와 선택 모델의 `supported_voices`를 읽는다. 목소리 목록이
+  없으면 Fish 목소리 페이지의 ID를 직접 추가한다. 연결 확인은 합성을 호출하지 않으며 새 서비스의
+  발견 목소리는 사용자가 선택해야 등록된다.
+- S2.1과 Drama 3 모두 대괄호 연기 지시를 받는다. 기존 `SpeakerPerformance`를 합성 직전에
+  모델별 짧은 지시로 변환한다. 중립은 지시 없이, 감정은 기본적으로 약하게, 보통 속도는 유지한다.
+  수동 자연어 지시도 대괄호로 감싼다. OpenRouter에는 이미 변환한 입력만 보내므로 `instructions`로
+  중복 지시하지 않는다. 본문의 ASCII 대괄호·꺾쇠는 전송 때만 전각으로 바꿔 연기/화자 제어문으로
+  해석되지 않게 한다. 원문·분석·위치 정보는 바꾸지 않고 추가 AI 분석도 요청하지 않는다.
+- 자동 연기와 요청 묶기는 명시적 기능 정보로 판단한다. 묶기는 계속 기본 꺼짐이며 같은 인물·목소리·
+  연기가 이어지는 부분만 묶는다. 다른 화자 합성이나 Fish 목소리 복제/제작은 추가하지 않는다.
+  기존 자연어 새 목소리 제작은 정확한 Gemini Flash 모델 전용으로 유지한다.
+- Fish 직접 연결은 PCM 44.1kHz/16-bit/mono를 명시한다. OpenRouter Fish도 제공자 옵션으로
+  `fish-audio.sample_rate=44100`을 보낸다. PCM 응답은 WAV로 감싸 기존 저장·재생·결합 경로를 쓴다.
+  OpenAI 호환 Fish 중계는 PCM WAV 응답이 필요하다. 연기 지시 길이도 입력 예산에 포함한다.
+  그 밖의 OpenRouter 모델은 기본 MP3 낭독만 제공하며 여러 응답을 임의로 이어 붙이지 않는다.
+- 모델 종류와 변환 버전도 합성 revision에 포함하며 보관함과 작업이 같은 모델 정보를 사용한다.
+  이는 화자 분석의 재사용 키를 변경하지 않는다. HTTP 요청 제한/일시 오류는 기존 재시도 정책,
+  명시적인 콘텐츠 정책 오류는 기존 건너뛰기 정책으로 전달한다.
+
+공식 계약: [Fish 합성 API](https://docs.fish.audio/api-reference/endpoint/openapi-v1/text-to-speech),
+[S2 연기](https://docs.fish.audio/developer-guide/core-features/emotions),
+[Drama 3](https://docs.fish.audio/features/text-to-speech/drama-3),
+[OpenRouter 음성 API](https://openrouter.ai/docs/guides/overview/multimodal/tts).
+OpenRouter 공개 목록 GET과 모의 API 계약·격리 DB 통합 테스트를 확인했다. 실제 계정의 합성·음질·중계 PCM 응답은 아직 확인하지 않았다.
 
 구현은 `providers/tts-connection*.ts`, `routes/ai/tts-connection-routes.ts`,
 `src/services/remote/tts-connections-client.ts`, `UiNextTTSConnections.tsx`에 있다.

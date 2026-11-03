@@ -147,6 +147,7 @@ export async function registerPlainTTSRoutes(
     providerId: source.id,
     modelId: source.modelId,
     revision: source.synthesisRevision ?? source.revision,
+    ...(source.performanceFormat ? { performanceFormat: source.performanceFormat } : {}),
   });
   const catalogRevision = (items: PlainTTSSource[]) =>
     items.length === 1 && items[0].legacyIds
@@ -344,8 +345,9 @@ export async function registerPlainTTSRoutes(
           const instructionsSupported = adapter.supportsInstructions === true;
           const autoActingSupported =
             instructionsSupported &&
-            isGeminiActingModel(source.modelId) &&
-            ['gemini-tts', 'gemini-vertex-tts', 'google-cloud-tts'].includes(adapter.providerId);
+            ((isGeminiActingModel(source.modelId) &&
+              ['gemini-tts', 'gemini-vertex-tts', 'google-cloud-tts'].includes(adapter.providerId)) ||
+              (!!source.performanceFormat && source.performanceFormat === adapter.performanceFormat));
           return { source, found, available: found.length > 0, instructionsSupported, autoActingSupported };
         } catch {
           return { source, found: [], available: false };
@@ -372,6 +374,7 @@ export async function registerPlainTTSRoutes(
           paid: source.paid,
           instructionsSupported: instructionsSupported === true,
           autoActingSupported: autoActingSupported === true,
+          batchAudioSupported: autoActingSupported === true,
         })),
       ),
       providers: results.map(({ source, available }) => ({

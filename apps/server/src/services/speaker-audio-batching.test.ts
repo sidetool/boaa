@@ -24,6 +24,23 @@ const paragraphs = (texts: string[]) =>
 const requestsFor = (ps: Paragraph[]) => castRequests(ps, [], [], {}, settings);
 
 describe('Gemini contiguous cast audio batching', () => {
+  it('batches Fish only by explicit choice and preserves its captured format and source ranges', () => {
+    const ps = paragraphs(['첫 문장.', '다음 문장.']);
+    const fishSettings = {
+      ...settings,
+      cast: {
+        ...settings.cast!,
+        models: { n: { ...model, modelId: 'relay-alias', performanceFormat: 'fish-drama' as const } },
+      },
+    };
+    const requests = castRequests(ps, [], [], {}, fishSettings);
+    expect(requests.every((r) => r.cast.model.performanceFormat === 'fish-drama')).toBe(true);
+    expect(batchCastRequests(ps, requests, [], true)).toHaveLength(2);
+    const merged = batchCastRequests(ps, requests, [], true, true);
+    expect(merged).toHaveLength(1);
+    expect(unbatchCastRequest(merged[0])).toEqual(requests);
+    expect(castPlayable(ps, merged[0], []).text).toBe('첫 문장.\n\n다음 문장.');
+  });
   it('sends one text for adjacent identical voices while retaining source anchors and paragraph navigation', () => {
     const ps = paragraphs(['문이 열렸다.', '달빛 🌙 아래로 걸었다.', '잠시 멈췄다.']);
     const original = requestsFor(ps);

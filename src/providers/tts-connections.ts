@@ -7,7 +7,9 @@ export interface TTSConnectionVoice {
 
 export interface TTSConnectionInput {
   readonly name: string;
-  readonly protocol: 'local' | 'openai';
+  readonly protocol: 'local' | 'openai' | 'fish' | 'openrouter';
+  /** Optional model-family override for administrator-configured gateway aliases. */
+  readonly speechModel?: FishSpeechModel;
   readonly url: string;
   readonly modelId: string;
   /** Omitted on update preserves the key; an empty string removes it. */
@@ -17,6 +19,27 @@ export interface TTSConnectionInput {
   readonly maxInputSegments: number;
   readonly paid: boolean;
   readonly enabled: boolean;
+}
+
+export type FishSpeechModel = 'fish-s2' | 'fish-drama';
+export function fishSpeechModel(modelId?: string): FishSpeechModel | undefined {
+  if (
+    [
+      's2-pro',
+      's2.1-pro',
+      's2.1-pro-free',
+      'fish-audio/s2-pro',
+      'fish-audio/s2.1-pro',
+      'fish-audio/s2.1-pro-free:free',
+    ].includes(modelId ?? '')
+  )
+    return 'fish-s2';
+  if (modelId === 'drama-3' || modelId === 'fish-audio/drama-3') return 'fish-drama';
+}
+export function connectionSpeechModel(
+  input: Pick<TTSConnectionInput, 'protocol' | 'speechModel' | 'modelId'>,
+): FishSpeechModel | undefined {
+  return input.protocol === 'local' ? undefined : (input.speechModel ?? fishSpeechModel(input.modelId));
 }
 
 export interface TTSConnection extends Omit<TTSConnectionInput, 'apiKey'> {

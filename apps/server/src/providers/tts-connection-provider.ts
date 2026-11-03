@@ -1,8 +1,10 @@
 import type { TTSSynthesisInput, TTSSynthesisProvider, TTSSynthesisResult } from '../../../../src/providers/tts';
-import type { TTSConnectionInput } from '../../../../src/providers/tts-connections';
+import { connectionSpeechModel, type TTSConnectionInput } from '../../../../src/providers/tts-connections';
 import type { LocalEndpointEgressOptions } from './local-endpoint-egress-policy.js';
 import { LocalEndpointTTSProvider } from './local-endpoint-tts-provider.js';
 import { connectionError } from './tts-connection-config.js';
+import { FishTTSAdapter } from './fish-tts-adapter.js';
+import { fishDirection } from '../../../../src/providers/fish-performance';
 
 /** Keep the reader's source anchors intact while respecting the engine's per-request text budget. */
 export class ConnectionTTSProvider implements TTSSynthesisProvider {
@@ -10,7 +12,9 @@ export class ConnectionTTSProvider implements TTSSynthesisProvider {
   readonly supportsAudioCache = true;
   readonly supportsPerCharacterVoice = true;
   readonly displayName: string;
-  private readonly adapter: LocalEndpointTTSProvider;
+  readonly performanceFormat;
+  readonly supportsInstructions;
+  private readonly adapter: LocalEndpointTTSProvider | FishTTSAdapter;
   constructor(
     readonly providerId: string,
     private readonly config: TTSConnectionInput,
@@ -18,20 +22,32 @@ export class ConnectionTTSProvider implements TTSSynthesisProvider {
     network: LocalEndpointEgressOptions = {},
   ) {
     this.displayName = config.name;
-    this.adapter = new LocalEndpointTTSProvider({
-      ...network,
-      endpointUrl: config.url,
-      modelId: config.modelId,
-      apiKey: config.apiKey,
-      allowedHosts: [new URL(config.url).hostname],
-      voices: config.voices.map((v) => ({ ...v, lang: v.lang ?? 'und' })),
-    });
+    this.performanceFormat = connectionSpeechModel(config);
+    this.supportsInstructions = !!this.performanceFormat;
+    this.adapter =
+      this.performanceFormat || config.protocol === 'openrouter'
+        ? new FishTTSAdapter(config, network)
+        : new LocalEndpointTTSProvider({
+            ...network,
+            endpointUrl: config.url,
+            modelId: config.modelId,
+            apiKey: config.apiKey,
+            allowedHosts: [new URL(config.url).hostname],
+            voices: config.voices.map((v) => ({ ...v, lang: v.lang ?? 'und' })),
+          });
   }
   listVoices() {
     return this.adapter.listVoices();
   }
   async synthesize(input: TTSSynthesisInput): Promise<TTSSynthesisResult> {
-    const parts = splitConnectionText(input.text, this.config.maxInputCharacters);
+    const instructions = input.providerOptions?.instructions ?? input.providerOptions?.prompt;
+    const prefix = this.performanceFormat && typeof instructions === 'string' ? fishDirection(instructions) : '';
+    const budget = this.config.maxInputCharacters - (prefix ? Array.from(prefix).length + 1 : 0);
+    if (budget < 1)
+      throw connectionError('말투 지시가 요청 한도보다 길어요. 지시를 줄이거나 연결의 글자 수 한도를 늘려 주세요.');
+    const parts = splitConnectionText(input.text, budget);
+    if (this.config.protocol === 'openrouter' && !this.performanceFormat && parts.length > 1)
+      throw connectionError('이 중계 모델은 나뉜 음성을 합칠 수 없어요. 연결의 요청 글자 수 한도를 확인해 주세요.');
     if (parts.length > this.config.maxInputSegments)
       throw connectionError('요청이 너무 길어요. 낭독 묶음 크기를 줄이거나 연결의 최대 구간 수를 늘려 주세요.');
     const results: TTSSynthesisResult[] = [];
@@ -55,7 +71,7 @@ export class ConnectionTTSProvider implements TTSSynthesisProvider {
       if (!result.audio.byteLength || bytes > 32 * 1024 * 1024)
         throw connectionError('음성 응답 크기가 올바르지 않아요.', 502);
       // Reject a non-PCM response before paying for further pieces of an unmergeable recording.
-      if (parts.length > 1) joinConnectionWav([Buffer.from(result.audio)]);
+      if (parts.length > 1 || this.performanceFormat) joinConnectionWav([Buffer.from(result.audio)]);
       results.push(result);
     }
     if (results.length === 1) return results[0];
