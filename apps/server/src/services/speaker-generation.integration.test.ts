@@ -21,6 +21,11 @@ import { AudiobookService } from './audiobook-service.js';
 import { AudiobookAudioStore } from './audiobook-audio.js';
 import { SpeakerGenerationService } from './speaker-generation-service.js';
 import { SpeakerEngineStore } from '../providers/speaker-engine-store.js';
+import {
+  decryptProviderSecret,
+  encryptProviderSecret,
+  loadProviderSecretMasterKey,
+} from '../providers/server-provider-secrets.js';
 import { connectionError } from '../providers/tts-connection-config';
 import { SpeakerEngineTransport } from '../providers/speaker-engine-transport.js';
 import { classifyPlainTTSFailure, parsePlainTTSRules } from '../routes/ai/plain-tts-routes.js';
@@ -251,6 +256,67 @@ async function setup(pool: pg.Pool, concurrency: 1 | 2 = 1, chapterIds = ['c1', 
   };
 }
 (harness ? describe : describe.skip)('speaker background generation with real preset35 and PostgreSQL', () => {
+  it('reuses legacy analysis after output budget changes and sends the new budget only for unfinished chapters', async () => {
+    await withPostgresSchema(harness!, 'speaker_output_budget', async (pool) => {
+      const f = await setup(pool);
+      try {
+        // Existing installations have no server-owned cache budget yet.
+        const row = (await pool.query('select * from speaker_engines where id=$1', [f.engine.id])).rows[0];
+        const key = loadProviderSecretMasterKey(f.config, {});
+        const aad = `owner:speaker-engine:${f.engine.id}`;
+        const stored = JSON.parse(decryptProviderSecret(key, row, aad));
+        delete stored.analysisSettings;
+        const encrypted = encryptProviderSecret(key, JSON.stringify(stored), aad);
+        await pool.query('update speaker_engines set ciphertext=$2,iv=$3,auth_tag=$4 where id=$1', [
+          f.engine.id,
+          encrypted.ciphertext,
+          encrypted.iv,
+          encrypted.authTag,
+        ]);
+        const first = await f.create({ ...f.input, chapterIds: ['c1'] });
+        await f.until(async () => (await f.audio.get(first.id)).status === 'completed');
+        const before = (await pool.query('select * from speaker_analysis order by analysis_key,chapter_id')).rows;
+        const count = f.modelCalls.length;
+        const extended = await f.create();
+        const updated = await f.engines.save(
+          { ...f.engine, maxOutputTokens: 32768, reasoning: 'high', analysisSettings: { maxOutputTokens: 1024 } },
+          f.engine.id,
+        );
+        expect(updated.revision).toBe(f.engine.revision);
+        expect(updated).not.toHaveProperty('analysisSettings');
+        expect((await f.engines.load(f.engine.id, f.engine.revision)).maxOutputTokens).toBe(32768);
+        expect((await f.engines.list())[0]).toMatchObject({ revision: f.engine.revision, maxOutputTokens: 32768 });
+        const requestStart = f.requests.length;
+        await f.until(async () => (await f.audio.get(extended.id)).status === 'completed');
+        expect(f.modelCalls.slice(count).every((call) => call.input.source.chapter.id === 'c2')).toBe(true);
+        const paid = f.requests.slice(requestStart).filter((r) => r.url.endsWith('/chat/completions'));
+        expect(paid.length).toBeGreaterThan(0);
+        expect(paid.every((r) => (r.body as { max_tokens: number }).max_tokens === 32768)).toBe(true);
+        expect(paid.every((r) => (r.body as { reasoning_effort: string }).reasoning_effort === 'high')).toBe(true);
+        expect(
+          (await pool.query("select * from speaker_analysis where chapter_id='c1' order by analysis_key,chapter_id"))
+            .rows,
+        ).toEqual(before);
+        expect(
+          (await pool.query('select count(distinct analysis_key)::int n from speaker_generation_runs')).rows[0].n,
+        ).toBe(1);
+        const lowered = await f.engines.save(
+          { ...updated, maxOutputTokens: 8192, reasoning: 'low', tokenLimitParameter: 'max_completion_tokens' },
+          f.engine.id,
+        );
+        expect(lowered.revision).toBe(f.engine.revision);
+        const calls = f.modelCalls.length;
+        const variant = await f.create({ ...f.input, characterVoiceIds: ['b'] });
+        await f.until(async () => (await f.audio.get(variant.id)).status === 'completed');
+        expect(f.modelCalls).toHaveLength(calls);
+        const changedModel = await f.engines.save({ ...lowered, modelId: 'other' }, f.engine.id);
+        expect(changedModel.revision).not.toBe(f.engine.revision);
+        await expect(f.engines.load(f.engine.id, f.engine.revision)).rejects.toMatchObject({ statusCode: 409 });
+      } finally {
+        await f.cleanup();
+      }
+    });
+  });
   it('automatically continues cast audio after a transient provider outage without manual analysis resume', async () => {
     await withPostgresSchema(harness!, 'cast_transient_retry', async (pool) => {
       const f = await setup(pool, 2);

@@ -101,14 +101,31 @@ export function castingRevision(v: SpeakerEngineInput) {
     reasoning: v.reasoning,
   });
 }
+// Server-owned cache lineage. Transport uses the current execution settings for new requests.
+// A symbol prevents a submitted connection payload from choosing its own revision.
+type AnalysisSettings = Pick<SpeakerEngineInput, 'maxOutputTokens' | 'tokenLimitParameter' | 'reasoning'>;
+const analysisSettings = Symbol('analysisSettings');
+export function speakerAnalysisSettings(v: SpeakerEngineInput): AnalysisSettings {
+  return (
+    (v as SpeakerEngineInput & { [analysisSettings]?: AnalysisSettings })[analysisSettings] ?? {
+      maxOutputTokens: v.maxOutputTokens,
+      tokenLimitParameter: v.tokenLimitParameter,
+      reasoning: v.reasoning,
+    }
+  );
+}
+export function withSpeakerAnalysisSettings(v: SpeakerEngineInput, settings: AnalysisSettings): SpeakerEngineInput {
+  return Object.defineProperty(v, analysisSettings, { value: settings, configurable: true });
+}
 export function speakerRevision(v: SpeakerEngineInput) {
+  const settings = speakerAnalysisSettings(v);
   return structuredIntegrityHash({
     engineUrl: v.engineUrl,
     protocol: v.protocol,
     url: v.url,
     modelId: v.modelId,
-    maxOutputTokens: v.maxOutputTokens,
-    tokenLimitParameter: v.tokenLimitParameter ?? 'max_tokens',
-    reasoning: v.reasoning,
+    maxOutputTokens: settings.maxOutputTokens,
+    tokenLimitParameter: settings.tokenLimitParameter ?? 'max_tokens',
+    reasoning: settings.reasoning,
   });
 }

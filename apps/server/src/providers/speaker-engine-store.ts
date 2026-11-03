@@ -12,7 +12,13 @@ import {
   loadProviderSecretMasterKey,
 } from './server-provider-secrets.js';
 import { connectionError } from './tts-connection-config.js';
-import { normalizeSpeakerEngine, speakerRevision, castingRevision } from './speaker-engine-config.js';
+import {
+  normalizeSpeakerEngine,
+  speakerRevision,
+  castingRevision,
+  speakerAnalysisSettings,
+  withSpeakerAnalysisSettings,
+} from './speaker-engine-config.js';
 import { SpeakerEngineTransport } from './speaker-engine-transport.js';
 type Row = { id: string; ciphertext: string; iv: string; auth_tag: string; key_version: string };
 export class SpeakerEngineStore {
@@ -26,19 +32,30 @@ export class SpeakerEngineStore {
     return `${this.config.defaultUserId}:speaker-engine:${id}`;
   }
   private decode(row: Row) {
-    return normalizeSpeakerEngine(
-      JSON.parse(decryptProviderSecret(loadProviderSecretMasterKey(this.config, this.env), row, this.aad(row.id))),
+    const stored = JSON.parse(
+      decryptProviderSecret(loadProviderSecretMasterKey(this.config, this.env), row, this.aad(row.id)),
     );
+    const v = normalizeSpeakerEngine(stored);
+    if (!stored.analysisSettings) return v;
+    // Validate encrypted metadata with the same bounds as connection settings.
+    const historical = normalizeSpeakerEngine({
+      ...v,
+      maxOutputTokens: stored.analysisSettings.maxOutputTokens,
+      tokenLimitParameter: stored.analysisSettings.tokenLimitParameter,
+      reasoning: stored.analysisSettings.reasoning,
+    });
+    return withSpeakerAnalysisSettings(v, speakerAnalysisSettings(historical));
   }
   private view(row: Row): SpeakerEngine {
-    const { apiKey, engineToken, serviceAccountJson, ...v } = this.decode(row);
+    const decoded = this.decode(row);
+    const { apiKey, engineToken, serviceAccountJson, ...v } = decoded;
     return {
       ...v,
       id: row.id,
       hasApiKey: !!apiKey,
       hasEngineToken: !!engineToken,
       ...(v.protocol === 'vertex' ? { hasServiceAccount: !!serviceAccountJson } : {}),
-      revision: speakerRevision(v),
+      revision: speakerRevision(decoded),
     };
   }
   private async row(id: string, db: Pick<pg.Pool, 'query'> = this.pool): Promise<Row> {
@@ -95,8 +112,12 @@ export class SpeakerEngineStore {
     try {
       await c.query('begin');
       await c.query('select id from users where id=$1 for update', [this.config.defaultUserId]);
-      if (id) v = this.merge(v, this.decode(await this.row(id, c)));
-      else if (
+      if (id) {
+        const old = this.decode(await this.row(id, c));
+        v = this.merge(v, old);
+        const candidate = withSpeakerAnalysisSettings({ ...v }, speakerAnalysisSettings(old));
+        if (speakerRevision(candidate) === speakerRevision(old)) v = candidate;
+      } else if (
         Number(
           (await c.query('select count(*) n from speaker_engines where user_id=$1', [this.config.defaultUserId]))
             .rows[0].n,
@@ -106,7 +127,7 @@ export class SpeakerEngineStore {
       const key = id ?? randomUUID();
       const e = encryptProviderSecret(
         loadProviderSecretMasterKey(this.config, this.env),
-        JSON.stringify(v),
+        JSON.stringify({ ...v, analysisSettings: speakerAnalysisSettings(v) }),
         this.aad(key),
       );
       const r = (
