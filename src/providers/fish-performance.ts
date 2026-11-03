@@ -1,5 +1,6 @@
 import type { SpeakerPerformance } from './tts-performance';
 import type { FishSpeechModel } from './tts-connections';
+import { directionCues, type SpeakerDirection } from './tts-direction';
 
 /** Render only at the provider boundary: the book text and its stored anchors stay intact. */
 export function fishLiteralText(text: string): string {
@@ -19,11 +20,16 @@ export function fishDirection(instructions: string): string {
     .trim()}]`;
 }
 
-export function fishPerformanceStyle(p: SpeakerPerformance, format: FishSpeechModel): string | undefined {
+export function fishPerformanceStyle(
+  p: SpeakerPerformance,
+  format: FishSpeechModel,
+  direction?: SpeakerDirection,
+): string | undefined {
   const emotion = p.emotion === 'afraid' ? 'scared' : p.emotion;
-  const cues: string[] = [];
-  if (emotion !== 'neutral') cues.push(p.intensity === 'subtle' ? `slightly ${emotion}` : emotion);
-  if (p.delivery !== 'normal') {
+  const directed = direction?.format === format;
+  const cues: string[] = directed ? directionCues(direction, p) : [];
+  if (!directed && emotion !== 'neutral') cues.push(p.intensity === 'subtle' ? `slightly ${emotion}` : emotion);
+  if (!directed && p.delivery !== 'normal') {
     const delivery = p.delivery === 'breathless' ? 'breathless voice' : p.delivery;
     cues.push(p.intensity === 'subtle' ? `restrained ${delivery}` : delivery);
   }

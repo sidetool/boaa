@@ -12,7 +12,7 @@ import type {
   TTSSpeakerGenerationControls,
 } from '../../providers/speaker-generation';
 import { formatBytes, formatCount } from '../../utils/format';
-import { cx } from '../components/primitives';
+import { cx, Segmented } from '../components/primitives';
 import SpeakerCleanup from './SpeakerCleanup';
 import SpeakerJobProgress from './SpeakerJobProgress';
 import { AudioBadge, AudioGaps, audioCounts, skipBlockedText, visibleError } from './AudioGaps';
@@ -59,6 +59,9 @@ const savedPool = (value?: SpeakerGenerationPreferences) =>
   value && !(value.narratorVoiceId === '' && value.characterVoiceIds.length === 0)
     ? value.characterVoiceIds
     : undefined;
+type ActingMode = NonNullable<SpeakerGenerationInput['actingMode']>;
+const engineLabel = (engine: SpeakerEngine) =>
+  `${engine.name}${engine.name !== engine.modelId ? ` · ${engine.modelId}` : ''}${engine.paid ? ' · 유료 API' : ''}`;
 const isAbort = (error: unknown) => error instanceof DOMException && error.name === 'AbortError';
 
 export interface UiNextSpeakerGenerationPanelProps {
@@ -159,6 +162,10 @@ function Body({
   const [poolChoice, setPoolChoice] = useState<readonly string[] | undefined>(savedPool(restored));
   const [castingChoice, setCastingChoice] = useState<SpeakerCastingOptions | undefined>(restored?.casting);
   const [actingChoice, setActingChoice] = useState<boolean | undefined>(restored?.autoActing);
+  // No saved choice means acting is worked out with the speakers; a separate pass is only ever picked here.
+  const [actingModeChoice, setActingModeChoice] = useState<ActingMode | undefined>(restored?.actingMode);
+  // '' or undefined: the separate pass uses the speaker analysis model.
+  const [actingEngineChoice, setActingEngineChoice] = useState<string | undefined>(restored?.actingEngineId);
   // Off unless the person turns it on; no saved choice means off.
   const [batchChoice, setBatchChoice] = useState<boolean | undefined>(restored?.batchAudio);
   const [library, setLibrary] = useState<{ voices: LibraryVoice[]; designers: VoiceDesignProvider[] }>();
@@ -196,6 +203,8 @@ function Body({
           setPoolChoice((current) => current ?? savedPool(value));
           setCastingChoice((current) => current ?? value.casting);
           setActingChoice((current) => current ?? value.autoActing);
+          setActingModeChoice((current) => current ?? value.actingMode);
+          setActingEngineChoice((current) => current ?? value.actingEngineId);
           setBatchChoice((current) => current ?? value.batchAudio);
         }
         setPrefs('ready');
@@ -282,6 +291,8 @@ function Body({
     if (next.characterVoiceIds !== undefined) setPoolChoice(next.characterVoiceIds);
     if (next.casting !== undefined) setCastingChoice(next.casting);
     if (next.autoActing !== undefined) setActingChoice(next.autoActing);
+    if (next.actingMode !== undefined) setActingModeChoice(next.actingMode);
+    if (next.actingEngineId !== undefined) setActingEngineChoice(next.actingEngineId);
     if (next.batchAudio !== undefined) setBatchChoice(next.batchAudio);
     if (next.resetPool) setPoolChoice(undefined);
     if (prefs !== 'ready') return;
@@ -294,6 +305,11 @@ function Body({
       // Only an explicit on/off is saved; no saved choice means "on whenever the voices support it".
       ...((next.autoActing ?? actingChoice) !== undefined ? { autoActing: next.autoActing ?? actingChoice } : {}),
       ...((next.batchAudio ?? batchChoice) !== undefined ? { batchAudio: next.batchAudio ?? batchChoice } : {}),
+      ...((next.actingMode ?? actingModeChoice) ? { actingMode: next.actingMode ?? actingModeChoice } : {}),
+      // '' picks "same as the speaker analysis model", which is saved as no choice at all.
+      ...((next.actingEngineId ?? actingEngineChoice)
+        ? { actingEngineId: next.actingEngineId ?? actingEngineChoice }
+        : {}),
     });
   };
   // Voice creation is a Gemini 3.8 Flash TTS feature: only a Flash narrator opens it, on that same connection.
@@ -318,6 +334,10 @@ function Body({
   );
   const actingAvailable = Boolean(narratorId) && actingUnsupported.length === 0;
   const autoActing = actingChoice ?? actingAvailable;
+  // A separate acting pass reuses the speaker analysis and asks a model again; it only applies while acting is on.
+  const separateActing = autoActing && actingModeChoice === 'separate';
+  const actingEngineId = separateActing ? actingEngineChoice || undefined : undefined;
+  const actingEngine = actingEngineId ? analysisEngines?.find((item) => item.id === actingEngineId) : engine;
   // Shown while any voice of this job can be batched; a saved 'on' under other voices is simply not sent.
   const batchVoices = [narratorId, ...pool].map((id) => voices.find((voice) => voice.id === id));
   const batchAvailable = batchVoices.some(batchable);
@@ -353,7 +373,11 @@ function Body({
                           ? '만들 회차를 골라 주세요.'
                           : autoActing && !actingAvailable
                             ? '장면 연기를 지원하지 않는 목소리가 있어요. 장면 연기를 끄거나 목소리를 바꿔 주세요.'
-                            : (designProblem ?? budgetProblem);
+                            : actingEngineId && !actingEngine
+                              ? '고른 연기 분석 모델을 찾을 수 없어요. 다시 골라 주세요.'
+                              : actingEngineId && actingEngine?.enabled === false
+                                ? '고른 연기 분석 모델이 꺼져 있어요.'
+                                : (designProblem ?? budgetProblem);
   // Missing models or voices are already explained in their own section.
   const problemAbove = analysisEngines?.length === 0 || !catalog?.available || voices.length === 0;
   const input: SpeakerGenerationInput | undefined =
@@ -371,6 +395,8 @@ function Body({
           ...(casting ? { casting } : {}),
           // The default for voices without support stays implicit; explicit choices are always sent.
           ...(actingChoice !== undefined || autoActing ? { autoActing } : {}),
+          // The default pass stays implicit, so older plans keep their estimate and fingerprint.
+          ...(separateActing ? { actingMode: 'separate' as const, ...(actingEngineId ? { actingEngineId } : {}) } : {}),
           ...(batchAudio ? { batchAudio: true } : {}),
           rules: controls.rules,
           footnotePlayback: controls.footnotePlayback,
@@ -448,6 +474,8 @@ function Body({
         setPoolChoice(undefined);
         setCastingChoice(undefined);
         setActingChoice(undefined);
+        setActingModeChoice(undefined);
+        setActingEngineChoice(undefined);
         setBatchChoice(undefined);
         if (result.preferences?.engineId) setEngineChoice(result.preferences.engineId);
         queue.replace(result.preferences);
@@ -745,7 +773,7 @@ function Body({
             감정·속도 살려 읽기
             <small className="un-book-note">
               {actingAvailable
-                ? '목소리는 그대로 두고 장면마다 말하는 느낌만 바꿔요. 화자 분석과 함께 처리해요.'
+                ? '목소리는 그대로 두고 장면마다 말하는 느낌만 바꿔요.'
                 : actingUnsupported.length === [narratorId, ...pool].length
                   ? '지금 고른 목소리로는 쓸 수 없어요.'
                   : `지원하지 않는 목소리가 있어 쓸 수 없어요: ${actingUnsupported
@@ -755,6 +783,44 @@ function Body({
             </small>
           </span>
         </label>
+        {autoActing && (
+          <div className="un-cast-acting-pass">
+            <Segmented
+              label="연기 분석 방식"
+              value={separateActing ? 'separate' : 'inline'}
+              options={[
+                { value: 'inline', label: '화자 분석과 함께' },
+                { value: 'separate', label: '따로 분석' },
+              ]}
+              onChange={(actingMode) => prefs !== 'loading' && choose({ actingMode })}
+            />
+            <p className="un-book-note">
+              {separateActing
+                ? '화자를 찾은 뒤 회차 전체 흐름을 보고 연기만 한 번 더 분석해요. AI 요청이 늘어 비용이 더 들 수 있고, 결과가 꼭 더 좋아지지는 않아요.'
+                : '화자 분석에 연기 판단을 함께 요청해요. 빠진 연기는 따로 보충해요.'}
+            </p>
+            {separateActing && (
+              <label className="un-cast-field">
+                <span>연기 분석 모델</span>
+                <select
+                  aria-label="연기 분석 모델"
+                  value={actingEngineChoice ?? ''}
+                  disabled={prefs === 'loading'}
+                  onChange={(event) => choose({ actingEngineId: event.target.value })}
+                >
+                  <option value="">화자 분석과 같은 모델{engine ? ` · ${engine.name}` : ''}</option>
+                  {actingEngineId && !actingEngine && <option value={actingEngineId}>목록에 없는 분석 모델</option>}
+                  {analysisEngines?.map((item) => (
+                    <option key={item.id} value={item.id} disabled={!item.enabled && item.id !== actingEngineId}>
+                      {engineLabel(item)}
+                      {!item.enabled ? ' · 꺼짐' : ''}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
+          </div>
+        )}
       </section>
 
       {batchAvailable && (
@@ -827,7 +893,13 @@ function Body({
               {input?.autoActing && (
                 <li>
                   <span>장면 연기</span>
-                  <b>켬 · 화자 분석과 함께</b>
+                  <b>{input.actingMode === 'separate' ? '켬 · 따로 분석' : '켬 · 화자 분석과 함께'}</b>
+                </li>
+              )}
+              {input?.autoActing && input.actingMode === 'separate' && (
+                <li>
+                  <span>연기 분석</span>
+                  <b>{fresh.actingModelLabel ?? actingEngine?.name ?? fresh.modelLabel}</b>
                 </li>
               )}
               {input?.batchAudio && (
@@ -841,6 +913,11 @@ function Body({
                 <b>{fresh.voiceLabel}</b>
               </li>
             </ul>
+            {input?.autoActing && input.actingMode === 'separate' && (
+              <p className="un-book-note">
+                화자 분석 결과는 다시 쓰고, 연기만 따로 분석해요. 그만큼 AI 요청과 비용이 더 들어요.
+              </p>
+            )}
             {!!fresh.maxDesignedVoices && (
               <p className="un-book-note">
                 {naturalVoices

@@ -501,6 +501,46 @@ describe('UiNextSpeakerRevoice scene acting', () => {
       ],
     });
   });
+
+  it('offers a full pass for an untagged source too, still needing a model and paid consent', async () => {
+    const port = fixture(source());
+    port.estimateRevoice.mockResolvedValue({ ...estimateValue, paid: true, actingAnalysis: true });
+    const root = await mount(port, { voices: actingVoices, engines: [analysisEngine] });
+    const acting = () => byLabel(root, '장면 연기')[1];
+    expect(acting().props.value).toBe('preserve');
+    const options = acting().findAll((n) => n.type === 'option');
+    expect(options.map((n) => n.props.value)).toEqual(['preserve', 'auto', 'regenerate']);
+    expect(text(options[2]!)).toBe('전체 분석');
+    await change(acting(), 'regenerate');
+    expect(text(byLabel(root, '바뀌는 내용')[0])).toContain('장면 연기전체 분석');
+    expect(button(root, CHECK).props.disabled).toBe(true);
+    await change(byLabel(root, '연기 분석 모델')[0], 'e1');
+    await click(button(root, CHECK));
+    expect(port.estimateRevoice.mock.lastCall![1].acting).toEqual({ mode: 'regenerate', engineId: 'e1' });
+    expect(text(byLabel(root, '만들기 확인')[0])).toContain('분석 A · 전체');
+    expect(button(root, '새 음성 만들기').props.disabled).toBe(true);
+  });
+
+  it('redoes every tagged span only when asked, with a chosen model, and keeps filling gaps as its own choice', async () => {
+    const port = fixture(source({ hasActing: true, needsActing: true, actingEngineId: 'e1' }));
+    port.estimateRevoice.mockResolvedValue({ ...estimateValue, actingAnalysis: true, actingModelLabel: '분석 A · m' });
+    const root = await mount(port, { voices: actingVoices, engines: [analysisEngine] });
+    const acting = () => byLabel(root, '장면 연기')[1];
+    // Partly tagged: the default still only fills the gaps.
+    expect(acting().props.value).toBe('auto');
+    expect(
+      acting()
+        .findAll((n) => n.type === 'option')
+        .map((n) => n.props.value),
+    ).toEqual(['preserve', 'auto', 'regenerate', 'off']);
+    await change(acting(), 'regenerate');
+    expect(text(root)).toContain('처음부터 다시 분석해요');
+    expect(text(byLabel(root, '바뀌는 내용')[0])).toContain('장면 연기전부 새로 분석');
+    expect(byLabel(root, '연기 분석 모델')[0].props.value).toBe('e1');
+    await click(button(root, CHECK));
+    expect(port.estimateRevoice.mock.lastCall![1].acting).toEqual({ mode: 'regenerate', engineId: 'e1' });
+    expect(text(byLabel(root, '만들기 확인')[0])).toContain('연기 분석분석 A · m · 전부 새로');
+  });
 });
 
 describe('UiNextSpeakerRevoice request batching', () => {

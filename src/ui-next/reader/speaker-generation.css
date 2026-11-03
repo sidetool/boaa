@@ -502,6 +502,13 @@
   accent-color: var(--un-accent);
 }
 
+/* How acting is worked out: only while acting is on, kept apart from request batching below. */
+.un-cast-acting-pass {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 8px;
+}
+
 /* Saved legacy design choice: its switch and limit stay together under the pick settings. */
 .un-cast-legacy {
   display: grid;

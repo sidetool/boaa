@@ -78,6 +78,8 @@ export async function registerSpeakerGenerationRoutes(
         characterVoiceIds: b.characterVoiceIds,
         casting: normalizeCasting(b.casting),
         autoActing: b.autoActing,
+        actingMode: b.actingMode,
+        actingEngineId: b.actingEngineId,
         batchAudio: b.batchAudio,
         rules: parsePlainTTSRules(b.rules),
         footnotePlayback: b.footnotePlayback,
@@ -103,6 +105,8 @@ export async function registerSpeakerGenerationRoutes(
         if (
           !v ||
           (v.autoActing !== undefined && typeof v.autoActing !== 'boolean') ||
+          (v.actingMode !== undefined && !['inline', 'separate'].includes(v.actingMode)) ||
+          (v.actingEngineId !== undefined && !valid(v.actingEngineId)) ||
           (v.batchAudio !== undefined && typeof v.batchAudio !== 'boolean') ||
           !valid(v.engineId) ||
           !valid(v.narratorVoiceId) ||
@@ -117,6 +121,8 @@ export async function registerSpeakerGenerationRoutes(
           characterVoiceIds: [...new Set(v.characterVoiceIds)],
           casting: normalizeCasting(v.casting, true),
           ...(typeof v.autoActing === 'boolean' ? { autoActing: v.autoActing } : {}),
+          ...(v.actingMode ? { actingMode: v.actingMode } : {}),
+          ...(v.actingEngineId ? { actingEngineId: v.actingEngineId } : {}),
           ...(typeof v.batchAudio === 'boolean' ? { batchAudio: v.batchAudio } : {}),
         };
         const written = await pool.query(

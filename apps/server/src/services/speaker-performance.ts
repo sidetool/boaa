@@ -8,6 +8,12 @@ import {
   parsePerformance,
   type SpeakerPerformance,
 } from '../../../../src/providers/tts-performance';
+import {
+  DIRECTION_INSTRUCTION,
+  DIRECTION_SCHEMA,
+  parseDirection,
+  type SpeakerDirection,
+} from '../../../../src/providers/tts-direction';
 import type { SpeakerEngineStore } from '../providers/speaker-engine-store';
 import { loadSpeakerChapter, castPlayable, type CastRequest } from './speaker-generation-plan';
 import { audiobookError } from './audiobook-plan';
@@ -61,6 +67,7 @@ export async function preparePerformance(options: {
     if (!v?.autoActingSupported || structuredIntegrityHash(v.model) !== structuredIntegrityHash(row.request.cast.model))
       throw audiobookError(409, '자동 연출을 지원하는 목소리 연결을 다시 확인해 주세요.');
   }
+  const directed = run.settings.cast?.actingMode === 'separate';
   const chapterId = rows[0].chapter_id,
     // Match the attribution path's 120-target threshold and 100-target large batches.
     batch = rows.length >= 120 ? rows.slice(0, 100) : rows;
@@ -72,19 +79,43 @@ export async function preparePerformance(options: {
     return {
       id: String(r.ordinal),
       speaker: r.request.cast.label,
+      ...(directed
+        ? {
+            speakerId: r.request.cast.speakerId,
+            format: r.request.cast.model.performanceFormat ?? 'plain',
+            model: r.request.cast.model.modelId,
+          }
+        : {}),
       text: playable.text,
       paragraphId: p.id,
       startOffset: r.request.cast.start,
       endOffset: r.request.cast.end,
     };
   });
+  const paragraphOrder = new Map(loaded.paragraphs.map((p, index) => [p.id, index]));
+  const castContext = directed
+    ? (
+        await pool.query(
+          `select distinct request#>>'{cast,speakerId}' as "speakerId", request#>>'{cast,label}' as speaker,
+     request->>'paragraphId' as "paragraphId", request#>'{cast,start}' as "startOffset", request#>'{cast,end}' as "endOffset"
+     from saved_audiobook_items where audiobook_id=$1 and chapter_id=$2`,
+          [run.id, chapterId],
+        )
+      ).rows.sort(
+        (a, b) =>
+          (paragraphOrder.get(a.paragraphId) ?? -1) - (paragraphOrder.get(b.paragraphId) ?? -1) ||
+          Number(a.startOffset) - Number(b.startOffset) ||
+          String(a.speakerId).localeCompare(String(b.speakerId)),
+      )
+    : undefined;
   // The complete chapter is context once per request, including non-target narration.
   const prompt = {
     chapter: loaded.chapter.title,
     paragraphs: loaded.paragraphs.map((p) => ({ id: p.id, text: p.text })),
     targets,
+    ...(directed ? { speakers: castContext } : {}),
   };
-  const key = 'acting:' + structuredIntegrityHash({ v: 2, engine: config, chapterId, prompt });
+  const key = 'acting:' + structuredIntegrityHash({ v: directed ? 3 : 2, engine: config, chapterId, prompt });
   const args = [run.id, key];
   await pool.query(
     'insert into speaker_voice_decisions(audiobook_id,decision_key) values($1,$2) on conflict do nothing',
@@ -156,15 +187,19 @@ export async function preparePerformance(options: {
                 items: {
                   type: 'object',
                   additionalProperties: false,
-                  required: ['id', 'acting'],
-                  properties: { id: { type: 'string' }, acting: PERFORMANCE_SCHEMA },
+                  required: directed ? ['id', 'acting', 'direction'] : ['id', 'acting'],
+                  properties: {
+                    id: { type: 'string' },
+                    acting: PERFORMANCE_SCHEMA,
+                    ...(directed ? { direction: DIRECTION_SCHEMA } : {}),
+                  },
                 },
               },
             },
           },
         },
         AbortSignal.any([signal, AbortSignal.timeout(180000)]),
-        PERFORMANCE_INSTRUCTION,
+        directed ? PERFORMANCE_INSTRUCTION + ' ' + DIRECTION_INSTRUCTION : PERFORMANCE_INSTRUCTION,
       );
       if (Buffer.byteLength(response) > 256 * 1024) throw audiobookError(502, '연출 응답이 너무 커요.');
       await fenced(async (c) => {
@@ -185,6 +220,7 @@ export async function preparePerformance(options: {
     }
   }
   let values: Map<string, SpeakerPerformance>;
+  const directions = new Map<string, SpeakerDirection>();
   try {
     const raw = JSON.parse(response!);
     if (
@@ -196,9 +232,19 @@ export async function preparePerformance(options: {
       throw Error();
     values = new Map();
     for (const row of raw.performance) {
-      if (!row || Object.keys(row).length !== 2 || !targets.some((t) => t.id === row.id) || values.has(row.id))
+      if (
+        !row ||
+        Object.keys(row).length !== (directed ? 3 : 2) ||
+        !targets.some((t) => t.id === row.id) ||
+        values.has(row.id)
+      )
         throw Error();
       values.set(row.id, parsePerformance(row.acting));
+      if (directed) {
+        const target = batch.find((t) => String(t.ordinal) === row.id)!;
+        const direction = parseDirection(row.direction, target.request.cast.model.performanceFormat);
+        if (direction) directions.set(row.id, direction);
+      }
     }
   } catch {
     await pool.query(
@@ -210,7 +256,14 @@ export async function preparePerformance(options: {
   if (!(await active())) return false;
   await fenced(async (c) => {
     for (const row of batch) {
-      const request = { ...row.request, cast: { ...row.request.cast, performance: values.get(String(row.ordinal))! } };
+      const request = {
+        ...row.request,
+        cast: {
+          ...row.request.cast,
+          performance: values.get(String(row.ordinal))!,
+          ...(directions.has(String(row.ordinal)) ? { direction: directions.get(String(row.ordinal))! } : {}),
+        },
+      };
       const updated = await c.query(
         "update saved_audiobook_items set request=$4 where audiobook_id=$1 and ordinal=$2 and request=$3::jsonb and status not in ('ready','dispatching')",
         [run.id, row.ordinal, row.request, request],

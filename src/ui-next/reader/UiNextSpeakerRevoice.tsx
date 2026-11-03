@@ -27,6 +27,14 @@ const MAX_DESIGN = 8;
 const ACTING_EXAMPLES = ['조용히 속삭이듯', '지친 듯', '긴장해서 빠르게', '단호하고 차갑게', '밝고 들뜬', '울먹이며'];
 const IMPORTANCE = { major: '주요', supporting: '조연', extra: '엑스트라' } as const;
 const RANK = { major: 0, supporting: 1, extra: 2 } as const;
+/** Labels for a changed acting choice; a full pass reads differently once the source already has acting. */
+const actingChange = (mode: ActingMode, hasActing: boolean) =>
+  ({
+    auto: hasActing ? '빠진 부분만 새로 분석' : 'AI로 분석해서 넣기',
+    regenerate: hasActing ? '전부 새로 분석' : '전체 분석',
+    off: '연기 빼기',
+    preserve: undefined,
+  })[mode];
 const STOPPED: readonly SpeakerGenerationJob['status'][] = ['paused', 'failed', 'completed'];
 const message = (error: unknown, fallback: string) =>
   error instanceof Error && error.message && error.name !== 'AbortError' ? error.message : fallback;
@@ -187,7 +195,9 @@ export default function UiNextSpeakerRevoice({
       : {
           acting: {
             mode: actingMode,
-            ...(actingMode === 'auto' && actingEngineId ? { engineId: actingEngineId } : {}),
+            ...((actingMode === 'auto' || actingMode === 'regenerate') && actingEngineId
+              ? { engineId: actingEngineId }
+              : {}),
           },
         }),
     // The server sizes the job from designSpeakerIds; the casting block keeps its older required fields.
@@ -219,7 +229,10 @@ export default function UiNextSpeakerRevoice({
   const directed = speakers.filter((v, i) => (v.instructions ?? '') !== (input?.voices[i]?.instructions ?? ''));
   const missing = speakers.filter((v) => effective(v) !== 'design' && !catalog(voiceOf(v)));
   // Automatic acting tags are applied only through voices the server marks as capable.
-  const acted = actingMode === 'auto' || (actingMode === 'preserve' && !!source?.hasActing);
+  const acted =
+    actingMode === 'auto' || actingMode === 'regenerate' || (actingMode === 'preserve' && !!source?.hasActing);
+  // Both analyse with a model: filling gaps only where tags are missing, or redoing every span.
+  const analysing = (actingMode === 'auto' && needsActing) || actingMode === 'regenerate';
   const actingUnsupported = acted ? speakers.filter((v) => capability(v)?.autoActingSupported !== true) : [];
   const problem = !stopped
     ? '만들기를 멈추거나 끝난 뒤 바꿀 수 있어요.'
@@ -227,7 +240,7 @@ export default function UiNextSpeakerRevoice({
       ? `${missing.map((v) => v.name).join(', ')}의 목소리를 찾을 수 없어요. 다른 목소리로 바꿔 주세요.`
       : actingUnsupported.length
         ? `장면 연기를 지원하지 않는 목소리예요: ${actingUnsupported.map((v) => v.name).join(', ')}. 목소리를 바꾸거나 장면 연기를 빼 주세요.`
-        : actingMode === 'auto' && needsActing && !actingEngine?.enabled
+        : analysing && !actingEngine?.enabled
           ? '연기를 분석할 모델을 골라 주세요.'
           : designIds.length && !selection?.enabled
             ? '새 목소리를 정할 배정 AI 모델을 골라 주세요.'
@@ -472,6 +485,12 @@ export default function UiNextSpeakerRevoice({
                 <dt>지금 음성</dt>
                 <dd>지우지 않고 그대로 둬요</dd>
               </div>
+              {actingChange(actingMode, !!source.hasActing) && (
+                <div className="is-on">
+                  <dt>장면 연기</dt>
+                  <dd>{actingChange(actingMode, !!source.hasActing)}</dd>
+                </div>
+              )}
               {batchChanged && (
                 <div className="is-on">
                   <dt>만드는 방식</dt>
@@ -517,13 +536,21 @@ export default function UiNextSpeakerRevoice({
                     <option value="preserve">{source.hasActing ? '지금 표시 그대로' : '연기 없이'}</option>
                     {/* With every span tagged, filling gaps would be the same as keeping them. */}
                     {(needsActing || actingMode === 'auto') && (
-                      <option value="auto">{source.hasActing ? '빠진 부분만 새로 분석' : 'AI로 분석해서 넣기'}</option>
+                      <option value="auto">{actingChange('auto', !!source.hasActing)}</option>
                     )}
+                    {/* A full pass in the current per-model style is its own explicit choice; filling gaps never turns into it. */}
+                    <option value="regenerate">{actingChange('regenerate', !!source.hasActing)}</option>
                     {source.hasActing && <option value="off">연기 빼기</option>}
                   </select>
                 </label>
               )}
-              {showActing && actingMode === 'auto' && needsActing && (
+              {showActing && actingMode === 'regenerate' && (
+                <p className="un-book-note">
+                  모든 대사의 연기를 회차 흐름을 보고 {source.hasActing ? '처음부터 다시' : '새로'} 분석해요. 지금
+                  음성과 원래 분석은 그대로 남고, 분석 요청만큼 비용이 들 수 있어요.
+                </p>
+              )}
+              {showActing && analysing && (
                 <label className="un-cast-field">
                   <span>연기 분석 모델</span>
                   <select
@@ -634,10 +661,13 @@ export default function UiNextSpeakerRevoice({
                     <b>켬</b>
                   </li>
                 )}
-                {fresh.actingAnalysis && (
+                {(fresh.actingAnalysis || input?.acting?.mode === 'regenerate') && (
                   <li>
                     <span>연기 분석</span>
-                    <b>{actingEngine?.name ?? '분석 모델'} · 빠진 부분만</b>
+                    <b>
+                      {fresh.actingModelLabel ?? actingEngine?.name ?? '분석 모델'} ·{' '}
+                      {input?.acting?.mode === 'regenerate' ? (source.hasActing ? '전부 새로' : '전체') : '빠진 부분만'}
+                    </b>
                   </li>
                 )}
               </ul>

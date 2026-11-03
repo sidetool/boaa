@@ -28,6 +28,8 @@ const same = (a?: SpeakerGenerationPreferences, b?: SpeakerGenerationPreferences
     a.engineId === b.engineId &&
     a.narratorVoiceId === b.narratorVoiceId &&
     a.autoActing === b.autoActing &&
+    a.actingMode === b.actingMode &&
+    a.actingEngineId === b.actingEngineId &&
     a.batchAudio === b.batchAudio &&
     JSON.stringify(a.casting) === JSON.stringify(b.casting) &&
     a.characterVoiceIds.length === b.characterVoiceIds.length &&

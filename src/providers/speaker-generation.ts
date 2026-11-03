@@ -34,10 +34,14 @@ export interface SpeakerGenerationInput {
   characterVoiceIds: string[];
   casting?: SpeakerCastingOptions;
   autoActing?: boolean;
+  /** Separate pass reuses speaker analysis and directs delivery after attribution. */
+  actingMode?: 'inline' | 'separate';
+  actingEngineId?: string;
   rules: AudiobookInput['rules'];
   footnotePlayback: AudiobookInput['footnotePlayback'];
 }
 export interface SpeakerGenerationEstimate {
+  actingModelLabel?: string;
   fingerprint: string;
   chapterCount: number;
   contextChapterCount: number;
@@ -72,7 +76,7 @@ export interface SpeakerRevoiceInput {
   designSpeakerIds?: string[];
   /** Apply changed character voices to future generation; existing audio remains immutable. */
   applyToBook?: boolean;
-  acting?: { mode: 'preserve' | 'off' | 'auto'; engineId?: string };
+  acting?: { mode: 'preserve' | 'off' | 'auto' | 'regenerate'; engineId?: string };
   casting?: SpeakerCastingOptions;
   voices: { speakerId: string; voiceId: string; instructions?: string }[];
 }
@@ -99,6 +103,7 @@ export interface SpeakerRevoiceSource {
   }[];
 }
 export interface SpeakerRevoiceEstimate {
+  actingModelLabel?: string;
   actingAnalysis?: boolean;
   recastCharacters?: number;
   selectionModelLabel?: string;
@@ -152,6 +157,9 @@ export interface SpeakerGenerationPreferences {
   characterVoiceIds: string[];
   casting?: SpeakerCastingOptions;
   autoActing?: boolean;
+  /** Separate pass reuses speaker analysis and directs delivery after attribution. */
+  actingMode?: 'inline' | 'separate';
+  actingEngineId?: string;
 }
 export interface TTSSpeakerGenerationControls {
   key: string;
@@ -184,6 +192,7 @@ export interface SpeakerGenerationSettings {
   /** Keeps pre-upgrade paid selection checkpoints addressable on resume. */
   voiceEvidenceVersion?: 2;
   autoActing?: boolean;
+  actingMode?: 'inline' | 'separate';
   actingEngine?: { id: string; revision: string };
   language?: string;
   engineId: string;

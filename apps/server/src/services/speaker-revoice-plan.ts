@@ -111,7 +111,7 @@ export async function planSpeakerRevoice(
     throw audiobookError(400, '문장 묶기 설정을 확인해 주세요.');
   const view = revoiceSourceView(captured);
   const mode = input?.acting?.mode ?? 'preserve';
-  if (!['preserve', 'off', 'auto'].includes(mode) || (input?.acting && typeof input.acting !== 'object'))
+  if (!['preserve', 'off', 'auto', 'regenerate'].includes(mode) || (input?.acting && typeof input.acting !== 'object'))
     throw audiobookError(400, '자동 연기 설정을 확인해 주세요.');
   if (!input || !Array.isArray(input.voices) || input.voices.length !== view.voices.length || input.voices.length > 512)
     throw audiobookError(400, '내레이터와 인물의 목소리를 모두 골라 주세요.');
@@ -152,11 +152,15 @@ export async function planSpeakerRevoice(
   }
   const selectedIds = [...new Set([...choices.values()].map((v) => v.voiceId))];
   const voices = selectedIds.map((id) => catalog.voices.find((v) => v.id === id)!);
-  if ((mode === 'auto' || (mode === 'preserve' && view.hasActing)) && voices.some((v) => !v.autoActingSupported))
+  if (
+    (mode === 'auto' || mode === 'regenerate' || (mode === 'preserve' && view.hasActing)) &&
+    voices.some((v) => !v.autoActingSupported)
+  )
     throw audiobookError(400, '자동 연기를 끄거나 지원하는 목소리를 골라 주세요.');
-  const actingAnalysis = mode === 'auto' && view.needsActing === true;
+  const actingAnalysis = mode === 'regenerate' || (mode === 'auto' && view.needsActing === true);
   let actingEngine: { id: string; revision: string } | undefined;
   let actingPaid = false;
+  let actingModelLabel: string | undefined;
   if (actingAnalysis) {
     const engineId = voiceText(input.acting?.engineId, 128, true);
     if (!engines) throw audiobookError(503, '연기 분석 연결을 확인해 주세요.');
@@ -164,6 +168,7 @@ export async function planSpeakerRevoice(
     if (engine.purpose === 'casting') throw audiobookError(400, '화자 분석용 모델을 선택해 주세요.');
     actingEngine = { id: engineId, revision: speakerRevision(engine) };
     actingPaid = engine.paid;
+    actingModelLabel = engine.modelId;
   }
   if (input.applyToBook !== undefined && typeof input.applyToBook !== 'boolean')
     throw audiobookError(400, '앞으로 쓸 목소리 설정을 확인해 주세요.');
@@ -245,7 +250,11 @@ export async function planSpeakerRevoice(
       };
       if (choice.instructions) request.cast.instructions = choice.instructions;
       else delete request.cast.instructions;
-      if (mode === 'off') delete request.cast.performance;
+      if (mode === 'off' || mode === 'regenerate') {
+        delete request.cast.performance;
+        delete request.cast.direction;
+      }
+      if (request.cast.direction?.format !== request.cast.model.performanceFormat) delete request.cast.direction;
       if (
         input.batchAudio === true &&
         mode === 'auto' &&
@@ -267,7 +276,7 @@ export async function planSpeakerRevoice(
       loaded.paragraphs,
       chapterRequests,
       source.settings.rules,
-      mode === 'auto',
+      mode === 'auto' || mode === 'regenerate',
       input.batchAudio === true,
     )) {
       const paragraph = paragraphs.get(request.paragraphId)!;
@@ -285,6 +294,7 @@ export async function planSpeakerRevoice(
   if (!changed) throw audiobookError(400, '바꿀 목소리나 연기, 문장 묶기 설정을 선택해 주세요.');
   const fingerprint = structuredIntegrityHash({
     version: 'speaker-revoice-1',
+    ...(mode === 'regenerate' ? { actingMode: 'separate' } : {}),
     owner,
     bookId,
     sourceId: id,
@@ -346,7 +356,8 @@ export async function planSpeakerRevoice(
         ...source.settings.cast!,
         batchAudio: input.batchAudio === true,
         voiceEvidenceVersion: 2,
-        autoActing: mode === 'auto',
+        autoActing: mode === 'auto' || mode === 'regenerate',
+        actingMode: mode === 'regenerate' ? 'separate' : undefined,
         actingEngine,
         revoiceFrom: id,
         casting: resolvedCasting,
@@ -372,7 +383,7 @@ export async function planSpeakerRevoice(
             maxDesignedVoices: resolvedCasting.maxDesignedVoices,
           }
         : {}),
-      ...(actingAnalysis ? { actingAnalysis: true } : {}),
+      ...(actingAnalysis ? { actingAnalysis: true, actingModelLabel } : {}),
       voiceLabel: '화자별 목소리',
       providerName: [...new Set(voices.map((v) => v.providerName || v.providerId || 'TTS'))].join(' · '),
       firstChapterTitle: items[0].chapterTitle,

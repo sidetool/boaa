@@ -1,3 +1,4 @@
+import { DIRECTION_INSTRUCTION } from '../../../../src/providers/tts-direction';
 import { TransientTTSError } from '../providers/tts-transient-error.js';
 import { GeminiAudioResponseError } from '../providers/gemini-audio-response.js';
 import { preparedNarrationSession } from '../../../../src/providers/prepared-narration';
@@ -2303,13 +2304,32 @@ type ActingFixture = Awaited<ReturnType<typeof setup>>;
 type ActingPacket = {
   chapter: string;
   paragraphs: { id: string; text: string }[];
-  targets: { id: string; speaker: string; text: string; paragraphId: string; startOffset: number; endOffset: number }[];
+  targets: {
+    id: string;
+    speaker: string;
+    text: string;
+    paragraphId: string;
+    startOffset: number;
+    endOffset: number;
+    format?: string;
+  }[];
 };
 const actingResponse = (packet: ActingPacket) =>
   JSON.stringify({
     performance: packet.targets.map((t) => ({
       id: t.id,
       acting: t.speaker === '내레이터' ? NEUTRAL_PERFORMANCE : ACTING_FIXTURE,
+      ...(t.format
+        ? {
+            direction: {
+              tags: t.format === 'fish-s2' && t.speaker !== '내레이터' ? ['uncertain'] : [],
+              text:
+                t.format === 'fish-drama' && t.speaker !== '내레이터'
+                  ? '상대를 안심시키려 애쓰며, 감정은 절제해서'
+                  : '',
+            },
+          }
+        : {}),
     })),
   });
 async function actingFixture(pool: pg.Pool, chapters = ['c1']) {
@@ -2322,7 +2342,7 @@ async function actingFixture(pool: pg.Pool, chapters = ['c1']) {
   const annotations: ActingPacket[] = [];
   const original = f.engines.transport.generateJson.bind(f.engines.transport);
   const generate = vi.spyOn(f.engines.transport, 'generateJson').mockImplementation(async (...args) => {
-    if (args[3] !== PERFORMANCE_INSTRUCTION) return original(...args);
+    if (args[3] !== PERFORMANCE_INSTRUCTION && !args[3]?.includes(DIRECTION_INSTRUCTION)) return original(...args);
     const packet = JSON.parse(args[1].prompt) as ActingPacket;
     annotations.push(packet);
     return actingResponse(packet);
@@ -2340,81 +2360,163 @@ async function actingVariant(f: ActingFixture, original: string) {
 }
 
 (harness ? describe : describe.skip)('automatic acting durable generation', () => {
-  it('supplements a whole chapter together, splits large target sets, and preserves full context and fixed speakers', async () => {
-    await withPostgresSchema(harness!, 'acting_chapter_batch', async (pool) => {
+  it('runs a selected acting model separately, reuses speaker records and directs each Fish family with whole-chapter context', async () => {
+    await withPostgresSchema(harness!, 'acting_separate_models', async (pool) => {
       const f = await actingFixture(pool, ['c1', 'c2']);
       try {
-        const job = await f.create();
+        const prior = await f.create({ ...f.input, autoActing: true });
+        await f.until(async () => (await f.audio.get(prior.id)).status === 'completed');
+        const stored = (await pool.query('select * from speaker_analysis order by chapter_id,analysis_key')).rows;
+        const previousCalls = f.modelCalls.length;
+        const catalog = await f.catalog();
+        f.catalog.mockResolvedValue({
+          ...catalog,
+          voices: catalog.voices.map((v) => ({
+            ...v,
+            model: { ...v.model!, performanceFormat: v.id === 'a' ? 'fish-drama' : 'fish-s2' },
+          })),
+        });
+        const director = await f.engines.save({
+          ...f.engine,
+          name: '연기 전용',
+          modelId: 'acting-fixture',
+          paid: true,
+        });
+        const input = { ...f.input, autoActing: true, actingMode: 'separate' as const, actingEngineId: director.id };
+        const estimate = await f.service.estimate('book', input);
+        expect(estimate).toMatchObject({ actingModelLabel: 'acting-fixture', paid: true });
+        f.synthesize.mockClear();
+        const job = await f.create(input);
         await f.until(async () => (await f.audio.get(job.id)).status === 'completed');
-        await f.audio.stop();
-        const originals = (
-          await pool.query(
-            "select distinct on (chapter_id) chapter_id,request from saved_audiobook_items where audiobook_id=$1 and request#>>'{cast,speakerId}'<>'narrator' order by chapter_id,ordinal",
-            [job.id],
-          )
-        ).rows;
-        expect(originals).toHaveLength(2);
-        await pool.query('delete from saved_audiobook_items where audiobook_id=$1', [job.id]);
-        await pool.query(
-          "insert into saved_audiobook_items(audiobook_id,ordinal,chapter_id,chapter_title,request) select $1,n,'c1','First',$2 from generate_series(0,120) n",
-          [job.id, originals[0].request],
+        expect(f.modelCalls).toHaveLength(previousCalls);
+        expect((await pool.query('select * from speaker_analysis order by chapter_id,analysis_key')).rows).toEqual(
+          stored,
         );
-        await pool.query(
-          "insert into saved_audiobook_items(audiobook_id,ordinal,chapter_id,chapter_title,request) values($1,121,'c2','Second',$2)",
-          [job.id, originals[1].request],
-        );
-        // Non-target narration still belongs in the shared chapter context.
-        await pool.query(
-          "insert into paragraph_search values('book','c1','c1-after',2,'{}'::jsonb,'뒤늦게 그는 농담이었다고 밝혔다.')",
-        );
-        await pool.query("update saved_audiobooks set status='running' where id=$1", [job.id]);
-        const run = (
-          await pool.query('select id,book_id,content_revision,settings from saved_audiobooks where id=$1', [job.id])
-        ).rows[0];
-        run.chapter_ids = ['c1', 'c2'];
-        run.settings.cast.actingEngine = { id: f.engine.id, revision: f.engine.revision };
-        const callsBefore = f.modelCalls.length;
-        const supplement = () =>
-          preparePerformance({
-            pool,
-            owner: 'owner',
-            run,
-            engines: f.engines,
-            catalog: f.catalog,
-            signal: new AbortController().signal,
-            authority: async () => {},
-          });
-        expect(await supplement()).toBe(false);
-        expect(f.annotations.map((a) => a.targets.length)).toEqual([100]);
-        expect(await supplement()).toBe(false);
-        expect(f.annotations.map((a) => a.targets.length)).toEqual([100, 21]);
-        expect(await supplement()).toBe(true);
-        expect(f.annotations.map((a) => [a.chapter, a.targets.length])).toEqual([
-          ['First', 100],
-          ['First', 21],
-          ['Second', 1],
-        ]);
-        expect(f.annotations[0].paragraphs).toEqual(f.annotations[1].paragraphs);
-        expect(f.annotations[0].paragraphs.map((p) => p.id)).toEqual(['c1-p', 'c1-after']);
-        expect(f.annotations[0].paragraphs[1].text).toBe('뒤늦게 그는 농담이었다고 밝혔다.');
-        expect(f.annotations[2].paragraphs.map((p) => p.id)).toEqual(['c2-p']);
-        expect(f.annotations[0].targets.every((t) => t.paragraphId === 'c1-p' && !('context' in t))).toBe(true);
-        expect(f.modelCalls).toHaveLength(callsBefore);
-        const saved = (
-          await pool.query('select chapter_id,request from saved_audiobook_items where audiobook_id=$1', [job.id])
-        ).rows;
-        for (const row of saved) {
-          const original = originals.find((o) => o.chapter_id === row.chapter_id)!.request;
-          expect(row.request).toEqual({ ...original, cast: { ...original.cast, performance: ACTING_FIXTURE } });
-        }
-        expect(await supplement()).toBe(true);
-        expect(f.annotations).toHaveLength(3);
+        expect(f.annotations.map((p) => p.chapter)).toEqual(['First', 'Second']);
+        expect(f.annotations.every((p) => p.paragraphs.length > 0 && p.targets.length > 1)).toBe(true);
+        const calls = f.annotationSpy.mock.calls.filter((c) => c[3]?.includes(DIRECTION_INSTRUCTION));
+        expect(calls.every((c) => c[0].modelId === 'acting-fixture')).toBe(true);
+        expect(calls.every((c) => JSON.parse(c[1].prompt).speakers.length > 0)).toBe(true);
+        expect(f.synthesize.mock.calls.some((c) => c[5]?.includes('상대를 안심시키려'))).toBe(true);
+        const requests = (await pool.query('select request from saved_audiobook_items where audiobook_id=$1', [job.id]))
+          .rows;
+        expect(requests.some((r) => r.request.cast.direction?.format === 'fish-drama')).toBe(true);
+        const source = await f.service.revoiceSource('book', job.id);
+        const variantInput: SpeakerRevoiceInput = {
+          voices: source.voices.map((v) => ({ speakerId: v.speakerId, voiceId: v.voiceId })),
+          acting: { mode: 'regenerate', engineId: director.id },
+        };
+        const regenEstimate = await f.service.estimateRevoice('book', job.id, variantInput);
+        expect(regenEstimate).toMatchObject({ actingAnalysis: true, actingModelLabel: 'acting-fixture', paid: true });
+        const variant = await f.service.revoice('book', job.id, variantInput, regenEstimate.fingerprint, true);
+        await f.until(async () => (await f.audio.get(variant.id)).status === 'completed');
+        expect(f.annotations).toHaveLength(4);
+        expect(
+          (await pool.query('select request from saved_audiobook_items where audiobook_id=$1', [job.id])).rows,
+        ).toEqual(requests);
+        expect(f.modelCalls).toHaveLength(previousCalls);
       } finally {
         f.annotationSpy.mockRestore();
         await f.cleanup();
       }
     });
   });
+
+  it('keeps fresh attribution free of acting when separate mode is selected', async () => {
+    await withPostgresSchema(harness!, 'acting_separate_fresh', async (pool) => {
+      const f = await actingFixture(pool, ['c1', 'c2']);
+      try {
+        const job = await f.create({ ...f.input, autoActing: true, actingMode: 'separate' });
+        await f.until(async () => (await f.audio.get(job.id)).status === 'completed');
+        expect(f.annotations.map((p) => p.chapter)).toEqual(['First', 'Second']);
+        const analysis = (await pool.query('select result from speaker_analysis where result is not null')).rows;
+        expect(analysis.every((r) => !JSON.stringify(r.result).includes('"performance"'))).toBe(true);
+      } finally {
+        f.annotationSpy.mockRestore();
+        await f.cleanup();
+      }
+    });
+  });
+
+  it.each(['inline', 'separate'] as const)(
+    'supplements a whole chapter together in %s mode, splits large target sets, and preserves full context and fixed speakers',
+    async (mode) => {
+      await withPostgresSchema(harness!, 'acting_chapter_batch', async (pool) => {
+        const f = await actingFixture(pool, ['c1', 'c2']);
+        try {
+          const job = await f.create();
+          await f.until(async () => (await f.audio.get(job.id)).status === 'completed');
+          await f.audio.stop();
+          const originals = (
+            await pool.query(
+              "select distinct on (chapter_id) chapter_id,request from saved_audiobook_items where audiobook_id=$1 and request#>>'{cast,speakerId}'<>'narrator' order by chapter_id,ordinal",
+              [job.id],
+            )
+          ).rows;
+          expect(originals).toHaveLength(2);
+          await pool.query('delete from saved_audiobook_items where audiobook_id=$1', [job.id]);
+          await pool.query(
+            "insert into saved_audiobook_items(audiobook_id,ordinal,chapter_id,chapter_title,request) select $1,n,'c1','First',$2 from generate_series(0,120) n",
+            [job.id, originals[0].request],
+          );
+          await pool.query(
+            "insert into saved_audiobook_items(audiobook_id,ordinal,chapter_id,chapter_title,request) values($1,121,'c2','Second',$2)",
+            [job.id, originals[1].request],
+          );
+          // Non-target narration still belongs in the shared chapter context.
+          await pool.query(
+            "insert into paragraph_search values('book','c1','c1-after',2,'{}'::jsonb,'뒤늦게 그는 농담이었다고 밝혔다.')",
+          );
+          await pool.query("update saved_audiobooks set status='running' where id=$1", [job.id]);
+          const run = (
+            await pool.query('select id,book_id,content_revision,settings from saved_audiobooks where id=$1', [job.id])
+          ).rows[0];
+          run.chapter_ids = ['c1', 'c2'];
+          run.settings.cast.actingMode = mode;
+          run.settings.cast.actingEngine = { id: f.engine.id, revision: f.engine.revision };
+          const callsBefore = f.modelCalls.length;
+          const supplement = () =>
+            preparePerformance({
+              pool,
+              owner: 'owner',
+              run,
+              engines: f.engines,
+              catalog: f.catalog,
+              signal: new AbortController().signal,
+              authority: async () => {},
+            });
+          expect(await supplement()).toBe(false);
+          expect(f.annotations.map((a) => a.targets.length)).toEqual([100]);
+          expect(await supplement()).toBe(false);
+          expect(f.annotations.map((a) => a.targets.length)).toEqual([100, 21]);
+          expect(await supplement()).toBe(true);
+          expect(f.annotations.map((a) => [a.chapter, a.targets.length])).toEqual([
+            ['First', 100],
+            ['First', 21],
+            ['Second', 1],
+          ]);
+          expect(f.annotations[0].paragraphs).toEqual(f.annotations[1].paragraphs);
+          expect(f.annotations[0].paragraphs.map((p) => p.id)).toEqual(['c1-p', 'c1-after']);
+          expect(f.annotations[0].paragraphs[1].text).toBe('뒤늦게 그는 농담이었다고 밝혔다.');
+          expect(f.annotations[2].paragraphs.map((p) => p.id)).toEqual(['c2-p']);
+          expect(f.annotations[0].targets.every((t) => t.paragraphId === 'c1-p' && !('context' in t))).toBe(true);
+          expect(f.modelCalls).toHaveLength(callsBefore);
+          const saved = (
+            await pool.query('select chapter_id,request from saved_audiobook_items where audiobook_id=$1', [job.id])
+          ).rows;
+          for (const row of saved) {
+            const original = originals.find((o) => o.chapter_id === row.chapter_id)!.request;
+            expect(row.request).toEqual({ ...original, cast: { ...original.cast, performance: ACTING_FIXTURE } });
+          }
+          expect(await supplement()).toBe(true);
+          expect(f.annotations).toHaveLength(3);
+        } finally {
+          f.annotationSpy.mockRestore();
+          await f.cleanup();
+        }
+      });
+    },
+  );
 
   it('uses the same fresh A response without an annotation call and keeps analysis identities stable when disabled', async () => {
     await withPostgresSchema(harness!, 'acting_fresh', async (pool) => {
@@ -2629,7 +2731,8 @@ async function actingVariant(f: ActingFixture, original: string) {
           await f.engines.save({ ...f.engine, rateLimitRetries: 0 }, f.engine.id);
           const original = f.annotationSpy.getMockImplementation()!;
           f.annotationSpy.mockImplementation(async (...args) => {
-            if (args[3] !== PERFORMANCE_INSTRUCTION) return original(...args);
+            if (args[3] !== PERFORMANCE_INSTRUCTION && !args[3]?.includes(DIRECTION_INSTRUCTION))
+              return original(...args);
             calls++;
             signal = args[2];
             const packet = JSON.parse(args[1].prompt) as ActingPacket;
@@ -2696,7 +2799,8 @@ async function actingVariant(f: ActingFixture, original: string) {
           await f.until(async () => (await f.audio.get(source.id)).status === 'completed');
           const original = f.annotationSpy.getMockImplementation()!;
           f.annotationSpy.mockImplementation(async (...args) => {
-            if (args[3] !== PERFORMANCE_INSTRUCTION) return original(...args);
+            if (args[3] !== PERFORMANCE_INSTRUCTION && !args[3]?.includes(DIRECTION_INSTRUCTION))
+              return original(...args);
             entered.resolve();
             await held.promise;
             return actingResponse(JSON.parse(args[1].prompt) as ActingPacket);

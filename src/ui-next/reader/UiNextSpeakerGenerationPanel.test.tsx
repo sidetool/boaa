@@ -1168,3 +1168,89 @@ describe('UiNextSpeakerGenerationPanel saved choices', () => {
     expect(button(root, '생성 전 확인').props.disabled).toBe(true);
   });
 });
+
+describe('separate acting pass', () => {
+  const actingCatalog = () => {
+    const value = catalog();
+    value.voices = value.voices.map((voice) =>
+      voice.providerId === 'tts-a' ? { ...voice, autoActingSupported: true } : voice,
+    );
+    return value;
+  };
+  const passButton = (root: ReactTestInstance, label: string) =>
+    root
+      .findByProps({ role: 'radiogroup', 'aria-label': '연기 분석 방식' })
+      .find((n) => n.type === 'button' && text(n) === label);
+  const plan = (root: ReactTestInstance) => text(root.findByProps({ 'aria-label': '생성 확인' }));
+
+  it('starts with the speaker analysis and sends a separate pass and its model only once picked', async () => {
+    const api = port(async () => [], {
+      estimate: vi.fn(async () => estimate({ actingModelLabel: '분석 B · model-b' })),
+    });
+    const two = engines(async () => [engine(), engine({ id: 'e2', name: '분석 B', modelId: 'model-b', paid: true })]);
+    const root = await mount(controls({ port: api, engines: two, voices: actingCatalog() }));
+    expect(passButton(root, '화자 분석과 함께').props['aria-checked']).toBe(true);
+    await click(button(root, '생성 전 확인'));
+    expect(vi.mocked(api.estimate).mock.lastCall![0]).not.toHaveProperty('actingMode');
+    expect(plan(root)).toContain('장면 연기켬 · 화자 분석과 함께');
+    expect(api.savePreferences).not.toHaveBeenCalled();
+
+    await click(passButton(root, '따로 분석'));
+    expect(api.savePreferences).toHaveBeenLastCalledWith(expect.objectContaining({ actingMode: 'separate' }));
+    expect(vi.mocked(api.savePreferences).mock.lastCall![0]).not.toHaveProperty('actingEngineId');
+    // The earlier confirmation described another plan.
+    expect(root.findAll((n) => n.props['aria-label'] === '생성 확인')).toHaveLength(0);
+    expect(select(root, '연기 분석 모델').props.value).toBe('');
+
+    act(() => select(root, '연기 분석 모델').props.onChange({ target: { value: 'e2' } }));
+    await flush();
+    expect(api.savePreferences).toHaveBeenLastCalledWith(
+      expect.objectContaining({ actingMode: 'separate', actingEngineId: 'e2' }),
+    );
+    await click(button(root, '생성 전 확인'));
+    expect(vi.mocked(api.estimate).mock.lastCall![0]).toMatchObject({
+      autoActing: true,
+      actingMode: 'separate',
+      actingEngineId: 'e2',
+    });
+    expect(plan(root)).toContain('장면 연기켬 · 따로 분석');
+    expect(plan(root)).toContain('연기 분석분석 B · model-b');
+    expect(plan(root)).toContain('AI 요청과 비용이 더 들어요');
+
+    // With acting off nothing about the pass is sent, and the saved pass waits for acting to come back.
+    act(() => castingField(root, '감정·속도 살려 읽기').props.onChange({ target: { checked: false } }));
+    await flush();
+    expect(root.findAll((n) => n.props['aria-label'] === '연기 분석 방식')).toHaveLength(0);
+    await click(button(root, '생성 전 확인'));
+    expect(vi.mocked(api.estimate).mock.lastCall![0]).toMatchObject({ autoActing: false });
+    expect(vi.mocked(api.estimate).mock.lastCall![0]).not.toHaveProperty('actingMode');
+    expect(api.savePreferences).toHaveBeenLastCalledWith(
+      expect.objectContaining({ autoActing: false, actingMode: 'separate', actingEngineId: 'e2' }),
+    );
+  });
+
+  it('restores a saved pass and asks again for a missing acting model instead of swapping it', async () => {
+    const api = port(async () => [], {
+      preferences: vi.fn(async () => ({
+        engineId: 'e1',
+        narratorVoiceId: 'a1',
+        characterVoiceIds: ['a2'],
+        autoActing: true,
+        actingMode: 'separate' as const,
+        actingEngineId: 'gone',
+      })),
+    });
+    const root = await mount(controls({ port: api, voices: actingCatalog() }));
+    expect(passButton(root, '따로 분석').props['aria-checked']).toBe(true);
+    expect(text(root)).toContain('고른 연기 분석 모델을 찾을 수 없어요');
+    expect(button(root, '생성 전 확인').props.disabled).toBe(true);
+    act(() => select(root, '연기 분석 모델').props.onChange({ target: { value: '' } }));
+    await flush();
+    expect(vi.mocked(api.savePreferences).mock.lastCall![0]).toMatchObject({ actingMode: 'separate' });
+    expect(vi.mocked(api.savePreferences).mock.lastCall![0]).not.toHaveProperty('actingEngineId');
+    await click(button(root, '생성 전 확인'));
+    expect(vi.mocked(api.estimate).mock.lastCall![0]).toMatchObject({ actingMode: 'separate' });
+    expect(vi.mocked(api.estimate).mock.lastCall![0]).not.toHaveProperty('actingEngineId');
+    expect(plan(root)).toContain('연기 분석분석 A');
+  });
+});

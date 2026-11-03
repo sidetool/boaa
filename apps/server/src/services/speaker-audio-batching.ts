@@ -30,6 +30,7 @@ export function batchCastRequests(
       language: request.cast.language,
       instructions: request.cast.instructions,
       performance: request.cast.performance,
+      direction: request.cast.direction,
     });
     const eligible =
       (isGeminiActingModel(request.cast.model.modelId) || !!request.cast.model.performanceFormat) &&

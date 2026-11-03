@@ -1,3 +1,4 @@
+import type { SpeakerDirection } from '../../../../src/providers/tts-direction';
 import { isGeminiVoiceDesignModel } from '../../../../src/providers/voice-library';
 import {
   parsePerformance,
@@ -36,6 +37,7 @@ export interface CastRequest extends Omit<PlainTTSRequest, 'rules'> {
     model: PlainTTSModel;
     instructions?: string;
     performance?: SpeakerPerformance;
+    direction?: SpeakerDirection;
     /** Additional contiguous source spans sharing this speaker, voice and delivery. */
     batch?: CastSource[];
   };
@@ -73,6 +75,9 @@ export async function speakerPlan(
     !input ||
     (input.batchAudio !== undefined && typeof input.batchAudio !== 'boolean') ||
     (input.autoActing !== undefined && typeof input.autoActing !== 'boolean') ||
+    (input.actingMode !== undefined && !['inline', 'separate'].includes(input.actingMode)) ||
+    (input.actingEngineId !== undefined &&
+      (typeof input.actingEngineId !== 'string' || input.actingEngineId.length > 512)) ||
     !Array.isArray(input.chapterIds) ||
     !input.chapterIds.length ||
     input.chapterIds.length > 500 ||
@@ -120,6 +125,11 @@ export async function speakerPlan(
     throw audiobookError(400, '장면 연기를 지원하는 목소리를 선택해 주세요.');
   const engine = await engines.load(input.engineId);
   if (engine.purpose === 'casting') throw audiobookError(400, '화자 분석에는 분석용 모델 연결을 골라 주세요.');
+  const separate = input.autoActing === true && input.actingMode === 'separate';
+  const actingEngineId = separate && input.actingEngineId ? input.actingEngineId : input.engineId;
+  const actingEngine = actingEngineId !== input.engineId ? await engines.load(actingEngineId) : engine;
+  if (separate && actingEngine.purpose === 'casting')
+    throw audiobookError(400, '연기 분석에는 분석용 모델 연결을 골라 주세요.');
   const casting = normalizeCasting(input.casting);
   const selecting = casting?.engineId ? await engines.loadCasting(casting.engineId) : undefined;
   const designer = casting?.autoDesign
@@ -148,7 +158,7 @@ export async function speakerPlan(
   )
     throw audiobookError(400, '새 목소리 제작은 Gemini 3.8 Flash TTS 연결에서 사용할 수 있어요.');
   const capabilities = await engines.transport.capabilities(engine, AbortSignal.timeout(15000));
-  if (input.autoActing && !capabilities.performanceAnnotations)
+  if (input.autoActing && !separate && !capabilities.performanceAnnotations)
     throw audiobookError(409, '화자 분석 서비스를 업데이트하면 자동 연출을 사용할 수 있어요.');
   const generationEpoch: string | null =
     (
@@ -175,7 +185,11 @@ export async function speakerPlan(
       voiceEvidenceVersion: 2 as const,
       ...(input.batchAudio === true ? { batchAudio: true } : {}),
       ...(input.autoActing
-        ? { autoActing: true, actingEngine: { id: input.engineId, revision: speakerRevision(engine) } }
+        ? {
+            autoActing: true,
+            ...(separate ? { actingMode: 'separate' as const } : {}),
+            actingEngine: { id: actingEngineId, revision: speakerRevision(actingEngine) },
+          }
         : {}),
       language: book.language ?? undefined,
       engineId: input.engineId,
@@ -210,9 +224,15 @@ export async function speakerPlan(
     characters,
     modelLabel: engine.modelId,
     voiceLabel: '화자별 목소리',
+    ...(separate ? { actingModelLabel: actingEngine.modelId } : {}),
     selectionModelLabel: selecting?.modelId,
     maxDesignedVoices: casting?.autoDesign ? casting.maxDesignedVoices : undefined,
-    paid: engine.paid || voices.some((v) => v!.paid) || !!selecting?.paid || !!designer?.paid,
+    paid:
+      engine.paid ||
+      (separate && actingEngine.paid) ||
+      voices.some((v) => v!.paid) ||
+      !!selecting?.paid ||
+      !!designer?.paid,
   };
   return {
     estimate,
@@ -410,7 +430,7 @@ export function castRequests(
             label,
             language: cast.language,
             model: cast.models[voiceId],
-            ...(cast.autoActing && (performance || speakerId === 'narrator')
+            ...(cast.autoActing && cast.actingMode !== 'separate' && (performance || speakerId === 'narrator')
               ? { performance: parsePerformance(performance ?? NEUTRAL_PERFORMANCE) }
               : {}),
           },

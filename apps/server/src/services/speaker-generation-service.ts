@@ -382,8 +382,10 @@ export class SpeakerGenerationService {
       }
       if (!admit()) return false;
       if (latest.settings.cast?.autoActing && (await missingPerformance(this.pool, id))) {
-        // Ordered identity always finishes before a supplementary acting pass.
-        if (latest.next_chapter < latest.chapter_ids.length) return false;
+        // A separate pass can direct each planned chapter after its identities are committed.
+        // Legacy supplementation keeps its original all-chapters ordering.
+        if (latest.settings.cast.actingMode !== 'separate' && latest.next_chapter < latest.chapter_ids.length)
+          return false;
         await this.pool.query("update speaker_generation_runs set stage='performance' where audiobook_id=$1", [id]);
         await this.pool.query('update saved_audiobooks set planning_complete=false where id=$1', [id]);
         if (
@@ -494,7 +496,7 @@ export class SpeakerGenerationService {
           bookId: run.book_id,
           analysisKey: run.analysis_key,
           chapterIds: candidates,
-          autoActing: config.autoActing,
+          autoActing: config.autoActing && config.actingMode !== 'separate',
           identityOnly: existing,
           engine,
           transport: this.engines.transport,
@@ -542,7 +544,7 @@ export class SpeakerGenerationService {
             checkpoint: request?.checkpoint,
             response: state.model_response ?? undefined,
             attribution,
-            autoActing: config.autoActing,
+            autoActing: config.autoActing && config.actingMode !== 'separate',
           },
           deadline,
         );
@@ -796,9 +798,11 @@ export class SpeakerGenerationService {
     if (run.settings.cast?.autoActing && !request.cast.performance)
       throw audiobookError(425, '연기 분석이 끝나면 이 음성을 만들 수 있어요.');
     const effectiveInstructions =
-      request.cast.instructions || performanceStyle(request.cast.performance, request.cast.model.performanceFormat);
+      request.cast.instructions ||
+      performanceStyle(request.cast.performance, request.cast.model.performanceFormat, request.cast.direction);
     const renderRequest = { ...request, cast: { ...request.cast } };
     delete renderRequest.cast.performance;
+    delete renderRequest.cast.direction;
     if (effectiveInstructions) renderRequest.cast.instructions = effectiveInstructions;
     else delete renderRequest.cast.instructions;
     const p = loaded.paragraphs.find((p) => p.id === request.paragraphId);

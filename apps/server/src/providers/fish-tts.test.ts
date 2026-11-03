@@ -55,7 +55,7 @@ describe('Fish model and gateway boundary', () => {
     );
     expect(ttsConnectionModelRevision({ ...config, speechModel: 'fish-s2' })).toBe(ttsConnectionModelRevision(config));
   });
-  it.each(['s2.1-pro', 's2.1-pro-free', 'drama-3'])(
+  it.each(['s2-pro', 's2.1-pro', 's2.1-pro-free', 'drama-3'])(
     'sends native %s as a header, protects source text and wraps PCM accurately',
     async (modelId) => {
       const fetchImpl = vi.fn<typeof fetch>(async (_url, init) => {
