@@ -1,3 +1,4 @@
+import { source, attribution, identity } from '../../../speaker-engine/src/test-fixtures';
 import { describe, expect, it, vi } from 'vitest';
 import { SpeakerEngineTransport } from './speaker-engine-transport';
 import { normalizeSpeakerEngine, speakerRevision, castingRevision } from './speaker-engine-config';
@@ -22,6 +23,55 @@ const request = {
   schema: { type: 'OBJECT' },
 };
 describe('speaker model transport', () => {
+  it('runs the default engine on fresh installations without a sidecar and preserves checkpoints', async () => {
+    const fetchImpl = vi.fn();
+    const transport = new SpeakerEngineTransport({ fetchImpl });
+    const local = { ...config, engineUrl: 'http://speaker-engine:8095', engineToken: undefined };
+    const signal = new AbortController().signal;
+    const original = structuredClone(source);
+    expect(await transport.capabilities(local, signal)).toMatchObject({
+      attributionPreparation: true,
+      performanceAnnotations: true,
+    });
+    const first = await transport.attribution(local, { protocol: SPEAKER_ENGINE_PROTOCOL, source }, signal);
+    expect(first.kind).toBe('request');
+    const attributed = await transport.attribution(
+      local,
+      {
+        protocol: SPEAKER_ENGINE_PROTOCOL,
+        source,
+        checkpoint: first.checkpoint,
+        response: JSON.stringify(attribution(source)),
+      },
+      signal,
+    );
+    expect(attributed.kind).toBe('attributed');
+    const linked = await transport.step(
+      local,
+      { protocol: SPEAKER_ENGINE_PROTOCOL, source, attribution: attributed.checkpoint },
+      signal,
+    );
+    expect(linked.kind).toBe('request');
+    if (linked.kind !== 'request') throw Error('expected identity request');
+    const done = await transport.step(
+      local,
+      {
+        protocol: SPEAKER_ENGINE_PROTOCOL,
+        source,
+        checkpoint: linked.checkpoint,
+        response: JSON.stringify(identity(linked)),
+      },
+      signal,
+    );
+    expect(done.kind).toBe('complete');
+    expect(source).toEqual(original);
+    expect(fetchImpl).not.toHaveBeenCalled();
+    await expect(transport.capabilities(local, AbortSignal.abort())).rejects.toMatchObject({ name: 'AbortError' });
+    await expect(transport.step(local, { protocol: 'invalid', source } as never, signal)).rejects.toMatchObject({
+      statusCode: 502,
+    });
+  });
+
   it('accepts a chapter analysis taking over three minutes without dispatching again', async () => {
     vi.useFakeTimers();
     const timeout = vi.spyOn(AbortSignal, 'timeout').mockImplementation((ms) => {

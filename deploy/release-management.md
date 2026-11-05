@@ -172,3 +172,9 @@ Validation: `node --test --test-concurrency=1 scripts/release/*.test.mjs`; build
 `deploy/plain-tts.Dockerfile`, then run `BOAA_TTS_SMOKE_IMAGE=<local-image> node scripts/release/tts-smoke.mjs`.
 The isolated smoke checks first installation, real Korean synthesis, stop and verified model reuse offline.
 It removes only its own temporary container and volume.
+
+## beta.6 → beta.7
+
+beta.7은 화자별 음성 생성·보관함·Fish 연결과 선택형 Supertonic 설치를 포함한다. 새 설치의 기본 화자 분석 엔진은 API/worker 이미지에 포함되며 별도 서비스 설정이 필요 없다. 기존에 직접 지정한 분석 엔진과 인증은 유지한다.
+
+기존 beta.6 업데이터는 추가된 TTS 이미지 계약을 알지 못하므로, 서명된 beta.7 설치 묶음과 기존 신뢰 키로 `upgrade-updater.mjs --container <current-updater-container> --version v0.1.1-beta.7 --key <trusted-key>`를 먼저 실행한 뒤 앱의 베타 채널에서 업데이트한다. 설치 명령을 기존 설치에 다시 실행하지 않는다. 스키마 epoch는 2이고 추가 테이블·컬럼은 업데이트 과정에서 이행한다. 업데이트 실패 시 이전 앱 이미지로 복귀할 수 있지만, beta.7에서 새 음성·분석·플러그인 데이터를 쓴 뒤에는 이전 DB 백업으로 덮어쓰지 말고 현재 데이터를 보존해 복구한다.

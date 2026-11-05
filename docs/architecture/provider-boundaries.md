@@ -842,3 +842,5 @@ Gemini API는 Voices `POST /v1beta/voices`를 사용한다. Vertex는 global 위
 BOAA에 음성 ID가 남아 있다는 사실만으로 원격 영구 보관을 보장하지 않는다.
 계약 참고: [Voice design](https://ai.google.dev/gemini-api/docs/voice-design),
 [Voices API](https://ai.google.dev/api/voices).
+
+기본 화자 엔진 주소(`http://speaker-engine:8095`)에서 사용자 엔진 토큰과 운영 토큰이 모두 없으면 서버에 포함된 동일 엔진을 실행한다. 새 설치는 별도 화자 엔진 컨테이너나 공유 비밀 설정 없이 동작한다. 명시한 엔진 주소·토큰 또는 기존 `SPEAKER_ENGINE_TOKEN`이 있으면 기존 HTTP 경로를 유지하며 통신 실패 뒤 내장 엔진으로 전환하지 않는다. 두 경로는 같은 엔진 버전·본문/체크포인트 계약·크기 제한을 쓰므로 호출 위치 변경으로 기존 분석을 무효화하지 않는다.

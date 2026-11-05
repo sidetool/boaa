@@ -1,7 +1,7 @@
 # Server candidate review and publication
 
 Candidate CI does not create a version tag, merge, publish an installable release, or change package
-visibility. It publishes source-only releases named `server-sources-<commit>` before uploading candidate images; the update feed excludes these tags. It verifies the exact dispatch commit, builds fourteen native images,
+visibility. It publishes source-only releases named `server-sources-<commit>` before uploading candidate images; the update feed excludes these tags. It verifies the exact dispatch commit, builds sixteen native images,
 checks their component evidence and sources, tests the final updater in isolated
 application stacks, then uploads signed assets to an **existing draft**. Registry
 packages may be private or public; public packages remain usable for subsequent releases. The global desktop/mobile
@@ -18,7 +18,7 @@ image checks remain required on both architectures.
 
 After the existing web build, validation captures dependency notices and checks every emitted
 web/worker component inventory against the notice paths or retained hash-pinned exceptions.
-A vendored library with an unlinked license now fails before fourteen native builds. The
+A vendored library with an unlinked license now fails before sixteen native builds. The
 regression tests reproduce that missing link rather than merely checking that a LICENSE exists.
 
 For local preparation (after dependencies are installed and the web build is current):
@@ -45,7 +45,7 @@ at the same commit for transient errors as described below.
    ```
 
 2. The command verifies the evidence signature against the committed trust key,
-   expected commit, fourteen native receipts, integrations, signed manifest and
+   expected commit, sixteen native receipts, integrations, signed manifest and
    installer. It downloads review JSON/logs and the installer. For bulky source /
    notice archives it compares the **live GitHub asset SHA-256 and size** against
    signed evidence instead of downloading the same bytes CI just audited. Missing,
@@ -143,7 +143,7 @@ ghcr.io/sidetool/boaa-<component>@<reviewed-index-digest>`. Verify the registry
    checks all eight indexes, child manifests/config digests and anonymous access
    to every layer. An already-proven CI download is not repeated. For old releases,
    new private packages, missing/ambiguous receipts or different child digests,
-   it performs the full anonymous pull. `--full-pull` forces all fourteen downloads.
+   it performs the full anonymous pull. `--full-pull` forces all sixteen downloads.
    This preserves first-publication checks without routinely downloading both
    browser architectures twice. Verify the public release feed signature as well.
    Report successful publication only after these checks pass.

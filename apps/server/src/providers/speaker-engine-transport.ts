@@ -1,3 +1,4 @@
+import { step, attributionStep, ENGINE_VERSION } from '../../../speaker-engine/src/engine';
 import type { SpeakerEngineInput } from '../../../../src/providers/speaker-engine';
 import {
   SPEAKER_ENGINE_PROTOCOL,
@@ -86,6 +87,46 @@ export class SpeakerEngineTransport {
       throw connectionError('분석 서버 응답 형식이 올바르지 않아요.', 502);
     }
   }
+  private async engineJson(
+    v: SpeakerEngineInput,
+    route: 'capabilities' | 'step' | 'attribution',
+    signal: AbortSignal,
+    input?: SpeakerEngineStep | SpeakerAttributionStep,
+  ): Promise<Record<string, unknown>> {
+    // A fresh installation uses the bundled deterministic engine. Explicit remote
+    // credentials retain the existing service path; never fall back after a remote failure.
+    if (v.engineUrl !== 'http://speaker-engine:8095' || v.engineToken || this.managedEngineToken)
+      return this.json(
+        v.engineUrl + '/v1/' + route,
+        signal,
+        this.engineHeaders(v),
+        input,
+        false,
+        route === 'capabilities' ? 16384 : 16 * 1024 * 1024,
+      );
+    signal.throwIfAborted();
+    if (route === 'capabilities')
+      return {
+        protocol: SPEAKER_ENGINE_PROTOCOL,
+        engineVersion: ENGINE_VERSION,
+        attributionPreparation: true,
+        performanceAnnotations: true,
+      };
+    const encoded = JSON.stringify(input);
+    if (!encoded || Buffer.byteLength(encoded) > 16 * 1024 * 1024)
+      throw connectionError('분석 입력이 너무 커요. 범위를 줄여 주세요.', 413);
+    let result: string;
+    try {
+      const copy = JSON.parse(encoded);
+      result = JSON.stringify(route === 'attribution' ? attributionStep(copy) : step(copy));
+    } catch {
+      throw connectionError('분석 결과 형식이 올바르지 않아요. 완료한 분석은 보관돼 있어요.', 502);
+    }
+    signal.throwIfAborted();
+    if (Buffer.byteLength(result) > 16 * 1024 * 1024)
+      throw connectionError('분석 응답이 너무 커요. 범위를 줄여 주세요.', 413);
+    return JSON.parse(result);
+  }
   private engineHeaders(v: SpeakerEngineInput): Record<string, string> {
     // The deployment secret belongs only to our internal service, never to a model or custom engine URL.
     const token = v.engineToken || (v.engineUrl === 'http://speaker-engine:8095' ? this.managedEngineToken : '');
@@ -106,7 +147,7 @@ export class SpeakerEngineTransport {
     v: SpeakerEngineInput,
     signal: AbortSignal,
   ): Promise<{ engineVersion: string; attributionPreparation?: boolean; performanceAnnotations?: boolean }> {
-    const r = await this.json(v.engineUrl + '/v1/capabilities', signal, this.engineHeaders(v), undefined, false, 16384);
+    const r = await this.engineJson(v, 'capabilities', signal);
     if (
       r.protocol !== SPEAKER_ENGINE_PROTOCOL ||
       typeof r.engineVersion !== 'string' ||
@@ -173,7 +214,7 @@ export class SpeakerEngineTransport {
       : [];
   }
   async step(v: SpeakerEngineInput, input: SpeakerEngineStep, signal: AbortSignal): Promise<SpeakerEngineResult> {
-    const r = await this.json(v.engineUrl + '/v1/step', signal, this.engineHeaders(v), input, false, 16 * 1024 * 1024);
+    const r = await this.engineJson(v, 'step', signal, input);
     if (
       r.kind === 'request' &&
       (r.stage === 'attribution' || r.stage === 'identity') &&
@@ -199,14 +240,7 @@ export class SpeakerEngineTransport {
     input: SpeakerAttributionStep,
     signal: AbortSignal,
   ): Promise<SpeakerAttributionResult> {
-    const r = await this.json(
-      v.engineUrl + '/v1/attribution',
-      signal,
-      this.engineHeaders(v),
-      input,
-      false,
-      16 * 1024 * 1024,
-    );
+    const r = await this.engineJson(v, 'attribution', signal, input);
     if (r.kind === 'attributed' && r.checkpoint && typeof r.checkpoint === 'object')
       return r as unknown as SpeakerAttributionResult;
     if (

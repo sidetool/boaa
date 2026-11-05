@@ -38,6 +38,7 @@ COPY packages/reader-core/package.json packages/reader-core/package.json
 RUN pnpm install --frozen-lockfile
 
 COPY apps/server apps/server
+COPY apps/speaker-engine/src apps/speaker-engine/src
 COPY packages/contracts packages/contracts
 COPY packages/document-series-core packages/document-series-core
 COPY packages/extension-contracts packages/extension-contracts
