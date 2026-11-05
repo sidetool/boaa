@@ -579,7 +579,10 @@ it('does not promote an enabled paid engine to the default when optional Superto
 it.each([
   [429, 429, 'tts_rate_limited'],
   [403, 502, 'tts_access_denied'],
-  [503, 502, 'tts_provider_failed'],
+  [500, 503, 'tts_temporarily_unavailable'],
+  [502, 503, 'tts_temporarily_unavailable'],
+  [503, 503, 'tts_temporarily_unavailable'],
+  [504, 504, 'tts_timeout'],
 ] as const)('preserves Gemini HTTP %s through the playback route', async (upstream, status, code) => {
   const f = await fixture();
   const adapter = new GeminiTTSProvider({
