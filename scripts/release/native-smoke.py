@@ -39,6 +39,16 @@ def main():
         finally:
             subprocess.run(['docker', 'rm', '-f', name], check=True, stdout=subprocess.DEVNULL)
     if a.component == 'server':
+        execute('Linux SSH transport without Windows Pageant helper', 'node', ['--input-type=module', '-e', r'''
+import assert from 'node:assert/strict';
+import { createRequire } from 'node:module';
+import { existsSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
+const require=createRequire(import.meta.url);
+const ssh=require('ssh2');assert.equal(typeof ssh.Client,'function');assert.equal(typeof ssh.Server,'function');
+assert.equal(existsSync(resolve(dirname(require.resolve('ssh2')),'../util/pagent.exe')),false);
+console.log('Linux SSH module loads without Windows-only executable');
+'''])
         execute('sharp native decode/resize; QuickJS and archive WASM load', 'node', ['--input-type=module', '-e', r'''
 import assert from 'node:assert/strict';
 import sharp from 'sharp';

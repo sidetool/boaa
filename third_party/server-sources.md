@@ -95,8 +95,8 @@ its original compiler selection or npm bytes can be reproduced exactly. Use the
 rebuilt `7zz.js` and `7zz.wasm` together; build the ES module variant using the
 supplied `build-es6.env` instead when replacing that entry point.
 
-Candidate workflows require no version Git tag and keep registry packages
-private. The final evidence manifest is signed only after all twelve final image
+Candidate workflows require no version Git tag and do not change registry package
+visibility. The final evidence manifest is signed only after all sixteen final image
 decisions and both native integration runs pass. A candidate/draft is not a
 published release or a claim of legal approval. The separate global binary
 license gate remains closed for desktop/mobile and other excluded artifacts.
@@ -122,3 +122,17 @@ and configure/make recipes with a supported boot JDK (JDK 20 or 21), build the
 APK image. The source archive contains the release's downstream source changes;
 no bit-identical vendor toolchain reproduction is claimed. The image's `release`
 file and per-module legal notices are preserved in evidence.
+
+The optional Linux TTS image pins FlatBuffers Python 25.12.19. Its wheel declares
+Apache 2.0 but omits the standalone license. The original `LICENSE` from upstream
+tag `v25.12.19`, commit `7e163021e59cca4f8e1e35a7c828b5c6b7915953`, is retained at
+`third_party/licenses/flatbuffers-25.12.19/LICENSE` and installed under that wheel's
+`dist-info/licenses/`. Original URL:
+https://raw.githubusercontent.com/google/flatbuffers/7e163021e59cca4f8e1e35a7c828b5c6b7915953/LICENSE
+(SHA-256 `cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30`).
+The published wheel SHA-256 is
+`7634f50c427838bb021c2d66a3d1168e9d199b0607e6329399f04846d42e20b4`.
+ONNX Runtime's original `LICENSE` and complete `ThirdPartyNotices.txt` stay in its
+package and are also copied into its `dist-info/licenses/` for inventory linkage.
+Unused pip Windows launchers and ssh2's Windows Pageant helper are excluded from
+the Linux TTS/server images; the Python runtime and Linux SSH transport remain.

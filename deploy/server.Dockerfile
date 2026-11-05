@@ -58,6 +58,7 @@ RUN pnpm --filter server build && pnpm --filter server bundle \
 
 FROM build AS production-dependencies
 RUN pnpm --config.inject-workspace-packages=true --filter server deploy --prod /opt/server \
+    && find /opt/server/node_modules -path '*/ssh2/util/pagent.exe' -type f -delete \
     && mkdir /opt/pdf-geometry \
     && cp "$(find /opt/server/node_modules -path '*/@napi-rs/canvas/geometry.js' -print -quit)" /opt/pdf-geometry/geometry.cjs \
     && find /opt/server/node_modules -path '*/@napi-rs/canvas*' -prune -exec rm -rf '{}' + \
