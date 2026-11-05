@@ -16,6 +16,11 @@ snapshot handles versions removed from rolling indexes. This probe checks the cu
 architecture and base packages, not packages installed later by a Dockerfile; the final native
 image checks remain required on both architectures.
 
+The lookup container records the original package inventory before installing a missing CA
+trust store. This temporary tooling is excluded from the image inventory. Signed August and
+October 2026 snapshots retain the exact CA and timezone package versions used by the pinned
+bases; TLS, APT signatures and source checksums remain verified.
+
 After the existing web build, validation captures dependency notices and checks every emitted
 web/worker component inventory against the notice paths or retained hash-pinned exceptions.
 A vendored library with an unlinked license now fails before sixteen native builds. The

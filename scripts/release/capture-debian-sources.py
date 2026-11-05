@@ -18,25 +18,35 @@ dpkg-query -W -f='${binary:Package}\t${Version}\t${Architecture}\t${source:Packa
 printf 'BOAA_PACKAGES_END\n'
 dpkg-query -W -f='${source:Package}=${source:Version}\n' | sort -u > /tmp/boaa-source-versions
 if ! xargs apt-get --print-uris --download-only source < /tmp/boaa-source-versions > /tmp/boaa-source-uris; then
+    # Minimal bases may have no TLS trust store. Install lookup tooling only after
+    # recording the original image inventory; never include these temporary packages
+    # in final-image evidence or disable HTTPS/signature verification.
+    if [ ! -s /etc/ssl/certs/ca-certificates.crt ]; then
+        DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ca-certificates >&2
+    fi
     # Pinned base images can outlive versions in the rolling Debian indexes.
-    # This signed snapshot retains the ca-certificates version in the pinned Python base.
+    # Retain the older Python CA package and the October base images' tzdata.
     # Disable expiry only for the historical index, never signature/hash verification.
     . /etc/os-release
-    cat > /etc/apt/sources.list.d/boaa-source-snapshot.sources <<EOF
+    : > /etc/apt/sources.list.d/boaa-source-snapshot.sources
+    for snapshot in 20260811T000000Z 20261006T000000Z; do
+    cat >> /etc/apt/sources.list.d/boaa-source-snapshot.sources <<EOF
 Types: deb-src
-URIs: https://snapshot.debian.org/archive/debian/20260811T000000Z/
+URIs: https://snapshot.debian.org/archive/debian/${snapshot}/
 Suites: ${VERSION_CODENAME} ${VERSION_CODENAME}-updates
 Components: main
 Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg
 Check-Valid-Until: no
 
 Types: deb-src
-URIs: https://snapshot.debian.org/archive/debian-security/20260811T000000Z/
+URIs: https://snapshot.debian.org/archive/debian-security/${snapshot}/
 Suites: ${VERSION_CODENAME}-security
 Components: main
 Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg
 Check-Valid-Until: no
+
 EOF
+    done
     apt-get update >&2
     xargs apt-get --print-uris --download-only source < /tmp/boaa-source-versions > /tmp/boaa-source-uris
 fi
