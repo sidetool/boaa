@@ -31,7 +31,7 @@ type RemoteImportJob = Awaited<ReturnType<RemoteApiClient['getImportJob']>>;
 
 export class ServerImportActivityTimeoutError extends Error {
   constructor() {
-    super('서버 가져오기 작업이 응답하지 않습니다. worker 상태를 확인한 뒤 같은 파일을 다시 선택해 이어서 진행하세요.');
+    super('서버 가져오기 작업이 응답하지 않습니다. 잠시 후 다시 시도해 주세요.');
     this.name = 'ServerImportActivityTimeoutError';
   }
 }

@@ -1,7 +1,7 @@
 /* ui-next text selection bar. Position comes from the classic `.selection-action-bar` rules. */
 
 .selection-action-bar.un-textsel {
-  flex-wrap: nowrap;
+  flex-wrap: wrap;
   gap: 2px;
   padding: 6px;
   border: 0;
@@ -12,6 +12,21 @@
   -webkit-backdrop-filter: blur(22px) saturate(1.4);
   backdrop-filter: blur(22px) saturate(1.4);
   animation: un-pop-in 0.18s var(--un-ease);
+}
+
+@media (min-width: 981px) {
+  /* Above the floating reader bar, on the same line the mini player uses. */
+  .selection-action-bar.un-textsel {
+    bottom: var(--reader-mini-bottom, 76px);
+    width: max-content;
+    transition: bottom 0.28s var(--un-ease);
+  }
+
+  .reader-screen:not(.addon-open) .selection-action-bar.un-textsel {
+    /* Keep the toolbar centered while its entrance animation scales it. */
+    translate: -50% 0;
+    transform: none;
+  }
 }
 
 .un-textsel-swatches {
@@ -123,21 +138,38 @@
   color: var(--un-text);
 }
 
+/* Phones: colors and ✕ on the first row, the commands share the second row evenly. */
 @media (max-width: 699px) {
   .selection-action-bar.un-textsel {
-    justify-content: space-between;
+    row-gap: 4px;
   }
 
   .un-textsel-swatches {
-    padding: 0;
+    flex: 1 0 calc(100% - 38px);
+    padding: 0 2px;
   }
 
   .un-textsel-swatch {
-    width: 30px;
+    width: 36px;
+  }
+
+  .un-textsel-divider {
+    display: none;
+  }
+
+  .un-textsel-close {
+    order: 1;
+  }
+
+  .selection-action-bar.un-textsel > :not(.un-textsel-swatches, .un-textsel-divider, .un-textsel-close) {
+    flex: 1 1 0;
+    order: 2;
+    min-width: 0;
+    max-width: none;
   }
 
   .un-textsel-action {
-    min-width: 42px;
+    white-space: nowrap;
   }
 }
 

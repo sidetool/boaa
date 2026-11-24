@@ -1,5 +1,6 @@
 import { act, create, type ReactTestRenderer } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { defaultSettings } from '../../repositories/reader-defaults';
 import { DEFAULT_TRANSLATION_SETTINGS, type TranslationResult } from '../../translation/contracts';
 import { useReaderTranslation, type ReaderTranslationController } from './use-reader-translation';
 import type { ReaderScreenModel } from '../reader/reader-screen-contract';
@@ -36,6 +37,7 @@ beforeEach(() => {
   vi.stubGlobal('window', new EventTarget());
   vi.stubGlobal('document', { visibilityState: 'visible' });
   model = {
+    settings: defaultSettings,
     novel: { id: 'book', format: 'txt', activeContentRevisionId: 'r' },
     chapter: { id: 'chapter', paragraphCount: 1, textHash: 'current-hash' },
     chapters: [{ id: 'chapter', paragraphCount: 1 }],
@@ -94,6 +96,24 @@ describe('reader translation lifecycle', () => {
       await vi.advanceTimersByTimeAsync(6000);
     });
     expect(client.result).toHaveBeenCalledTimes(1);
+  });
+  it('removes a transient polling error when the next status read returns the translated text', async () => {
+    await mount();
+    client.request.mockResolvedValueOnce({ result: result() });
+    await act(async () => controller.start('en'));
+    client.result.mockRejectedValueOnce(new Error('temporary disconnect'));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1100);
+    });
+    expect(controller.error).toBe('실패');
+    client.result.mockResolvedValueOnce(
+      result({ status: 'complete', completed: 1, paragraphs: [{ id: 'p1', text: '번역문' }] }),
+    );
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2000);
+    });
+    expect(controller.error).toBe('');
+    expect(controller.texts?.get('p1')).toBe('번역문');
   });
   it.each([
     { automatic: false, nextChapters: 2, expected: 0 },
@@ -361,6 +381,7 @@ describe('reader translation lifecycle', () => {
       await vi.advanceTimersByTimeAsync(1100);
     });
     expect(controller.result?.status).toBe('complete');
+    expect(controller.error).toBe('');
   });
   it('serializes cancellation refresh with polling while the refresh is slow', async () => {
     await mount();
@@ -472,6 +493,12 @@ describe('reader translation lifecycle', () => {
     await act(async () => controller.cancel());
     expect(controller.result?.status).toBe('queued');
     expect(controller.error).toBe('실패');
+    client.result.mockResolvedValueOnce(result({ status: 'running' }));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1100);
+    });
+    expect(controller.result?.status).toBe('running');
+    expect(controller.error).toBe('실패');
     client.result.mockResolvedValueOnce(
       result({ status: 'complete', paragraphs: [{ id: 'p1', text: 'Completed on server' }] }),
     );
@@ -479,6 +506,7 @@ describe('reader translation lifecycle', () => {
       await vi.advanceTimersByTimeAsync(1100);
     });
     expect(controller.result?.status).toBe('complete');
+    expect(controller.error).toBe('');
   });
   it('retries authoritative status polling when cancel succeeds but its immediate refresh fails', async () => {
     await mount();
@@ -492,5 +520,6 @@ describe('reader translation lifecycle', () => {
       await vi.advanceTimersByTimeAsync(1100);
     });
     expect(controller.result?.status).toBe('cancelled');
+    expect(controller.error).toBe('');
   });
 });

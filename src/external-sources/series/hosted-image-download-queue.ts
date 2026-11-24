@@ -15,6 +15,7 @@ export function createHostedImageDownloadQueue(options: {
   document?: boolean;
   items: readonly Item[];
   signal: AbortSignal;
+  itemSignal?(index: number): AbortSignal;
   onStage(item: Item, phase: 'downloading' | 'downloaded'): void;
   onProgress?(item: Item, progress: TaskProgress): void;
 }) {
@@ -24,18 +25,26 @@ export function createHostedImageDownloadQueue(options: {
     if (
       current.state !== 'connected' ||
       current.connectionGeneration !== initial.connectionGeneration ||
+      current.accountConnectionId !== options.items[0]?.key.accountConnectionId ||
       current.accountConnectionId !== initial.accountConnectionId
     )
       throw new Error('외부 소스 연결이 변경되었습니다. 목록을 다시 열어 주세요.');
   };
-  const receipts = new Set<string>();
+  const receipts = new Map<string, number>();
+  const buffered = new Map<number, string>();
   let closed = false;
-  const discard = (id: string) => {
+  const forget = (id: string) => {
+    const index = receipts.get(id);
+    if (index !== undefined) buffered.delete(index);
     receipts.delete(id);
+  };
+  const discard = (id: string) => {
+    forget(id);
     void options.port.discard(id).catch(() => undefined);
   };
   const queue = new OrderedDownloadQueue<HostedImageDownload>({
     signal: options.signal,
+    itemSignal: options.itemSignal,
     concurrency: options.items.some((item) => item.collection.maxConcurrentDownloads === 1) ? 1 : 2,
     maxBufferedBytes: (options.document ? 4 : 64) * 1024 * 1024,
     count: () => options.items.length,
@@ -52,11 +61,12 @@ export function createHostedImageDownloadQueue(options: {
           if (!signal.aborted && !closed) options.onProgress?.(item, progress);
         },
       );
-      receipts.add(receipt.artifactId);
+      receipts.set(receipt.artifactId, i);
       try {
         signal.throwIfAborted();
         assertConnection();
         if (closed) throw new DOMException('Cancelled', 'AbortError');
+        buffered.set(i, receipt.artifactId);
         options.onStage(item, 'downloaded');
         return receipt;
       } catch (error) {
@@ -66,6 +76,12 @@ export function createHostedImageDownloadQueue(options: {
     },
   });
   return {
+    async skip(index: number) {
+      await queue.skip(index);
+      const receipt = buffered.get(index);
+      if (receipt) discard(receipt);
+      buffered.delete(index);
+    },
     async take(i: number) {
       assertConnection();
       const value = await queue.take(i);
@@ -76,13 +92,11 @@ export function createHostedImageDownloadQueue(options: {
       discard(id);
     },
     /** Transfer cleanup ownership to the sequential importer. */
-    forget(id: string) {
-      receipts.delete(id);
-    },
+    forget,
     close() {
       closed = true;
       queue.close();
-      for (const id of receipts) discard(id);
+      for (const id of receipts.keys()) discard(id);
     },
   };
 }

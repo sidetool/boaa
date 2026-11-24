@@ -12,7 +12,7 @@ import './tools.css';
 export default function UiNextAnnotationsPanel({ controller }: { controller: AnnotationsController }) {
   const [composing, setComposing] = useState(false);
   const editing = Boolean(controller.editingNoteId);
-  const composerOpen = composing || editing || Boolean(controller.noteDraft);
+  const composerOpen = composing || editing || Boolean(controller.noteDraft || controller.selectedQuote);
   const bookmarked = Boolean(controller.view.activeBookmark);
   const closeComposer = () => {
     controller.resetEditor();
@@ -47,9 +47,12 @@ export default function UiNextAnnotationsPanel({ controller }: { controller: Ann
           className="un-notes-composer"
           onSubmit={(event) => {
             event.preventDefault();
-            void Promise.resolve(controller.saveNoteDraft()).then(() => setComposing(false));
+            void controller.saveNoteDraft().then((closed) => {
+              if (closed) setComposing(false);
+            });
           }}
         >
+          {controller.selectedQuote && <blockquote>{controller.selectedQuote}</blockquote>}
           <textarea
             aria-label="메모 내용"
             autoFocus
@@ -61,7 +64,11 @@ export default function UiNextAnnotationsPanel({ controller }: { controller: Ann
             <button type="button" className="un-btn is-text is-sm" onClick={closeComposer}>
               취소
             </button>
-            <button type="submit" className="un-btn is-primary is-sm" disabled={!controller.noteDraft.trim()}>
+            <button
+              type="submit"
+              className="un-btn is-primary is-sm"
+              disabled={controller.noteBusy || !controller.noteDraft.trim()}
+            >
               {editing ? '수정 저장' : '저장'}
             </button>
           </div>

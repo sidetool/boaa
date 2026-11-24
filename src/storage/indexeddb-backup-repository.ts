@@ -1,3 +1,4 @@
+import { backupConflictResolution } from '../repositories/backup-repository';
 import { normalizeBrandRecord } from '@boaa/extension-contracts/brand-compat';
 import { isBrandValue } from '@boaa/extension-contracts/brand-compat';
 import type { Novel, ParagraphPage } from '../domain/types';
@@ -413,46 +414,6 @@ export class IndexedDbBackupRepository implements BackupRepository {
 
   async restoreBackup(archive: Blob, options: BackupRestoreOptions): Promise<BackupRestoreResult> {
     const parsed = await this.readArchive(archive);
-    const inspection = await this.inspectBackup(archive);
-    const conflictIds = new Set(inspection.conflicts.map((conflict) => conflict.bookId));
-    const resolutions = new Map<string, BackupConflictResolution>();
-    for (const conflict of inspection.conflicts) {
-      resolutions.set(
-        conflict.bookId,
-        options.conflictResolutions?.[conflict.bookId] ?? options.defaultConflictResolution,
-      );
-    }
-    const copyMaps = new Map<string, ReadonlyMap<string, string>>();
-    for (const [bookId, resolution] of resolutions) {
-      if (resolution === 'copy') copyMaps.set(bookId, copyIdMap(bookId, parsed.jsonStores));
-    }
-
-    const restoredStores = new Map<string, Record<string, unknown>[]>();
-    for (const [storeName, records] of parsed.jsonStores) {
-      const restored = records.flatMap((record) => {
-        const bookId = recordBookIdForStore(storeName, record);
-        if (!bookId || !conflictIds.has(bookId)) return [record];
-        const resolution = resolutions.get(bookId) ?? options.defaultConflictResolution;
-        if (resolution === 'skip') return [];
-        if (resolution !== 'copy') return [record];
-        if (COPY_REBUILD_STORES.has(storeName)) return [];
-        const copied = rekeyValue(record, copyMaps.get(bookId)!) as Record<string, unknown>;
-        if (storeName === 'novels' && typeof copied.title === 'string') copied.title = `${copied.title} (복사본)`;
-        return [copied];
-      });
-      restoredStores.set(storeName, restored);
-    }
-
-    const restoredAssets = [
-      ...(restoredStores.get(BOOK_ASSET_STORES.assets) ?? []),
-      ...(restoredStores.get(READER_PERSONALIZATION_STORES.fonts) ?? []),
-    ];
-    const requiredStorageKeys = new Set(
-      restoredAssets
-        .map((asset) => asset.storageKey)
-        .filter((storageKey): storageKey is string => typeof storageKey === 'string'),
-    );
-    const restoredBlobs = parsed.manifest.assetBlobs.filter((asset) => requiredStorageKeys.has(asset.storageKey));
     const runId = restoreRunId();
     const now = new Date().toISOString();
     const run: BackupRestoreRunRecord = {
@@ -472,7 +433,7 @@ export class IndexedDbBackupRepository implements BackupRepository {
         'novels',
         'settings',
         ...BOOK_DATA_STORES,
-        ...restoredStores.keys(),
+        ...parsed.jsonStores.keys(),
         'paragraph_search',
         'book_content_paragraph_search',
         BOOK_ASSET_STORES.assets,
@@ -485,6 +446,48 @@ export class IndexedDbBackupRepository implements BackupRepository {
     const tx = db.transaction(storeNames, 'readwrite');
     const done = transactionDone(tx);
     try {
+      // Read identities under the same write lock as the subsequent deletes and inserts.
+      const existing = new Set(await requestToPromise(tx.objectStore('novels').getAllKeys()));
+      const resolutions = new Map<string, BackupConflictResolution>();
+      for (const { id } of parsed.manifest.books) {
+        if (existing.has(id)) {
+          resolutions.set(
+            id,
+            backupConflictResolution(id, options.conflictResolutions, options.defaultConflictResolution),
+          );
+        }
+      }
+      const copyMaps = new Map<string, ReadonlyMap<string, string>>();
+      for (const [bookId, resolution] of resolutions) {
+        if (resolution === 'copy') copyMaps.set(bookId, copyIdMap(bookId, parsed.jsonStores));
+      }
+
+      const restoredStores = new Map<string, Record<string, unknown>[]>();
+      for (const [storeName, records] of parsed.jsonStores) {
+        const restored = records.flatMap((record) => {
+          const bookId = recordBookIdForStore(storeName, record);
+          const resolution = bookId && resolutions.get(bookId);
+          if (!bookId || !resolution) return [record];
+          if (resolution === 'skip') return [];
+          if (resolution !== 'copy') return [record];
+          if (COPY_REBUILD_STORES.has(storeName)) return [];
+          const copied = rekeyValue(record, copyMaps.get(bookId)!) as Record<string, unknown>;
+          if (storeName === 'novels' && typeof copied.title === 'string') copied.title = `${copied.title} (복사본)`;
+          return [copied];
+        });
+        restoredStores.set(storeName, restored);
+      }
+
+      const restoredAssets = [
+        ...(restoredStores.get(BOOK_ASSET_STORES.assets) ?? []),
+        ...(restoredStores.get(READER_PERSONALIZATION_STORES.fonts) ?? []),
+      ];
+      const requiredStorageKeys = new Set(
+        restoredAssets
+          .map((asset) => asset.storageKey)
+          .filter((storageKey): storageKey is string => typeof storageKey === 'string'),
+      );
+      const restoredBlobs = parsed.manifest.assetBlobs.filter((asset) => requiredStorageKeys.has(asset.storageKey));
       tx.objectStore(BACKUP_RESTORE_RUNS_STORE).put({
         ...run,
         status: 'applying',
@@ -631,7 +634,16 @@ export class IndexedDbBackupRepository implements BackupRepository {
         }
         assetBlobs.set(asset.storageKey, blob);
       }
-      if (!jsonStores.has('novels')) throw new Error('Backup novel catalog is missing');
+      const catalog = jsonStores.get('novels');
+      if (!catalog) throw new Error('Backup novel catalog is missing');
+      const bookIds = new Set(manifest.books.map(({ id }) => id));
+      if (
+        bookIds.size !== manifest.books.length ||
+        catalog.length !== bookIds.size ||
+        catalog.some((row) => typeof row.id !== 'string' || !bookIds.delete(row.id))
+      ) {
+        throw new Error('Backup book list does not match the novel catalog');
+      }
       if (assetBlobs.size !== manifest.assetBlobs.length) throw new Error('Backup asset list is incomplete');
       return {
         manifest,

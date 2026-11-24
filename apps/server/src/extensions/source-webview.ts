@@ -1,3 +1,4 @@
+import { readRenderedParagraphs } from './source-browser-paragraphs.js';
 import { routeSourceBrowserPage } from './source-browser-routing.js';
 import { openSourceBrowserProxy } from './source-browser-proxy.js';
 import { sourceBrowserLimits } from './source-browser-limits.js';
@@ -396,7 +397,10 @@ export class SourceWebViewHost {
                       ? 'source_access_denied'
                       : 'source_http_failed'),
                 );
-              result = await evaluateBrowserScript(page, input.script);
+              result =
+                input.renderedParagraphs && browserEngine() === 'patchright'
+                  ? await readRenderedParagraphs(context, page, initial, input.renderedParagraphs, deadline)
+                  : await evaluateBrowserScript(page, input.script);
             }
             deadline.throwIfAborted();
             if (!http && Buffer.byteLength(JSON.stringify(result) ?? 'null') > 2 * 1024 * 1024)

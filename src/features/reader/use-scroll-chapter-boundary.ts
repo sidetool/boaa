@@ -132,6 +132,9 @@ export function useScrollChapterBoundary(input: {
     resetWheelIntent();
     pointerStartedArmedRef.current = false;
     pointerStartYRef.current = undefined;
+    touchStartedArmedRef.current = false;
+    touchStartYRef.current = undefined;
+    touchLastYRef.current = undefined;
     setArmed(false);
     releasePull();
   }, [clearArmTimer, releasePull, resetWheelIntent, setArmed]);
@@ -347,37 +350,61 @@ export function useScrollChapterBoundary(input: {
     const root = input.rootRef.current;
     if (!root) return;
 
+    let nextButton: Element | null = null;
+    let startX = 0;
     const resetTouch = () => {
+      nextButton = null;
       touchStartedArmedRef.current = false;
       touchStartYRef.current = undefined;
       touchLastYRef.current = undefined;
     };
     const onTouchStart = (event: TouchEvent) => {
-      if (event.touches.length !== 1 || gestureTargetIsInteractive(event.target)) {
+      nextButton = event.target instanceof Element ? event.target.closest('[data-chapter-swipe-next]:enabled') : null;
+      if (event.touches.length !== 1 || (!nextButton && gestureTargetIsInteractive(event.target))) {
         resetTouch();
         return;
       }
       const clientY = event.touches[0].clientY;
-      const ready = isAtScrollEnd(root) && armedRef.current && !transitioningRef.current;
+      // A new finger contact is already a distinct gesture. The idle timer is
+      // needed for wheel momentum, not a fresh touch at the chapter end.
+      // A touch that merely reaches the end stays unclaimed until the next touch.
+      // The next title can be visible while the footer still has clearance below it.
+      const ready = Boolean(nextButton || isAtScrollEnd(root)) && !transitioningRef.current;
+      startX = event.touches[0].clientX;
       touchStartedArmedRef.current = ready;
       touchStartYRef.current = clientY;
       touchLastYRef.current = clientY;
       if (isAtScrollEnd(root) && !armedRef.current) scheduleArm();
     };
     const onTouchMove = (event: TouchEvent) => {
-      if (!touchStartedArmedRef.current || touchStartYRef.current === undefined || event.touches.length !== 1) return;
+      if ((!nextButton && !isAtScrollEnd(root)) || event.touches.length !== 1) {
+        resetTouch();
+        releasePull();
+        return;
+      }
+      if (!touchStartedArmedRef.current || touchStartYRef.current === undefined) return;
       const clientY = event.touches[0].clientY;
       touchLastYRef.current = clientY;
       const delta = touchStartYRef.current - clientY;
-      if (delta <= 0) return;
+      const horizontalDistance = Math.abs(event.touches[0].clientX - startX);
+      if (horizontalDistance >= 8 && horizontalDistance > Math.abs(delta)) {
+        resetTouch();
+        releasePull();
+        return;
+      }
+      if (delta <= 0 || (nextButton && delta < 8)) return;
       event.preventDefault();
       setPullMotion(pullOffset(delta, TOUCH_COMMIT_THRESHOLD_PX), 'touch');
     };
-    const onTouchEnd = () => {
+    const onTouchEnd = (event: TouchEvent) => {
       const startedArmed = touchStartedArmedRef.current;
       const delta = (touchStartYRef.current ?? 0) - (touchLastYRef.current ?? touchStartYRef.current ?? 0);
+      const startedOnTitle = Boolean(nextButton);
+      const reachedEnd = startedOnTitle || isAtScrollEnd(root);
       resetTouch();
-      if (startedArmed && delta >= TOUCH_COMMIT_THRESHOLD_PX && isAtScrollEnd(root) && !transitioningRef.current) {
+      if (startedArmed && delta >= TOUCH_COMMIT_THRESHOLD_PX && reachedEnd && !transitioningRef.current) {
+        // A completed title swipe already owns this turn. Suppress its compatibility click.
+        if (startedOnTitle) event.preventDefault();
         commitNextChapter();
         return;
       }
@@ -393,7 +420,7 @@ export function useScrollChapterBoundary(input: {
 
     root.addEventListener('touchstart', onTouchStart, { passive: true });
     root.addEventListener('touchmove', onTouchMove, { passive: false });
-    root.addEventListener('touchend', onTouchEnd, { passive: true });
+    root.addEventListener('touchend', onTouchEnd, { passive: false });
     root.addEventListener('touchcancel', onTouchCancel, { passive: true });
     return () => {
       root.removeEventListener('touchstart', onTouchStart);

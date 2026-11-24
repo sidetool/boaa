@@ -1,5 +1,6 @@
 import {
   BookOpen,
+  BookX,
   Check,
   ChevronLeft,
   Download,
@@ -173,11 +174,13 @@ function ChapterSheet({
           <button
             type="button"
             className="un-action"
-            disabled={busy || read || !actions.markRead}
-            onClick={() => void run(() => actions.markRead?.(chapter, false))}
+            disabled={busy || !actions.markRead}
+            onClick={() =>
+              void run(() => (read ? actions.markRead?.(chapter, false, false) : actions.markRead?.(chapter, false)))
+            }
           >
-            <Check size={20} />
-            <span>{read ? '이미 읽은 회차예요' : '읽음으로 표시'}</span>
+            {read ? <BookX size={20} /> : <Check size={20} />}
+            <span>{read ? '안 읽음으로 변경' : '읽음으로 표시'}</span>
           </button>
           <button
             type="button"
@@ -507,7 +510,7 @@ export function UiNextChaptersScreen({ model, actions }: ChaptersScreenProps) {
         <div className="un-detail-backdrop" aria-hidden="true">
           <WorkCover item={{ kind: 'book', key: novel.id, book }} />
         </div>
-        <button type="button" className="un-detail-back" onClick={actions.navigation.backToLibrary}>
+        <button type="button" className="un-detail-back" aria-label="뒤로" onClick={actions.navigation.backToLibrary}>
           <ChevronLeft size={22} />
           <span>뒤로</span>
         </button>

@@ -348,8 +348,6 @@ it('uses the visible or selected chapter while continuous-scroll observation is 
     setBookmarks: vi.fn(),
     setHighlights: vi.fn(),
     setNotes: vi.fn(),
-    resetEditor: vi.fn(),
-    editNote: vi.fn(),
     isNovelCurrent: () => true,
     openChapter: vi.fn(),
     onMutationCommitted: vi.fn(),

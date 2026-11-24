@@ -62,8 +62,7 @@ export async function planBackupRetention(directory, input, protect = []) {
         tree = await inspectTree(folder);
       const dump = await lstat(path.join(folder, 'database.dump'));
       const meta = await lstat(path.join(folder, 'deployment.json'));
-      const server = await lstat(path.join(folder, 'server'));
-      if (!dump.isFile() || !dump.size || !meta.isFile() || !server.isDirectory()) throw new Error('incomplete_backup');
+      if (!dump.isFile() || !dump.size || !meta.isFile()) throw new Error('incomplete_backup');
       const saved = await readJson(path.join(folder, 'deployment.json'));
       if (
         !saved ||
@@ -71,6 +70,8 @@ export async function planBackupRetention(directory, input, protect = []) {
         typeof saved.config !== 'string' ||
         typeof saved.compose !== 'string'
       )
+        throw new Error('incomplete_backup');
+      if (saved.backupScope !== 'database' && !(await lstat(path.join(folder, 'server'))).isDirectory())
         throw new Error('incomplete_backup');
       candidates.push({ id, ...tree, createdAt: meta.mtimeMs });
     } catch {

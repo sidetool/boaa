@@ -11,36 +11,45 @@ export function useContinuousTextWindow(
   chapters: readonly Chapter[],
   revision: string,
   source?: ContinuousTextSource,
+  retainListeningChapter?: boolean,
 ) {
   const [, publish] = useReducer((value) => value + 1, 0);
-  const latest = useRef({ chapter, chapters, source });
-  latest.current = { chapter, chapters, source };
+  const [opening, reopen] = useReducer((value) => value + 1, 0);
+  const latest = useRef({ chapter, chapters, source, retainListeningChapter });
+  latest.current = { chapter, chapters, source, retainListeningChapter };
   const mounted = useRef(true);
   const leases = useRef(new Map<ContinuousTextWindow, number>());
-  const window = useMemo(
-    () =>
-      enabled
-        ? new ContinuousTextWindow(
-            { chapter: latest.current.chapter, repository },
-            {
-              neighbor: async (id, direction, signal) => {
-                if (latest.current.source) return latest.current.source.neighbor(id, direction, signal);
-                const list = latest.current.chapters;
-                const at = list.findIndex((item) => item.id === id);
-                const next = at < 0 ? undefined : list[at + direction];
-                signal.throwIfAborted();
-                return next ? { chapter: next, repository } : undefined;
-              },
-              retain: (ids) => latest.current.source?.retain?.(ids),
+  const window = useMemo(() => {
+    // Reopen the bounded row window without changing the shared source revision.
+    void opening;
+    return enabled
+      ? new ContinuousTextWindow(
+          { chapter: latest.current.chapter, repository },
+          {
+            neighbor: async (id, direction, signal) => {
+              if (latest.current.source) return latest.current.source.neighbor(id, direction, signal);
+              const list = latest.current.chapters;
+              const at = list.findIndex((item) => item.id === id);
+              const next = at < 0 ? undefined : list[at + direction];
+              signal.throwIfAborted();
+              return next ? { chapter: next, repository } : undefined;
             },
-            revision,
-            () => {
-              if (mounted.current) publish();
+            retain: (ids) => {
+              const current = latest.current;
+              current.source?.retain?.(
+                current.retainListeningChapter && !ids.includes(current.chapter.id)
+                  ? [...ids, current.chapter.id]
+                  : ids,
+              );
             },
-          )
-        : undefined,
-    [enabled, repository, revision],
-  );
+          },
+          revision,
+          () => {
+            if (mounted.current) publish();
+          },
+        )
+      : undefined;
+  }, [enabled, repository, revision, opening]);
   useEffect(() => {
     mounted.current = true;
     if (window) leases.current.set(window, (leases.current.get(window) ?? 0) + 1);
@@ -77,5 +86,5 @@ export function useContinuousTextWindow(
         : undefined,
     [window, version],
   );
-  return { window, pages };
+  return { window, pages, reopen };
 }

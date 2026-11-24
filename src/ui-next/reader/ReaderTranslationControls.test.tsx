@@ -69,3 +69,26 @@ it('hides activity while the sheet is open and clears a failure warning after fo
   });
   expect(activity()).toHaveLength(0);
 });
+
+it('keeps a separate settings warning from marking a completed translation as failed', () => {
+  render(state({ busy: true }));
+  render(
+    state({
+      error: '설정을 갱신하지 못했습니다.',
+      result: {
+        id: 'job',
+        workKey: 'book',
+        chapterKey: 'chapter',
+        sourceHash: 'hash',
+        status: 'complete',
+        targetLanguage: 'ko',
+        provider: 'gemini',
+        model: 'fixture',
+        completed: 1,
+        total: 1,
+        paragraphs: [{ id: 'p1', text: '번역문' }],
+      },
+    }),
+  );
+  expect(activity()).toHaveLength(0);
+});

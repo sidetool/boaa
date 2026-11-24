@@ -1,3 +1,4 @@
+import { backupConflictResolution } from '../../repositories/backup-repository';
 import { ArchiveRestore, DatabaseBackup, FileArchive, Upload } from 'lucide-react';
 import { useRef } from 'react';
 import { taskProgressDetail, taskProgressLabel, taskProgressPercent } from '../../components/task-progress';
@@ -44,6 +45,11 @@ function ResolutionSelect({
 export default function UiNextBackupSheet({ controller }: { controller: BackupFeatureController }) {
   const input = useRef<HTMLInputElement>(null);
   const { inspection, progress } = controller;
+  const replacing =
+    inspection?.conflicts.filter(
+      ({ bookId }) =>
+        backupConflictResolution(bookId, controller.conflictResolutions, controller.defaultResolution) === 'replace',
+    ).length ?? 0;
   // Members can take their own library out; restoring stays with the administrator in this release.
   const canExport = useSelfHostCapability('exportLibrary');
   const canRestore = useSelfHostCapability('restoreLibrary');
@@ -72,7 +78,7 @@ export default function UiNextBackupSheet({ controller }: { controller: BackupFe
             onClick={() => void controller.restoreBackup()}
           >
             <ArchiveRestore size={17} />
-            확인한 백업 복원하기
+            {replacing ? `기존 책 ${formatCount(replacing)}권을 바꾸고 복원하기` : '확인한 백업 복원하기'}
           </button>
         ) : undefined
       }
@@ -193,7 +199,11 @@ export default function UiNextBackupSheet({ controller }: { controller: BackupFe
                         control={
                           <ResolutionSelect
                             label={`${conflict.title} 처리`}
-                            value={controller.conflictResolutions[conflict.bookId] ?? controller.defaultResolution}
+                            value={backupConflictResolution(
+                              conflict.bookId,
+                              controller.conflictResolutions,
+                              controller.defaultResolution,
+                            )}
                             onChange={(value) => controller.setConflictResolution(conflict.bookId, value)}
                           />
                         }

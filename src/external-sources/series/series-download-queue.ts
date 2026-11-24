@@ -32,6 +32,7 @@ export function createSeriesDownloadQueue(options: {
   hostContext: TrustedExternalSourceHostContext;
   items: readonly SeriesItem[];
   signal: AbortSignal;
+  itemSignal?(index: number): AbortSignal;
   onStage(item: SeriesItem, stage: 'downloading' | 'downloaded'): void;
 }) {
   const initial = options.registry.getExternalSourceStatus(options.sourceId, options.hostContext);
@@ -40,6 +41,7 @@ export function createSeriesDownloadQueue(options: {
     if (
       current.state !== 'connected' ||
       current.connectionGeneration !== initial.connectionGeneration ||
+      current.accountConnectionId !== options.items[0]?.key.accountConnectionId ||
       current.accountConnectionId !== initial.accountConnectionId
     )
       throw new Error('외부 소스 연결이 변경되었습니다. 목록을 다시 열어 주세요.');
@@ -48,6 +50,7 @@ export function createSeriesDownloadQueue(options: {
   const estimate = document ? 2 * 1024 * 1024 : 32 * 1024 * 1024;
   const queue = new OrderedDownloadQueue<DownloadedExternalSource>({
     signal: options.signal,
+    itemSignal: options.itemSignal,
     concurrency: options.items.some((item) => item.collection.maxConcurrentDownloads === 1) ? 1 : 2,
     maxBufferedBytes: estimate * 2,
     count: () => options.items.length,
@@ -73,6 +76,7 @@ export function createSeriesDownloadQueue(options: {
     },
   });
   return {
+    skip: (index: number) => queue.skip(index),
     async take(index: number) {
       assertConnection();
       const result = await queue.take(index);

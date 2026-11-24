@@ -317,6 +317,37 @@ describe('BookWorkspaceController commands', () => {
     expect(harness.calls).toEqual(['repository.saveReadingPosition', 'adjacent.refreshAfterLocalMutation']);
   });
 
+  it('records the visible chapter without replacing the chapter that owns narration', () => {
+    const novel = testNovel();
+    const chapter = testChapter(1);
+    const visible = testChapter(2);
+    const harness = createBookWorkspaceTestHarness({ novel });
+    const controller = new BookWorkspaceController(
+      harness.ports,
+      testWorkspaceState({
+        selectedNovel: novel,
+        novels: [novel],
+        chapters: [chapter, visible],
+        currentChapter: chapter,
+      }),
+    );
+    const commit = {
+      novelId: novel.id,
+      chapterId: visible.id,
+      location: { chapterId: visible.id, progress: 0.4, scrollTop: 10, paragraphIndex: 2, ttsIndex: 1 },
+      bookProgress: 0.6,
+      updatedAt: '2026-07-11T02:00:00.000Z',
+    };
+    controller.commitLocation({ ...commit, visibleListeningChapterId: chapter.id });
+    expect(controller.getSnapshot().localReadingPosition).toBeUndefined();
+    controller.commitLocation({ ...commit, visibleListeningChapterId: visible.id });
+    expect(controller.getSnapshot()).toMatchObject({
+      currentChapter: { id: chapter.id },
+      localReadingPosition: { chapterId: visible.id, paragraphIndex: 2 },
+      selectedNovel: { lastReadChapterId: visible.id },
+    });
+  });
+
   it('projects committed location and session time before scheduling adjacent refreshes', () => {
     const novel = testNovel();
     const chapter = testChapter(2);

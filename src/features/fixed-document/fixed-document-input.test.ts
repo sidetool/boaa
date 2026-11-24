@@ -111,6 +111,8 @@ describe('fixed document input boundaries', () => {
     expect(fixedDocumentPanAxis({ ...input, continuousView: true })).toBeUndefined();
     expect(fixedDocumentPanAxis({ ...input, scrollWidth: 900, deltaX: -100, deltaY: 2 })).toBe('x');
     expect(fixedDocumentPanAxis({ ...input, zoom: 1.5 })).toBe('both');
+    expect(fixedDocumentPanAxis({ ...input, zoom: 1.5, comic: true, deltaY: 3 })).toBeUndefined();
+    expect(fixedDocumentPanAxis({ ...input, zoom: 1.5, comic: true, deltaY: 12 })).toBe('both');
     expect(fixedDocumentPanAxis({ ...input, deltaX: 1, deltaY: 2 })).toBeUndefined();
   });
 
@@ -130,5 +132,10 @@ describe('fixed document input boundaries', () => {
     expect(fixedDocumentTapStep(0.9, false)).toBe(1);
     expect(fixedDocumentTapStep(0.1, true)).toBe(1);
     expect(fixedDocumentTapStep(0.9, true)).toBe(-1);
+    const magnified = { zoom: 2, comic: true };
+    expect(fixedDocumentTapStep(0.5, true, magnified)).toBe(0);
+    expect(fixedDocumentTapStep(0.1, false, magnified)).toBeUndefined();
+    expect(fixedDocumentTapStep(0.9, true, magnified)).toBeUndefined();
+    expect(fixedDocumentTapStep(0.5, false, { ...magnified, comic: false })).toBeUndefined();
   });
 });

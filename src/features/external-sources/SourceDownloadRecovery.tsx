@@ -2,12 +2,18 @@ import { useState } from 'react';
 import { Download, X } from 'lucide-react';
 import type { ExternalSourceController } from './external-source-controller-contract';
 
-export function SourceDownloadRecovery({ controller }: { controller: ExternalSourceController }) {
+export function SourceDownloadRecovery({
+  controller,
+  expanded,
+}: {
+  controller: ExternalSourceController;
+  expanded?: boolean;
+}) {
   const [pending, setPending] = useState<string>();
   const queues = controller.recoverableDownloads ?? [];
   if (!queues.length) return null;
   return (
-    <details className="source-download-recovery">
+    <details className="source-download-recovery" open={expanded}>
       <summary>
         <Download size={16} />
         중단된 다운로드 <strong>{queues.length}</strong>

@@ -28,9 +28,14 @@ interface SourceDownloadRecoveryPort extends SourceLibrarySnapshotPort {
   notify(message: string, tone?: ToastTone): void;
   isMounted(): boolean;
   isBusy(): boolean;
+  scheduledQueueIds?(): string[];
   setImportBusy(value: boolean): void;
   setDownloadAbort(value: AbortController | undefined): void;
-  importSerialItems(sourceId: ExtensionContributionId, items: SerialSourceItem[]): Promise<boolean>;
+  importSerialItems(
+    sourceId: ExtensionContributionId,
+    items: SerialSourceItem[],
+    startup: AbortSignal,
+  ): Promise<boolean>;
 }
 
 const currentIso = () => new Date().toISOString();
@@ -40,21 +45,29 @@ export function useSourceDownloadRecovery(port: SourceDownloadRecoveryPort) {
   const portRef = useRef(port);
   portRef.current = port;
   const activeQueueIdRef = useRef<string>();
-  const checkpointDownloadQueue = useCallback(async (completed: readonly ExternalItemSummary[]) => {
-    const id = activeQueueIdRef.current;
-    if (id)
-      await portRef.current.state.pruneDownloadQueue?.(
-        id,
-        completed.map((item) => ({
-          key: item.key,
-          remoteRevision: item.remoteRevision,
-          title: item.title,
-          sectionId: externalItemSectionId(item),
-        })),
-      );
-  }, []);
+  const activeState = useRef(port.state);
+  const checkpointDownloadQueue = useCallback(
+    async (completed: readonly ExternalItemSummary[], id = activeQueueIdRef.current, state = activeState.current) => {
+      if (!id) return;
+      const items = completed.map((item) => ({
+        key: item.key,
+        remoteRevision: item.remoteRevision,
+        title: item.title,
+        sectionId: externalItemSectionId(item),
+      }));
+      if (state.checkpointDownloadItems) await state.checkpointDownloadItems(id, items);
+      else await state.pruneDownloadQueue?.(id, items);
+    },
+    [],
+  );
   const [recoverableDownloads, setRecoverableDownloads] = useState<readonly SourceDownloadQueue[]>([]);
   const recoveryBusyRef = useRef(false);
+
+  useEffect(() => {
+    activeQueueIdRef.current = undefined;
+    activeState.current = port.state;
+    setRecoverableDownloads([]);
+  }, [port.state, port.settingsScope]);
 
   const recoveryGeneration = useRef(0);
   const reconcileDownloadQueue = useCallback(
@@ -129,9 +142,9 @@ export function useSourceDownloadRecovery(port: SourceDownloadRecoveryPort) {
         portRef.current.state === port.state &&
         portRef.current.settingsScope === port.settingsScope &&
         generation === recoveryGeneration.current;
-      const queues = ((await port.state.listDownloadQueues?.()) ?? []).filter(
-        (queue) => queue.id !== activeQueueIdRef.current,
-      );
+      const exclude = new Set(port.scheduledQueueIds?.());
+      if (activeQueueIdRef.current) exclude.add(activeQueueIdRef.current);
+      const queues = ((await port.state.listDownloadQueues?.(exclude)) ?? []).filter((queue) => !exclude.has(queue.id));
       const library = reconcile && queues.length ? (snapshot ?? (await loadSourceLibrary(port))) : undefined;
       const chapters = new Map<string, Promise<Set<string>>>();
       const pending: SourceDownloadQueue[] = [];
@@ -156,15 +169,12 @@ export function useSourceDownloadRecovery(port: SourceDownloadRecoveryPort) {
     const first = serial[0]!;
     if (!serial.every((item) => serialCollectionKey(item) === serialCollectionKey(first))) return undefined;
     const id = sourceDownloadQueueId(first.key, first.collection.remoteId);
-    const previous = (await portRef.current.state.listDownloadQueues?.())?.find((queue) => queue.id === id);
-    const pending = new Map(previous?.items.map((item) => [externalItemKeyId(item.key), item]));
-    for (const item of filterAndSortReleases(serial, '', 'all', 'asc'))
-      pending.set(externalItemKeyId(item.key), {
-        key: item.key,
-        title: item.originalTitle ?? item.title,
-        remoteRevision: item.remoteRevision,
-        sectionId: externalItemSectionId(item),
-      });
+    const pending = filterAndSortReleases(serial, '', 'all', 'asc').map((item) => ({
+      key: item.key,
+      title: item.originalTitle ?? item.title,
+      remoteRevision: item.remoteRevision,
+      sectionId: externalItemSectionId(item),
+    }));
     const queue: SourceDownloadQueue = {
       id,
       kind: 'downloadQueue',
@@ -173,7 +183,7 @@ export function useSourceDownloadRecovery(port: SourceDownloadRecoveryPort) {
       collectionRemoteId: first.collection.remoteId,
       title: first.collection.title,
       updatedAt: currentIso(),
-      items: [...pending.values()],
+      items: pending,
     };
     await portRef.current.state.saveDownloadQueue(queue);
     return queue;
@@ -184,19 +194,26 @@ export function useSourceDownloadRecovery(port: SourceDownloadRecoveryPort) {
       if (portRef.current.isBusy() || recoveryBusyRef.current) return;
       recoveryBusyRef.current = true;
       activeQueueIdRef.current = queue.id;
-      portRef.current.setImportBusy(true);
+      const owner = portRef.current;
+      activeState.current = owner.state;
+      const currentOwner = () =>
+        portRef.current.state === owner.state &&
+        portRef.current.settingsScope === owner.settingsScope &&
+        owner.isMounted();
+      const abort = new AbortController();
+      owner.setDownloadAbort(abort);
+      owner.setImportBusy(true);
       try {
         const run = async () => {
-          const remaining = await reconcileDownloadQueue(queue);
-          if (!remaining.items.length) return;
+          if (!currentOwner() || abort.signal.aborted) return;
+          const remaining = await reconcileDownloadQueue(queue, owner, undefined, undefined, currentOwner);
+          if (!currentOwner() || abort.signal.aborted || !remaining.items.length) return;
           const sourceId = queue.connectorId as ExtensionContributionId;
-          const registry = portRef.current.registry;
-          const context = portRef.current.hostContext;
+          const registry = owner.registry;
+          const context = owner.hostContext;
           const connection = registry.getExternalSourceStatus(sourceId, context);
           if (connection.state !== 'connected' || connection.accountConnectionId !== queue.accountConnectionId)
             throw new Error('이 대기열을 만든 소스 계정으로 다시 연결해 주세요.');
-          const abort = new AbortController();
-          portRef.current.setDownloadAbort(abort);
           const read = (cursor?: string) =>
             registry.listExternalSource(
               sourceId,
@@ -204,25 +221,39 @@ export function useSourceDownloadRecovery(port: SourceDownloadRecoveryPort) {
               { parentRef: queue.collectionRemoteId, cursor, cacheMode: cursor ? undefined : 'reload' },
               abort.signal,
             );
-          const page = await completeSeriesCatalog(await read(), (cursor) => read(cursor), abort.signal);
+          const requested = new Map(remaining.items.map((item) => [externalItemKeyId(item.key), item]));
+          const page = await completeSeriesCatalog(await read(), read, abort.signal, new Set(requested.keys()));
           const current = registry.getExternalSourceStatus(sourceId, context);
           if (
+            owner.state !== portRef.current.state ||
+            owner.settingsScope !== portRef.current.settingsScope ||
             current.state !== 'connected' ||
             current.accountConnectionId !== connection.accountConnectionId ||
             current.connectionGeneration !== connection.connectionGeneration
           )
             throw new Error('소스 연결이 변경되어 이어받기를 중단했습니다.');
           abort.signal.throwIfAborted();
-          const pending = new Set(remaining.items.map((item) => externalItemKeyId(item.key)));
-          const selected = page.items
-            .filter((item) => pending.has(externalItemKeyId(item.key)))
-            .map((item): ExternalSourceItemView => ({ ...item, selected: false, importState: 'available' }))
-            .filter((item): item is SerialSourceItem => isSerialSourceItem(item));
-          if (!selected.length) throw new Error('남은 회차를 소스에서 찾지 못했습니다. 대기열은 보관됩니다.');
-          portRef.current.setImportBusy(false);
-          portRef.current.setDownloadAbort(undefined);
-          await portRef.current.importSerialItems(sourceId, selected);
-          await reconcileDownloadQueue(remaining);
+          const matching = new Map(page.items.map((item) => [externalItemKeyId(item.key), item]));
+          const selected = [...requested].flatMap(([key, intent]) => {
+            const item = matching.get(key);
+            if (
+              !item ||
+              !isSerialSourceItem(item) ||
+              item.collection.remoteId !== queue.collectionRemoteId ||
+              externalItemSectionId(item) !== intent.sectionId ||
+              (intent.remoteRevision !== undefined && item.remoteRevision !== intent.remoteRevision)
+            )
+              return [];
+            return [{ ...item, selected: false, importState: 'available' as const }];
+          });
+          if (selected.length !== remaining.items.length)
+            owner.notify(
+              `사라지거나 변경된 ${remaining.items.length - selected.length}개 회차는 대기열에 남겼습니다. 회차 목록에서 확인해 주세요.`,
+              'warning',
+            );
+          if (!selected.length) return;
+          await owner.importSerialItems(sourceId, selected, abort.signal);
+          if (currentOwner()) await reconcileDownloadQueue(remaining, owner, undefined, undefined, currentOwner);
         };
         if (globalThis.navigator?.locks)
           await navigator.locks.request(`boaa-source-queue:${queue.id}`, { ifAvailable: true }, async (lock) => {
@@ -231,15 +262,16 @@ export function useSourceDownloadRecovery(port: SourceDownloadRecoveryPort) {
           });
         else await run();
       } catch (error) {
-        portRef.current.notify(
-          error instanceof Error ? error.message : '이어받기에 실패했습니다. 다시 시도할 수 있습니다.',
-          'warning',
-        );
+        if (currentOwner())
+          owner.notify(
+            error instanceof Error ? error.message : '이어받기에 실패했습니다. 다시 시도할 수 있습니다.',
+            'warning',
+          );
       } finally {
-        portRef.current.setDownloadAbort(undefined);
+        if (currentOwner()) owner.setDownloadAbort(undefined);
         activeQueueIdRef.current = undefined;
         recoveryBusyRef.current = false;
-        if (portRef.current.isMounted()) portRef.current.setImportBusy(false);
+        if (owner.isMounted()) owner.setImportBusy(false);
         await refreshRecovery();
       }
     },
@@ -262,6 +294,7 @@ export function useSourceDownloadRecovery(port: SourceDownloadRecoveryPort) {
   const isRecovering = useCallback(() => recoveryBusyRef.current, []);
   const activateQueue = useCallback((id: string) => {
     activeQueueIdRef.current = id;
+    activeState.current = portRef.current.state;
   }, []);
   const clearActiveQueue = useCallback(() => {
     activeQueueIdRef.current = undefined;

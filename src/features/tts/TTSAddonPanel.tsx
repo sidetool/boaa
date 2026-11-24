@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react';
 import { Check, Play, RefreshCw, RotateCcw, Trash2, Wand2, X } from 'lucide-react';
 import type {
   Character,
@@ -67,6 +68,7 @@ export interface TTSAudiobookControls {
 }
 
 export interface TTSAddonPanelProps {
+  readonly castArtifactsNotice?: ReactNode;
   readonly status?: TTSStatus;
   readonly statusTone: string;
   readonly selectedVoiceMissing: boolean;
@@ -128,6 +130,12 @@ export interface TTSAddonPanelProps {
   /** 화자별 미리 생성하기: server-side speaker analysis and per-character narration for the open book. */
   readonly speakerGeneration?: TTSSpeakerGenerationControls;
   readonly preparedVoiceLabel?: string;
+  leavePreparedNarration?(): void;
+  readonly sessionTimer?: {
+    readonly preset?: TTSPlaybackSettings['sleepTimerDefault'];
+    readonly remainingSeconds?: number;
+    set(preset?: TTSPlaybackSettings['sleepTimerDefault']): void;
+  };
   /** Show only the real-time cast section, without the panel's own intro, tabs and status. */
   readonly view?: 'advanced';
   /** Offer real-time cast beside the ordinary voice: the earlier AI labeling tools are in use on this device. */
@@ -185,6 +193,8 @@ export interface TTSAddonPanelProps {
     kind: Extract<SpokenTextRule['kind'], 'skip_line' | 'skip_prefix' | 'skip_suffix'>,
   ): void | Promise<unknown>;
   deleteSpokenTextSkipRule(id: string): void | Promise<unknown>;
+  readonly spokenFilterError?: string;
+  retrySpokenFilters?(): Promise<void>;
   saveSpokenTextFilter?(input: SpokenTextFilterInput): Promise<void>;
   importSpokenTextFilters?(inputs: readonly SpokenTextFilterInput[]): Promise<void>;
   previewSpokenTextRuleImpact(signal: AbortSignal): Promise<SpokenTextRuleImpactSummary>;

@@ -1,3 +1,4 @@
+import { countLibraryBooks } from '../library/library-screen-model';
 import { applySourceMetadata } from '../library/library-source-metadata';
 
 import { WorkspaceSourceHubScreen as SourceHubScreen } from '../../ui-next/WorkspaceSourceHubScreen';
@@ -162,30 +163,40 @@ export function BookWorkspaceScreens({
     () => externalSources.libraryWorks.filter((work) => !work.localBookId),
     [externalSources.libraryWorks],
   );
+  // Trash and its bulk actions apply to the entire library.
+  const scopedBookIds = state.libraryFilter === 'trash' ? undefined : activeShelfBookIds;
+  const scopedRemoteWorks = useMemo(
+    () =>
+      scopedBookIds
+        ? remoteLibraryWorks.filter((work) => scopedBookIds.has(externalSelectionId(work.id)))
+        : remoteLibraryWorks,
+    [scopedBookIds, remoteLibraryWorks],
+  );
+  const favoritesOnly = state.libraryFavoritesOnly && state.libraryFilter !== 'trash';
   const remoteWorksInView = useMemo(
     () =>
-      visibleRemoteLibraryWorks(
-        remoteLibraryWorks,
-        {
-          shelved: Boolean(activeShelfBookIds),
-          shelfId: libraryManagement.activeShelfId,
-          filter: state.libraryFilter,
-          query: state.libraryQuery,
-          sort: state.librarySort,
-        },
-        externalSources.sourceWorkProgress?.bySubscriptionId,
-      ),
+      favoritesOnly
+        ? []
+        : visibleRemoteLibraryWorks(
+            scopedRemoteWorks,
+            {
+              shelved: false,
+              filter: state.libraryFilter,
+              query: state.libraryQuery,
+              sort: state.librarySort,
+            },
+            externalSources.sourceWorkProgress?.bySubscriptionId,
+          ),
     [
-      activeShelfBookIds,
-      libraryManagement.activeShelfId,
-      remoteLibraryWorks,
+      favoritesOnly,
+      scopedRemoteWorks,
       state.libraryFilter,
       state.libraryQuery,
       state.librarySort,
       externalSources.sourceWorkProgress,
     ],
   );
-  // Source works count read releases against the source's list unless downloads are chosen in settings.
+  // Apply source progress before counting books by reading status.
   const sourceProgress = externalSources.sourceWorkProgress;
   const libraryCollection = useMemo(() => {
     const progressed = applySourceProgress(
@@ -193,30 +204,39 @@ export function BookWorkspaceScreens({
       sourceProgress?.byNovelId,
       { query: state.libraryQuery, filter: state.libraryFilter, sort: state.librarySort },
     );
-    const base = activeShelfBookIds
-      ? {
-          ...progressed,
-          visibleBooks: progressed.visibleBooks.filter((book) => activeShelfBookIds.has(book.novel.id)),
-        }
-      : progressed;
-    const remoteCounts = remoteLibraryReadCounts(
-      remoteLibraryWorks,
-      externalSources.sourceWorkProgress?.bySubscriptionId,
-    );
+    const shelfBooks = scopedBookIds
+      ? [...progressed.booksByNovelId.values()].filter((book) => scopedBookIds.has(book.novel.id))
+      : undefined;
+    const localCounts = shelfBooks ? countLibraryBooks(shelfBooks) : progressed.filterCounts;
+    const tabCounts = favoritesOnly
+      ? countLibraryBooks((shelfBooks ?? [...progressed.booksByNovelId.values()]).filter((book) => book.novel.favorite))
+      : localCounts;
+    const remoteCounts = remoteLibraryReadCounts(scopedRemoteWorks, sourceProgress?.bySubscriptionId);
+    const remoteTotal = remoteCounts.reading + remoteCounts.unread + remoteCounts.finished;
     return {
-      ...base,
-      totalBooks: base.totalBooks + remoteLibraryWorks.filter((work) => !work.deletedAt).length,
+      ...progressed,
+      visibleBooks:
+        scopedBookIds || favoritesOnly
+          ? progressed.visibleBooks.filter(
+              (book) => (!scopedBookIds || scopedBookIds.has(book.novel.id)) && (!favoritesOnly || book.novel.favorite),
+            )
+          : progressed.visibleBooks,
+      totalBooks: localCounts.all + remoteTotal,
       filterCounts: {
-        ...base.filterCounts,
-        all: base.filterCounts.all + remoteLibraryWorks.filter((work) => !work.deletedAt).length,
-        trash: base.filterCounts.trash + remoteLibraryWorks.filter((work) => work.deletedAt).length,
-        unread: base.filterCounts.unread + remoteCounts.unread,
-        reading: base.filterCounts.reading + remoteCounts.reading,
-        finished: base.filterCounts.finished + remoteCounts.finished,
+        ...tabCounts,
+        ...(!favoritesOnly && {
+          all: localCounts.all + remoteTotal,
+          unread: localCounts.unread + remoteCounts.unread,
+          reading: localCounts.reading + remoteCounts.reading,
+          finished: localCounts.finished + remoteCounts.finished,
+        }),
+        trash: progressed.filterCounts.trash + remoteLibraryWorks.filter((work) => work.deletedAt).length,
       },
     };
   }, [
-    activeShelfBookIds,
+    scopedBookIds,
+    scopedRemoteWorks,
+    favoritesOnly,
     projection.libraryCollection,
     state.libraryQuery,
     state.libraryFilter,
@@ -224,7 +244,6 @@ export function BookWorkspaceScreens({
     externalSources.libraryWorks,
     remoteLibraryWorks,
     sourceProgress,
-    externalSources.sourceWorkProgress,
   ]);
   const bookHasActiveImport = (bookId: string) =>
     importTasks.some((task) => task.targetBookId === bookId && importTaskIsActive(task));
@@ -263,6 +282,7 @@ export function BookWorkspaceScreens({
     externalSources.close();
     controller.setLibraryQuery('');
     controller.setLibraryFilter('all');
+    controller.setLibraryFavoritesOnly(false);
     if (libraryManagement.selectionMode) libraryManagement.clearSelection();
     closeInspector();
     controller.setView('library');
@@ -317,6 +337,7 @@ export function BookWorkspaceScreens({
         : undefined,
     },
     filter: state.libraryFilter,
+    favoritesOnly,
     sort: state.librarySort,
     viewMode: state.libraryViewMode,
     collection: libraryCollection,
@@ -386,6 +407,7 @@ export function BookWorkspaceScreens({
         controller.setView('library');
         controller.setLibraryFilter(filter);
       },
+      setFavoritesOnly: controller.setLibraryFavoritesOnly,
       setSort: controller.setLibrarySort,
       setViewMode: controller.setLibraryViewMode,
       emptyTrash: () => controller.emptyTrash(externalSources.emptyLibraryTrash),
@@ -502,6 +524,8 @@ export function BookWorkspaceScreens({
         }
         externalSources.show(externalSources.activeSourceId);
       },
+      canRetry: (task) => externalSources.canRetryTask(task.id),
+      retry: (task) => void externalSources.retryTask(task.id),
       dismiss: dismissImportTask,
     },
   };

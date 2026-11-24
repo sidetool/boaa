@@ -43,6 +43,31 @@ class TestAudioSession {
 }
 
 describe('TTS execution controller', () => {
+  it('ignores an unfinished voice check after another tap, stop, account switch or unmount', async () => {
+    const systemTTS = { pause: vi.fn(), resume: vi.fn(), stop: vi.fn() };
+    let controller!: ReturnType<typeof useTTSExecutionController>;
+    function Harness({ owner }: { owner: object }) {
+      controller = useTTSExecutionController({ systemTTS, bookId: 'book', chapterId: 'chapter', sessionOwner: owner });
+      return null;
+    }
+    let renderer!: ReactTestRenderer;
+    await act(async () => {
+      renderer = create(<Harness owner={{}} />);
+    });
+    const initial = controller.requestStart();
+    const second = controller.requestStart();
+    expect(initial()).toBe(false);
+    expect(second()).toBe(true);
+    await act(async () => controller.stopAll());
+    expect(second()).toBe(false);
+    const stopped = controller.requestStart();
+    await act(async () => renderer.update(<Harness owner={{}} />));
+    expect(stopped()).toBe(false);
+    const last = controller.requestStart();
+    await act(async () => renderer.unmount());
+    expect(last()).toBe(false);
+  });
+
   it('adopts a surviving Android media session without stopping it on WebView teardown', async () => {
     const systemTTS = { pause: vi.fn(), resume: vi.fn(), stop: vi.fn() };
     let controller!: ReturnType<typeof useTTSExecutionController>;
@@ -245,7 +270,7 @@ it('restores the batch start after failure instead of resuming from estimated hi
   act(() => renderer.unmount());
 });
 
-it('applies speed and sleep timer changes to a live item without restarting it', async () => {
+it('applies live speed and session timers independently of the saved timer default', async () => {
   const audio = new TestAudioSession();
   const setPlaybackRate = vi.fn();
   Object.assign(audio, { setPlaybackRate });
@@ -283,6 +308,8 @@ it('applies speed and sleep timer changes to a live item without restarting it',
     root.update(<Harness rate={1.5} timer={10} />);
   });
   expect(controller.isSessionCurrent(id)).toBe(true);
+  expect(controller.sleepTimerPreset).toBeUndefined();
+  act(() => controller.setSleepTimer(10));
   expect(controller.sleepTimerPreset).toBe(10);
   expect(controller.sleepTimerRemainingSeconds).toBeGreaterThan(599);
   expect(setPlaybackRate).toHaveBeenLastCalledWith(1.5);
@@ -293,11 +320,11 @@ it('applies speed and sleep timer changes to a live item without restarting it',
     root.update(<Harness rate={0.8} timer={30} />);
   });
   expect(controller.paused).toBe(true);
-  expect(controller.sleepTimerRemainingSeconds).toBe(1800);
+  expect(controller.sleepTimerRemainingSeconds).toBeGreaterThan(599);
   await act(async () => {
     root.update(<Harness rate={0.8} />);
   });
-  expect(controller.sleepTimerPreset).toBeUndefined();
+  expect(controller.sleepTimerPreset).toBe(10);
   expect(controller.isSessionCurrent(id)).toBe(true);
   act(() => root.unmount());
 });
@@ -446,4 +473,38 @@ it('tracks real playing callbacks and fences deferred resume and old completion 
     if (root) act(() => root.unmount());
     await Promise.allSettled([first, second].filter(Boolean));
   }
+});
+
+it('preserves an explicitly disabled timer across jumps and transitions and restores the default for a new session', async () => {
+  let controller!: ReturnType<typeof useTTSExecutionController>;
+  const audioSession = new TestAudioSession();
+  const systemTTS = { stop: vi.fn(), pause: vi.fn(), resume: vi.fn() };
+  function Harness({ chapterId }: { chapterId: string }) {
+    controller = useTTSExecutionController({ bookId: 'b', chapterId, audioSession, systemTTS, sleepTimerPreset: 10 });
+    return null;
+  }
+  let root!: ReactTestRenderer;
+  await act(async () => {
+    root = create(<Harness chapterId="a" />);
+  });
+  act(() => {
+    controller.beginSession('b', 'a', 0, { preserveSleepTimer: true });
+  });
+  expect(controller.sleepTimerPreset).toBe(10);
+  act(() => controller.setSleepTimer(undefined));
+  act(() => {
+    controller.beginSession('b', 'a', 1, { preserveSleepTimer: true });
+  });
+  expect(controller.sleepTimerPreset).toBeUndefined();
+  act(() => root.update(<Harness chapterId="b" />));
+  act(() => {
+    controller.beginSession('b', 'b', 0, { preserveSleepTimer: true });
+  });
+  expect(controller.sleepTimerPreset).toBeUndefined();
+  act(() => controller.stopAll());
+  act(() => {
+    controller.beginSession('b', 'b', 0);
+  });
+  expect(controller.sleepTimerPreset).toBe(10);
+  act(() => root.unmount());
 });

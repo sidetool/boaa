@@ -52,6 +52,7 @@ export function ReaderChapterEnd({
           <button
             type="button"
             className="reader-chapter-end-next"
+            data-chapter-swipe-next={unit === '화' ? 'true' : undefined}
             disabled={busy}
             aria-busy={busy || undefined}
             onClick={onNext}

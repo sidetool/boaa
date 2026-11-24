@@ -12,6 +12,7 @@ import {
   stageOriginalSourceAsset,
 } from './book-asset-store';
 import { BOOK_ASSET_STORES } from './book-asset-schema';
+import { transactionDone } from './indexeddb-transaction';
 import { openReaderDb, resetReaderDbForTests } from './reader-database';
 import { integrityHash } from '../domain/id-hash-contract';
 import { OriginalSourceMismatchError } from '../repositories/book-asset-repository';
@@ -57,6 +58,19 @@ function generatedInput(fingerprint: string, byte: number) {
 describe('book asset store', () => {
   beforeEach(async () => {
     await resetReaderDbForTests();
+  });
+
+  it('preserves the failing asset request error when its transaction has no error yet', async () => {
+    const db = await openReaderDb();
+    const tx = db.transaction(BOOK_ASSET_STORES.blobs, 'readwrite');
+    const done = transactionDone(tx);
+    const store = tx.objectStore(BOOK_ASSET_STORES.blobs);
+    store.add({ id: 'duplicate', blob: new Blob(['data']) });
+    const duplicate = store.add({ id: 'duplicate', blob: new Blob(['data']) });
+    const failure = await done.catch((error: unknown) => error);
+    expect(failure).toBe(duplicate.error);
+    expect(duplicate.error?.name).toBe('ConstraintError');
+    expect(await blobCount()).toBe(0);
   });
 
   it('keeps a shared physical blob until the final staged reference is removed', async () => {

@@ -4,7 +4,7 @@ import {
   Info,
   HardDrive,
   Network,
-  Palette,
+  House,
   PlugZap,
   Puzzle,
   RefreshCw,
@@ -57,9 +57,9 @@ export const SETTINGS_SECTIONS: readonly SettingsSection[] = [
   },
   {
     id: 'appearance',
-    label: '모양',
-    detail: '시작 화면, 앱 테마',
-    icon: Palette,
+    label: '시작 화면',
+    detail: '앱을 열 때 볼 홈, 책장, 탐색 탭',
+    icon: House,
   },
   {
     id: 'layout',

@@ -154,6 +154,42 @@ describe('automatic reader flow handoff', () => {
     return { model, root, screenHandle, viewport, scroll, anchor };
   }
 
+  it('keeps an adjacent joined chapter visible during narration without handing the audio session to it', () => {
+    const current = testChapter(1);
+    const adjacent = testChapter(2);
+    const model = {
+      ...fixture(),
+      chapter: current,
+      chapters: [current, adjacent],
+      ttsPlaybackState: 'playing' as const,
+    };
+    model.settings.readingProfile.scrollChapterTransition = 'continuous';
+    const { root, screenHandle } = mount(model);
+    const observeChapter = vi.fn();
+    screenHandle.setActions({ ...screenHandle.getActions(), observeChapter });
+    const viewport = () => root.findByType(ReaderViewport).props;
+    const scroll = {
+      flow: 'scroll',
+      getAnchor: () => undefined,
+      getCachedParagraphById: () => ({ chapterId: adjacent.id }),
+      detachPlaybackFollow: vi.fn(),
+      isPlaybackFollowDetached: () => true,
+      scrollPageJump: vi.fn(),
+    };
+    act(() => viewport().onApiReady(scroll));
+    act(() => viewport().onVisualLocation({ chapterId: adjacent.id, progress: 0.4, ttsIndex: 1, paragraphIndex: 2 }));
+    act(() => viewport().onSelectionChanged({ paragraphId: 'p', text: '보이는 문장' }));
+    expect(observeChapter).not.toHaveBeenCalled();
+    act(() => viewport().onPageIntent(1));
+    expect(scroll.detachPlaybackFollow).toHaveBeenCalledOnce();
+    expect(scroll.scrollPageJump).toHaveBeenCalledWith(1);
+    expect(viewport().readingFlow).toBe('scroll');
+    act(() =>
+      renderer!.update(<ReaderScreen model={{ ...model, ttsPlaybackState: undefined }} screenHandle={screenHandle} />),
+    );
+    expect(observeChapter).toHaveBeenCalledWith(adjacent);
+  });
+
   it.each([-1, 1] as const)(
     'animates the first %s turn without an extra page jump, keeping the source until done',
     async (direction) => {

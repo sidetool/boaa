@@ -1,6 +1,7 @@
 import { FolderInput, Heart, MoreHorizontal, RotateCcw, Trash2 } from 'lucide-react';
 import { useState } from 'react';
 import type { Shelf } from '../../domain/types';
+import { ConfirmSheet } from '../components/dialogs';
 import { ActionList, Sheet } from '../components/primitives';
 import type { LibraryAction, LibraryBatchInput } from './contract';
 
@@ -13,14 +14,16 @@ function pick(actions: readonly LibraryAction[], id: string) {
 /** Floating bar for multi-select: the three most used commands, the rest in a sheet. */
 export function SelectionBar({
   batch,
+  count,
   shelves,
   inTrash,
 }: {
   batch: Batch;
+  count: number;
   shelves: readonly Shelf[];
   inTrash: boolean;
 }) {
-  const [sheet, setSheet] = useState<'more' | 'add_to_shelf' | 'remove_from_shelf' | 'tag' | null>(null);
+  const [sheet, setSheet] = useState<'more' | 'add_to_shelf' | 'remove_from_shelf' | 'tag' | 'trash' | null>(null);
   const [tag, setTag] = useState('');
   const actions = batch();
   const remove = pick(actions, inTrash ? 'restore' : 'remove');
@@ -52,10 +55,10 @@ export function SelectionBar({
             type="button"
             className={remove.danger ? 'is-danger' : undefined}
             disabled={remove.disabled}
-            onClick={() => void remove.run()}
+            onClick={() => (inTrash ? void remove.run() : setSheet('trash'))}
           >
             {inTrash ? <RotateCcw size={20} /> : <Trash2 size={20} />}
-            {inTrash ? '복원' : '삭제'}
+            {inTrash ? '복원' : '휴지통으로'}
           </button>
         )}
         {!inTrash && (
@@ -65,6 +68,17 @@ export function SelectionBar({
           </button>
         )}
       </div>
+
+      <ConfirmSheet
+        open={sheet === 'trash'}
+        title={`선택한 작품 ${count}개를 휴지통으로 옮길까요?`}
+        confirmLabel="휴지통으로 이동"
+        onClose={close}
+        danger
+        onConfirm={() => void remove?.run()}
+      >
+        휴지통에서 다시 복원할 수 있어요.
+      </ConfirmSheet>
 
       <Sheet open={sheet === 'more'} onClose={close} title="선택한 작품">
         <ActionList

@@ -58,7 +58,7 @@ export interface ChaptersScreenActions {
     reconstructSource(novel: Novel): MaybePromise;
   };
   chapterList: {
-    markRead?(chapter: Chapter, previous: boolean): Promise<void>;
+    markRead?(chapter: Chapter, previous: boolean, read?: boolean): Promise<void>;
     rename?(chapter: Chapter, title: string): Promise<void>;
     setQuery(value: string): void;
     setReadFilter(filter: ChapterReadFilter): void;

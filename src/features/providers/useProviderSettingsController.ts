@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { PlatformRuntimeKind } from '../../platform/runtime';
-import { BrowserAudioSession } from '../../providers/browser-audio-session';
+import { VoiceSamplePlayback } from '../tts/voice-sample-playback';
 import {
   defaultProviderSecretName,
   desktopProviderCatalog,
@@ -71,7 +71,7 @@ export function useProviderSettingsController(input: ProviderSettingsControllerI
   const voiceBusyRef = useRef(false);
   const sampleVersionRef = useRef(0);
   const dataRevisionRef = useRef(0);
-  const sampleAudio = useMemo(() => new BrowserAudioSession(), []);
+  const sampleAudio = useMemo(() => new VoiceSamplePlayback(), []);
   const bundleRef = useRef(bundle);
   const statusesRef = useRef(secretStatuses);
   bundleRef.current = bundle;
@@ -88,7 +88,7 @@ export function useProviderSettingsController(input: ProviderSettingsControllerI
   }, []);
   const stopSamples = useCallback(() => {
     sampleVersionRef.current += 1;
-    sampleAudio.stop(true);
+    sampleAudio.stop();
     setTtsSampleBusyProvider(undefined);
   }, [sampleAudio]);
 
@@ -114,8 +114,9 @@ export function useProviderSettingsController(input: ProviderSettingsControllerI
     setDrafts(next.drafts);
     return () => {
       if (epochRef.current === epoch) epochRef.current += 1;
+      sampleAudio.stop();
     };
-  }, [input.apiClient, input.controlClient, input.desktopMode, input.platformKind]);
+  }, [input.apiClient, input.controlClient, input.desktopMode, input.platformKind, sampleAudio]);
 
   useEffect(() => {
     if (!input.ttsPlaybackBusy) return;
@@ -127,7 +128,7 @@ export function useProviderSettingsController(input: ProviderSettingsControllerI
     return () => {
       mountedRef.current = false;
       epochRef.current += 1;
-      sampleAudio.stop(true);
+      sampleAudio.stop();
     };
   }, [sampleAudio]);
 
@@ -403,15 +404,17 @@ export function useProviderSettingsController(input: ProviderSettingsControllerI
       const epoch = epochRef.current;
       const sampleVersion = ++sampleVersionRef.current;
       setTtsSampleBusyProvider(provider.providerId);
-      sampleAudio.stop(true);
       try {
-        const { playDesktopTTSSampleRequest } = await import('./provider-sample-runner');
-        const played = await playDesktopTTSSampleRequest({
-          provider,
-          draft,
-          voices: voicesByProvider[provider.providerId] ?? [],
-          audio: sampleAudio,
-          text: SAMPLE_TEXT,
+        const played = await sampleAudio.play(async (signal, playBlob) => {
+          const { playDesktopTTSSampleRequest } = await import('./provider-sample-runner');
+          signal.throwIfAborted();
+          return playDesktopTTSSampleRequest({
+            provider,
+            draft,
+            voices: voicesByProvider[provider.providerId] ?? [],
+            audio: { playBlob },
+            text: SAMPLE_TEXT,
+          });
         });
         if (!isCurrent(epoch) || sampleVersionRef.current !== sampleVersion) return;
         input.notify(
@@ -441,16 +444,18 @@ export function useProviderSettingsController(input: ProviderSettingsControllerI
       const epoch = epochRef.current;
       const sampleVersion = ++sampleVersionRef.current;
       setTtsSampleBusyProvider(provider.providerId);
-      sampleAudio.stop(true);
       try {
-        const { playDesktopTTSSampleRequest } = await import('./provider-sample-runner');
-        return await playDesktopTTSSampleRequest({
-          provider,
-          draft,
-          voices: voicesByProvider[provider.providerId] ?? [],
-          audio: sampleAudio,
-          text,
-          voiceId,
+        return await sampleAudio.play(async (signal, playBlob) => {
+          const { playDesktopTTSSampleRequest } = await import('./provider-sample-runner');
+          signal.throwIfAborted();
+          return playDesktopTTSSampleRequest({
+            provider,
+            draft,
+            voices: voicesByProvider[provider.providerId] ?? [],
+            audio: { playBlob },
+            text,
+            voiceId,
+          });
         });
       } finally {
         if (isCurrent(epoch) && sampleVersionRef.current === sampleVersion) setTtsSampleBusyProvider(undefined);

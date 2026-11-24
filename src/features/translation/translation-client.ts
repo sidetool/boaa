@@ -36,7 +36,7 @@ export class TranslationClient {
     return result;
   }
   async credential(provider: TranslationProvider, value: string) {
-    const result = await this.api.request(`/translation/credentials/${provider}`, {
+    const result = await this.api.request<{ saved: boolean }>(`/translation/credentials/${provider}`, {
       method: 'PUT',
       body: JSON.stringify({ value }),
     });
@@ -44,7 +44,9 @@ export class TranslationClient {
     return result;
   }
   async deleteCredential(provider: TranslationProvider) {
-    const result = await this.api.request(`/translation/credentials/${provider}`, { method: 'DELETE' });
+    const result = await this.api.request<{ saved: boolean }>(`/translation/credentials/${provider}`, {
+      method: 'DELETE',
+    });
     this.titles.invalidate();
     return result;
   }

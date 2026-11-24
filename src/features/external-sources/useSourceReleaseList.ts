@@ -8,6 +8,7 @@
 import { useEffect, useMemo, useRef } from 'react';
 import { useNavigationViewState } from '../navigation/navigation-view-state';
 import { externalItemKeyId } from '../../external-sources/contracts';
+import { sourceEpisodeNumber } from './source-primary-read';
 import { useReadingChapterPage } from '../chapters/use-reading-chapter-page';
 import {
   filterAndSortReleases,
@@ -28,7 +29,18 @@ export function useSourceReleaseList(controller: ExternalSourceController, items
   const [query, setQuery] = useNavigationViewState(`${location}:query`, '');
   const [readFilter, setReadFilter] = useNavigationViewState<ReleaseReadFilter>(`${location}:filter`, 'all');
   const [sort, setSort] = useNavigationViewState<ReleaseSort>(`${location}:sort`, 'asc');
-  const sorted = useMemo(() => filterAndSortReleases(items, query, readFilter, sort), [items, query, readFilter, sort]);
+  // A fallback number is the position in reading order, before applying the current sort or filters.
+  const episodeNumbers = useMemo(
+    () =>
+      new Map(
+        filterAndSortReleases(items, '', 'all', 'asc').map((item, index) => [item, sourceEpisodeNumber(item, index)]),
+      ),
+    [items],
+  );
+  const sorted = useMemo(
+    () => filterAndSortReleases(items, query, readFilter, sort, episodeNumbers),
+    [items, query, readFilter, sort, episodeNumbers],
+  );
   const [requestedPage, setRequestedPage] = useReadingChapterPage(
     `${location}:page`,
     sorted.findIndex((item) => item.readingState === 'current'),
@@ -92,6 +104,7 @@ export function useSourceReleaseList(controller: ExternalSourceController, items
       )
       .catch(() => undefined);
   return {
+    episodeNumber: (item: ExternalSourceItemView) => episodeNumbers.get(item)!,
     query,
     setQuery,
     readFilter,

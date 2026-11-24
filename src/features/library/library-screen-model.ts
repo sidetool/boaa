@@ -135,6 +135,22 @@ export function buildLibraryCatalogProjection(
   return buildLibraryViewCatalog(novels.map((novel) => buildLibraryBookView(novel, readState)));
 }
 
+export function countLibraryBooks(books: Iterable<LibraryBookView>): Record<LibraryFilter, number> {
+  const counts = { all: 0, reading: 0, finished: 0, unread: 0, favorite: 0, trash: 0 };
+  for (const book of books) {
+    if (book.novel.deletedAt) {
+      counts.trash++;
+      continue;
+    }
+    counts.all++;
+    if (book.novel.favorite) counts.favorite++;
+    if (book.isFinished) counts.finished++;
+    else if (book.isUnread) counts.unread++;
+    else counts.reading++;
+  }
+  return counts;
+}
+
 /** Aggregate effective display states before applying search and status selection. */
 export function buildLibraryViewCatalog(books: readonly LibraryBookView[]): LibraryCatalogProjection {
   const activeBooks = books.filter((book) => !book.novel.deletedAt);
@@ -143,21 +159,6 @@ export function buildLibraryViewCatalog(books: readonly LibraryBookView[]): Libr
     .filter((book) => !book.isUnread)
     .sort((a, b) => activityAt(b).localeCompare(activityAt(a)))
     .slice(0, 5);
-  const filterCounts: Record<LibraryFilter, number> = {
-    all: activeBooks.length,
-    reading: 0,
-    finished: 0,
-    unread: 0,
-    favorite: 0,
-    trash: books.length - activeBooks.length,
-  };
-
-  activeBooks.forEach((book) => {
-    if (book.novel.favorite) filterCounts.favorite += 1;
-    if (book.isFinished) filterCounts.finished += 1;
-    else if (book.isUnread) filterCounts.unread += 1;
-    else filterCounts.reading += 1;
-  });
 
   return {
     books,
@@ -165,7 +166,7 @@ export function buildLibraryViewCatalog(books: readonly LibraryBookView[]): Libr
     recentBooks,
     featuredBook: recentBooks[0],
     booksByNovelId,
-    filterCounts,
+    filterCounts: countLibraryBooks(books),
   };
 }
 

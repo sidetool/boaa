@@ -30,12 +30,13 @@ export function createBookWorkspacePortProxy(input: {
     },
     adjacent: {
       loadBookAnnotations: (novelId) => input.adjacent.current.loadBookAnnotations(novelId),
-      applyBookAnnotations: (annotations) => input.adjacent.current.applyBookAnnotations(annotations),
+      applyBookAnnotations: (annotations, expected) =>
+        input.adjacent.current.applyBookAnnotations(annotations, expected),
       preloadReaderBody: (novel, chapter, options) =>
         input.adjacent.current.preloadReaderBody?.(novel, chapter, options),
       loadReaderArtifacts: (chapterId, novelId, preparation) =>
         input.adjacent.current.loadReaderArtifacts(chapterId, novelId, preparation),
-      applyReaderArtifacts: (artifacts) => input.adjacent.current.applyReaderArtifacts(artifacts),
+      applyReaderArtifacts: (artifacts, expected) => input.adjacent.current.applyReaderArtifacts(artifacts, expected),
       resetCorrection: () => input.adjacent.current.resetCorrection(),
       resetAnnotationEditor: () => input.adjacent.current.resetAnnotationEditor(),
       refreshNovels: () => input.adjacent.current.refreshNovels(),

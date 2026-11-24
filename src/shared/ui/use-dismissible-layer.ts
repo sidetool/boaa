@@ -42,7 +42,7 @@ export function createDismissibleLayerStack(): DismissibleLayerStack {
   };
 }
 
-const dismissibleLayerStack = createDismissibleLayerStack();
+export const dismissibleLayerStack = createDismissibleLayerStack();
 
 let bodyLockCount = 0;
 let bodyOverflowBeforeLock = '';
@@ -127,7 +127,8 @@ function focusLayerStart(container: HTMLElement, initialFocus?: HTMLElement | nu
 }
 
 export function useMediaQuery(query: string): boolean {
-  const [matches, setMatches] = useState(false);
+  // The first commit must use the same breakpoint as CSS, before effects run.
+  const [matches, setMatches] = useState(() => typeof window !== 'undefined' && window.matchMedia(query).matches);
 
   useEffect(() => {
     const media = window.matchMedia(query);
@@ -147,6 +148,8 @@ export function useDismissibleLayer(input: {
   readonly layerRootRef?: RefObject<HTMLElement>;
   readonly initialFocusRef?: RefObject<HTMLElement>;
   readonly restoreFocusRef?: RefObject<HTMLElement>;
+  /** A focused application surface that forwards its own Escape and Tab keys. */
+  readonly keyboardSurfaceRef?: RefObject<HTMLElement>;
   readonly closeDisabled?: boolean;
   readonly onClose: (reason: DismissibleLayerCloseReason) => void;
 }): void {
@@ -168,11 +171,11 @@ export function useDismissibleLayer(input: {
     const focusFrame = window.requestAnimationFrame(() => focusLayerStart(container, input.initialFocusRef?.current));
 
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (!registration.isTop()) return;
-      if (event.key === 'Escape' && !closeDisabledRef.current) {
+      if (!registration.isTop() || event.target === input.keyboardSurfaceRef?.current) return;
+      if (event.key === 'Escape' && (input.modal || !closeDisabledRef.current)) {
         event.preventDefault();
         event.stopImmediatePropagation();
-        onCloseRef.current('escape');
+        if (!closeDisabledRef.current) onCloseRef.current('escape');
         return;
       }
       if (!input.modal || event.key !== 'Tab') return;
@@ -205,5 +208,13 @@ export function useDismissibleLayer(input: {
       const restoreTarget = input.restoreFocusRef?.current ?? previouslyFocused;
       if (restoreTarget?.isConnected) restoreTarget.focus();
     };
-  }, [input.containerRef, input.initialFocusRef, input.layerRootRef, input.modal, input.open, input.restoreFocusRef]);
+  }, [
+    input.containerRef,
+    input.initialFocusRef,
+    input.keyboardSurfaceRef,
+    input.layerRootRef,
+    input.modal,
+    input.open,
+    input.restoreFocusRef,
+  ]);
 }

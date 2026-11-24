@@ -188,6 +188,7 @@ export function WorkTile({
       <button
         type="button"
         className="un-tile-open"
+        data-navigation-item={item.key}
         aria-pressed={selecting ? selected : undefined}
         aria-label={selecting ? `${title} 선택` : `${title} 열기`}
         onClick={() => {

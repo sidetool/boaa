@@ -102,6 +102,7 @@ export interface HomeRowView {
    * Idempotent. Uncached rows start `loading`; failed refreshes retain previously published items.
    */
   requestLoad?(): void;
+  releaseLoad?(): void;
   /** Shown with failed rows. */
   retry?(): void;
   /** Failure detail; cached rows remain `ready` when only their background refresh fails. */
@@ -124,6 +125,8 @@ export interface HomeRowOption {
 }
 
 export interface UiNextHomeAdapter {
+  retryBootstrap(): void;
+  bootstrapMessage?: string;
   rowBuilder?: {
     sources: readonly { id: string; title: string; kind?: string }[];
     session: DiscoverySession;

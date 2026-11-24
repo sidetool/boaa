@@ -18,6 +18,31 @@ import type {
 } from '../integration-settings/self-host-integration-settings';
 
 const DB_NAME = 'boaa-external-sources';
+const cacheClearListeners = new Set<(scope?: string) => void>();
+
+/** A metadata clear also retires active discovery reads before they can save back into that store. */
+export function subscribeSourceCacheClear(listener: (scope?: string) => void) {
+  cacheClearListeners.add(listener);
+  return () => {
+    cacheClearListeners.delete(listener);
+  };
+}
+
+function notifySourceCacheClear(scope?: string) {
+  for (const listener of cacheClearListeners) listener(scope);
+}
+
+function cachedConnection(page: ExternalCatalogCachePage) {
+  if (page.accountConnectionId !== undefined) return page.accountConnectionId;
+  // Previously discovery stored the connection only inside its persisted list/schema key.
+  try {
+    const key: unknown = JSON.parse(page.id.replace(/^schema:/u, ''));
+    if (Array.isArray(key) && key.length === 6 && key[1] === page.connectorId) return key[3];
+  } catch {
+    /* Other catalog stores use opaque IDs. */
+  }
+  return undefined;
+}
 // Keep this at the last shipped version. Shared connection hints are server-owned in self-host mode
 // and reconstructed from the encrypted device credential in local mode, so they need no new store.
 const DB_VERSION = 6;
@@ -41,6 +66,61 @@ function transactionDone(transaction: IDBTransaction): Promise<void> {
     transaction.onerror = () => reject(transaction.error);
     transaction.onabort = () => reject(transaction.error);
   });
+}
+
+type QueueItem = SourceDownloadQueue['items'][number];
+type QueueHeader = Omit<SourceDownloadQueue, 'items'> & { count: number; nextPosition: number };
+type QueueRow = { id: [string, string]; position: number; item: QueueItem };
+
+function queueRows(id: string) {
+  return IDBKeyRange.bound([id], [id, []]);
+}
+
+const headerPrefix = 'source-queue-header:';
+const releasePreferencesRange = () => IDBKeyRange.bound('release-preference:', 'release-preference:\uffff');
+function writeQueueHeader(store: IDBObjectStore, header: QueueHeader) {
+  store.put({ ...header, kind: 'downloadQueueHeader', id: headerPrefix + header.id });
+}
+
+async function readQueueHeader(store: IDBObjectStore, id: string): Promise<QueueHeader | undefined> {
+  const [saved, legacy] = await Promise.all([
+    requestToPromise<QueueHeader | undefined>(store.get(headerPrefix + id)),
+    requestToPromise<SourceDownloadQueue | undefined>(store.get(id)),
+  ]);
+  const header = saved && { ...saved, kind: 'downloadQueue' as const, id };
+  if (!legacy) return header;
+  // An older tab can still write the original array record. Merge on every encounter
+  // without replacing this client's outstanding entries or newer revisions.
+  const { items, ...metadata } = legacy;
+  const next = header ?? { ...metadata, count: 0, nextPosition: 0 };
+  const unique = [...new Map(items.map((item) => [externalItemKeyId(item.key), item])).entries()];
+  const existing = await Promise.all(
+    unique.map(([key]) => requestToPromise<QueueRow | undefined>(store.get([id, key]))),
+  );
+  unique.forEach(([key, item], index) => {
+    if (!existing[index]) {
+      store.put({ id: [id, key], item, position: next.nextPosition++ });
+      next.count++;
+    }
+  });
+  writeQueueHeader(store, next);
+  store.delete(id);
+  return next;
+}
+
+async function readQueue(store: IDBObjectStore, header: QueueHeader): Promise<SourceDownloadQueue> {
+  const { id, kind, connectorId, accountConnectionId, collectionRemoteId, title, updatedAt } = header;
+  const rows = await requestToPromise<QueueRow[]>(store.getAll(queueRows(header.id)));
+  return {
+    id,
+    kind,
+    connectorId,
+    accountConnectionId,
+    collectionRemoteId,
+    title,
+    updatedAt,
+    items: rows.sort((a, b) => a.position - b.position).map((row) => row.item),
+  };
 }
 
 function openExternalSourceDb(dbName = DB_NAME): Promise<IDBDatabase> {
@@ -206,15 +286,17 @@ export interface ExternalSourceLocalState {
   saveReleasePreferences?(records: readonly SourceReleasePreference[]): Promise<void>;
   /** Atomically compare a journal visit with the current reset/visit timestamp and return the authoritative record. */
   replaySourceStreamVisit?(visit: SourceReleasePreference): Promise<SourceReleasePreference>;
-  listDownloadQueues?(): Promise<SourceDownloadQueue[]>;
+  listDownloadQueues?(exclude?: ReadonlySet<string>): Promise<SourceDownloadQueue[]>;
   saveDownloadQueue?(queue: SourceDownloadQueue): Promise<void>;
   deleteDownloadQueue?(id: string): Promise<void>;
+  checkpointDownloadItems?(id: string, completed: SourceDownloadQueue['items']): Promise<void>;
   pruneDownloadQueue?(id: string, completed: SourceDownloadQueue['items']): Promise<SourceDownloadQueue | undefined>;
   getOrCreateCredentialKey(): Promise<CryptoKey>;
   getCredential(connectorId: string): Promise<ExternalSourceCredentialRecord | undefined>;
   saveCredential(record: ExternalSourceCredentialRecord): Promise<void>;
   deleteCredential(connectorId: string): Promise<void>;
   getCachePage(id: string): Promise<ExternalCatalogCachePage | undefined>;
+  deleteCachePage?(id: string): Promise<void>;
   saveCachePage(page: ExternalCatalogCachePage): Promise<void>;
   clearCache(connectorId: string, accountConnectionId?: string): Promise<void>;
   listLinks(connectorId?: string): Promise<ExternalSourceLink[]>;
@@ -275,7 +357,7 @@ export class ExternalSourceLocalStateStore implements ExternalSourceLocalState {
     const db = await this.openDb();
     if (!db.objectStoreNames.contains('browsePreferences')) return [];
     const rows = await requestToPromise<SourceReleasePreference[]>(
-      db.transaction('browsePreferences').objectStore('browsePreferences').getAll(),
+      db.transaction('browsePreferences').objectStore('browsePreferences').getAll(releasePreferencesRange()),
     );
     return rows.filter((row) => row.kind === 'releasePreference');
   }
@@ -312,28 +394,69 @@ export class ExternalSourceLocalStateStore implements ExternalSourceLocalState {
     return next;
   }
 
-  async listDownloadQueues(): Promise<SourceDownloadQueue[]> {
+  async listDownloadQueues(exclude?: ReadonlySet<string>): Promise<SourceDownloadQueue[]> {
     const db = await this.openDb();
     if (!db.objectStoreNames.contains('browsePreferences')) return [];
-    const rows = await requestToPromise<SourceDownloadQueue[]>(
-      db.transaction('browsePreferences').objectStore('browsePreferences').getAll(),
+    const tx = db.transaction('browsePreferences', 'readwrite');
+    const store = tx.objectStore('browsePreferences');
+    const prefixes = ['download-queue:', headerPrefix];
+    const [legacy, headers] = await Promise.all(
+      prefixes.map((prefix) => requestToPromise(store.getAllKeys(IDBKeyRange.bound(prefix, prefix + '\uffff')))),
     );
-    return rows.filter((row) => row.kind === 'downloadQueue');
+    const ids = new Set([...legacy.map(String), ...headers.map((key) => String(key).slice(headerPrefix.length))]);
+    const queues = await Promise.all(
+      [...ids]
+        .filter((id) => !exclude?.has(id))
+        .map(async (id) => readQueue(store, (await readQueueHeader(store, id))!)),
+    );
+    await transactionDone(tx);
+    return queues;
   }
 
   async saveDownloadQueue(queue: SourceDownloadQueue): Promise<void> {
-    if (queue.items.length > 50_000) throw new Error('한 작품의 대기열은 50,000회차까지 저장할 수 있습니다.');
+    const { items, ...metadata } = queue;
+    if (items.length > 50_000) throw new Error('한 작품의 대기열은 50,000회차까지 저장할 수 있습니다.');
     const db = await this.openDb();
     const tx = db.transaction('browsePreferences', 'readwrite');
     const store = tx.objectStore('browsePreferences');
-    const previous = await requestToPromise<SourceDownloadQueue | undefined>(store.get(queue.id));
-    const merged = new Map(previous?.items.map((item) => [externalItemKeyId(item.key), item]));
-    queue.items.forEach((item) => merged.set(externalItemKeyId(item.key), item));
-    if (merged.size > 50_000) {
+    const previous = await readQueueHeader(store, queue.id);
+    const unique = [...new Map(items.map((item) => [externalItemKeyId(item.key), item])).entries()];
+    const existing = await Promise.all(
+      unique.map(([key]) => requestToPromise<QueueRow | undefined>(store.get([queue.id, key]))),
+    );
+    const count = (previous?.count ?? 0) + existing.filter((row) => !row).length;
+    if (count > 50_000) {
       tx.abort();
       throw new Error('대기열 회차 한도를 초과했습니다.');
     }
-    store.put({ ...queue, items: [...merged.values()] });
+    let nextPosition = previous?.nextPosition ?? 0;
+    unique.forEach(([key, item], index) => {
+      store.put({ id: [queue.id, key], item, position: existing[index]?.position ?? nextPosition++ });
+    });
+    if (count) writeQueueHeader(store, { ...metadata, count, nextPosition });
+    await transactionDone(tx);
+  }
+
+  async checkpointDownloadItems(id: string, completed: SourceDownloadQueue['items']): Promise<void> {
+    if (!completed.length) return;
+    const db = await this.openDb();
+    const tx = db.transaction('browsePreferences', 'readwrite');
+    const store = tx.objectStore('browsePreferences');
+    const header = await readQueueHeader(store, id);
+    if (!header) return;
+    const unique = new Map(completed.map((item) => [externalItemKeyId(item.key), item]));
+    const rows = await Promise.all(
+      [...unique.keys()].map((key) => requestToPromise<QueueRow | undefined>(store.get([id, key]))),
+    );
+    let count = header.count;
+    for (const row of rows) {
+      if (row && unique.get(row.id[1])!.remoteRevision === row.item.remoteRevision) {
+        store.delete(row.id);
+        count--;
+      }
+    }
+    if (count === 0) store.delete(headerPrefix + id);
+    else if (count !== header.count) writeQueueHeader(store, { ...header, count });
     await transactionDone(tx);
   }
 
@@ -341,30 +464,20 @@ export class ExternalSourceLocalStateStore implements ExternalSourceLocalState {
     id: string,
     completed: SourceDownloadQueue['items'],
   ): Promise<SourceDownloadQueue | undefined> {
+    await this.checkpointDownloadItems(id, completed);
     const db = await this.openDb();
-    const tx = db.transaction('browsePreferences', 'readwrite');
-    const store = tx.objectStore('browsePreferences');
-    const current = await requestToPromise<SourceDownloadQueue | undefined>(store.get(id));
-    const done = new Map(completed.map((item) => [externalItemKeyId(item.key), item]));
-    const next = current
-      ? {
-          ...current,
-          items: current.items.filter((item) => {
-            const matched = done.get(externalItemKeyId(item.key));
-            return !matched || matched.remoteRevision !== item.remoteRevision;
-          }),
-        }
-      : undefined;
-    if (next?.items.length) store.put(next);
-    else store.delete(id);
-    await transactionDone(tx);
-    return next?.items.length ? next : undefined;
+    const store = db.transaction('browsePreferences', 'readwrite').objectStore('browsePreferences');
+    const header = await readQueueHeader(store, id);
+    return header && readQueue(store, header);
   }
 
   async deleteDownloadQueue(id: string): Promise<void> {
     const db = await this.openDb();
     const tx = db.transaction('browsePreferences', 'readwrite');
-    tx.objectStore('browsePreferences').delete(id);
+    const store = tx.objectStore('browsePreferences');
+    store.delete(id);
+    store.delete(headerPrefix + id);
+    store.delete(queueRows(id));
     await transactionDone(tx);
   }
   private readonly sharedChangeListeners = new Set<() => void>();
@@ -501,9 +614,17 @@ export class ExternalSourceLocalStateStore implements ExternalSourceLocalState {
       const cursor = request.result;
       if (!cursor) return;
       const page = cursor.value as ExternalCatalogCachePage;
-      if (accountConnectionId === undefined || page.accountConnectionId === accountConnectionId) cursor.delete();
+      if (accountConnectionId === undefined || cachedConnection(page) === accountConnectionId) cursor.delete();
       cursor.continue();
     };
+    notifySourceCacheClear(this.scope);
+    await transactionDone(tx);
+  }
+
+  async deleteCachePage(id: string): Promise<void> {
+    const db = await this.openDb();
+    const tx = db.transaction('cachePages', 'readwrite');
+    tx.objectStore('cachePages').delete(id);
     await transactionDone(tx);
   }
 
@@ -601,9 +722,9 @@ export class ExternalSourceLocalStateStore implements ExternalSourceLocalState {
       const remaining = await requestToPromise<ExternalSourceLink[]>(store.getAll());
       remaining.forEach((link) => affected.delete(collectionKey(link) ?? ''));
       const preferencesStore = tx.objectStore('browsePreferences');
-      const preferences = (await requestToPromise<SourceReleasePreference[]>(preferencesStore.getAll())).filter(
-        (p) => p.kind === 'releasePreference',
-      );
+      const preferences = (
+        await requestToPromise<SourceReleasePreference[]>(preferencesStore.getAll(releasePreferencesRange()))
+      ).filter((p) => p.kind === 'releasePreference');
       for (const id of affected) {
         const association = removed.find((link) => collectionKey(link) === id)!;
         const work = { ...association.source, remoteId: association.collectionRemoteId! };
@@ -906,7 +1027,7 @@ export class ExternalSourceLocalStateStore implements ExternalSourceLocalState {
     snapshot.subscriptions.forEach((subscription) => subscriptionStore.put(subscription));
     if (hasPreferences) {
       const preferences = tx.objectStore('browsePreferences');
-      const rows = await requestToPromise<SourceReleasePreference[]>(preferences.getAll());
+      const rows = await requestToPromise<SourceReleasePreference[]>(preferences.getAll(releasePreferencesRange()));
       rows.filter((row) => row.kind === 'releasePreference').forEach((row) => preferences.delete(row.id));
       snapshot.releasePreferences?.forEach((row) => preferences.put(row));
     }
@@ -940,6 +1061,7 @@ export async function clearSourceMetadataCache(scope?: string): Promise<void> {
   const db = await openExternalSourceDb(scope ? `${DB_NAME}:account:${scope}` : DB_NAME);
   const tx = db.transaction('cachePages', 'readwrite');
   tx.objectStore('cachePages').clear();
+  notifySourceCacheClear(scope);
   await transactionDone(tx);
 }
 

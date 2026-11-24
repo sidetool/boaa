@@ -9,7 +9,12 @@ import {
   updateGlobalTTSPlaybackSettings,
 } from '../providers/tts-playback-settings';
 import { TTSActiveSleepTimer } from '../providers/tts-sleep-timer';
-import { ttsPlaybackSettingsFingerprint, validTTSPlaybackResume } from '../providers/tts-playback-resume';
+import { voiceProfilesRevision } from '../domain/resource-revisions';
+import {
+  loadTTSResumeSettingsFingerprint,
+  ttsPlaybackSettingsFingerprint,
+  validTTSPlaybackResume,
+} from '../providers/tts-playback-resume';
 import { BrowserMediaSessionAdapter } from '../platform/media-session-adapter';
 
 const paragraph: Paragraph = {
@@ -190,4 +195,27 @@ it('keeps ordinary server audio resume identity across live speed and timer chan
   expect(
     ttsPlaybackSettingsFingerprint({ settings: { ...settings, serverVoiceId: 'other' }, voiceRevision: 'v' }),
   ).not.toBe(fingerprint);
+});
+
+it.each(['system', 'server'] as const)(
+  'loads a saved plain %s position without querying cast profiles',
+  async (voiceSource) => {
+    const settings = { ...defaultSettings.ttsPlayback, mode: 'plain' as const, voiceSource };
+    const unavailable = vi.fn(async () => {
+      throw new Error('cast profiles unavailable');
+    });
+    await expect(loadTTSResumeSettingsFingerprint(settings, 'device-voice', unavailable)).resolves.toBe(
+      ttsPlaybackSettingsFingerprint({ settings, voiceRevision: 'device-voice' }),
+    );
+    expect(unavailable).not.toHaveBeenCalled();
+  },
+);
+
+it('loads cast profiles to validate a saved cast position', async () => {
+  const settings = { ...defaultSettings.ttsPlayback, mode: 'cast' as const };
+  const load = vi.fn(async () => []);
+  await expect(loadTTSResumeSettingsFingerprint(settings, 'device-voice', load)).resolves.toBe(
+    ttsPlaybackSettingsFingerprint({ settings, voiceRevision: voiceProfilesRevision([]) }),
+  );
+  expect(load).toHaveBeenCalledOnce();
 });

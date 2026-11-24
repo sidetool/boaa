@@ -430,6 +430,152 @@
   background: none;
 }
 
+.un-release .un-chapter-open {
+  grid-template-columns: minmax(2.25em, auto) minmax(0, 1fr);
+}
+.un-release .un-chapter-index {
+  min-width: 2.25em;
+}
+.un-release .un-release-meta {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 0 6px;
+}
+/* Reading state leads in color; a finished download is a quiet fact after it. */
+.un-release-meta > .un-release-state.is-imported {
+  color: var(--un-text-3);
+  font-weight: 500;
+}
+.un-release-meta > .un-release-state + .un-release-state::before {
+  margin-right: 1px;
+  color: var(--un-text-3);
+  font-weight: 500;
+  content: '·';
+}
+.un-release:focus-visible {
+  outline: 2px solid var(--un-accent-2);
+  outline-offset: -2px;
+}
+.un-release-navigation label {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+.un-release-navigation label > span {
+  color: var(--un-text-2);
+  font-size: 13px;
+  font-weight: 600;
+}
+.un-release-navigation input {
+  font-variant-numeric: tabular-nums;
+  appearance: textfield;
+}
+.un-release-navigation input::-webkit-inner-spin-button,
+.un-release-navigation input::-webkit-outer-spin-button {
+  margin: 0;
+  appearance: none;
+}
+.un-release-range {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+/* An unavailable source: the two ways out sit side by side, the queue link under them. */
+.un-source .un-empty-actions {
+  display: flex;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.un-queue-groups {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.un-queue-group {
+  overflow-wrap: anywhere;
+  border-radius: 16px;
+  background: var(--un-pref-surface, rgb(255 255 255 / 4.5%));
+}
+.un-queue-group summary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 60px;
+  padding: 10px 14px 10px 16px;
+  list-style: none;
+  cursor: pointer;
+}
+.un-queue-group summary::-webkit-details-marker {
+  display: none;
+}
+.un-queue-group summary > span {
+  display: grid;
+  flex: 1;
+  gap: 2px;
+  min-width: 0;
+}
+.un-queue-group summary b {
+  overflow: hidden;
+  font-size: 15px;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.un-queue-group summary svg {
+  flex: none;
+  color: var(--un-text-3);
+  transition: transform 0.2s var(--un-ease);
+}
+.un-queue-group[open] summary svg {
+  transform: rotate(180deg);
+}
+.un-queue-group ul {
+  margin: 0;
+  padding: 0 6px 6px 16px;
+  border-top: 1px solid var(--un-line);
+  list-style: none;
+}
+.un-queue-group li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 48px;
+  padding-block: 6px;
+  font-size: 14px;
+}
+.un-queue-group li > span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.un-queue-actions {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 4px;
+}
+.un-queue-group li + li {
+  border-top: 1px solid var(--un-line);
+}
+.un-queue-group small {
+  display: block;
+  color: var(--un-text-3);
+  font-size: 12.5px;
+}
+.un-queue-group small.is-failed {
+  color: #ff98a2;
+}
+.un-queue-empty {
+  margin: 0;
+  padding: 24px 0;
+  color: var(--un-text-2);
+  font-size: 14px;
+  text-align: center;
+}
+
 .un-release-state {
   display: inline-flex;
   align-items: center;
@@ -693,6 +839,17 @@
   background: var(--un-accent);
 }
 
+/* Reserve the bar's actual height in the list so even a wrapped bar clears the pager. */
+.un-source:has(> .un-source-batch) {
+  padding-bottom: 24px;
+}
+
+.un-source > .un-source-batch {
+  position: sticky;
+  bottom: 0;
+  margin-top: 8px;
+}
+
 .un-source-batch .un-source-batch-label {
   display: inline-flex;
   align-items: center;
@@ -709,6 +866,10 @@
 @media (max-width: 899px) {
   .un-source {
     padding-bottom: calc(var(--un-tabbar) + var(--un-safe-b) + 88px);
+  }
+
+  .un-source:has(> .un-source-batch) {
+    padding-bottom: calc(var(--un-tabbar) + var(--un-safe-b) + 14px);
   }
 
   .un-source-head {
@@ -741,14 +902,6 @@
   .un-source-search {
     flex-basis: 100%;
     max-width: none;
-  }
-
-  .un-release-state {
-    display: none;
-  }
-
-  .un-release.is-current .un-release-state {
-    display: inline-flex;
   }
 
   .un-source-file {

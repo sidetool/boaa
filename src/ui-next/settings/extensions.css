@@ -284,7 +284,7 @@
 
 .un-ext .un-ext-danger {
   background: var(--un-danger);
-  color: #fff;
+  color: var(--un-bg);
 }
 
 /* Per-source options, logins and content connections inside an expanded row. */

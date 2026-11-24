@@ -1,6 +1,6 @@
 import type { ExternalSourceItemView } from './external-source-controller-contract';
 
-export const SOURCE_RELEASE_PAGE_SIZE = 10;
+export const SOURCE_RELEASE_PAGE_SIZE = 30;
 export type ReleaseReadFilter = 'all' | 'unread' | 'read';
 export type ReleaseSort = 'asc' | 'desc';
 
@@ -9,6 +9,7 @@ export function filterAndSortReleases(
   query: string,
   readFilter: ReleaseReadFilter,
   sort: ReleaseSort,
+  episodeNumbers?: ReadonlyMap<ExternalSourceItemView, number>,
 ): ExternalSourceItemView[] {
   const search = query.normalize('NFKC').trim().toLocaleLowerCase();
   const order = (item: ExternalSourceItemView) => {
@@ -20,7 +21,8 @@ export function filterAndSortReleases(
       const read = item.readingState === 'read';
       if (readFilter === 'read' && !read) return false;
       if (readFilter === 'unread' && read) return false;
-      return !search || `${item.title} ${order(item) ?? ''}화`.normalize('NFKC').toLocaleLowerCase().includes(search);
+      const number = episodeNumbers?.get(item) ?? order(item);
+      return !search || `${item.title} ${number ?? ''}화`.normalize('NFKC').toLocaleLowerCase().includes(search);
     })
     .sort((a, b) => {
       // A local section index is not a remote chapter number. Keep local-only

@@ -345,6 +345,15 @@ export class DockerDeployment {
     } finally {
       clearTimeout(timer);
     }
+    await this.finishBackup(state, folder);
+  }
+  async finishBackup(state, folder) {
+    const policy = await readJson(path.join(this.directory, 'update-backup-policy.json'), { scope: 'full' });
+    if (policy?.scope === 'database') {
+      await atomicJson(path.join(folder, 'deployment.json'), { ...state, backupScope: 'database' });
+      return;
+    }
+    if (policy?.scope !== 'full') throw new Error('update_backup_policy_invalid');
     await this.compose(state.compose, ['cp', 'api:/data/server/.', path.join(folder, 'server')], 20 * 60_000);
     if (state.enabled.includes('metadata'))
       await this.compose(state.compose, ['cp', 'runtime-metadata:/data/.', path.join(folder, 'metadata')], 20 * 60_000);

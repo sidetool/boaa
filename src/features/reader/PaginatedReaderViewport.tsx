@@ -964,10 +964,11 @@ export function PaginatedReaderViewport(
           },
           'search',
         ),
-      scrollToParagraph: async (id) => {
+      scrollToParagraph: async (id, source, signal) => {
+        if (source === 'playback' && (document.visibilityState === 'hidden' || signal?.aborted)) return false;
         const navigation = ++navigationRef.current;
         const p = await repository.getParagraph(id);
-        if (navigation !== navigationRef.current || session.controller.signal.aborted) return false;
+        if (signal?.aborted || navigation !== navigationRef.current || session.controller.signal.aborted) return false;
         return p?.chapterId === chapter.id ? seekParagraph(p.index - 1) : false;
       },
       scrollToParagraphIndex: async (index) => {

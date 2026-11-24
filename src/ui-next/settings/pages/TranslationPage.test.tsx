@@ -1,7 +1,7 @@
 import { StrictMode } from 'react';
 import { act, create, type ReactTestRenderer } from 'react-test-renderer';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { DEFAULT_TRANSLATION_SETTINGS } from '../../../translation/contracts';
+import { DEFAULT_TRANSLATION_SETTINGS, type TranslationConfiguration } from '../../../translation/contracts';
 import { TranslationPage } from './TranslationPage';
 const client = vi.hoisted(() => ({
   configuration: vi.fn(),
@@ -10,13 +10,19 @@ const client = vi.hoisted(() => ({
   deleteCredential: vi.fn(),
   clear: vi.fn(),
 }));
+const session = vi.hoisted(() => ({ current: undefined as typeof client | undefined }));
+vi.mock('../../components/dialogs', () => ({
+  ConfirmSheet: (props: { open: boolean; onConfirm(): void }) =>
+    props.open ? <button onClick={props.onConfirm}>삭제 확인</button> : null,
+}));
 vi.mock('../../../features/translation/translation-client', () => ({
-  useTranslationClient: () => client,
+  useTranslationClient: () => session.current ?? client,
   translationError: () => '다시 확인해 주세요.',
 }));
 let renderer: ReactTestRenderer;
 afterEach(() => {
   if (renderer) act(() => renderer.unmount());
+  session.current = undefined;
   vi.clearAllMocks();
   vi.unstubAllGlobals();
 });
@@ -26,9 +32,10 @@ const config = () => ({
   credentials: {},
   usedCharacters: 0,
 });
-async function mount() {
+async function mount(initial: TranslationConfiguration | Error = config()) {
   vi.stubGlobal('window', new EventTarget());
-  client.configuration.mockResolvedValue(config());
+  if (initial instanceof Error) client.configuration.mockRejectedValue(initial);
+  else client.configuration.mockResolvedValue(initial);
   await act(async () => {
     renderer = create(
       <StrictMode>
@@ -45,12 +52,119 @@ describe('translation settings', () => {
     await mount();
     const key = renderer.root.findByProps({ 'aria-label': '번역 API 키' });
     act(() => key.props.onChange({ target: { value: 'test-private' } }));
-    client.credential.mockResolvedValue(undefined);
+    expect(button('번역 설정 저장').props.disabled).toBe(true);
+    client.credential.mockResolvedValue({ saved: true });
     await act(async () => button('키 저장').props.onClick());
+    expect(button('번역 설정 저장').props.disabled).toBe(false);
     expect(client.credential).toHaveBeenCalledWith('gemini', 'test-private');
     expect(renderer.root.findByProps({ 'aria-label': '번역 API 키' }).props.value).toBe('');
     expect(client.save).not.toHaveBeenCalled();
   });
+  it.each(['save', 'delete'] as const)(
+    'shows the confirmed key %s and retries only the settings lookup',
+    async (action) => {
+      const saving = action === 'save';
+      const before = { ...config(), credentials: { gemini: { saved: !saving } } };
+      await mount(before);
+      const model = () => renderer.root.findByProps({ 'aria-label': '모델 ID' });
+      act(() => model().props.onChange({ target: { value: 'draft-model' } }));
+      const secret = () => renderer.root.findByProps({ 'aria-label': '번역 API 키' });
+      client.configuration.mockRejectedValueOnce(new Error('offline'));
+      if (saving) {
+        act(() => secret().props.onChange({ target: { value: 'synthetic-key' } }));
+        client.credential.mockResolvedValue({ saved: true });
+        await act(async () => button('키 저장').props.onClick());
+      } else {
+        client.deleteCredential.mockResolvedValue({ saved: false });
+        act(() => button('저장된 키 삭제').props.onClick());
+        await act(async () => button('삭제 확인').props.onClick());
+      }
+      expect(Boolean(button('저장된 키 삭제'))).toBe(saving);
+      expect(model().props.value).toBe('draft-model');
+      expect(secret().props.value).toBe('');
+      expect(JSON.stringify(renderer.toJSON())).toContain('설정 상태를 갱신하지 못했어요');
+      client.configuration.mockResolvedValue({ ...before, revision: 3, credentials: { gemini: { saved: saving } } });
+      act(() => secret().props.onChange({ target: { value: 'next-edit' } }));
+      const queries = client.configuration.mock.calls.length;
+      await act(async () => button('다시 불러오기').props.onClick());
+      expect(client.configuration.mock.calls.length).toBe(queries + 1);
+      expect(client.credential).toHaveBeenCalledTimes(saving ? 1 : 0);
+      expect(client.deleteCredential).toHaveBeenCalledTimes(saving ? 0 : 1);
+      expect(client.save).not.toHaveBeenCalled();
+      expect(model().props.value).toBe('draft-model');
+      expect(secret().props.value).toBe('next-edit');
+      expect(JSON.stringify(renderer.toJSON())).not.toContain('설정 상태를 갱신하지 못했어요');
+      act(() => button('입력 지우기').props.onClick());
+      client.save.mockResolvedValue(before);
+      await act(async () => button('번역 설정 저장').props.onClick());
+      expect(client.save).toHaveBeenCalledWith(expect.objectContaining({ model: 'draft-model' }), before.revision);
+    },
+  );
+
+  it('preserves edits made before the first successful settings lookup', async () => {
+    await mount(new Error('initial lookup failed'));
+    const model = () => renderer.root.findByProps({ 'aria-label': '모델 ID' });
+    act(() => model().props.onChange({ target: { value: 'edited-model' } }));
+    act(() => renderer.root.findByProps({ 'aria-label': '번역 API 키' }).props.onChange({ target: { value: 'test' } }));
+    client.credential.mockResolvedValue({ saved: true });
+    const settings = { ...config().settings, targetLanguage: 'ja' };
+    client.configuration.mockResolvedValue({
+      ...config(),
+      settings,
+      revision: 7,
+      credentials: { gemini: { saved: true } },
+    });
+    await act(async () => button('키 저장').props.onClick());
+    expect(model().props.value).toBe('edited-model');
+    expect(renderer.root.findByProps({ 'aria-label': '번역할 언어' }).props.value).toBe('ja');
+  });
+
+  it('keeps the edited key after a rejected write and isolates confirmed state by provider', async () => {
+    await mount();
+    const secret = () => renderer.root.findByProps({ 'aria-label': '번역 API 키' });
+    act(() => secret().props.onChange({ target: { value: 'synthetic-key' } }));
+    client.credential.mockRejectedValueOnce(new Error('offline'));
+    const queries = client.configuration.mock.calls.length;
+    await act(async () => button('키 저장').props.onClick());
+    expect(secret().props.value).toBe('synthetic-key');
+    expect(client.configuration.mock.calls.length).toBe(queries);
+    expect(button('저장된 키 삭제')).toBeUndefined();
+
+    client.credential.mockResolvedValueOnce({ saved: true });
+    client.configuration.mockRejectedValueOnce(new Error('offline'));
+    await act(async () => button('키 저장').props.onClick());
+    act(() => renderer.root.findAllByType('select')[0].props.onChange({ target: { value: 'openai-compatible' } }));
+    expect(button('저장된 키 삭제')).toBeUndefined();
+    act(() => renderer.root.findAllByType('select')[0].props.onChange({ target: { value: 'gemini' } }));
+    expect(button('저장된 키 삭제')).toBeDefined();
+  });
+
+  it('discards a previous account and its late key receipt when the client changes', async () => {
+    await mount();
+    const secret = () => renderer.root.findByProps({ 'aria-label': '번역 API 키' });
+    act(() => secret().props.onChange({ target: { value: 'account-one' } }));
+    let done!: (value: { saved: boolean }) => void;
+    client.credential.mockImplementationOnce(() => new Promise((resolve) => (done = resolve)));
+    act(() => button('키 저장').props.onClick());
+    const previousReads = client.configuration.mock.calls.length;
+    const next = { ...client, configuration: vi.fn().mockResolvedValue(config()) };
+    session.current = next;
+    await act(async () =>
+      renderer.update(
+        <StrictMode>
+          <TranslationPage />
+        </StrictMode>,
+      ),
+    );
+    expect(secret().props.value).toBe('');
+    expect(secret().props.disabled).toBe(false);
+    act(() => secret().props.onChange({ target: { value: 'account-two' } }));
+    await act(async () => done({ saved: true }));
+    expect(client.configuration.mock.calls.length).toBe(previousReads);
+    expect(secret().props.value).toBe('account-two');
+    expect(button('저장된 키 삭제')).toBeUndefined();
+  });
+
   it('discards late JSON reads after changing provider or clearing input', async () => {
     await mount();
     act(() => renderer.root.findAllByType('select')[0].props.onChange({ target: { value: 'vertex' } }));

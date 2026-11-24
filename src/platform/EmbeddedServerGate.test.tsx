@@ -3,9 +3,14 @@ import { act, create, type ReactTestRenderer } from 'react-test-renderer';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { EmbeddedServerGate } from './EmbeddedServerGate';
 import { DesktopServerChoice } from './DesktopServerChoice';
+import { DesktopWindowShell } from './DesktopWindowFrame';
 import { DESKTOP_SERVER_SELECTION_KEY } from './desktop-server-selection';
 
-const { invoke } = vi.hoisted(() => ({ invoke: vi.fn() }));
+const { invoke, sharingModule } = vi.hoisted(() => ({ invoke: vi.fn(), sharingModule: { loaded: false } }));
+vi.mock(import('./EmbeddedServerSharing'), async (load) => {
+  sharingModule.loaded = true;
+  return load();
+});
 vi.mock('@tauri-apps/api/core', () => ({ invoke }));
 vi.mock('@tauri-apps/api/event', () => ({ listen: vi.fn(async () => () => {}) }));
 let renderer: ReactTestRenderer;
@@ -48,6 +53,55 @@ it('shows startup failure and retry without creating a local library', async () 
   expect(JSON.stringify(renderer.toJSON())).toContain('서버 실행 실패');
   expect(JSON.stringify(renderer.toJSON())).toContain('다시 시도');
   expect(reader).not.toHaveBeenCalled();
+});
+
+it('opens and closes sharing controls from the Windows title bar only after the embedded library is ready', async () => {
+  vi.stubEnv('VITE_DESKTOP_EMBEDDED_SERVER', 'true');
+  vi.stubGlobal('window', Object.assign(new EventTarget(), { isTauri: true, navigator: { userAgent: 'Windows' } }));
+  const status = vi.fn(async () => Response.json({ setupRequired: false }));
+  vi.stubGlobal('fetch', status);
+  let finishStart!: (ready: unknown) => void;
+  invoke.mockReturnValueOnce(
+    new Promise((resolve) => {
+      finishStart = resolve;
+    }),
+  );
+  await act(async () => {
+    renderer = create(
+      <EmbeddedServerGate>
+        {() => (
+          <DesktopWindowShell>
+            <main>내장 서재</main>
+          </DesktopWindowShell>
+        )}
+      </EmbeddedServerGate>,
+    );
+  });
+  const sharingButtons = () =>
+    renderer.root.findAllByType('button').filter((button) => button.children.includes('다른 기기 접속'));
+  expect(sharingButtons()).toHaveLength(0);
+  await act(async () =>
+    finishStart({ phase: 'ready', running: true, url: 'http://127.0.0.1:43127', authToken: 'test' }),
+  );
+  expect(sharingButtons()).toHaveLength(1);
+  expect(sharingModule.loaded).toBe(false);
+  await act(async () => {
+    sharingButtons()[0].props.onClick();
+  });
+  await act(async () => vi.dynamicImportSettled());
+  expect(sharingModule.loaded).toBe(true);
+  const dialog = renderer.root.findByProps({ role: 'dialog' });
+  expect(dialog.findByType('h2').children).toEqual(['다른 기기에서 서재 열기']);
+  expect(dialog.findByProps({ 'aria-label': '접속 방식' }).props.value).toBe('cloudflare');
+  expect(status).toHaveBeenCalledTimes(1);
+  expect(invoke).not.toHaveBeenCalledWith('desktop_embedded_server_share', expect.anything());
+  await act(async () =>
+    dialog
+      .findAllByType('button')
+      .find((button) => button.children.includes('닫기'))!
+      .props.onClick(),
+  );
+  expect(renderer.root.findAllByProps({ role: 'dialog' })).toHaveLength(0);
 });
 
 it('allows selecting an external server when the local server cannot start', async () => {

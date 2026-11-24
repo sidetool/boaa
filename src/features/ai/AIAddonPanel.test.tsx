@@ -1,4 +1,6 @@
 import { renderToStaticMarkup } from 'react-dom/server';
+import { act, create, type ReactTestRenderer } from 'react-test-renderer';
+import { AnalysisReviewWorkspace } from './AnalysisReviewWorkspace';
 import { describe, expect, it, vi } from 'vitest';
 import AIAddonPanel, {
   type AIAddonPanelActions,
@@ -267,9 +269,9 @@ describe('AIAddonPanel', () => {
     expect(markup.match(/class="primary-btn wide ai-recommended-action"/g)).toHaveLength(1);
     expect(markup).toContain('<summary>고급 정보</summary>');
     expect(markup).not.toContain('<details class="ai-advanced-disclosure" open="">');
-    expect(markup).toContain('3</strong> Graph bundles');
-    expect(markup).toContain('7</strong> Label windows');
-    expect(markup).toContain('Label/voice readiness needs review');
+    expect(markup).toContain('3</strong> 인물 관계 분석 묶음');
+    expect(markup).toContain('7</strong> 화자 분석 구간');
+    expect(markup).toContain('화자·음성 연결 검토 필요');
     expect(markup).toContain('화자 분리 · 검토 항목 분류');
     expect(markup).toContain('speaker-attribution-workflow-v3');
     expect(markup).toContain('대상 구간 18');
@@ -277,7 +279,7 @@ describe('AIAddonPanel', () => {
     expect(markup).toContain('재판별 한도 최대 15% / 4개');
     expect(markup).toContain('대화 경계 2');
     expect(markup).toContain('의미 모호성 1');
-    expect(markup).toContain('aria-label="Workflow review items"');
+    expect(markup).toContain('aria-label="분석 검토 항목"');
     expect(markup).toContain('라벨이 없는 예정 문단');
     expect(markup).toContain('후보 4명 · 관계 3개');
     expect(markup).toContain('data-workflow-id="test.ai.character-bundle"');
@@ -304,7 +306,7 @@ describe('AIAddonPanel', () => {
       }),
     );
 
-    expect(markup).not.toContain('aria-label="화자 분리 workflow 상태"');
+    expect(markup).not.toContain('aria-label="화자 분리 진행 상태"');
     expect(markup).not.toContain('speaker-attribution-workflow-v3');
   });
 
@@ -320,13 +322,68 @@ describe('AIAddonPanel', () => {
       }),
     );
 
-    expect(markup).toContain('실패 window 검토');
+    expect(markup).toContain('분석이 멈춘 구간 검토');
     expect(markup).toContain('&quot;안녕하세요.&quot;');
     expect(markup).toContain('저장 및 재검증');
     expect(markup).toContain('승인 및 재개');
     expect(markup).toContain('수정 적용 범위');
-    expect(markup).toContain('이 window부터 다시 분석');
+    expect(markup).toContain('이 구간부터 다시 분석');
+    expect(markup).toContain('따옴표 대사');
+    expect(markup).toContain('떨리는 목소리');
     expect(markup).not.toContain('수정 내용을 후속 분석에 반영하는 연결이 완료되기 전에는');
+  });
+
+  it('selects listeners by name, keeps a draft on refresh and saves the original character ids', () => {
+    const review = analysisReview();
+    const artifact = {
+      ...review,
+      editIntents: {},
+      characterOptions: [{ id: 'character-9', canonicalName: '은영', aliases: [] }],
+      candidate: {
+        ...review.candidate,
+        segments: review.candidate.segments.map((segment) => ({
+          ...segment,
+          listenerIds: ['legacy-person'],
+          emotion: '기존 감정',
+        })),
+      },
+    };
+    const callbacks = actions().workflow;
+    const render = (value: ChapterLabelAnalysisReviewArtifact) => (
+      <AnalysisReviewWorkspace data={{ available: true, loading: false, reviews: [value] }} actions={callbacks} />
+    );
+    let view!: ReactTestRenderer;
+    act(() => {
+      view = create(render(artifact));
+    });
+    try {
+      const picker = () => view.root.findByProps({ 'aria-label': '대화 상대 추가' });
+      expect(picker().findByProps({ value: 'character-9' }).children).toEqual(['은영']);
+      act(() => picker().props.onChange({ currentTarget: { value: 'character-9' } }));
+      act(() => view.update(render(structuredClone(artifact))));
+      const selected = view.root.findByProps({ 'aria-label': '은영 대화 상대에서 제외' });
+      expect(selected).toBeDefined();
+      expect(picker().findAllByProps({ value: 'character-9' })).toHaveLength(0);
+      act(() => view.root.findByProps({ 'aria-label': 'legacy-person 대화 상대에서 제외' }).props.onClick());
+      act(() =>
+        view.root
+          .findAllByType('button')
+          .find((btn) => btn.children.includes(' 저장 및 재검증'))!
+          .props.onClick(),
+      );
+      expect(callbacks.saveReviewDraft).toHaveBeenCalledWith(
+        artifact.id,
+        expect.objectContaining({
+          segments: [expect.objectContaining({ listenerIds: ['character-9'], emotion: '기존 감정' })],
+        }),
+        {},
+      );
+      act(() => view.update(render({ ...artifact, status: 'approved', reviewRevision: artifact.reviewRevision + 1 })));
+      expect(view.root.findByType('fieldset').props.disabled).toBe(true);
+      expect(view.root.findAllByProps({ 'aria-label': '은영 대화 상대에서 제외' })).toHaveLength(0);
+    } finally {
+      act(() => view.unmount());
+    }
   });
 
   it('offers stored-result retry only after transient promotion retries are exhausted', () => {

@@ -1,5 +1,31 @@
-import type { PreparedNarration } from './plain-audiobook';
+import type { AudiobookPort, PreparedNarration } from './plain-audiobook';
 import type { Paragraph } from '../domain/types';
+
+/** Prefer the saved chapter's original filters and chunk boundaries even during a voice-engine outage. */
+export async function loadPreparedNarration(
+  port: Pick<AudiobookPort, 'reader'>,
+  chapterId: string,
+  choice: { id?: string; voiceId?: string },
+  cacheOnly: boolean,
+  signal: AbortSignal,
+) {
+  const onlyComplete = cacheOnly && !choice.id;
+  let plan: PreparedNarration | undefined;
+  try {
+    plan = await port.reader(chapterId, choice, signal);
+  } catch (error) {
+    signal.throwIfAborted();
+    const status = (error as { status?: number })?.status;
+    if (onlyComplete && (status === 404 || status === 503)) return;
+    throw error;
+  }
+  if (
+    onlyComplete &&
+    plan?.items.some(({ playable }) => !playable.preparedAudio?.ready && !playable.preparedAudio?.skipped)
+  )
+    return;
+  return plan;
+}
 
 /** Feed recorded source ranges to the existing paragraph/highlight/sleep/chapter runner. */
 export function preparedNarrationQueue(plan: PreparedNarration, requestedIndex: number) {

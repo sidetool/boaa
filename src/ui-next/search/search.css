@@ -100,6 +100,10 @@
   font-weight: 600;
 }
 
+.un-search-pages {
+  padding: 4px var(--un-pad) 0;
+}
+
 .un-search-none {
   margin: 0;
   padding: 0 var(--un-pad);

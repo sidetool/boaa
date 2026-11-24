@@ -62,23 +62,22 @@ export class AnnotationPersistence {
     context: MutationContext & { readonly notes: readonly ReaderNote[] },
     draft: string,
     editingNoteId?: string,
-  ): Promise<{ status: 'created' | 'updated'; notes: ReaderNote[] } | undefined> {
+    selection = context.reader.getSelection(),
+    location = context.reader.getLocation(),
+  ): Promise<{ status: 'created' | 'updated'; note: ReaderNote; notes: ReaderNote[] } | undefined> {
     const body = draft.trim();
     if (!body) return undefined;
     if (editingNoteId) {
       const existing = context.notes.find((note) => note.id === editingNoteId);
       if (!existing) return undefined;
-      await this.repository.saveNote(
-        { ...existing, body, updatedAt: this.now() },
-        { expectedRevision: noteRevision(existing) },
-      );
-      return { status: 'updated', notes: await this.repository.listNotes(context.novel.id) };
+      const note = { ...existing, body, updatedAt: this.now() };
+      await this.repository.saveNote(note, { expectedRevision: noteRevision(existing) });
+      return { status: 'updated', note, notes: await this.notesAfterSave(context, note) };
     }
 
-    const selection = context.reader.getSelection() ?? { text: '' };
-    const location = context.reader.getLocation();
     const paragraph = await this.resolveParagraph(context.reader, selection, location);
-    if (!paragraph) return undefined;
+    if (!paragraph || paragraph.novelId !== context.novel.id || paragraph.chapterId !== context.chapter.id)
+      return undefined;
     const createdAt = this.now();
     const note: ReaderNote = {
       id: readerNoteId({
@@ -91,14 +90,21 @@ export class AnnotationPersistence {
       novelId: context.novel.id,
       chapterId: context.chapter.id,
       paragraphId: paragraph.id,
-      quote: selection.text || undefined,
+      quote: selection?.text || undefined,
       body,
       progress: location?.progress ?? context.readerProgress,
       createdAt,
       updatedAt: createdAt,
     };
     await this.repository.saveNote(note, { expectedRevision: noteRevision() });
-    return { status: 'created', notes: await this.repository.listNotes(context.novel.id) };
+    return { status: 'created', note, notes: await this.notesAfterSave(context, note) };
+  }
+
+  private async notesAfterSave(context: { novel: Novel; notes: readonly ReaderNote[] }, saved: ReaderNote) {
+    // A failed refresh must not turn a committed write into a second create on retry.
+    return this.repository
+      .listNotes(context.novel.id)
+      .catch(() => [saved, ...context.notes.filter((note) => note.id !== saved.id)]);
   }
 
   async setHighlight(
@@ -187,9 +193,9 @@ export class AnnotationPersistence {
     return this.repository.listHighlights(novelId);
   }
 
-  async deleteNote(novelId: string, note: ReaderNote): Promise<ReaderNote[]> {
+  async deleteNote(novelId: string, note: ReaderNote, notes: readonly ReaderNote[]): Promise<ReaderNote[]> {
     await this.repository.deleteNote(note.id, { expectedRevision: noteRevision(note) });
-    return this.repository.listNotes(novelId);
+    return this.repository.listNotes(novelId).catch(() => notes.filter((item) => item.id !== note.id));
   }
 
   private async resolveParagraph(

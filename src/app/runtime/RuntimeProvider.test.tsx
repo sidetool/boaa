@@ -49,6 +49,7 @@ describe('RuntimeProvider', () => {
       </RuntimeProvider>,
     );
 
-    expect(markup).toContain('책장을 불러오는 중입니다');
+    expect(markup).toContain('aria-busy="true"');
+    expect(markup).toContain('class="un-skeleton"');
   });
 });

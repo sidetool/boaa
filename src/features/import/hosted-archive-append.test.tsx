@@ -69,6 +69,12 @@ it.each([
     for (const file of files) expect(file.arrayBuffer).not.toHaveBeenCalled();
     expect(controller.seriesTargetLocked).toBe(failSecond);
     expect(controller.tasks.some((task) => task.phase === 'queued')).toBe(false);
+    if (failSecond) {
+      expect(controller.pendingFiles).toEqual(files.slice(1));
+      await act(async () => controller.startPendingImport());
+      expect(inputs.map((input) => input.file)).toEqual([files[0], files[1], files[1], files[2]]);
+      expect(controller.tasks).toEqual([]);
+    }
   } finally {
     await act(async () => renderer.unmount());
   }

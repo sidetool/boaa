@@ -9,6 +9,7 @@ import { useReaderPlugins } from '../../extensions/ui/ReaderPluginProvider';
 import { ReaderPluginSelectionAction } from '../../extensions/ui/ReaderPluginSelectionAction';
 import { captureReaderPluginSelection } from '../../extensions/ui/reader-selection';
 import { memo, useCallback, useEffect, useMemo, useRef, useState, useLayoutEffect } from 'react';
+import { flushSync } from 'react-dom';
 import type { Bookmark, Chapter, Paragraph, ReaderAnchor, ReaderHighlight } from '../../domain/types';
 import { useAppRuntime } from '../../app/runtime/RuntimeProvider';
 import type { ReadingPosition } from '../../sync/types';
@@ -177,12 +178,14 @@ function ReaderScreenComponent({
     [screenHandle],
   );
   const scrollToParagraph = useCallback(
-    (paragraphId: string) => viewportApiRef.current?.scrollToParagraph(paragraphId) ?? Promise.resolve(false),
+    (paragraphId: string, source?: 'playback') =>
+      viewportApiRef.current?.scrollToParagraph(paragraphId, source) ?? Promise.resolve(false),
     [],
   );
   const scrollToMatch = useCallback(async (paragraph: Paragraph) => {
     const viewport = viewportApiRef.current;
     if (!viewport) return false;
+    viewport.detachPlaybackFollow?.();
     // Use the search-only layout path; other reader navigation keeps its alignment.
     return viewport.scrollToSearchMatch?.(paragraph) ?? false;
   }, []);
@@ -244,11 +247,12 @@ function ReaderScreenComponent({
           return;
         }
         const chapter = model.chapters.find((chapter) => chapter.id === paragraph?.chapterId);
-        if (chapter && chapter.id !== model.chapter.id) screenHandle.getActions().observeChapter?.(chapter);
+        if (chapter && chapter.id !== model.chapter.id && !model.ttsPlaybackState)
+          screenHandle.getActions().observeChapter?.(chapter);
       }
       setSelection(next);
     },
-    [continuous, model.chapters, model.chapter.id, screenHandle],
+    [continuous, model.chapters, model.chapter.id, model.ttsPlaybackState, screenHandle],
   );
 
   useEffect(() => {
@@ -313,6 +317,7 @@ function ReaderScreenComponent({
 
   const requestPageIntent = useCallback(
     (direction: -1 | 1) => {
+      viewportApiRef.current?.detachPlaybackFollow?.();
       if (readingFlow === 'paginated') {
         const pending = pendingFlowTransitionRef.current;
         if (pending?.targetFlow === 'paginated') {
@@ -322,7 +327,16 @@ function ReaderScreenComponent({
         }
         return;
       }
-      if (modeLock === 'scroll') {
+      // A page layer belongs to one chapter. Keep the listener's scroll window while
+      // inspecting another chapter rather than reopening it and stopping the narration.
+      const visibleChapter = locationRef.current?.chapterId;
+      if (
+        modeLock === 'scroll' ||
+        (continuous &&
+          visibleChapter &&
+          visibleChapter !== model.chapter.id &&
+          viewportApiRef.current?.isPlaybackFollowDetached?.())
+      ) {
         viewportApiRef.current?.scrollPageJump(direction);
         return;
       }
@@ -357,8 +371,13 @@ function ReaderScreenComponent({
           if (readingFlowRef.current !== 'scroll' || viewportApiRef.current?.flow !== 'scroll') return;
           const anchor = resolvedAnchor ?? fallbackAnchor();
           const targetChapter = model.chapters.find((chapter) => chapter.id === anchor.sectionId) ?? model.chapter;
-          if (continuous && targetChapter.id !== model.chapter.id)
+          if (continuous && targetChapter.id !== model.chapter.id) {
+            if (api?.isPlaybackFollowDetached?.()) {
+              api.scrollPageJump(direction);
+              return;
+            }
             screenHandle.getActions().observeChapter?.(targetChapter);
+          }
           const paragraph = anchor.blockId ? api?.getCachedParagraphById(anchor.blockId) : undefined;
           const atChapterEnd =
             request.initialDirection > 0 &&
@@ -398,6 +417,7 @@ function ReaderScreenComponent({
   const requestScrollIntent = useCallback(
     (deltaY: number) => {
       if (!Number.isFinite(deltaY) || deltaY === 0) return;
+      viewportApiRef.current?.detachPlaybackFollow?.();
       const activeTransition = pendingFlowTransitionRef.current;
       if (activeTransition?.targetFlow === 'scroll') {
         activeTransition.scrollDelta = (activeTransition.scrollDelta ?? 0) + deltaY;
@@ -583,8 +603,8 @@ function ReaderScreenComponent({
       revealChrome: () => implementationRef.current?.revealChrome(),
       flushSession: () => implementationRef.current?.flushSession() ?? Promise.resolve(),
       setMode: (nextMode) => implementationRef.current?.setMode(nextMode),
-      scrollToParagraph: (paragraphId) =>
-        implementationRef.current?.scrollToParagraph(paragraphId) ?? Promise.resolve(false),
+      scrollToParagraph: (paragraphId, source) =>
+        implementationRef.current?.scrollToParagraph(paragraphId, source) ?? Promise.resolve(false),
       scrollToParagraphIndex: (index, align, behavior) =>
         implementationRef.current?.scrollToParagraphIndex(index, align, behavior) ?? Promise.resolve(),
       scrubTo: (progress) => implementationRef.current?.scrubTo(progress) ?? Promise.resolve(),
@@ -624,40 +644,60 @@ function ReaderScreenComponent({
     [model.chapter.id, screenHandle],
   );
 
+  const linkRequest = useRef<AbortController>();
+  useLayoutEffect(
+    () => () => linkRequest.current?.abort(),
+    [model.novel.id, model.chapter.id, model.novel.activeContentRevisionId, repository],
+  );
+
   const handleDocumentLink = useCallback(
     async (href: string, isFootnote: boolean) => {
+      linkRequest.current?.abort();
       if (/^https?:\/\//i.test(href)) {
         if (window.confirm('외부 링크를 브라우저에서 열까요?')) window.open(href, '_blank', 'noopener,noreferrer');
         return;
       }
-      const targetHref = href.split('#', 1)[0];
-      const currentChapter = model.chapters.find((candidate) => candidate.id === model.chapter.id);
-      const candidates = [
-        currentChapter,
-        ...model.chapters.filter((candidate) => candidate.id !== model.chapter.id),
-      ].filter((candidate): candidate is Chapter => Boolean(candidate));
-      for (const candidate of candidates) {
-        const matches: Paragraph[] = [];
-        for (let pageIndex = 0; pageIndex < Math.ceil(candidate.paragraphCount / PARAGRAPHS_PER_PAGE); pageIndex += 1) {
-          const page = await repository.getParagraphPage(candidate.id, pageIndex);
-          matches.push(
-            ...(page?.paragraphs.filter(
-              (paragraph) =>
-                paragraph.sourceHref === href ||
-                (!href.includes('#') && paragraph.sourceHref?.split('#', 1)[0] === targetHref),
-            ) ?? []),
-          );
-        }
-        const target = matches[0];
-        if (!target) continue;
-        if (isFootnote) {
-          setFootnote({ chapter: candidate, paragraphs: matches });
+      const request = new AbortController();
+      linkRequest.current = request;
+      try {
+        const targetHref = href.split('#', 1)[0];
+        const currentChapter = model.chapters.find((candidate) => candidate.id === model.chapter.id);
+        const candidates = [
+          currentChapter,
+          ...model.chapters.filter((candidate) => candidate.id !== model.chapter.id),
+        ].filter((candidate): candidate is Chapter => Boolean(candidate));
+        for (const candidate of candidates) {
+          const matches: Paragraph[] = [];
+          for (
+            let pageIndex = 0;
+            pageIndex < Math.ceil(candidate.paragraphCount / PARAGRAPHS_PER_PAGE);
+            pageIndex += 1
+          ) {
+            const page = await repository.getParagraphPage(candidate.id, pageIndex, request.signal);
+            if (request.signal.aborted) return;
+            matches.push(
+              ...(page?.paragraphs.filter(
+                (paragraph) =>
+                  paragraph.sourceHref === href ||
+                  (!href.includes('#') && paragraph.sourceHref?.split('#', 1)[0] === targetHref),
+              ) ?? []),
+            );
+          }
+          const target = matches[0];
+          if (!target) continue;
+          if (isFootnote) {
+            setFootnote({ chapter: candidate, paragraphs: matches });
+            return;
+          }
+          await navigateToDocumentParagraph(candidate, target);
           return;
         }
-        await navigateToDocumentParagraph(candidate, target);
-        return;
+        notify('링크가 가리키는 위치를 찾을 수 없습니다.', 'warning');
+      } catch {
+        if (!request.signal.aborted) notify('링크를 열지 못했어요. 다시 눌러 주세요.', 'warning');
+      } finally {
+        if (linkRequest.current === request) linkRequest.current = undefined;
       }
-      notify('링크가 가리키는 위치를 찾을 수 없습니다.', 'warning');
     },
     [model.chapter.id, model.chapters, navigateToDocumentParagraph, notify, repository],
   );
@@ -717,15 +757,18 @@ function ReaderScreenComponent({
       else if (!actions.closeActiveLayer()) chrome.hide();
       return;
     }
-    if (chrome.immersive && ['/', 'b', 'h', 's', 'o', 'i', 'n'].includes(event.key.toLowerCase())) {
+    if (event.key.toLowerCase() === 'm') {
       event.preventDefault();
+      if (!event.repeat) chrome.toggleImmersive();
       return;
     }
     if (event.key === '/') {
       event.preventDefault();
-      chrome.reveal();
-      if (window.matchMedia('(max-width: 980px)').matches) setMobileSearchOpen(true);
-      window.setTimeout(search.focus, 0);
+      flushSync(() => {
+        chrome.exitImmersive();
+        if (window.matchMedia('(max-width: 899px)').matches) setMobileSearchOpen(true);
+      });
+      search.focus();
       return;
     }
     if (event.key === 'Home' || event.key === 'End') {
@@ -742,7 +785,7 @@ function ReaderScreenComponent({
     }
     if (['ArrowRight', 'ArrowDown', 'PageDown', ' '].includes(event.key)) {
       event.preventDefault();
-      dispatchAction('next_page');
+      dispatchAction(event.key === ' ' && event.shiftKey ? 'previous_page' : 'next_page');
       return;
     }
     if (['ArrowLeft', 'ArrowUp', 'PageUp'].includes(event.key)) {
@@ -782,7 +825,18 @@ function ReaderScreenComponent({
     }
   });
 
-  const activeBookmark = activeBookmarkAt(model.bookmarks, model.chapter.id, location);
+  const visibleChapter =
+    continuous && location?.chapterId && location.chapterId !== model.chapter.id
+      ? (model.chapters.find((chapter) => chapter.id === location.chapterId) ?? model.chapter)
+      : model.chapter;
+  const wasListening = useRef(false);
+  useEffect(() => {
+    const stopped = wasListening.current && !model.ttsPlaybackState;
+    wasListening.current = Boolean(model.ttsPlaybackState);
+    if (stopped && visibleChapter.id !== model.chapter.id && !model.navigation?.busy)
+      screenHandle.getActions().observeChapter?.(visibleChapter);
+  }, [model.chapter.id, model.navigation?.busy, model.ttsPlaybackState, screenHandle, visibleChapter]);
+  const activeBookmark = activeBookmarkAt(model.bookmarks, visibleChapter.id, location);
   const [autoScrollOpen, setAutoScrollOpen] = useState(false);
   const autoScrollAllowed =
     mode === 'read' &&
@@ -887,7 +941,7 @@ function ReaderScreenComponent({
       />
       <ReaderChrome
         onOpenTranslation={translation.available ? () => translation.setOpen(true) : undefined}
-        model={model}
+        model={visibleChapter === model.chapter ? model : { ...model, chapter: visibleChapter }}
         screenHandle={screenHandle}
         viewport={viewportApi}
         chrome={chrome}
@@ -947,6 +1001,7 @@ function ReaderScreenComponent({
           pageTransitionPending={scrollToPageSettling}
           navigationBusy={model.navigation?.busy}
           mode={mode}
+          ttsSessionActive={Boolean(model.ttsPlaybackState)}
           ttsIndex={model.ttsIndex}
           ttsParagraphId={model.activeTTSPlayback?.paragraphId}
           continuousSource={model.continuousSource}

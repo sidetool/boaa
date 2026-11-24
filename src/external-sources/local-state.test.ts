@@ -145,6 +145,30 @@ describe('ExternalSourceLocalStateStore', () => {
     expect(await store.listSubscriptions(connectorId, 'account-1')).toEqual([]);
   });
 
+  it('clears legacy discovery pages and schemas belonging to the disconnected account', async () => {
+    const store = new ExternalSourceLocalStateStore();
+    const save = async (account: string, prefix: string) => {
+      const id = prefix + JSON.stringify(['fixture-scope', connectorId, 'connected', account, 'generation', {}]);
+      await store.saveCachePage({
+        id,
+        connectorId,
+        queryFingerprint: '{}',
+        items: [],
+        fetchedAt: new Date().toISOString(),
+        expiresAt: new Date(Date.now() + 60_000).toISOString(),
+        schemaVersion: 1,
+      });
+      return id;
+    };
+    const page = await save('first', '');
+    const schema = await save('first', 'schema:');
+    const other = await save('second', '');
+    await store.clearCache(connectorId, 'first');
+    expect(await store.getCachePage(page)).toBeUndefined();
+    expect(await store.getCachePage(schema)).toBeUndefined();
+    expect(await store.getCachePage(other)).toBeDefined();
+  });
+
   it('finalizes only the pending operation that still owns the link', async () => {
     const store = new ExternalSourceLocalStateStore();
     const source = { connectorId, accountConnectionId: 'account-1', remoteId: 'remote-cas' };

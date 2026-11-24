@@ -2,7 +2,12 @@ import type { Dispatch, SetStateAction } from 'react';
 import type { Bookmark, ReaderHighlight, ReaderNote } from '../../domain/types';
 import { buildAnnotationsMarkdown, copyAnnotationMarkdown, downloadAnnotationMarkdown } from './annotation-export';
 import { navigateToAnnotation, type AnnotationNavigationTarget } from './annotation-navigation';
-import type { AnnotationControllerOptions, AnnotationScope, AnnotationSelection } from './annotation-contract';
+import type {
+  AnnotationControllerOptions,
+  AnnotationScope,
+  AnnotationSelection,
+  NoteAnchor,
+} from './annotation-contract';
 import type { AnnotationViewModel } from './annotation-model';
 import { AnnotationPersistence } from './annotation-persistence';
 
@@ -19,8 +24,6 @@ interface AnnotationActionInput extends AnnotationControllerOptions {
   readonly setBookmarks: Dispatch<SetStateAction<Bookmark[]>>;
   readonly setHighlights: Dispatch<SetStateAction<ReaderHighlight[]>>;
   readonly setNotes: Dispatch<SetStateAction<ReaderNote[]>>;
-  readonly resetEditor: () => void;
-  readonly editNote: (note: ReaderNote) => void;
   readonly isNovelCurrent: (novelId: string) => boolean;
 }
 
@@ -34,7 +37,7 @@ async function reportPersistenceFailure(
   } catch {
     // The feature fallback below remains safe even when the host error handler fails.
   }
-  input.notify(fallbackMessage, 'danger');
+  if (input.novel && input.isNovelCurrent(input.novel.id)) input.notify(fallbackMessage, 'danger');
 }
 
 export function createAnnotationActions(input: AnnotationActionInput) {
@@ -55,12 +58,13 @@ export function createAnnotationActions(input: AnnotationActionInput) {
     try {
       await input.onMutationCommitted();
     } catch {
-      input.notify('변경 내용은 저장했지만 동기화 상태를 갱신하지 못했습니다.', 'warning');
+      if (input.novel && input.isNovelCurrent(input.novel.id))
+        input.notify('변경 내용은 저장했지만 동기화 상태를 갱신하지 못했습니다.', 'warning');
     }
   };
-  const navigate = (target: AnnotationNavigationTarget) => {
-    if (!input.novel) return Promise.resolve(false);
-    return navigateToAnnotation({
+  const navigate = async (target: AnnotationNavigationTarget) => {
+    if (!input.novel) return false;
+    const moved = await navigateToAnnotation({
       target,
       novelId: input.novel.id,
       currentChapterId: input.chapter?.id,
@@ -69,6 +73,8 @@ export function createAnnotationActions(input: AnnotationActionInput) {
       reader: input.reader,
       openChapter: input.openChapter,
     });
+    if (moved && input.isNovelCurrent(input.novel.id)) input.onNavigated?.();
+    return moved;
   };
   const remove = async <Item>(
     failureMessage: string,
@@ -79,10 +85,13 @@ export function createAnnotationActions(input: AnnotationActionInput) {
     if (!novelId) return;
     try {
       const items = await load(novelId);
-      if (input.isNovelCurrent(novelId)) commit(items);
+      if (!input.isNovelCurrent(novelId)) return false;
+      commit(items);
       await committed();
+      return true;
     } catch (error) {
-      await reportPersistenceFailure(input, error, failureMessage);
+      if (input.isNovelCurrent(novelId)) await reportPersistenceFailure(input, error, failureMessage);
+      return false;
     }
   };
 
@@ -103,26 +112,28 @@ export function createAnnotationActions(input: AnnotationActionInput) {
         await reportPersistenceFailure(input, error, '북마크를 저장하지 못했습니다.');
       }
     },
-    async saveNoteDraft() {
-      const context = mutationContext(input.reader.getLocation(), input.reader.getSelection());
+    async saveNoteDraft(anchor?: NoteAnchor) {
+      const selection = anchor?.selection ?? input.reader.getSelection();
+      const location = anchor?.location ?? input.reader.getLocation();
+      const context = mutationContext(location, selection);
       if (!context) return;
       try {
         const result = await input.persistence.saveNote(
           { ...context, notes: input.notes },
           input.noteDraft,
           input.editingNoteId,
+          selection,
+          location,
         );
-        if (!result) {
-          if (input.editingNoteId) input.resetEditor();
-          return;
-        }
-        if (input.isNovelCurrent(context.novel.id)) input.setNotes(result.notes);
-        input.resetEditor();
-        if (result.status === 'created') input.reader.clearSelection();
+        if (!result || !input.isNovelCurrent(context.novel.id)) return;
+        input.setNotes(result.notes);
         await committed();
+        if (!input.isNovelCurrent(context.novel.id)) return;
         input.notify(result.status === 'created' ? '메모를 저장했습니다.' : '메모를 수정했습니다.', 'success');
+        return result.note.id;
       } catch (error) {
-        await reportPersistenceFailure(input, error, '메모를 저장하지 못했습니다.');
+        if (input.isNovelCurrent(context.novel.id))
+          await reportPersistenceFailure(input, error, '메모를 저장하지 못했습니다.');
       }
     },
     async setHighlight(
@@ -167,17 +178,18 @@ export function createAnnotationActions(input: AnnotationActionInput) {
         );
       }
     },
-    deleteBookmark: (id: string) =>
-      remove(
+    deleteBookmark: async (id: string) => {
+      await remove(
         '북마크를 삭제하지 못했습니다.',
         (novelId) => {
           const bookmark = input.bookmarks.find((item) => item.id === id);
           return bookmark ? input.persistence.deleteBookmark(novelId, bookmark) : Promise.resolve([...input.bookmarks]);
         },
         input.setBookmarks,
-      ),
-    deleteHighlight: (id: string) =>
-      remove(
+      );
+    },
+    deleteHighlight: async (id: string) => {
+      await remove(
         '하이라이트를 삭제하지 못했습니다.',
         (novelId) => {
           const highlight = input.highlights.find((item) => item.id === id);
@@ -186,14 +198,14 @@ export function createAnnotationActions(input: AnnotationActionInput) {
             : Promise.resolve([...input.highlights]);
         },
         input.setHighlights,
-      ),
+      );
+    },
     deleteNote: async (id: string) => {
-      if (input.editingNoteId === id) input.resetEditor();
-      await remove(
+      return remove(
         '메모를 삭제하지 못했습니다.',
         (novelId) => {
           const note = input.notes.find((item) => item.id === id);
-          return note ? input.persistence.deleteNote(novelId, note) : Promise.resolve([...input.notes]);
+          return note ? input.persistence.deleteNote(novelId, note, input.notes) : Promise.resolve([...input.notes]);
         },
         input.setNotes,
       );

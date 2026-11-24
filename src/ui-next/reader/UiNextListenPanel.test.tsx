@@ -143,6 +143,24 @@ function click(node: ReactTestInstance) {
 }
 
 describe('UiNextListenPanel playback', () => {
+  it('offers filter recovery in the player and keeps prepared audio speed available without a synthesis engine', () => {
+    const retrySpokenFilters = vi.fn().mockResolvedValue(undefined);
+    const { root, props } = mount(
+      fixture({
+        unavailable: true,
+        preparedVoiceLabel: '저장 음성',
+        spokenFilterError: '낭독 필터를 불러오지 못했어요.',
+        retrySpokenFilters,
+      }),
+    );
+    expect(text(root.findByProps({ role: 'alert' }))).toContain('낭독 필터');
+    click(button(root, '필터 다시 불러오기'));
+    expect(retrySpokenFilters).toHaveBeenCalledOnce();
+    expect(button(root, '속도 높이기').props.disabled).toBeFalsy();
+    click(button(root, '속도 높이기'));
+    expect(props.changeSpeed).toHaveBeenCalledWith(1.1);
+  });
+
   it('places explicit regeneration after next and disables it while preparing', () => {
     const retryAudio = vi.fn();
     const props = fixture({
@@ -361,6 +379,40 @@ describe('UiNextListenPanel playback', () => {
     expect(button(root, label).props.disabled).toBe(true);
     expect(props.changeSpeed).not.toHaveBeenCalled();
   });
+  it('shows the live timer while paused and changes only this session', () => {
+    const set = vi.fn();
+    const { root, props } = mount(
+      fixture({
+        playing: true,
+        paused: true,
+        playbackSettings: { ...DEFAULT_TTS_PLAYBACK_SETTINGS, sleepTimerDefault: 10 },
+        sessionTimer: { preset: 30, remainingSeconds: 123, set },
+      }),
+    );
+    const chips = root.findByProps({ role: 'radiogroup', 'aria-label': '이번 재생 수면 타이머' });
+    expect(text(root)).toContain('2:03 남음');
+    expect(chips.findAllByType('button').find((node) => text(node) === '30분')?.props['aria-checked']).toBe(true);
+    act(() =>
+      chips
+        .findAllByType('button')
+        .find((node) => text(node) === '끔')!
+        .props.onClick(),
+    );
+    expect(set).toHaveBeenCalledExactlyOnceWith(undefined);
+    expect(props.changePlaybackSettings).not.toHaveBeenCalled();
+  });
+  it('lets the listener leave the explicitly chosen recording without starting another voice', () => {
+    const leavePreparedNarration = vi.fn();
+    const { root, props } = mount(fixture({ preparedVoiceLabel: '내 음성', leavePreparedNarration }));
+    act(() =>
+      root
+        .findAllByType('button')
+        .find((node) => text(node).includes('일반 낭독으로 돌아가기'))!
+        .props.onClick(),
+    );
+    expect(leavePreparedNarration).toHaveBeenCalledOnce();
+    expect(props.start).not.toHaveBeenCalled();
+  });
   it.each([
     ['끔', undefined],
     ['10분', 10],
@@ -396,6 +448,19 @@ describe('UiNextListenPanel pages and status', () => {
     expect(links.some((label) => /화자·고급|인물별 목소리/.test(label))).toBe(false);
     act(() => renderer!.update(<UiNextListenPanel {...fixture()} realtimeCastAvailable />));
     expect(root.find((node) => node.props.label === '낭독 방식').props.value).toBe('plain');
+  });
+  it('keeps plain playback usable while waiting for cast data and protects the cast editor until ready', () => {
+    const props = fixture({ castArtifactsNotice: <span>화자 정보를 불러오는 중</span> });
+    const { root } = mount(props);
+    expect(button(root, '재생').props.disabled).toBeFalsy();
+    const cast = { ...props, playbackSettings: { ...props.playbackSettings, mode: 'cast' as const } };
+    act(() => renderer!.update(<UiNextListenPanel {...cast} />));
+    expect(button(root, '재생').props.disabled).toBe(true);
+    click(button(root, /^인물별 목소리/));
+    expect(root.findAllByType(TTSAddonPanel)).toHaveLength(0);
+    expect(text(root)).toContain('화자 정보를 불러오는 중');
+    act(() => renderer!.update(<UiNextListenPanel {...cast} castArtifactsNotice={undefined} />));
+    expect(root.findByType(TTSAddonPanel).props.view).toBe('advanced');
   });
   it('opens the real-time cast page from a saved cast choice', () => {
     const props = fixture({ playbackSettings: { ...DEFAULT_TTS_PLAYBACK_SETTINGS, mode: 'cast' } });
@@ -523,6 +588,34 @@ describe('UiNextListenPanel plain engine voices', () => {
     expect(text(root.findByProps({ role: 'note' }))).toContain('Gemini API 사용량(요금)이 발생할 수 있어요');
     click(button(root, '목소리 미리듣기'));
     expect(props.previewPlainVoice).toHaveBeenCalledOnce();
+  });
+  it('enables playback of cached segments and disables synthesis previews for a previously discovered voice', () => {
+    const { root, props } = mount(
+      serverFixture(undefined, {
+        plainVoices: {
+          available: false,
+          voices: [],
+          revision: 'catalog',
+          defaultVoiceId: '',
+          cachedDefaultVoiceId: 'local:v',
+          cachedVoices: [
+            {
+              id: 'local:v',
+              label: '이전 음성',
+              lang: 'ko',
+              providerId: 'local',
+              model: { providerId: 'local', revision: 'model' },
+            },
+          ],
+          providers: [{ id: 'local', name: 'Local', available: false, paid: false }],
+        },
+      }),
+    );
+    expect(button(root, '재생').props.disabled).toBe(false);
+    expect(select(root).props.disabled).toBe(false);
+    expect(button(root, '목소리 미리듣기').props.disabled).toBe(true);
+    expect(text(root)).toContain('저장되지 않은 구간에서는 멈춰요');
+    expect(props.changePlaybackSettings).not.toHaveBeenCalled();
   });
   it('blocks a voice whose engine is down without switching to another engine', () => {
     const { root, props } = mount(serverFixture('other:Ann'));

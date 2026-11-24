@@ -573,6 +573,15 @@
   line-height: 1.45;
 }
 
+.reader-screen:has(> .reader-footnote-backdrop) {
+  /* The screen entrance animation can create a stacking context around the modal. */
+  z-index: var(--layer-dialog);
+}
+
+.reader-screen:has(> .reader-footnote-backdrop) ~ .toast-region {
+  z-index: calc(var(--layer-dialog) - 1);
+}
+
 .reader-footnote-backdrop {
   position: fixed;
   inset: 0;

@@ -162,6 +162,10 @@ describe('library adapter', () => {
       .forEach((item) => item.run());
     expect(props.actions.imports.open).toHaveBeenCalledWith(failed);
     expect(props.actions.imports.dismiss).toHaveBeenCalledWith(task.id);
+    const boundFailure = { ...failed, targetBookId: book.novel.id };
+    props.model.importTasks = [boundFailure];
+    run(adapter().bookMenu(book), 'import-failure');
+    expect(props.actions.imports.open).toHaveBeenCalledWith(boundFailure);
   });
   it('opens or selects works with external ids and never opens trash or selects active imports', () => {
     const { props, adapter, book } = fixture();

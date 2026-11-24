@@ -248,7 +248,7 @@ describe('book routes', () => {
         expect(sql).toContain('ps.text_lower like $3');
         expect(sql).toContain('escape');
         expect(sql).toContain('order by c.chapter_index asc, ps.paragraph_index asc');
-        expect(params).toEqual(['user_test', 'book_1', '%dr\\%\\_agon%', 300]);
+        expect(params).toEqual(['user_test', 'book_1', '%dr\\%\\_agon%', null, null, 300]);
         return { rows: [{ paragraph }] };
       }),
     } as unknown as pg.Pool;
@@ -278,7 +278,7 @@ describe('book routes', () => {
         expect(sql).toContain('ps.chapter_id = $2');
         expect(sql).toContain('escape');
         expect(sql).toContain('order by ps.paragraph_index asc');
-        expect(params).toEqual(['user_test', 'chapter_1', '%dra\\_gon\\%%', 200]);
+        expect(params).toEqual(['user_test', 'chapter_1', '%dra\\_gon\\%%', null, 200]);
         return { rows: [{ paragraph }] };
       }),
     } as unknown as pg.Pool;

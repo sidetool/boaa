@@ -111,8 +111,9 @@ export class AndroidSystemTTSProvider implements TTSProvider {
     try {
       const bridge = await this.bridgePromise;
       await this.ensurePlaybackListener(bridge);
+      if (input.previewSignal?.aborted) return;
       this.clearSequenceCallbacks();
-      const utteranceId = `boaa-${Date.now()}-${++this.utteranceSequence}`;
+      const utteranceId = `${input.previewSignal ? 'boaa-preview' : 'boaa'}-${Date.now()}-${++this.utteranceSequence}`;
       this.callbacks.set(utteranceId, input);
       try {
         await bridge.invoke('speak', {
@@ -133,6 +134,7 @@ export class AndroidSystemTTSProvider implements TTSProvider {
         throw error;
       }
     } catch {
+      if (input.previewSignal?.aborted) return;
       this.activeBackend = 'fallback';
       await this.fallback.speak(input);
     }
@@ -194,10 +196,9 @@ export class AndroidSystemTTSProvider implements TTSProvider {
   stop(): void {
     this.callbacks.clear();
     this.sequenceUtteranceIds.clear();
-    if (this.activeBackend === 'fallback') {
-      this.fallback.stop();
-      return;
-    }
+    // Status polling can discover the native engine again while a Web Speech fallback
+    // is still playing or loading voices. Release both queues on cancellation.
+    this.fallback.stop();
     void this.invokeControl('stop');
   }
 
@@ -272,7 +273,7 @@ export class AndroidSystemTTSProvider implements TTSProvider {
 function normalizedPlaybackSnapshot(
   snapshot: (TTSPlaybackSnapshot & { readonly trackingJson?: string }) | undefined,
 ): TTSPlaybackSnapshot | undefined {
-  if (!snapshot) return undefined;
+  if (!snapshot || snapshot.utteranceId?.startsWith('boaa-preview-')) return undefined;
   let anchor: TTSPlaybackSnapshot['anchor'];
   if (snapshot.trackingJson) {
     try {

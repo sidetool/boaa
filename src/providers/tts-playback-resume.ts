@@ -1,6 +1,7 @@
 import { normalizePlainTTSBatchCharacters } from './plain-tts-limits';
 import { readBrandStorage, removeBrandStorage, writeBrandStorage } from '@boaa/extension-contracts/brand-compat';
-import type { TTSPlaybackSettings } from '../domain/types';
+import { voiceProfilesRevision } from '../domain/resource-revisions';
+import type { TTSPlaybackSettings, VoiceProfile } from '../domain/types';
 import { persistentId128 } from '../domain/id-hash-contract';
 import type { PlayableTtsSegment } from './tts-playback';
 
@@ -42,6 +43,16 @@ export function ttsPlaybackSettingsFingerprint(input: {
     footnotePlayback: input.settings.footnotePlayback,
     voiceRevision: input.voiceRevision,
   });
+}
+
+export async function loadTTSResumeSettingsFingerprint(
+  settings: TTSPlaybackSettings,
+  systemVoiceURI: string | undefined,
+  loadVoiceProfiles: () => Promise<VoiceProfile[]>,
+): Promise<string> {
+  const voiceRevision =
+    settings.mode === 'cast' ? voiceProfilesRevision(await loadVoiceProfiles()) : (systemVoiceURI ?? '');
+  return ttsPlaybackSettingsFingerprint({ settings, voiceRevision });
 }
 
 export function loadTTSPlaybackResume(bookId: string): TTSPlaybackResumeRecord | undefined {

@@ -4,7 +4,7 @@ import { afterEach, expect, it, vi } from 'vitest';
 import { UiNextWorkspace } from '../Workspace';
 import { useAppBrowserNavigation } from '../../features/navigation/useAppBrowserNavigation';
 import { testWorkspaceState } from '../../features/book-workspace/book-workspace-test-fixtures';
-import { actions, model } from '../test-fixtures';
+import { actions, model, novel } from '../test-fixtures';
 import { getHomeActive, setHomeActive } from '../home/route';
 import type { UiNextShellProps } from '../shell/contract';
 import type { UiNextSearchScreenProps } from './contract';
@@ -190,6 +190,7 @@ it.each([false, true])('keeps plugin search open across asynchronous history (ba
       setView: vi.fn(),
       setLibraryQuery: vi.fn(),
       setLibraryFilter: vi.fn(),
+      setLibraryFavoritesOnly: vi.fn(),
       setLibrarySort: vi.fn(),
       setLibraryViewMode: vi.fn(),
     },
@@ -232,5 +233,63 @@ it.each([false, true])('keeps plugin search open across asynchronous history (ba
     expect(getHomeActive()).toBe(true);
   } finally {
     act(() => renderer.unmount());
+  }
+});
+
+it('keeps the search entry immediately before a result whose detail opens after an asynchronous lookup', async () => {
+  const window = browser();
+  vi.stubGlobal('window', window);
+  vi.stubGlobal('requestAnimationFrame', (fn: () => void) => {
+    fn();
+    return 0;
+  });
+  const book = novel({ title: 'Result' });
+  const props = { model: model([book]), actions: actions() };
+  let state = testWorkspaceState({ view: 'library' });
+  const workspace = {
+    getSnapshot: () => state,
+    cancelNavigation: vi.fn(),
+    setView: (view: typeof state.view) => {
+      state = { ...state, view };
+    },
+    setLibraryQuery: vi.fn(),
+    setLibrarySort: vi.fn(),
+    setLibraryFilter: vi.fn(),
+    setLibraryFavoritesOnly: vi.fn(),
+    setLibraryViewMode: vi.fn(),
+  };
+  const notify = vi.fn();
+  function Harness() {
+    useAppBrowserNavigation({
+      enabled: true,
+      state,
+      workspace,
+      sources: { open: false, close: vi.fn() },
+      getNovel: async () => book,
+      notify,
+    } as unknown as Parameters<typeof useAppBrowserNavigation>[0]);
+    return createElement(UiNextWorkspace, { ...props, view: state.view, children: null });
+  }
+  let renderer!: ReactTestRenderer;
+  try {
+    act(() => {
+      renderer = create(createElement(Harness));
+    });
+    act(() => openSearch());
+    const original = getSearchRoute();
+    const item = screen!.adapter.library('Result')[0];
+    await act(async () => {
+      void screen!.adapter.libraryHelpers.activate(item);
+    });
+    expect(window.entries).toHaveLength(2);
+    state = { ...state, selectedNovel: book, view: 'chapters' };
+    act(() => renderer.update(createElement(Harness)));
+    expect(window.entries).toHaveLength(3);
+    await act(async () => window.history.back());
+    expect(getSearchRoute()).toBe(original);
+    expect(screen?.routeId).toBe(original?.id);
+    expect(notify).not.toHaveBeenCalled();
+  } finally {
+    act(() => renderer?.unmount());
   }
 });

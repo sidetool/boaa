@@ -2,13 +2,23 @@ import { ChevronLeft, ChevronRight } from 'lucide-react';
 import { cx } from '../components/primitives';
 
 /** 회차 페이지 이동: first, last and the pages around the current one, with gaps shown as `…`. */
-export function Pager({ page, count, onPage }: { page: number; count: number; onPage(page: number): void }) {
+export function Pager({
+  page,
+  count,
+  onPage,
+  label = '회차 페이지',
+}: {
+  page: number;
+  count: number;
+  onPage(page: number): void;
+  label?: string;
+}) {
   if (count <= 1) return null;
   const pages = Array.from({ length: count }, (_, i) => i + 1).filter(
     (value) => value === 1 || value === count || Math.abs(value - page) <= 1,
   );
   return (
-    <nav className="un-pager" aria-label="회차 페이지">
+    <nav className="un-pager" aria-label={label}>
       <button
         type="button"
         className="un-icon-btn"

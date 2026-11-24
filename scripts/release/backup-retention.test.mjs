@@ -1,3 +1,4 @@
+import { DockerDeployment } from './deployment.mjs';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, writeFile, utimes, symlink, readdir, rm } from 'node:fs/promises';
@@ -68,4 +69,21 @@ test('linked backup root is never traversed or removed', () =>
     await mkdir(other);
     await symlink(path.join(root, 'backups'), path.join(other, 'backups'));
     await assert.rejects(planBackupRetention(other, {}), /unsafe/);
+  }));
+
+test('database-only updates preserve the deployment reference without copying service volumes', () =>
+  fixture(async (root) => {
+    const deployment = new DockerDeployment({ directory: root });
+    deployment.compose = () => assert.fail('unexpected volume copy');
+    const folder = path.join(root, 'backups', 'db-update');
+    await mkdir(folder);
+    await writeFile(path.join(folder, 'database.dump'), 'data');
+    await writeFile(path.join(root, 'update-backup-policy.json'), JSON.stringify({ scope: 'database' }));
+    await deployment.finishBackup(
+      { version: 'v2', config: 'config', compose: 'compose', enabled: ['metadata'] },
+      folder,
+    );
+    assert.deepEqual((await readdir(folder)).sort(), ['database.dump', 'deployment.json']);
+    const result = await planBackupRetention(root, {});
+    assert.ok(result.kept.some((entry) => entry.id === 'db-update'));
   }));

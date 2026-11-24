@@ -8,6 +8,7 @@ const fixture = `
 import React from 'react';
 import { createRoot } from 'react-dom/client';
 import { RemoteCollectorAuthBrowser } from '/src/features/extensions/RemoteCollectorAuthBrowser.tsx';
+import { useModalFocus } from '/src/ui-next/components/primitives.tsx';
 import '/src/styles/tokens.css';
 import '/src/styles/base.css';
 import '/src/styles/dialogs-import.css';
@@ -30,10 +31,19 @@ const broker = {
     revision++;
   }
 };
-createRoot(document.getElementById('root')).render(React.createElement(RemoteCollectorAuthBrowser, {
-  broker, platformLabel: '테스트 플랫폼', busy: false,
-  onComplete: () => { window.completed = true; }, onCancel: () => {}, onDismiss: () => {}
-}));
+function Settings() {
+  const [open, setOpen] = React.useState(false);
+  const panel = React.useRef(null);
+  useModalFocus(panel, true, () => { window.settingsDismissed = true; });
+  return React.createElement('section', { ref: panel, role: 'dialog', 'aria-label': '설정', tabIndex: -1 },
+    React.createElement('button', { onClick: () => setOpen(true) }, '로그인 화면 열기'),
+    open && React.createElement(RemoteCollectorAuthBrowser, {
+      broker, platformLabel: '테스트 플랫폼', busy: false,
+      onComplete: () => { window.completed = true; }, onCancel: () => {}, onDismiss: () => setOpen(false)
+    })
+  );
+}
+createRoot(document.getElementById('root')).render(React.createElement(Settings));
 `;
 const bundle = await build({
   configFile: false,
@@ -51,7 +61,12 @@ const assets = new Map(bundle.output.map((asset) => [`/${asset.fileName}`, asset
 const entry = bundle.output.find((a) => a.type === 'chunk' && a.isEntry);
 const css = bundle.output.filter((a) => a.fileName.endsWith('.css'));
 const html = `<!doctype html><meta name="viewport" content="width=device-width, initial-scale=1">${css.map((a) => `<link rel="stylesheet" href="/${a.fileName}">`).join('')}<div id="root"></div><script type="module" src="/${entry.fileName}"></script>`;
-const browser = await chromium.launch({ channel: 'msedge', headless: true });
+const browser = await chromium.launch(
+  process.env.BOAA_CHROMIUM_PATH
+    ? { executablePath: process.env.BOAA_CHROMIUM_PATH, headless: true }
+    : { channel: 'msedge', headless: true },
+);
+const screenshots = !process.argv.includes('--no-screenshots');
 try {
   const context = await browser.newContext({ hasTouch: true });
   await context.route('**/*', (route) => {
@@ -69,14 +84,35 @@ try {
   const errors = [];
   page.on('pageerror', (error) => errors.push(error.message));
   await page.goto('https://auth-fixture.test');
+  const openBrowser = page.getByRole('button', { name: '로그인 화면 열기' });
+  await openBrowser.click();
   const input = page.getByLabel('선택한 로그인 입력칸에 입력');
   await page.getByLabel('로그인 창 선택').waitFor();
   await page.setViewportSize({ width: 390, height: 844 });
   const remoteFrame = page.locator('.collector-auth-browser-frame');
+  await remoteFrame.focus();
+  for (const key of ['Escape', 'Tab']) {
+    await page.keyboard.press(key);
+    await page.waitForFunction((key) => window.actions.at(-1)?.key === key, key);
+    assert.ok(await remoteFrame.evaluate((element) => document.activeElement === element));
+  }
+  await page.getByRole('button', { name: '화면 닫기' }).focus();
+  await page.keyboard.press('Escape');
+  await remoteFrame.waitFor({ state: 'hidden' });
+  assert.ok(
+    await openBrowser.evaluate(
+      (element) =>
+        document.activeElement === element &&
+        document.documentElement.style.overflow === 'hidden' &&
+        !window.settingsDismissed,
+    ),
+  );
+  await openBrowser.click();
+  await page.getByLabel('로그인 창 선택').waitFor();
   const remoteBounds = await remoteFrame.boundingBox();
   await remoteFrame.tap({ position: { x: (remoteBounds.width * 50) / 390, y: (remoteBounds.height * 100) / 650 } });
   assert.equal(await input.evaluate((element) => document.activeElement === element), true);
-  await mkdir('.tmp', { recursive: true });
+  if (screenshots) await mkdir('.tmp', { recursive: true });
   for (const [width, height] of [
     [1440, 900],
     [390, 844],
@@ -92,7 +128,7 @@ try {
     await page.getByRole('button', { name: '입력', exact: true }).click();
     await page.waitForFunction(() => document.querySelector('input').value === '');
     assert.equal((await page.evaluate(() => window.actions.at(-1))).text, '합성 입력');
-    await page.screenshot({ path: '.tmp/remote-auth-' + width + '-' + height + '.png' });
+    if (screenshots) await page.screenshot({ path: '.tmp/remote-auth-' + width + '-' + height + '.png' });
   }
   await page.evaluate(() => {
     window.failNext = true;

@@ -3,6 +3,11 @@ import { act, create, type ReactTestRenderer } from 'react-test-renderer';
 import { afterEach, expect, it, vi } from 'vitest';
 import { resetAccountLinkForTests, SelfHostAccountGate, useOptionalSelfHostAuth } from './SelfHostAccountGate';
 import { SelfHostAuthClient } from './self-host-auth-client';
+import { UiNextSearchScreen } from '../../ui-next/search/UiNextSearchScreen';
+import { getSearchRoute, openSearch, useSearchRoute } from '../../ui-next/search/route';
+import { useNavigationViewState } from '../navigation/navigation-view-state';
+import { createUiNextLibraryAdapter } from '../../ui-next/library/model';
+import { actions, model } from '../../ui-next/test-fixtures';
 import { loadSharedParagraphPage } from '../reader/shared-paragraph-pages';
 import {
   SELF_HOST_AUTH_ENDING_EVENT,
@@ -228,6 +233,82 @@ function signedIn(userId: string, sessionContext: string) {
   };
 }
 
+it.each(['logout', 'replacement'] as const)(
+  'forgets search routes and typed queries across account %s',
+  async (boundary) => {
+    const { events } = stubBrowser();
+    vi.stubGlobal('window', events);
+    const status = vi.spyOn(SelfHostAuthClient.prototype, 'status').mockResolvedValue(signedIn('a', 'session-a'));
+    vi.spyOn(SelfHostAuthClient.prototype, 'logout').mockResolvedValue();
+    vi.spyOn(SelfHostAuthClient.prototype, 'login').mockResolvedValue(signedIn('b', 'session-b').account);
+    let auth!: ReturnType<typeof useOptionalSelfHostAuth>;
+    let previousViewKey = '';
+    const submit = vi.fn();
+    const libraryHelpers = createUiNextLibraryAdapter({ model: model([]), actions: actions() });
+    function PrivateApp() {
+      auth = useOptionalSelfHostAuth();
+      const route = useSearchRoute();
+      const [previousView] = useNavigationViewState(previousViewKey, { query: '' });
+      if (!route) return <span>{previousView.query}</span>;
+      return (
+        <UiNextSearchScreen
+          routeId={route.id}
+          initialQuery={route.initialQuery}
+          close={vi.fn()}
+          adapter={{
+            library: () => [],
+            libraryHelpers,
+            submitted: '',
+            sources: [],
+            recent: [],
+            submit: (query) => submit(auth?.account.userId, query),
+            cancel: vi.fn(),
+            clearRecent: vi.fn(),
+            removeRecent: vi.fn(),
+          }}
+        />
+      );
+    }
+    let renderer!: ReactTestRenderer;
+    await act(async () => {
+      renderer = create(<SelfHostAccountGate apiBaseUrl="/api">{() => <PrivateApp />}</SelfHostAccountGate>);
+    });
+    try {
+      const input = () => renderer.root.findByProps({ 'aria-label': '검색어' });
+      act(() => openSearch('title from another screen'));
+      expect(submit).toHaveBeenCalledWith('a', 'title from another screen');
+      previousViewKey = `search:${getSearchRoute()!.id}`;
+      act(() => input().props.onChange({ target: { value: 'private draft' } }));
+      await act(async () => {
+        events.dispatchEvent(new Event('focus'));
+      });
+      expect(input().props.value).toBe('private draft');
+      status.mockResolvedValue(signedIn('b', 'session-b'));
+      if (boundary === 'logout') {
+        await act(async () => auth!.logout());
+        expect(getSearchRoute()).toBeUndefined();
+        await act(async () => {
+          await import('../../ui-next/auth/UiNextAuthScreen');
+        });
+        await act(async () => renderer.root.findByType('form').props.onSubmit({ preventDefault() {} }));
+      } else {
+        await act(async () => {
+          events.dispatchEvent(new Event('focus'));
+        });
+      }
+      expect(auth!.account.userId).toBe('b');
+      expect(getSearchRoute()).toBeUndefined();
+      expect(renderer.root.findAllByProps({ 'aria-label': '검색어' })).toHaveLength(0);
+      expect(JSON.stringify(renderer.toJSON())).not.toContain('private draft');
+      expect(submit).toHaveBeenCalledTimes(1);
+      act(() => openSearch());
+      expect(input().props.value).toBe('');
+    } finally {
+      await act(async () => renderer.unmount());
+    }
+  },
+);
+
 it('keeps the running app, its drafts and playback when a focus or quick return finds the same session', async () => {
   const { events, doc } = stubBrowser();
   const status = vi.spyOn(SelfHostAuthClient.prototype, 'status').mockResolvedValue(signedIn('a', 'context-a'));
@@ -412,6 +493,51 @@ it('keeps an invitation link through StrictMode and remounts after stripping it 
     expect(JSON.stringify(renderer.toJSON())).not.toContain('BOAA에 초대받았어요');
   } finally {
     await act(async () => renderer.unmount());
+    resetAccountLinkForTests();
+  }
+});
+
+it.each(['invitation', 'password-reset'])('returns to a clean login form after a rejected %s link', async (kind) => {
+  stubBrowser();
+  resetAccountLinkForTests();
+  vi.stubGlobal('location', { href: `http://localhost/#${kind}=expired-token` });
+  vi.stubGlobal('history', { replaceState: vi.fn() });
+  vi.spyOn(SelfHostAuthClient.prototype, 'status').mockResolvedValue({
+    authenticated: false,
+    setupRequired: false,
+    legacyRecoveryEnabled: false,
+    setupCodeRequired: false,
+  });
+  const request = vi.fn().mockResolvedValue(new Response(JSON.stringify({ error: 'invalid_token' }), { status: 400 }));
+  vi.stubGlobal('fetch', request);
+  const tree = <SelfHostAccountGate apiBaseUrl="/api">{() => <span>private</span>}</SelfHostAccountGate>;
+  let renderer!: ReactTestRenderer;
+  try {
+    await act(async () => {
+      renderer = create(tree);
+      await import('../../ui-next/auth/UiNextAccountTokenScreen');
+    });
+    const fields = renderer.root.findAllByType('input');
+    await act(async () => {
+      for (const field of fields) field.props.onChange({ target: { value: 'unused-new-password' } });
+    });
+    await act(async () => renderer.root.findByType('form').props.onSubmit({ preventDefault() {} }));
+    expect(JSON.stringify(renderer.toJSON())).toContain('이미 썼거나 만료됐어요');
+    const back = renderer.root
+      .findByType('form')
+      .findAllByType('button')
+      .find((button) => button.children.includes('로그인 화면으로 돌아가기'));
+    await act(async () => back!.props.onClick());
+    expect(renderer.root.findByType('h1').children).toContain('다시 오신 걸 환영해요');
+    expect(renderer.root.findByProps({ autoComplete: 'current-password', type: 'password' }).props.value).toBe('');
+    await act(async () => renderer.unmount());
+    await act(async () => {
+      renderer = create(tree);
+    });
+    expect(renderer.root.findByType('h1').children).toContain('다시 오신 걸 환영해요');
+    expect(request).toHaveBeenCalledTimes(1);
+  } finally {
+    await act(async () => renderer?.unmount());
     resetAccountLinkForTests();
   }
 });

@@ -411,7 +411,7 @@ it('keeps only failed stream selections selected after a partial batch', async (
   });
   expect(mounted.controller.selectedBookIds).toEqual(new Set(['external:two']));
   expect(mounted.controller.selectionMode).toBe(true);
-  expect(mounted.notify).toHaveBeenCalledWith('1권 처리, 1권 실패', 'warning');
+  expect(mounted.notify).toHaveBeenCalledWith('1권을 휴지통으로 옮겼어요. 1권 실패', 'warning');
   act(() => mounted.renderer.unmount());
 });
 

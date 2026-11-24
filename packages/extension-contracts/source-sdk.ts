@@ -4,6 +4,8 @@ export interface SourceWebViewRequest {
   readonly url: string;
   /** JavaScript expression evaluated after DOMContentLoaded. May return a Promise. */
   readonly script: string;
+  /** On Chromium, read laid-out paragraph text below this main-frame selector. */
+  readonly renderedParagraphs?: string;
   readonly headers?: Readonly<Record<string, string>>;
   readonly timeoutMs?: number;
   readonly waitUntil?: 'load' | 'domcontentloaded';

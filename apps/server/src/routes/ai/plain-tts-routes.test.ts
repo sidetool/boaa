@@ -62,7 +62,9 @@ async function fixture(envPatch: NodeJS.ProcessEnv = {}, sources?: () => Promise
     return {
       rows:
         params?.[0] === paragraph.chapterId && params?.[2] === owner && !deleted
-          ? sourceRows.filter((row) => row.paragraph.id === params?.[1]).map((row) => ({ ...row }))
+          ? sourceRows
+              .filter((row) => Array.isArray(params?.[1]) && params[1].includes(row.paragraph.id))
+              .map((row) => ({ ...row, paragraph_id: row.paragraph.id }))
           : [],
     };
   });
@@ -155,6 +157,150 @@ describe('plain paragraph TTS routes', () => {
       await rm(dir, { recursive: true, force: true });
     }
   });
+  it('replays verified audio after voice discovery expires, while a new generation still needs the provider', async () => {
+    const f = await fixture();
+    const first = await f.request();
+    expect(first.statusCode).toBe(200);
+    f.listVoices.mockRejectedValue(new Error('offline'));
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 31_000);
+    try {
+      const replay = await f.request();
+      expect(replay.statusCode).toBe(200);
+      expect(replay.rawPayload).toEqual(first.rawPayload);
+      expect(f.listVoices).toHaveBeenCalledTimes(1);
+      expect((await f.request({ rate: 1.1 })).statusCode).toBe(502);
+      expect((await f.request({ regenerate: true })).statusCode).toBe(502);
+      expect((await f.request()).rawPayload).toEqual(first.rawPayload);
+      expect(f.synthesize).toHaveBeenCalledTimes(1);
+      f.setOwner('revoked');
+      expect((await f.request()).statusCode).toBe(404);
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  it('keeps offline voices separate from live generation and replays only previously cached matching audio', async () => {
+    const f = await fixture();
+    const catalog = () => f.app.inject('/api/tts/plain/voices').then((r) => r.json());
+    const cached = (patch = {}) =>
+      f.app.inject({
+        method: 'POST',
+        url: '/api/chapters/chapter_plain/tts/plain/cached',
+        payload: { ...f.body, ...patch },
+      });
+    const initial = await catalog();
+    const saved = await f.request();
+    expect(saved.statusCode).toBe(200);
+    f.listVoices.mockRejectedValue(new Error('offline'));
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 31_000);
+    try {
+      expect(await catalog()).toMatchObject({
+        available: false,
+        voices: [],
+        defaultVoiceId: '',
+        cachedDefaultVoiceId: 'M1',
+        cachedVoices: initial.voices,
+      });
+      const hit = await cached();
+      expect(hit.statusCode).toBe(200);
+      expect(hit.rawPayload).toEqual(saved.rawPayload);
+      expect((await cached({ rate: 1.3 })).json().code).toBe('tts_cached_audio_missing');
+      expect((await cached({ regenerate: true })).statusCode).toBe(400);
+      expect((await cached({ modelRevision: 'stale' })).statusCode).toBe(409);
+      expect((await cached({ paragraphHash: 'stale' })).statusCode).toBe(409);
+      f.setOwner('revoked');
+      expect((await cached()).statusCode).toBe(404);
+      expect(f.synthesize).toHaveBeenCalledOnce();
+      expect(f.listVoices).toHaveBeenCalledTimes(2);
+      f.listVoices.mockResolvedValue([]);
+      expect(await catalog()).not.toHaveProperty('cachedVoices');
+      clock.mockReturnValue(Date.now() + 31_000);
+      f.listVoices.mockRejectedValue(new Error('offline again'));
+      expect(await catalog()).not.toHaveProperty('cachedVoices');
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  it('discards cached voice choices when their configured source changes revision or is removed', async () => {
+    let enabled = true;
+    let revision = 'v1';
+    const f = await fixture({ TTS_PLAIN_ENABLED: 'false' }, async () =>
+      enabled
+        ? [
+            {
+              id: 'configured',
+              name: 'Configured',
+              revision,
+              paid: false,
+              default: true,
+              createProvider: async () => f.provider,
+            },
+          ]
+        : [],
+    );
+    const catalog = () => f.app.inject('/api/tts/plain/voices').then((r) => r.json());
+    expect((await catalog()).defaultVoiceId).toBe('configured:M1');
+    f.listVoices.mockRejectedValue(new Error('offline'));
+    revision = 'v2';
+    expect(await catalog()).not.toHaveProperty('cachedVoices');
+    enabled = false;
+    expect(await catalog()).not.toHaveProperty('cachedVoices');
+    enabled = true;
+    revision = 'v1';
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 31_000);
+    try {
+      expect(await catalog()).not.toHaveProperty('cachedVoices');
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  it('returns a read-only miss without joining an in-flight generation', async () => {
+    const f = await fixture();
+    const release = deferred<typeof f.audio>();
+    f.synthesize.mockImplementation(() => release.promise);
+    const rendering = f.request().then((r) => r.statusCode);
+    try {
+      await vi.waitFor(() => expect(f.synthesize).toHaveBeenCalledOnce());
+      const cached = await f.app.inject({
+        method: 'POST',
+        url: '/api/chapters/chapter_plain/tts/plain/cached',
+        payload: f.body,
+      });
+      expect(cached.statusCode).toBe(404);
+      expect(cached.json().code).toBe('tts_cached_audio_missing');
+    } finally {
+      release.resolve(f.audio);
+      expect(await rendering).toBe(200);
+    }
+  });
+
+  it('serves persistent cache hits while all synthesis slots are occupied', async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), 'boaa-audio-capacity-'));
+    try {
+      const writer = await fixture({}, undefined, dir);
+      const saved = await writer.request();
+      expect(saved.statusCode).toBe(200);
+      const f = await fixture({}, undefined, dir);
+      const release = deferred<typeof f.audio>();
+      f.synthesize.mockImplementation(() => release.promise);
+      const pending = [1.1, 1.2, 1.3, 1.4].map((rate) => f.request({ rate }).then((r) => r.statusCode));
+      try {
+        await vi.waitFor(() => expect(f.synthesize).toHaveBeenCalledTimes(4));
+        expect((await f.request({ rate: 1.5 })).statusCode).toBe(429);
+        const hit = await f.request();
+        expect(hit.statusCode).toBe(200);
+        expect(hit.rawPayload).toEqual(saved.rawPayload);
+      } finally {
+        release.resolve(f.audio);
+        expect(await Promise.all(pending)).toEqual([200, 200, 200, 200]);
+      }
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   it('regenerates only the verified item and replaces its cached audio for normal playback', async () => {
     const f = await fixture();
     const old = await f.request();
@@ -500,6 +646,7 @@ describe('batch source verification and quota cooldown', () => {
     const body = { chunking: 'batch', batch: item.plainBatch, chunkHash: item.spokenTextFingerprint };
     expect((await f.request(body)).statusCode).toBe(200);
     expect(f.synthesize).toHaveBeenCalledTimes(1);
+    expect(f.query).toHaveBeenCalledTimes(2);
     expect(f.synthesize.mock.calls[0][0].text).toBe(f.source.text + '\n\n' + next.text);
     expect((await f.request(body)).statusCode).toBe(200);
     expect(f.synthesize).toHaveBeenCalledTimes(1);

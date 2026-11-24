@@ -34,6 +34,14 @@ export interface BackupManifestV1 {
 
 export type BackupConflictResolution = 'skip' | 'replace' | 'copy';
 
+export function backupConflictResolution(
+  bookId: string,
+  overrides: Readonly<Record<string, BackupConflictResolution>> | undefined,
+  fallback: BackupConflictResolution,
+): BackupConflictResolution {
+  return overrides && Object.prototype.hasOwnProperty.call(overrides, bookId) ? overrides[bookId] : fallback;
+}
+
 export interface BackupConflict {
   readonly bookId: string;
   readonly title: string;

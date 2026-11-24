@@ -11,7 +11,7 @@
   display: flex;
   align-items: flex-end;
   background: rgb(0 0 0 / 50%);
-  animation: un-fade-in 0.2s;
+  animation: un-backdrop-in 0.2s;
 }
 
 .un-tools.addon-panel {
@@ -113,6 +113,7 @@
     border-radius: 22px 22px 0 0;
     background: var(--un-bg-1);
     box-shadow: 0 -16px 50px rgb(0 0 0 / 45%);
+    transform: translate3d(0, 0, 0);
     animation: un-slide-up 0.3s var(--un-ease);
   }
 
@@ -347,6 +348,19 @@
 .ui-next .un-notes-composer textarea {
   min-height: 96px;
   background: var(--un-bg-1);
+}
+
+/* The selected passage reads as a quote, not as a hint for the field below it. */
+.un-notes-composer blockquote {
+  max-height: 5.2em;
+  margin: 0 0 2px;
+  padding: 1px 0 1px 12px;
+  overflow: auto;
+  border-left: 3px solid var(--un-accent);
+  color: var(--un-text-2);
+  font-size: 13.5px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
 }
 
 .un-notes-composer > div {

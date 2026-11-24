@@ -37,20 +37,22 @@ async function activeRevisionReadRows(tx: IDBTransaction, novel: Novel): Promise
   return rows.filter((row) => componentIds.has(row.contentRevisionId));
 }
 
-function laterTimestamp(candidate: string, current: string | undefined): boolean {
-  return !current || candidate > current;
+function shouldUpdateMarker(candidate: string | undefined, current: string | undefined): boolean {
+  return candidate === undefined ? current !== undefined : !current || candidate > current;
 }
 
 export async function markExactDocumentSectionReadState(
   tx: IDBTransaction,
   novel: Novel,
   documentSectionId: string,
-  readAt: string,
+  readAt: string | undefined,
 ): Promise<void> {
   const revisionStore = tx.objectStore(CONTENT_REVISION_STORES.chapters);
   const rows = await activeRevisionSectionRows(tx, novel, documentSectionId);
   rows
-    .filter((row) => row.documentSectionId === documentSectionId && laterTimestamp(readAt, row.documentSectionReadAt))
+    .filter(
+      (row) => row.documentSectionId === documentSectionId && shouldUpdateMarker(readAt, row.documentSectionReadAt),
+    )
     .forEach((row) => revisionStore.put({ ...row, documentSectionReadAt: readAt } satisfies RevisionChapterRow));
 
   const legacyStore = tx.objectStore('chapters');
@@ -58,7 +60,9 @@ export async function markExactDocumentSectionReadState(
     legacyStore.index(EXACT_SECTION_READ_INDEXES.legacySection).getAll([novel.id, documentSectionId]),
   );
   legacyRows
-    .filter((row) => row.documentSectionId === documentSectionId && laterTimestamp(readAt, row.documentSectionReadAt))
+    .filter(
+      (row) => row.documentSectionId === documentSectionId && shouldUpdateMarker(readAt, row.documentSectionReadAt),
+    )
     .forEach((row) => legacyStore.put({ ...row, documentSectionReadAt: readAt } satisfies Chapter));
 }
 
@@ -83,7 +87,7 @@ export async function markExactChapterReadState(
   tx: IDBTransaction,
   novel: Novel,
   chapter: Chapter,
-  readAt: string,
+  readAt: string | undefined,
 ): Promise<void> {
   if (chapter.documentSectionId) {
     return markExactDocumentSectionReadState(tx, novel, chapter.documentSectionId, readAt);
@@ -96,12 +100,12 @@ export async function markExactChapterReadState(
       (row) =>
         row.novelId === novel.id &&
         componentIds.has(row.contentRevisionId) &&
-        laterTimestamp(readAt, row.documentSectionReadAt),
+        shouldUpdateMarker(readAt, row.documentSectionReadAt),
     )
     .forEach((row) => revisionStore.put({ ...row, documentSectionReadAt: readAt }));
   const legacyStore = tx.objectStore('chapters');
   const legacy = await requestToPromise<Chapter | undefined>(legacyStore.get(chapter.id));
-  if (legacy?.novelId === novel.id && laterTimestamp(readAt, legacy.documentSectionReadAt)) {
+  if (legacy?.novelId === novel.id && shouldUpdateMarker(readAt, legacy.documentSectionReadAt)) {
     legacyStore.put({ ...legacy, documentSectionReadAt: readAt });
   }
 }

@@ -437,7 +437,7 @@ async function verifyCompletedWorkflowInBrowser(session) {
       timeout: timeoutMs,
     });
     await page.getByText('고급 정보', { exact: true }).click({ timeout: timeoutMs });
-    await page.getByText('Label/voice readiness passed', { exact: true }).waitFor({
+    await page.getByText('화자·음성 연결 확인 완료', { exact: true }).waitFor({
       state: 'visible',
       timeout: timeoutMs,
     });

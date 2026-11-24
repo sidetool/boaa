@@ -29,7 +29,7 @@ export async function epubFixture() {
     'book.opf':
       '<package version="3.0"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>Boaa EPUB proof</dc:title><dc:language>en</dc:language></metadata><manifest><item id="text" href="chapter.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="text"/></spine></package>',
     'chapter.xhtml':
-      '<html xmlns="http://www.w3.org/1999/xhtml"><body><h1>First chapter</h1><p>Embedded EPUB reading works.</p></body></html>',
+      '<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><body><h1>First chapter</h1><p>Embedded EPUB reading works. <a epub:type="noteref" href="#note">Footnote 1</a></p><aside epub:type="footnote" id="note"><p>The footnote is readable.</p></aside></body></html>',
   }))
     await writer.add(name, new TextReader(value), { level: 0 });
   return Buffer.from(await (await writer.close()).arrayBuffer());

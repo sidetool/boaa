@@ -221,8 +221,8 @@ describe('backup conflict defaults', () => {
     expect(restoreBackup).toHaveBeenLastCalledWith(
       archive,
       {
-        defaultConflictResolution: 'replace',
-        conflictResolutions: { b: 'skip' },
+        defaultConflictResolution: 'skip',
+        conflictResolutions: { a: 'replace' },
       },
       expect.any(Function),
     );
@@ -239,6 +239,43 @@ describe('backup conflict defaults', () => {
     );
     await act(async () => renderer.unmount());
   });
+});
+
+it('consumes a committed restore even if catalog refresh fails and the user presses restore twice', async () => {
+  const inspection = { manifest: { books: [] }, conflicts: [] } as unknown as BackupInspection;
+  const restore = vi.fn(async () => ({ restoredBooks: 1, skippedBooks: 0, copiedBooks: 1, restoredEntries: 1 }));
+  const repository = { inspectBackup: async () => inspection, restoreBackup: restore, exportBackup: vi.fn() };
+  const refreshLibrary = vi.fn().mockRejectedValueOnce(new Error('offline')).mockResolvedValue(undefined);
+  const notify = vi.fn();
+  let controller!: BackupFeatureController;
+  let renderer!: ReactTestRenderer;
+  function Harness() {
+    controller = useBackupController({ repository, refreshLibrary, notify });
+    return null;
+  }
+  act(() => {
+    renderer = create(<Harness />);
+  });
+  try {
+    await act(async () => controller.inspectFile(new File(['archive'], 'backup.zip')));
+    await act(async () => {
+      await Promise.all([controller.restoreBackup(), controller.restoreBackup()]);
+    });
+    expect(controller.inspection).toBeUndefined();
+    expect(controller.open).toBe(false);
+    expect(restore).toHaveBeenCalledTimes(1);
+    expect(notify).toHaveBeenCalledWith(expect.stringContaining('1권을 복원'), 'success');
+    const action = notify.mock.calls.at(-1)?.[2];
+    expect(action.label).toBe('목록 새로고침');
+    await act(async () => {
+      await action.onSelect();
+      await controller.restoreBackup();
+    });
+    expect(refreshLibrary).toHaveBeenCalledTimes(2);
+    expect(restore).toHaveBeenCalledTimes(1);
+  } finally {
+    act(() => renderer.unmount());
+  }
 });
 
 it('shows bytes while receiving and stays busy until the destination closes', async () => {

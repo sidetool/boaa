@@ -195,8 +195,9 @@ export class RemoteReaderRepository implements ReaderRepository {
     chapterId: string,
     previous: boolean,
     expectedContentRevisionId?: string,
+    read = true,
   ): Promise<void> {
-    await this.client.request(`/books/${encodeURIComponent(novelId)}/chapters/read`, {
+    await this.client.request(`/books/${encodeURIComponent(novelId)}/chapters/${read ? 'read' : 'unread'}`, {
       method: 'POST',
       body: JSON.stringify({ chapterId, previous, expectedContentRevisionId }),
     });

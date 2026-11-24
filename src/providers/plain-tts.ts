@@ -43,13 +43,42 @@ export interface PlainTTSVoices {
   modelId?: string;
   revision?: string;
   voices: PlainTTSVoice[];
+  /** Previously discovered voices on currently configured but unreachable engines. Playback may read cached audio only. */
+  cachedVoices?: PlainTTSVoice[];
+  cachedDefaultVoiceId?: string;
   providers?: PlainTTSProviderStatus[];
   message?: string;
+}
+
+/** Only the configured default can supply an unspecified voice. Older catalogs omitted defaultVoiceId. */
+export function plainPlaybackVoice(catalog: PlainTTSVoices | undefined, selectedId?: string) {
+  const live = catalog?.voices ?? [];
+  const cached = (catalog?.cachedVoices ?? []).filter(
+    (voice) =>
+      voice.model?.revision &&
+      voice.providerId === voice.model.providerId &&
+      catalog?.providers?.some((provider) => provider.id === voice.providerId && !provider.available),
+  );
+  const voiceId =
+    selectedId ||
+    catalog?.defaultVoiceId ||
+    catalog?.cachedDefaultVoiceId ||
+    (catalog?.defaultVoiceId === undefined ? live[0]?.id : undefined);
+  const voice = live.find((item) => item.id === voiceId) ?? cached.find((item) => item.id === voiceId);
+  return {
+    voiceId,
+    voice,
+    cacheOnly: Boolean(voice && cached.includes(voice)),
+    cached,
+    voices: cached.length ? [...live, ...cached] : live,
+  };
 }
 
 export interface PlainTTSRequest {
   /** Explicit user retry: replace this source-verified audio, including persistent caches. */
   regenerate?: boolean;
+  /** Use the cache-only chapter endpoint. A miss must never start synthesis. */
+  cacheOnly?: boolean;
   voiceId: string;
   modelRevision: string;
   voiceRevision?: string;

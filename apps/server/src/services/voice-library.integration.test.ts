@@ -97,6 +97,8 @@ async function setup(pool: pg.Pool, natural = false) {
     '0067_audiobook_retry.sql',
     '0068_speaker_generation.sql',
     '0069_voice_library.sql',
+    '0070_audiobook_content_blocks.sql',
+    '0071_audiobook_transient_retries.sql',
   ])
     await pool.query(await readFile(new URL('../db/migrations/' + migration, import.meta.url), 'utf8'));
   await pool.query('insert into chapters values($1,$2,$3,1)', [chapter.id, 'book', chapter.title]);

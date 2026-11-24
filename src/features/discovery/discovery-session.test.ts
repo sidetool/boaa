@@ -3,6 +3,7 @@ import type { ExternalCatalogCachePage, ExternalItemPage } from '../../external-
 import 'fake-indexeddb/auto';
 import {
   ExternalSourceLocalStateStore,
+  clearSourceMetadataCache,
   resetExternalSourceLocalStateForTests,
 } from '../../external-sources/local-state';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -114,7 +115,7 @@ it('publishes a persisted stale page and its coverRef while a list refresh remai
         importability: 'supported',
       },
     ],
-    cache: { fetchedAt: Date.now() - 180_000 },
+    cache: { fetchedAt: Date.now() - 360_000 },
   };
   await new ExternalSourceLocalStateStore().saveCachePage(storedSourcePage(session.key('a', input), 'a', input, page));
   const restored = await session.restore('a', input);
@@ -241,4 +242,105 @@ it('keeps a replacement request shared when the abandoned same-key request settl
   await Promise.all([replacement, shared]);
   expect(list).toHaveBeenCalledTimes(2);
   session.dispose();
+});
+
+it('finishes one background refresh when a stale reader leaves and another opens the same list', async () => {
+  const { session, list } = fixture();
+  const input = { browseMode: 'popular' as const };
+  await session.list('a', input);
+  // Empty results expire in a minute, independently of the longer popular-list lifetime.
+  const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 61_000);
+  try {
+    const caller = new AbortController();
+    let finish!: (page: { items: [] }) => void;
+    list.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    );
+    const stale = session.peek('a', input)!.page;
+    const leaving = session.list('a', input, false, caller.signal);
+    const cancelled = expect(leaving).rejects.toMatchObject({ name: 'AbortError' });
+    caller.abort();
+    await cancelled;
+    expect((list.mock.lastCall![3] as AbortSignal).aborted).toBe(false);
+    expect(await session.restore('a', input)).toBe(stale);
+    const returning = session.list('a', input);
+    finish({ items: [] });
+    expect(await returning).toBe(session.peek('a', input)?.page);
+    expect(list).toHaveBeenCalledTimes(2);
+  } finally {
+    clock.mockRestore();
+    session.dispose();
+  }
+});
+
+it('coalesces explicit reloads behind an already running ordinary read', async () => {
+  const { session, list } = fixture();
+  const finishes: Array<(page: { items: [] }) => void> = [];
+  list.mockImplementation(() => new Promise((resolve) => finishes.push(resolve)));
+  const ordinary = session.list('a', {});
+  const reload = session.list('a', { cacheMode: 'reload' });
+  const alsoReload = session.list('a', {}, true);
+  expect(list).toHaveBeenCalledTimes(1);
+  finishes.shift()!({ items: [] });
+  await ordinary;
+  await vi.waitFor(() => expect(list).toHaveBeenCalledTimes(2));
+  expect(list.mock.lastCall![2]).toMatchObject({ cacheMode: 'reload' });
+  finishes.shift()!({ items: [] });
+  expect(await reload).toBe(await alsoReload);
+  session.dispose();
+});
+
+it('clearing this account retires the session before a late list can repopulate disk', async () => {
+  const { registry, list } = fixture();
+  const scope = 'hosted-account:cache-fixture';
+  const session = new DiscoverySession(registry, context, scope);
+  const invalidated = vi.fn();
+  const release = session.mount(invalidated);
+  const storage = new ExternalSourceLocalStateStore(scope);
+  const key = session.key('a', {});
+  try {
+    let finish!: (page: { items: [] }) => void;
+    list.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    );
+    const pending = session.list('a', {});
+    await clearSourceMetadataCache('hosted-account:other');
+    expect(invalidated).not.toHaveBeenCalled();
+    const done = expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+    await clearSourceMetadataCache(scope);
+    finish({ items: [] });
+    await done;
+    expect(invalidated).toHaveBeenCalledTimes(1);
+    expect(await storage.getCachePage(key)).toBeUndefined();
+    expect(session.peek('a', {})).toBeUndefined();
+  } finally {
+    release();
+  }
+});
+
+it('requires a live read before showing a page when list caching is disabled', async () => {
+  const { session, list } = fixture();
+  const input = { browseMode: 'popular' as const };
+  await session.list('a', input);
+  expect(session.peek('a', input)).toBeDefined();
+  const disabled = { ...input, cacheMaxAgeMs: 0 };
+  const disk = vi.spyOn(ExternalSourceLocalStateStore.prototype, 'getCachePage');
+  try {
+    expect(session.peek('a', disabled)).toBeUndefined();
+    expect(await session.restore('a', disabled)).toBeUndefined();
+    expect(disk).not.toHaveBeenCalled();
+    await session.list('a', disabled);
+    expect(list).toHaveBeenCalledTimes(2);
+    expect(list.mock.lastCall![2]).toMatchObject({ cacheMaxAgeMs: 0 });
+    expect(session.peek('a', disabled)).toBeUndefined();
+  } finally {
+    disk.mockRestore();
+    session.dispose();
+  }
 });

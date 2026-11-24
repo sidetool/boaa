@@ -41,6 +41,7 @@ import type { ServerConfig } from '../../config.js';
 import { createServerTTSSynthesisProvider } from '../../providers/server-tts-provider-factory.js';
 
 type SourceRow = {
+  paragraph_id: string;
   paragraph: Paragraph;
   text: string;
   book_id: string;
@@ -113,14 +114,16 @@ export async function registerPlainTTSRoutes(
     }
     return discovered;
   }
+  const discoveryKey = (source: PlainTTSSource) =>
+    structuredIntegrityHash([source.id, source.revision, sourceModel(source)]);
   async function voices(source: PlainTTSSource) {
-    const key = source.id + ':' + source.revision;
+    const key = discoveryKey(source);
     const old = catalogs.get(key);
-    const task =
+    const task: Promise<Awaited<ReturnType<typeof discover>>> =
       old && old.expires > Date.now()
         ? old.task
         : discover(source).catch((error) => {
-            catalogs.delete(key);
+            if (catalogs.get(key)?.task === task) catalogs.delete(key);
             throw error;
           });
     if (!old || old.expires <= Date.now()) {
@@ -167,10 +170,17 @@ export async function registerPlainTTSRoutes(
   let activeRequests = 0;
   const maxBytes = 64 * 1024 * 1024;
   const cooldowns = new Map<string, { until: number; failures: number }>();
+  const persistedAudio = async (key: string) =>
+    (await diskCache?.get(key)) ?? (await retained?.find(pool, config.defaultUserId, key));
+  function reserveSynthesis() {
+    if (activeRequests >= 4)
+      throw new PlainTTSError(429, '서버 음성이 다른 문장을 준비 중입니다. 잠시 후 다시 재생하세요.');
+    activeRequests++;
+  }
   async function synthesize(
     key: string,
     text: string,
-    voiceId: string,
+    selectVoice: () => Promise<string>,
     rate: number,
     source: PlainTTSSource,
     regenerate = false,
@@ -179,22 +189,27 @@ export async function registerPlainTTSRoutes(
   ): Promise<Audio> {
     const current = pending.get(key);
     if (current && (!regenerate || regenerating.has(key))) return current;
+    // A rejected regeneration cannot invalidate the previous recording. Recheck after async discovery
+    // so concurrent retries still share one generation.
+    const confirmedVoice = regenerate ? await selectVoice() : undefined;
+    const replacement = regenerate ? pending.get(key) : undefined;
+    if (replacement && regenerating.has(key)) return replacement;
     const hit = cache.get(key);
     if (hit && !regenerate) {
       cache.delete(key);
       cache.set(key, hit);
       return hit;
     }
-    if (activeRequests >= 4)
-      throw new PlainTTSError(429, '서버 음성이 다른 문장을 준비 중입니다. 잠시 후 다시 재생하세요.');
+    let reserved = false;
     if (regenerate) {
+      reserveSynthesis();
+      reserved = true;
       regenerating.add(key);
       if (hit) {
         cacheBytes -= hit.data.length;
         cache.delete(key);
       }
     }
-    activeRequests++;
     // Schedule after assigning the task so even synchronous fake adapters obey the identity fence.
     const task = Promise.resolve()
       .then(async () => {
@@ -207,10 +222,13 @@ export async function registerPlainTTSRoutes(
               [key, config.defaultUserId],
             );
         }
-        const persisted = regenerate
-          ? undefined
-          : ((await diskCache?.get(key)) ?? (await retained?.find(pool, config.defaultUserId, key)));
+        const persisted = regenerate ? undefined : await persistedAudio(key);
         if (persisted) return persisted;
+        if (!reserved) {
+          reserveSynthesis();
+          reserved = true;
+        }
+        const voiceId = confirmedVoice ?? (await selectVoice());
         const now = new Date().toISOString();
         const adapter = await source.createProvider();
         const profile: VoiceProfile = {
@@ -325,7 +343,7 @@ export async function registerPlainTTSRoutes(
         return audio;
       })
       .finally(() => {
-        activeRequests--;
+        if (reserved) activeRequests--;
         if (pending.get(key) === task) {
           pending.delete(key);
           regenerating.delete(key);
@@ -335,10 +353,17 @@ export async function registerPlainTTSRoutes(
     return task;
   }
 
+  // Per-owner route instance. Last successful choices are for cache reads until the source revision changes.
+  const previousVoices = new Map<string, PlainTTSVoices['voices']>();
   async function catalog(): Promise<PlainTTSVoices> {
     const items = await sources();
+    const activeKeys = new Set(items.map(discoveryKey));
+    for (const store of [previousVoices, catalogs]) {
+      for (const key of store.keys()) if (!activeKeys.has(key)) store.delete(key);
+    }
     const results = await Promise.all(
       items.map(async (source) => {
+        const key = discoveryKey(source);
         try {
           const found = await voices(source);
           const adapter = await source.createProvider();
@@ -348,35 +373,40 @@ export async function registerPlainTTSRoutes(
             ((isGeminiActingModel(source.modelId) &&
               ['gemini-tts', 'gemini-vertex-tts', 'google-cloud-tts'].includes(adapter.providerId)) ||
               (!!source.performanceFormat && source.performanceFormat === adapter.performanceFormat));
-          return { source, found, available: found.length > 0, instructionsSupported, autoActingSupported };
+          const live = found.map((voice) => ({
+            ...voice,
+            id: voiceKey(source, voice.id),
+            providerId: source.id,
+            providerName: source.name,
+            modelId: source.modelId,
+            model: sourceModel(source),
+            paid: source.paid,
+            instructionsSupported,
+            autoActingSupported,
+            batchAudioSupported: autoActingSupported,
+          }));
+          previousVoices.set(key, live);
+          return { source, live, cached: [], available: live.length > 0 };
         } catch {
-          return { source, found: [], available: false };
+          return { source, live: [], cached: previousVoices.get(key) ?? [], available: false };
         }
       }),
     );
-    // Removing an optional runtime must not promote the next enabled (possibly paid) engine.
     const first = results.find(({ source }) => source.default);
-    const defaultVoice =
-      first?.found.find((voice) => voice.id === first.source.providerOptions?.voice) ?? first?.found[0];
+    const preference = first?.source.providerOptions?.voice;
+    const defaultId = (choices: PlainTTSVoices['voices']) =>
+      (first &&
+        typeof preference === 'string' &&
+        choices.find((voice) => voice.id === voiceKey(first.source, preference))?.id) ||
+      choices[0]?.id;
+    const cachedVoices = results.flatMap((row) => row.cached);
     const result: PlainTTSVoices = {
-      defaultVoiceId: first && defaultVoice ? voiceKey(first.source, defaultVoice.id) : '',
+      defaultVoiceId: defaultId(first?.live ?? []) ?? '',
       available: results.some((item) => item.available),
       modelId,
       revision: catalogRevision(items),
-      voices: results.flatMap(({ source, found, instructionsSupported, autoActingSupported }) =>
-        found.map((voice) => ({
-          ...voice,
-          id: voiceKey(source, voice.id),
-          providerId: source.id,
-          providerName: source.name,
-          modelId: source.modelId,
-          model: sourceModel(source),
-          paid: source.paid,
-          instructionsSupported: instructionsSupported === true,
-          autoActingSupported: autoActingSupported === true,
-          batchAudioSupported: autoActingSupported === true,
-        })),
-      ),
+      voices: results.flatMap((row) => row.live),
+      ...(cachedVoices.length ? { cachedVoices, cachedDefaultVoiceId: defaultId(first?.cached ?? []) } : {}),
       providers: results.map(({ source, available }) => ({
         id: source.id,
         name: source.name,
@@ -438,37 +468,16 @@ export async function registerPlainTTSRoutes(
       throw new PlainTTSError(409, '선택한 목소리의 모델이 변경되었습니다. 목소리 목록을 새로고침하세요.');
     }
     onProvider?.(source.id);
-    const selectedVoice = (await voices(source)).find((voice) => voiceKey(source, voice.id) === voiceId);
-    if (!selectedVoice) throw new PlainTTSError(400, '선택한 목소리를 찾을 수 없습니다.');
+    const selectVoice = async () => {
+      const selected = (await voices(source)).find((voice) => voiceKey(source, voice.id) === voiceId);
+      if (!selected) throw new PlainTTSError(400, '선택한 목소리를 찾을 수 없습니다.');
+      return selected.id;
+    };
     let text = PLAIN_TTS_SAMPLE;
     let sourceKey: unknown = { sample: 1 };
-    const loadSource = async (reference = { paragraphId: body.paragraphId, paragraphHash: body.paragraphHash }) => {
-      if (!chapterId) throw new PlainTTSError(400, '회차 ID가 필요합니다.');
-      const result = await pool.query<SourceRow>(
-        `
-              select p.paragraph, p.text, p.book_id, b.language, b.active_content_revision_id, p.paragraph_index
-              from paragraph_search p join library_books b on b.id = p.book_id
-              where p.chapter_id = $1 and p.paragraph_id = $2 and b.user_id = $3 and b.deleted_at is null
-            `,
-        [chapterId, reference.paragraphId, config.defaultUserId],
-      );
-      const row = result.rows[0];
-      if (!row) throw new PlainTTSError(404, '원문 문단을 찾을 수 없습니다.');
-      const paragraph = {
-        ...row.paragraph,
-        text: row.text,
-        id: String(reference.paragraphId),
-        novelId: row.book_id,
-        chapterId: chapterId,
-      };
-      if (
-        plainTTSParagraphHash(paragraph) !== reference.paragraphHash ||
-        (body.contentRevision ?? null) !== row.active_content_revision_id
-      )
-        throw new PlainTTSError(409, '본문이 변경되었습니다. 회차를 다시 열어주세요.');
-      return { row, paragraph };
-    };
+    let verify: (() => Promise<unknown>) | undefined;
     if (!sample) {
+      if (!chapterId) throw new PlainTTSError(400, '회차 ID가 필요합니다.');
       if (
         typeof body.paragraphId !== 'string' ||
         typeof body.paragraphHash !== 'string' ||
@@ -492,8 +501,8 @@ export async function registerPlainTTSRoutes(
       )
         throw new PlainTTSError(400, '묶음 크기는 200~2000자로 설정해 주세요.');
       const rules = parsePlainTTSRules(body.rules);
-      const { row, paragraph } = await loadSource();
-      let item;
+      const primary = { paragraphId: body.paragraphId, paragraphHash: body.paragraphHash };
+      let references = [primary];
       if (body.batch !== undefined) {
         if (
           body.chunking !== 'batch' ||
@@ -507,15 +516,42 @@ export async function registerPlainTTSRoutes(
           body.batch[0].paragraphHash !== body.paragraphHash
         )
           throw new PlainTTSError(400, '묶음 원문 위치가 올바르지 않습니다.');
-        const loaded = await Promise.all(body.batch.map((ref) => loadSource(ref)));
+        references = body.batch;
+      }
+      const loadSource = async () => {
+        const result = await pool.query<SourceRow>(
+          `select p.paragraph_id, p.paragraph, p.text, p.book_id, b.language, b.active_content_revision_id, p.paragraph_index
+           from paragraph_search p join library_books b on b.id = p.book_id
+           where p.chapter_id = $1 and p.paragraph_id = any($2::text[]) and b.user_id = $3 and b.deleted_at is null`,
+          [chapterId, references.map((ref) => ref.paragraphId), config.defaultUserId],
+        );
+        const byId = new Map(result.rows.map((row) => [row.paragraph_id, row]));
+        const loaded = references.map((ref) => {
+          const row = byId.get(ref.paragraphId);
+          if (!row) throw new PlainTTSError(404, '원문 문단을 찾을 수 없습니다.');
+          const paragraph = { ...row.paragraph, id: ref.paragraphId, text: row.text, novelId: row.book_id, chapterId };
+          if (
+            plainTTSParagraphHash(paragraph) !== ref.paragraphHash ||
+            (body.contentRevision ?? null) !== row.active_content_revision_id
+          )
+            throw new PlainTTSError(409, '본문이 변경되었습니다. 회차를 다시 열어주세요.');
+          return { row, paragraph };
+        });
         if (
           loaded.some(
             (entry, index) =>
-              entry.row.book_id !== row.book_id ||
+              entry.row.book_id !== loaded[0].row.book_id ||
               (index > 0 && entry.row.paragraph_index <= loaded[index - 1].row.paragraph_index),
           )
         )
           throw new PlainTTSError(400, '묶음 원문 순서가 올바르지 않습니다.');
+        return loaded;
+      };
+      const loaded = await loadSource();
+      verify = loadSource;
+      const { row, paragraph } = loaded[0];
+      let item;
+      if (body.batch !== undefined) {
         item = buildPlainTTSBatch({
           paragraphs: loaded.map((entry) => entry.paragraph),
           batchCharacters: body.batchCharacters as number | undefined,
@@ -571,13 +607,7 @@ export async function registerPlainTTSRoutes(
         409,
         '기존 음성의 생성 모델을 확인하지 못했습니다. 이미 만든 구간은 계속 들을 수 있어요.',
       );
-    const verify = async () => {
-      if (!sample) {
-        await loadSource();
-        if (Array.isArray(body.batch)) await Promise.all(body.batch.map((ref) => loadSource(ref)));
-      }
-    };
-    return { key, model, text, rate, source, selectedVoice, verify };
+    return { key, model, text, rate, source, selectVoice, verify };
   }
   async function render(
     chapterId: string | undefined,
@@ -587,29 +617,47 @@ export async function registerPlainTTSRoutes(
     expected?: PlainTTSModel,
     timeoutMs = 45_000,
   ) {
-    const { key, text, selectedVoice, rate, source, verify } = await prepare(
+    const { key, text, selectVoice, rate, source, verify } = await prepare(
       chapterId,
       body,
       sample,
       onProvider,
       expected,
     );
-    const audio = await synthesize(key, text, selectedVoice.id, rate, source, body.regenerate === true, timeoutMs);
+    const audio = await synthesize(key, text, selectVoice, rate, source, body.regenerate === true, timeoutMs);
     // Ownership and revision may change while inference runs.
-    await verify();
+    await verify?.();
     return { ...audio, key };
   }
 
-  for (const sample of [false, true]) {
+  for (const [route, mode] of [
+    ['/api/chapters/:chapterId/tts/plain', 'play'],
+    ['/api/chapters/:chapterId/tts/plain/cached', 'cached'],
+    ['/api/tts/plain/sample', 'sample'],
+  ] as const) {
     app.post<{ Params: { chapterId: string }; Body: Record<string, unknown> }>(
-      sample ? '/api/tts/plain/sample' : '/api/chapters/:chapterId/tts/plain',
+      route,
       { bodyLimit: 64 * 1024 },
       async (request, reply) => {
         let failureProvider: string | undefined;
         try {
-          const audio = await render(request.params.chapterId, request.body, sample, (id) => {
-            failureProvider = id;
-          });
+          let audio: Audio;
+          if (mode === 'cached') {
+            if (request.body?.regenerate === true) throw new PlainTTSError(400, '저장된 음성만 재생할 수 있어요.');
+            const { key, verify } = await prepare(request.params.chapterId, request.body);
+            const cached = regenerating.has(key) ? undefined : (cache.get(key) ?? (await persistedAudio(key)));
+            if (!cached || regenerating.has(key))
+              return reply.header('Cache-Control', 'private, no-store').code(404).send({
+                code: 'tts_cached_audio_missing',
+                error: '이 구간의 저장된 음성이 없어요. 음성 엔진을 연결한 뒤 다시 재생해 주세요.',
+              });
+            await verify?.();
+            audio = cached;
+          } else {
+            audio = await render(request.params.chapterId, request.body, mode === 'sample', (id) => {
+              failureProvider = id;
+            });
+          }
           return reply.header('Cache-Control', 'private, no-store').type(audio.contentType).send(audio.data);
         } catch (error) {
           if (error instanceof PlainTTSError) {
@@ -674,9 +722,12 @@ export async function registerPlainTTSRoutes(
             409,
             '이 음성을 만들던 모델의 설정이 바뀌었어요. 이미 만든 음성은 계속 들을 수 있어요.',
           );
-        const selected = (await voices(current)).find((v) => voiceKey(current, v.id) === voiceId);
-        if (!selected) throw new PlainTTSError(409, '배정한 목소리를 찾지 못했어요.');
-        const audio = await synthesize(key, text, selected.id, 1, current, regenerate, 180_000, instructions);
+        const selectVoice = async () => {
+          const selected = (await voices(current)).find((v) => voiceKey(current, v.id) === voiceId);
+          if (!selected) throw new PlainTTSError(409, '배정한 목소리를 찾지 못했어요.');
+          return selected.id;
+        };
+        const audio = await synthesize(key, text, selectVoice, 1, current, regenerate, 180_000, instructions);
         const after = (await sources()).find((s) => s.id === expected.providerId);
         if (!after || structuredIntegrityHash(sourceModel(after)) !== structuredIntegrityHash(expected))
           throw new PlainTTSError(409, '생성 중 모델 연결이 바뀌었어요.');

@@ -1,8 +1,18 @@
 /* ui-next listening mini player. Floats above the reader bar while it shows, and drops to the edge when it hides. */
 
+.reader-screen,
+.tts-compact-bar.un-mini {
+  --reader-mini-bottom: calc(152px + env(safe-area-inset-bottom, 0px));
+}
+
+.reader-screen.immersive,
+.reader-screen.immersive ~ .tts-compact-bar.un-mini {
+  --reader-mini-bottom: calc(16px + env(safe-area-inset-bottom, 0px));
+}
+
 .tts-compact-bar.un-mini {
   left: 50%;
-  bottom: calc(152px + var(--un-safe-b));
+  bottom: var(--reader-mini-bottom);
   display: flex;
   flex-wrap: nowrap;
   align-items: center;
@@ -28,7 +38,7 @@
 /* Keep the player while the reader bars are hidden: playback must stay reachable. */
 .reader-screen.immersive ~ .tts-compact-bar.un-mini {
   display: flex;
-  bottom: calc(16px + var(--un-safe-b));
+  bottom: var(--reader-mini-bottom);
 }
 
 .reader-screen.addon-open ~ .tts-compact-bar.un-mini {
@@ -117,6 +127,12 @@
   font-variant-numeric: tabular-nums;
 }
 
+.un-mini-status {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .un-mini-controls {
   display: flex;
   flex: none;
@@ -182,18 +198,24 @@
 }
 
 @media (max-width: 899px) {
+  .reader-screen,
+  .tts-compact-bar.un-mini {
+    --reader-mini-bottom: calc(126px + env(safe-area-inset-bottom, 0px));
+  }
+
+  .reader-screen.immersive,
+  .reader-screen.immersive ~ .tts-compact-bar.un-mini {
+    --reader-mini-bottom: calc(8px + env(safe-area-inset-bottom, 0px));
+  }
+
   .tts-compact-bar.un-mini,
   .reader-screen.addon-open ~ .tts-compact-bar.un-mini {
     left: 8px;
     right: 8px;
-    bottom: calc(126px + var(--un-safe-b));
+    bottom: var(--reader-mini-bottom);
     width: auto;
     margin: 0;
     transform: none;
-  }
-
-  .reader-screen.immersive ~ .tts-compact-bar.un-mini {
-    bottom: calc(8px + var(--un-safe-b));
   }
 
   .un-mini-controls button {
@@ -202,5 +224,21 @@
 
   .un-mini-controls button:is(.is-timer) {
     display: none;
+  }
+}
+
+/* The mini player occupies one 58px row. Keep selection actions just above it in either chrome mode. */
+.reader-screen:has(~ .tts-compact-bar.un-mini) .selection-action-bar.un-textsel {
+  bottom: calc(var(--reader-mini-bottom) + 66px);
+  transition: bottom 0.28s var(--un-ease);
+}
+
+@media (max-width: 380px) {
+  .un-mini-info:has(.un-mini-countdown) .un-mini-art {
+    display: none;
+  }
+
+  .un-mini-text small {
+    gap: 4px;
   }
 }

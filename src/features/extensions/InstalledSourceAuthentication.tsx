@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type {
   SourceAuthentication,
   SourceAuthenticationRequest,
@@ -14,38 +14,70 @@ const labels: Record<SourceAuthenticationStatus['state'], string> = {
   forbidden: '이 계정으로 접근할 수 없습니다. 사이트에서 이용 권한을 확인해 주세요.',
   error: '연결을 확인하지 못했습니다. 잠시 후 다시 시도해 주세요.',
 };
-export function InstalledSourceAuthentication({
-  manager,
-  auth,
-  disabled,
-}: {
+interface AuthenticationProps {
   manager: InstalledExtensionManager;
   auth: SourceAuthentication;
   disabled: boolean;
-}) {
+}
+
+export function InstalledSourceAuthentication(props: AuthenticationProps) {
+  const { manager, auth } = props;
+  // Account changes replace the manager even when the installed source id stays the same.
+  const [owner, setOwner] = useState({ manager, generation: 0 });
+  if (owner.manager !== manager) setOwner({ manager, generation: owner.generation + 1 });
+  const key = JSON.stringify([owner.generation, auth.sourceId, auth.origin, auth.scheme, auth.cookieName]);
+  return <AuthenticationForm key={key} {...props} />;
+}
+
+function AuthenticationForm({ manager, auth, disabled }: AuthenticationProps) {
   const [state, setState] = useState<SourceAuthenticationStatus>();
   const [busy, setBusy] = useState(false);
   const [username, setUsername] = useState('');
   const [secret, setSecret] = useState('');
+  const lookup = useRef<AbortController>();
+  const action = useRef<AbortController>();
+
   useEffect(() => {
-    const abort = new AbortController();
+    const controller = new AbortController();
+    lookup.current = controller;
     void manager
-      .authenticate?.(auth.sourceId, { action: 'status' }, abort.signal)
-      .then(setState)
+      .authenticate?.(auth.sourceId, { action: 'status' }, controller.signal)
+      .then((result) => {
+        if (!controller.signal.aborted) setState(result);
+      })
       .catch(() => {
-        if (!abort.signal.aborted) setState({ state: 'error' });
+        if (!controller.signal.aborted) setState({ state: 'error' });
       });
-    return () => abort.abort();
+    return () => {
+      controller.abort();
+      action.current?.abort();
+    };
   }, [manager, auth.sourceId]);
+
   const run = async (request: SourceAuthenticationRequest) => {
+    if (disabled || !manager.authenticate || action.current) return;
+    lookup.current?.abort();
+    const controller = new AbortController();
+    action.current = controller;
     setBusy(true);
-    setSecret('');
     try {
-      setState(await manager.authenticate!(auth.sourceId, request));
+      const result = await manager.authenticate(auth.sourceId, request, controller.signal);
+      if (controller.signal.aborted) return;
+      setState(result);
+      if (
+        (request.action === 'save' && (result.state === 'valid' || result.state === 'saved')) ||
+        (request.action === 'remove' && result.state === 'missing')
+      ) {
+        setUsername('');
+        setSecret('');
+      }
     } catch {
-      setState({ state: 'error' });
+      if (!controller.signal.aborted) setState({ state: 'error' });
     } finally {
-      setBusy(false);
+      if (!controller.signal.aborted) {
+        action.current = undefined;
+        setBusy(false);
+      }
     }
   };
   return (

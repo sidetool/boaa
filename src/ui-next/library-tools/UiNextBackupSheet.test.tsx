@@ -67,6 +67,14 @@ describe('UiNextBackupSheet', () => {
     expect(markup).toContain('여기서는 전체 백업을 쓸 수 없어요');
     expect(markup).not.toContain('파일 고르기');
   });
+
+  it('shows how many existing books will be replaced after applying per-book choices', () => {
+    const fixture = controller({ defaultResolution: 'replace', conflictResolutions: {} });
+    expect(renderToStaticMarkup(<UiNextBackupSheet controller={fixture} />)).toContain('기존 책 1권을 바꾸고 복원하기');
+    expect(
+      renderToStaticMarkup(<UiNextBackupSheet controller={{ ...fixture, conflictResolutions: { book_1: 'copy' } }} />),
+    ).toContain('확인한 백업 복원하기');
+  });
 });
 
 it('shows the operation and measured bytes inline without a progress details action', () => {

@@ -1,5 +1,5 @@
 import type { ExternalCatalogCachePage, ExternalItemPage, ExternalSourceListInput } from './contracts';
-import { sourceCachePolicy, sourcePageTime, sourceListIdentity } from './cache-policy';
+import { sourceCachePolicy, sourcePageFreshness, sourcePageTime, sourceListIdentity } from './cache-policy';
 
 // Object URLs belong to the current document. Keep direct URLs for sources without a cover resolver.
 function persistentCover(item: { thumbnailUrl?: string; coverRef?: unknown }) {
@@ -33,7 +33,9 @@ export function storedSourcePage(
     detail: page.detail ? { ...page.detail, thumbnailUrl: persistentCover(page.detail) } : undefined,
     browse: page.browse,
     fetchedAt: new Date(time).toISOString(),
-    expiresAt: new Date(time + (needsCoverRefresh ? 0 : policy.fresh)).toISOString(),
+    expiresAt: new Date(
+      time + (needsCoverRefresh || page.cache?.stale ? 0 : sourcePageFreshness(policy.fresh, page.items.length)),
+    ).toISOString(),
     retainUntil: new Date(time + policy.keep).toISOString(),
     schemaVersion: 1,
   };

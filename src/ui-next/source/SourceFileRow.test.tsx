@@ -19,6 +19,7 @@ beforeEach(() => {
     blockingBusy: false,
     importBusy: false,
     canRemoveItems: false,
+    cancelTask: vi.fn(),
     cancel: vi.fn(),
     importItem: vi.fn(),
     openImported: vi.fn(),
@@ -80,7 +81,8 @@ describe('SourceFileRow import tasks', () => {
     expect(bar.props.className).toContain('is-indeterminate');
     expect(buttons(row, '가져오기')).toHaveLength(0);
     click(buttons(row, `${item.title} 가져오기 중단`)[0]);
-    expect(controller.cancel).toHaveBeenCalledOnce();
+    expect(controller.cancelTask).toHaveBeenCalledWith(expect.objectContaining({ id: 'task-1' }));
+    expect(controller.cancel).not.toHaveBeenCalled();
     expect(controller.importItem).not.toHaveBeenCalled();
   });
 

@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import type { ComponentProps, ReactNode } from 'react';
 import { act, create, type ReactTestRenderer } from 'react-test-renderer';
 import { describe, expect, it, vi } from 'vitest';
 import { defaultSettings } from '../../repositories/reader-defaults';
@@ -37,7 +37,9 @@ describe('ReaderChrome bookmark action', () => {
       const notify = vi.fn();
       const openAutoScroll = vi.fn();
       const screenHandle = new ReaderScreenHandle();
-      screenHandle.setActions({ toggleBookmark, notify } as unknown as ReaderScreenActions);
+      const openAddon = vi.fn();
+      const startTTS = vi.fn();
+      screenHandle.setActions({ toggleBookmark, notify, openAddon, startTTS } as unknown as ReaderScreenActions);
       const fallbackLocation: ReaderLocationSnapshot = {
         progress: 0.37,
         scrollTop: 420,
@@ -131,6 +133,14 @@ describe('ReaderChrome bookmark action', () => {
       expect(renderer.root.findByProps({ 'aria-label': '읽기 조작' }).type).toBe('footer');
       expect(renderer.root.findByProps({ 'aria-label': '듣기 시작' }).props['aria-pressed']).toBe(false);
 
+      const chromeProps = renderer.root.findByType(ReaderChrome).props as ComponentProps<typeof ReaderChrome>;
+      for (const ttsPlaybackState of ['playing', 'paused', 'preparing'] as const) {
+        act(() => renderer.update(<ReaderChrome {...chromeProps} model={{ ...model, ttsPlaybackState }} />));
+        act(() => renderer.root.findByProps({ 'aria-label': '현재 듣기 패널 열기' }).props.onClick());
+        expect(openAddon).toHaveBeenLastCalledWith('tts');
+      }
+      expect(startTTS).not.toHaveBeenCalled();
+      expect(chromeProps.onSetMode).not.toHaveBeenCalled();
       act(() => renderer.root.findAllByProps({ 'aria-label': '보기 설정 열기' })[0].props.onClick());
 
       expect(renderer.root.findByProps({ 'aria-label': '읽기 진행률' }).props['aria-valuetext']).toBe(

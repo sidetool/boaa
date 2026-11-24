@@ -1,6 +1,14 @@
 import { Check, X } from 'lucide-react';
-import { useEffect, useRef, type ReactNode } from 'react';
+import {
+  useEffect,
+  useId,
+  useRef,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type ReactNode,
+  type RefObject,
+} from 'react';
 import { createPortal } from 'react-dom';
+import { dismissibleLayerStack } from '../../shared/ui/use-dismissible-layer';
 import type { LibraryAction } from '../library/contract';
 import '../styles/components.css';
 
@@ -22,6 +30,25 @@ export function Progress({ value, className, label }: { value: number; className
   );
 }
 
+/** Arrow keys change a radio value. Settings tabs move focus first and open on Enter or Space. */
+export function navigateChoices(event: ReactKeyboardEvent<HTMLDivElement>) {
+  if (event.altKey || event.ctrlKey || event.metaKey) return;
+  const radio = event.currentTarget.getAttribute('role') === 'radiogroup';
+  const previous = event.key === 'ArrowUp' || (radio && event.key === 'ArrowLeft');
+  const next = event.key === 'ArrowDown' || (radio && event.key === 'ArrowRight');
+  if (!previous && !next && event.key !== 'Home' && event.key !== 'End') return;
+  const buttons = [...event.currentTarget.querySelectorAll<HTMLButtonElement>(':scope > button:not(:disabled)')];
+  const index = buttons.indexOf(document.activeElement as HTMLButtonElement);
+  if (index < 0) return;
+  event.preventDefault();
+  event.stopPropagation();
+  let to = (index + (previous ? -1 : 1) + buttons.length) % buttons.length;
+  if (event.key === 'Home') to = 0;
+  if (event.key === 'End') to = buttons.length - 1;
+  buttons[to].focus();
+  if (radio && buttons[to].getAttribute('aria-checked') !== 'true') buttons[to].click();
+}
+
 export function Segmented<T extends string>({
   value,
   options,
@@ -33,13 +60,18 @@ export function Segmented<T extends string>({
   onChange: (value: T) => void;
   label: string;
 }) {
+  const tabStop = Math.max(
+    0,
+    options.findIndex((option) => option.value === value),
+  );
   return (
-    <div className="un-segmented" role="radiogroup" aria-label={label}>
-      {options.map((option) => (
+    <div className="un-segmented" role="radiogroup" aria-label={label} onKeyDown={navigateChoices}>
+      {options.map((option, index) => (
         <button
           key={option.value}
           type="button"
           role="radio"
+          tabIndex={index === tabStop ? 0 : -1}
           aria-checked={option.value === value}
           className={cx(option.value === value && 'is-active')}
           onClick={() => onChange(option.value)}
@@ -52,8 +84,68 @@ export function Segmented<T extends string>({
 }
 
 let openSheets = 0;
-const sheetStack: symbol[] = [];
+let overflowBeforeSheets = '';
 const FOCUSABLE = 'a[href], button, input, select, textarea, summary, [tabindex]:not([tabindex="-1"])';
+
+/** Shares Tab, Escape and focus ownership between full-screen dialogs and their nested sheets. */
+export function useModalFocus(
+  panel: RefObject<HTMLElement>,
+  open: boolean,
+  onClose: () => void,
+  initialFocus?: RefObject<HTMLElement>,
+) {
+  const close = useRef(onClose);
+  close.current = onClose;
+  useEffect(() => {
+    if (!open || !panel.current) return;
+    const previous = document.activeElement as HTMLElement | null;
+    if (!openSheets) overflowBeforeSheets = document.documentElement.style.overflow;
+    openSheets += 1;
+    document.documentElement.style.overflow = 'hidden';
+    const registration = dismissibleLayerStack.register();
+    if (!previous || !panel.current.contains(previous))
+      (initialFocus?.current ?? panel.current).focus({ preventScroll: true });
+    const onKey = (event: KeyboardEvent) => {
+      // Only the sheet on top answers: Escape in a rename dialog must not also close the list under it.
+      if (!registration.isTop() || event.defaultPrevented) return;
+      if (event.key === 'Escape') {
+        // preventDefault tells Android back that this sheet consumed it, even while closeDisabled holds it open.
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        close.current();
+        return;
+      }
+      if (event.key !== 'Tab' || !panel.current) return;
+      // Keep Tab inside the sheet; focus used to fall through to the page behind it.
+      const focusable = [...panel.current.querySelectorAll<HTMLElement>(FOCUSABLE)].filter(
+        (element) => element.tabIndex >= 0 && !element.matches(':disabled') && element.getClientRects().length > 0,
+      );
+      if (!focusable.length) {
+        event.preventDefault();
+        return;
+      }
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      const active = document.activeElement;
+      if (event.shiftKey && (active === first || active === panel.current || !panel.current.contains(active))) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && (active === last || !panel.current.contains(active))) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    window.addEventListener('keydown', onKey, true);
+    return () => {
+      window.removeEventListener('keydown', onKey, true);
+      const restoreFocus = registration.isTop();
+      registration.release();
+      openSheets -= 1;
+      if (!openSheets) document.documentElement.style.overflow = overflowBeforeSheets;
+      if (restoreFocus && previous?.isConnected) previous.focus({ preventScroll: true });
+    };
+  }, [open, panel, initialFocus]);
+}
 
 /** Bottom sheet on phones, side sheet on wide screens (`auto`), or a centered dialog. */
 export function Sheet({
@@ -78,57 +170,12 @@ export function Sheet({
   className?: string;
 }) {
   const panel = useRef<HTMLElement>(null);
-  const close = useRef(onClose);
-  close.current = closeDisabled ? () => undefined : onClose;
-  const requestClose = () => close.current();
+  const titleId = useId();
+  const requestClose = () => {
+    if (!closeDisabled) onClose();
+  };
 
-  useEffect(() => {
-    if (!open) return;
-    const previous = document.activeElement as HTMLElement | null;
-    openSheets += 1;
-    document.documentElement.style.overflow = 'hidden';
-    panel.current?.focus({ preventScroll: true });
-    const self = Symbol('sheet');
-    sheetStack.push(self);
-    const onKey = (event: KeyboardEvent) => {
-      // Only the sheet on top answers: Escape in a rename dialog must not also close the list under it.
-      if (sheetStack[sheetStack.length - 1] !== self) return;
-      if (event.key === 'Escape') {
-        // preventDefault tells Android back that this sheet consumed it, even while closeDisabled holds it open.
-        event.preventDefault();
-        event.stopPropagation();
-        close.current();
-        return;
-      }
-      if (event.key !== 'Tab' || !panel.current) return;
-      // Keep Tab inside the sheet; focus used to fall through to the page behind it.
-      const focusable = [...panel.current.querySelectorAll<HTMLElement>(FOCUSABLE)].filter(
-        (element) => !element.hasAttribute('disabled') && element.offsetParent !== null,
-      );
-      if (!focusable.length) {
-        event.preventDefault();
-        return;
-      }
-      const first = focusable[0];
-      const last = focusable[focusable.length - 1];
-      const active = document.activeElement;
-      if (event.shiftKey && (active === first || !panel.current.contains(active))) {
-        event.preventDefault();
-        last.focus();
-      } else if (!event.shiftKey && (active === last || !panel.current.contains(active))) {
-        event.preventDefault();
-        first.focus();
-      }
-    };
-    window.addEventListener('keydown', onKey, true);
-    return () => {
-      window.removeEventListener('keydown', onKey, true);
-      sheetStack.splice(sheetStack.indexOf(self), 1);
-      openSheets -= 1;
-      if (!openSheets) document.documentElement.style.overflow = '';
-      previous?.focus?.({ preventScroll: true });
-    };
-  }, [open]);
+  useModalFocus(panel, open, requestClose);
 
   if (!open) return null;
   return createPortal(
@@ -139,13 +186,14 @@ export function Sheet({
         role="dialog"
         aria-modal="true"
         aria-label={typeof title === 'string' ? title : undefined}
+        aria-labelledby={title && typeof title !== 'string' ? titleId : undefined}
         tabIndex={-1}
         onClick={(event) => event.stopPropagation()}
       >
         <div className="un-sheet-grabber" aria-hidden="true" />
         {title && (
           <header className="un-sheet-head">
-            <h2>{title}</h2>
+            <h2 id={titleId}>{title}</h2>
             <button
               type="button"
               className="un-icon-btn"

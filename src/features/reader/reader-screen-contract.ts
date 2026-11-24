@@ -92,6 +92,7 @@ export interface ReaderScreenModel {
   readonly addonTab: ReaderAddonTab;
   readonly overlays: ReaderOverlayState;
   readonly ttsIndex?: number;
+  readonly ttsPlaybackState?: 'playing' | 'paused' | 'preparing';
   readonly activeTTSPlayback?: ActiveTTSPlayback;
   readonly canRestoreSavedPosition: boolean;
   readonly statsVisible: boolean;
@@ -121,7 +122,8 @@ export interface ReaderScreenActions {
     color: ReaderHighlightColor | 'remove',
   ) => void | Promise<void>;
   readonly openSelectionNote: (selection: ReaderSelection) => void;
-  readonly previewSelectionTTS: (selection: ReaderSelection) => void;
+  readonly previewSelectionTTS: (selection: ReaderSelection, signal: AbortSignal) => Promise<void>;
+  readonly editSelectionPronunciation: (selection: ReaderSelection) => void;
   readonly selectCorrectionSegment: (segmentId: string) => void;
   readonly startTTS: (paragraphIndex: number) => void;
   readonly toggleTTS: (paragraphIndex: number) => void;
@@ -140,7 +142,7 @@ export interface ReaderScreenCommands {
   readonly revealChrome: () => void;
   readonly flushSession: () => Promise<void>;
   readonly setMode: (mode: ReaderMode) => void;
-  readonly scrollToParagraph: (paragraphId: string) => Promise<boolean>;
+  readonly scrollToParagraph: (paragraphId: string, source?: 'playback') => Promise<boolean>;
   readonly scrollToParagraphIndex: (
     paragraphIndex: number,
     align?: 'start' | 'center' | 'end',
@@ -176,7 +178,8 @@ const NO_ACTIONS: ReaderScreenActions = {
   addHighlight: () => undefined,
   highlightSelection: () => undefined,
   openSelectionNote: () => undefined,
-  previewSelectionTTS: () => undefined,
+  previewSelectionTTS: async () => undefined,
+  editSelectionPronunciation: () => undefined,
   selectCorrectionSegment: () => undefined,
   startTTS: () => undefined,
   toggleTTS: () => undefined,
@@ -278,8 +281,8 @@ export class ReaderScreenHandle {
     this.commands?.setMode(mode);
   }
 
-  scrollToParagraph(paragraphId: string): Promise<boolean> {
-    return this.commands?.scrollToParagraph(paragraphId) ?? Promise.resolve(false);
+  scrollToParagraph(paragraphId: string, source?: 'playback'): Promise<boolean> {
+    return this.commands?.scrollToParagraph(paragraphId, source) ?? Promise.resolve(false);
   }
 
   scrollToParagraphIndex(

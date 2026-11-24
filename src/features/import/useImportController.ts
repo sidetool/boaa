@@ -148,6 +148,7 @@ export interface ImportFeatureController {
   seriesTargetLocked: boolean;
   appendTargetTitle?: string;
   seriesError?: string;
+  preparationError?: string;
   encoding: EncodingMode;
   chapterSplitMode: ChapterSplitMode;
   preview?: ImportPreviewState;
@@ -163,6 +164,8 @@ export interface ImportFeatureController {
   openChapterAppend(novel: Novel): void;
   close(): void;
   selectFiles(files: readonly File[]): void;
+  removePendingFile(file: File): void;
+  retryPreparation(): void;
   pickFiles(): Promise<void>;
   importFiles(files: readonly File[]): Promise<void>;
   startPendingImport(): Promise<void>;
@@ -196,13 +199,14 @@ export function useImportController(options: UseImportControllerOptions): Import
   const [documentSeriesPlan, setDocumentSeriesPlan] = useState<LocalDocumentSeriesPlan>();
   const [seriesTargetNovelId, setSeriesTargetNovelId] = useState<string>();
   const [seriesError, setSeriesError] = useState<string>();
+  const [preparationError, setPreparationError] = useState<string>();
   const [encoding, setEncodingState] = useState<EncodingMode>('auto');
   const [chapterSplitMode, setChapterSplitModeState] = useState<ChapterSplitMode>('auto');
   const [archivePassword, setArchivePasswordState] = useState('');
   const [progress, setProgress] = useState<ImportProgress>();
   const [batch, setBatch] = useState<ImportBatchState>();
   const [tasks, setTasks] = useState<ImportTaskView[]>([]);
-  const [queueBusy, setQueueBusy] = useState(false);
+  const [busy, setQueueBusy] = useState(false);
   const busyRef = useRef(false);
   const mountedRef = useRef(true);
   const runGenerationRef = useRef(0);
@@ -212,6 +216,7 @@ export function useImportController(options: UseImportControllerOptions): Import
   const resetTimerRef = useRef<number>();
   const duplicateInspectionRef = useRef<Promise<void>>();
   const explicitSeriesTargetRef = useRef<Novel>();
+  const chosenSeriesTarget = useRef<{ id?: string }>();
   const seriesCommittedTargetIdRef = useRef<string>();
   const unresolvedSeriesTargetRef = useRef<string>();
   const seriesBuildAbortRef = useRef<AbortController>();
@@ -225,6 +230,8 @@ export function useImportController(options: UseImportControllerOptions): Import
     readonly openExisting?: Novel;
     readonly sourceHashes?: ReadonlyMap<File, string>;
   }>();
+  const remainingFilesByTask = useRef(new Map<string, File>());
+  const copyIds = useRef(new WeakMap<File, string>());
   const lastImportFailedRef = useRef(false);
   const backgroundedRunRef = useRef(false);
   const tasksRef = useRef<readonly ImportTaskView[]>(tasks);
@@ -280,25 +287,31 @@ export function useImportController(options: UseImportControllerOptions): Import
   const invalidatePreparation = useCallback(() => {
     seriesAnalysisGenerationRef.current += 1;
     preparedDraftRef.current = undefined;
-  }, []);
-
-  const clearDraft = useCallback(() => {
-    if (unresolvedSeriesTargetRef.current) return;
-    seriesCommittedTargetIdRef.current = undefined;
-    invalidatePreparation();
-    duplicatePolicyOverridesRef.current.clear();
-    setDuplicateBusy(false);
+    setPreparationError(undefined);
     setDuplicateConflicts([]);
-    setSeriesBusy(false);
     setSeriesInspection(undefined);
     setSeriesPlan(undefined);
     setDocumentSeriesInspection(undefined);
     setDocumentSeriesPlan(undefined);
     setSeriesError(undefined);
+  }, []);
+
+  const clearDraft = useCallback(() => {
+    if (unresolvedSeriesTargetRef.current) return;
+    seriesCommittedTargetIdRef.current = undefined;
+    chosenSeriesTarget.current = undefined;
+    invalidatePreparation();
+    duplicatePolicyOverridesRef.current.clear();
+    setDuplicateBusy(false);
+    setSeriesBusy(false);
     clearPreview();
     setPendingFiles([]);
     setArchivePasswordState('');
+    remainingFilesByTask.current.clear();
+    copyIds.current = new WeakMap();
     setTasks([]);
+    setProgress(undefined);
+    setBatch(undefined);
   }, [clearPreview, invalidatePreparation]);
 
   const forgetUploadSession = useCallback(
@@ -391,8 +404,12 @@ export function useImportController(options: UseImportControllerOptions): Import
 
   const dismissTask = useCallback(
     (taskId: string) => {
+      if (busyRef.current || !tasksRef.current.some((task) => task.id === taskId && task.phase === 'failed')) return;
+      const file = remainingFilesByTask.current.get(taskId);
+      remainingFilesByTask.current.delete(taskId);
       setTasks((current) => current.filter((task) => task.id !== taskId));
-      if (!busyRef.current && tasksRef.current.filter((task) => task.id !== taskId).length === 0) clearDraft();
+      if (tasksRef.current.length === 1) clearDraft();
+      else if (file) setPendingFiles((current) => current.filter((candidate) => candidate !== file));
     },
     [clearDraft],
   );
@@ -452,24 +469,31 @@ export function useImportController(options: UseImportControllerOptions): Import
       let localSeriesError: string | undefined;
       let localDocumentSeriesError: string | undefined;
       const sourceHashes = new Map<File, string>();
+      // An independent file stays independent when other files from its batch have finished.
+      const retryingFiles = remainingFilesByTask.current.size > 0;
       const [conflicts, localSeries, localDocumentSeries] = await Promise.all([
         inspectImportDuplicates(pendingFiles, novels, sourceHashes),
-        inspectLocalSeriesImport(pendingFiles, novels, {
-          password: archivePassword || undefined,
-          targetNovel: explicitSeriesTargetRef.current,
-        }).catch((error) => {
-          localSeriesError = error instanceof Error ? error.message : '연재 작품 구조를 확인하지 못했습니다.';
-          return undefined;
-        }),
-        inspectLocalDocumentSeriesImport(pendingFiles, novels, {
-          targetNovel: explicitSeriesTargetRef.current,
-          encoding,
-          chapterSplitMode,
-          password: archivePassword || undefined,
-        }).catch((error) => {
-          localDocumentSeriesError = error instanceof Error ? error.message : '문서 회차 구조를 확인하지 못했습니다.';
-          return undefined;
-        }),
+        retryingFiles
+          ? undefined
+          : inspectLocalSeriesImport(pendingFiles, novels, {
+              password: archivePassword || undefined,
+              targetNovel: explicitSeriesTargetRef.current,
+            }).catch((error) => {
+              localSeriesError = error instanceof Error ? error.message : '연재 작품 구조를 확인하지 못했습니다.';
+              return undefined;
+            }),
+        retryingFiles
+          ? undefined
+          : inspectLocalDocumentSeriesImport(pendingFiles, novels, {
+              targetNovel: explicitSeriesTargetRef.current,
+              encoding,
+              chapterSplitMode,
+              password: archivePassword || undefined,
+            }).catch((error) => {
+              localDocumentSeriesError =
+                error instanceof Error ? error.message : '문서 회차 구조를 확인하지 못했습니다.';
+              return undefined;
+            }),
       ]);
       if (generation !== seriesAnalysisGenerationRef.current) return;
       setSeriesError(localSeries || localDocumentSeries ? undefined : (localDocumentSeriesError ?? localSeriesError));
@@ -491,7 +515,11 @@ export function useImportController(options: UseImportControllerOptions): Import
       setSeriesInspection(localSeries);
       setDocumentSeriesInspection(localDocumentSeries);
       const candidates = localSeries?.candidateNovels ?? localDocumentSeries?.candidateNovels ?? [];
-      const target = explicitSeriesTargetRef.current ?? candidates[0];
+      const target =
+        explicitSeriesTargetRef.current ??
+        (chosenSeriesTarget.current
+          ? candidates.find((candidate) => candidate.id === chosenSeriesTarget.current?.id)
+          : candidates[0]);
       setSeriesTargetNovelId(target?.id);
       try {
         let nextSeriesPlan: LocalSeriesImportPlan | undefined;
@@ -522,12 +550,12 @@ export function useImportController(options: UseImportControllerOptions): Import
         if (generation !== seriesAnalysisGenerationRef.current) return;
         setSeriesPlan(undefined);
         setDocumentSeriesPlan(undefined);
-        setSeriesError(error instanceof Error ? error.message : '회차 추가 계획을 만들지 못했습니다.');
+        setPreparationError(error instanceof Error ? error.message : '회차 추가 계획을 만들지 못했어요.');
       }
     })()
       .catch(() => {
         if (generation === seriesAnalysisGenerationRef.current) {
-          optionsRef.current.notify('중복 파일 확인을 완료하지 못했습니다.', 'warning');
+          setPreparationError('서재와 파일을 확인하지 못했어요. 고른 파일로 다시 시도해 주세요.');
         }
       })
       .finally(() => {
@@ -569,6 +597,29 @@ export function useImportController(options: UseImportControllerOptions): Import
       );
     }
   }, [selectFiles]);
+
+  const removePendingFile = (file: File) => {
+    if (busyRef.current || unresolvedSeriesTargetRef.current || hasCompletedUploadSessions()) return;
+    if (!pendingFiles.includes(file)) return;
+    const failedTask = [...remainingFilesByTask.current].find(([, pending]) => pending === file);
+    if (failedTask && tasksRef.current.some((task) => task.id === failedTask[0])) {
+      dismissTask(failedTask[0]);
+      return;
+    }
+    if (pendingFiles.length === 1) {
+      clearDraft();
+      return;
+    }
+    invalidatePreparation();
+    clearPreview();
+    setPendingFiles((current) => current.filter((candidate) => candidate !== file));
+  };
+
+  const retryPreparation = () => {
+    if (!preparationError || busyRef.current) return;
+    invalidatePreparation();
+    setPendingFiles((files) => [...files]);
+  };
 
   const importFiles = useCallback(
     async (files: readonly File[]) => {
@@ -662,11 +713,17 @@ export function useImportController(options: UseImportControllerOptions): Import
               targetNovel: conflict.existingBook,
             });
           } else if (conflict.policy === 'copy') {
-            const suffix = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+            let clientBookId = copyIds.current.get(file);
+            if (!clientBookId) {
+              const suffix =
+                globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+              clientBookId = `book_copy_${suffix.split('-').join('')}`;
+              copyIds.current.set(file, clientBookId);
+            }
             preparedFiles.push({
               file,
               expectedSourceContentHash,
-              clientBookId: `book_copy_${suffix.split('-').join('')}`,
+              clientBookId,
             });
           } else {
             duplicateSkipped += 1;
@@ -691,6 +748,8 @@ export function useImportController(options: UseImportControllerOptions): Import
             : '모든 회차가 이미 작품에 들어 있습니다.',
           'info',
         );
+        lastImportFailedRef.current = false;
+        clearDraft();
         setIsOpen(false);
         return;
       }
@@ -700,6 +759,8 @@ export function useImportController(options: UseImportControllerOptions): Import
           openExisting ? '이미 가져온 책을 열었습니다.' : `${skipped}개 파일을 건너뛰었습니다.`,
           'info',
         );
+        lastImportFailedRef.current = false;
+        clearDraft();
         setIsOpen(false);
         return;
       }
@@ -750,6 +811,11 @@ export function useImportController(options: UseImportControllerOptions): Import
           });
         });
       }
+      const remainingFiles = new Map<string, File>();
+      if (!queuedMergePlan) {
+        for (const [file, taskId] of taskIdByFile) remainingFiles.set(taskId, file);
+      }
+      remainingFilesByTask.current.clear();
       setTasks(queuedTasks);
       backgroundedRunRef.current = false;
       runGenerationRef.current = generation;
@@ -831,6 +897,10 @@ export function useImportController(options: UseImportControllerOptions): Import
                 task.id === taskId && task.phase !== 'failed' ? { ...task, ...projection, error: undefined } : task,
               ),
             );
+          },
+          onFileStored: (file) => {
+            const taskId = taskIdByFile.get(file);
+            if (taskId) remainingFiles.delete(taskId);
           },
           onFileCommitted: async (file, novel) => {
             const taskId = taskIdByFile.get(file);
@@ -993,7 +1063,8 @@ export function useImportController(options: UseImportControllerOptions): Import
           if (updatedPlan) setSeriesPlan(updatedPlan);
         }
 
-        if (hostedAppendTarget && outcome.failed > 0) {
+        const pendingAppend = Boolean(hostedAppendTarget && outcome.refreshFailed && remainingFiles.size);
+        if (hostedAppendTarget && (outcome.failed > 0 || pendingAppend)) {
           setTasks((current) =>
             current.map((task) =>
               task.batchId === batchId && task.phase === 'queued'
@@ -1001,7 +1072,9 @@ export function useImportController(options: UseImportControllerOptions): Import
                     ...task,
                     phase: 'failed',
                     percent: undefined,
-                    error: '앞선 회차 추가에 실패해 중단했습니다. 다시 시도해 주세요.',
+                    error: pendingAppend
+                      ? '저장된 회차 정보를 갱신한 뒤 이어서 추가해 주세요.'
+                      : '앞선 회차 추가에 실패해 대기 중입니다.',
                   }
                 : task,
             ),
@@ -1017,7 +1090,7 @@ export function useImportController(options: UseImportControllerOptions): Import
           });
         }
         if (!mountedRef.current || runGenerationRef.current !== generation) return;
-        if (!outcome.aborted && outcome.failed === 0) {
+        if (!outcome.aborted && outcome.failed === 0 && !pendingAppend) {
           setTasks((current) => current.filter((task) => task.batchId !== batchId));
           if (!outcome.refreshFailed && !backgroundedRunRef.current && outcome.lastImportedNovel) {
             await optionsRef.current.onOpenRequested?.(outcome.lastImportedNovel).catch(() => {
@@ -1049,7 +1122,7 @@ export function useImportController(options: UseImportControllerOptions): Import
         const seriesIncomplete = Boolean(
           queuedSeriesPlan && outcome.completed + outcome.skipped - skipped < queuedSeriesPlan.addCount,
         );
-        lastImportFailedRef.current = outcome.failed > 0 || outcome.aborted || seriesIncomplete;
+        lastImportFailedRef.current = outcome.failed > 0 || outcome.aborted || seriesIncomplete || pendingAppend;
         resetDelay = lastImportFailedRef.current ? 12_000 : supportedFiles.length > 1 ? 1400 : 400;
       } catch (error) {
         if (mountedRef.current && runGenerationRef.current === generation) {
@@ -1084,6 +1157,10 @@ export function useImportController(options: UseImportControllerOptions): Import
       } finally {
         seriesBuildAbortRef.current = undefined;
         if (mountedRef.current && runGenerationRef.current === generation) {
+          if (lastImportFailedRef.current && !queuedMergePlan) {
+            remainingFilesByTask.current = remainingFiles;
+            setPendingFiles([...remainingFiles.values()]);
+          }
           busyRef.current = false;
           setQueueBusy(false);
           refreshUploadSessions();
@@ -1094,7 +1171,15 @@ export function useImportController(options: UseImportControllerOptions): Import
         }
       }
     },
-    [archivePassword, chapterSplitMode, encoding, hasCompletedUploadSessions, refreshUploadSessions, selectFiles],
+    [
+      archivePassword,
+      chapterSplitMode,
+      clearDraft,
+      encoding,
+      hasCompletedUploadSessions,
+      refreshUploadSessions,
+      selectFiles,
+    ],
   );
 
   const startPendingImport = useCallback(async () => {
@@ -1207,9 +1292,11 @@ export function useImportController(options: UseImportControllerOptions): Import
         return;
       const candidates = seriesInspection?.candidateNovels ?? documentSeriesInspection?.candidateNovels ?? [];
       const target = candidates.find((novel) => novel.id === targetNovelId);
+      chosenSeriesTarget.current = { id: target?.id };
       const generation = ++seriesAnalysisGenerationRef.current;
       preparedDraftRef.current = undefined;
       setSeriesTargetNovelId(target?.id);
+      setPreparationError(undefined);
       setSeriesBusy(true);
       setSeriesError(undefined);
       const preparation = (async () => {
@@ -1242,7 +1329,7 @@ export function useImportController(options: UseImportControllerOptions): Import
           if (generation !== seriesAnalysisGenerationRef.current) return;
           setSeriesPlan(undefined);
           setDocumentSeriesPlan(undefined);
-          setSeriesError(error instanceof Error ? error.message : '회차 추가 계획을 만들지 못했습니다.');
+          setPreparationError(error instanceof Error ? error.message : '회차 추가 계획을 만들지 못했어요.');
         } finally {
           if (generation === seriesAnalysisGenerationRef.current) setSeriesBusy(false);
         }
@@ -1296,7 +1383,6 @@ export function useImportController(options: UseImportControllerOptions): Import
     }
   }, [hydrateSeriesTarget, refreshPendingBooks, refreshUploadSessions]);
 
-  const busy = queueBusy || (progress !== undefined && progress.status !== 'ready' && progress.status !== 'failed');
   const libraryDrop = useImportDropTarget({
     busy,
     selectFiles,
@@ -1320,6 +1406,7 @@ export function useImportController(options: UseImportControllerOptions): Import
     seriesTargetLocked: Boolean(explicitSeriesTargetRef.current || unresolvedSeriesTargetRef.current),
     appendTargetTitle: explicitSeriesTargetRef.current?.title,
     seriesError,
+    preparationError,
     encoding,
     chapterSplitMode,
     preview,
@@ -1335,6 +1422,8 @@ export function useImportController(options: UseImportControllerOptions): Import
     openChapterAppend,
     close,
     selectFiles,
+    removePendingFile,
+    retryPreparation,
     pickFiles,
     importFiles,
     startPendingImport,

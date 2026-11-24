@@ -1846,6 +1846,7 @@ export default function FixedDocumentScreen({
     if (viewport && !pointerPanAxisRef.current) {
       pointerPanAxisRef.current = fixedDocumentPanAxis({
         zoom,
+        comic: novel.format === 'image_archive',
         continuousView,
         deltaX: event.clientX - (start?.x ?? previous.x),
         deltaY: event.clientY - (start?.y ?? previous.y),
@@ -1886,15 +1887,18 @@ export default function FixedDocumentScreen({
     const deltaY = start ? event.clientY - start.y : 0;
     const viewportRect = viewportRef.current?.getBoundingClientRect();
     const horizontalPosition = viewportRect ? (event.clientX - viewportRect.left) / Math.max(1, viewportRect.width) : 0;
+
     const isTap = Boolean(
       !cancelled &&
       start?.immersiveEligible &&
       !wasPinching &&
       Math.abs(deltaX) <= 12 &&
       Math.abs(deltaY) <= 12 &&
-      performance.now() - start.at <= 500 &&
-      zoom <= 1.02,
+      performance.now() - start.at <= 500,
     );
+    const tap = isTap
+      ? fixedDocumentTapStep(horizontalPosition, rtlComic, { zoom, comic: novel.format === 'image_archive' })
+      : undefined;
     const toggleImmersiveFromViewport = () => {
       suppressViewportClickRef.current = true;
       window.setTimeout(() => {
@@ -1906,27 +1910,22 @@ export default function FixedDocumentScreen({
       if (!cancelled && start && !wasPinching && zoom <= 1.02)
         scrollSectionBoundary.onVerticalGesture(start.y - event.clientY, event.pointerType);
       scrollSectionBoundary.onPointerEnd();
-      if (isTap && horizontalPosition >= 0.33 && horizontalPosition <= 0.67) toggleImmersiveFromViewport();
+      if (tap === 0) toggleImmersiveFromViewport();
       return;
     }
-    if (isTap) {
-      const step = fixedDocumentTapStep(
-        horizontalPosition,
-        novel.format === 'image_archive' && comicProfile.direction === 'rtl',
-      );
-      if (step === 0) toggleImmersiveFromViewport();
+    if (tap !== undefined) {
+      if (tap === 0) toggleImmersiveFromViewport();
       else {
         suppressViewportClickRef.current = true;
         window.setTimeout(() => {
           suppressViewportClickRef.current = false;
         }, 0);
-        if (canTurn(step)) turnPage(step);
+        if (canTurn(tap)) turnPage(tap);
       }
       return;
     }
     if (!start || wasPinching || zoom > 1.02 || cancelled) return;
     if (Math.abs(deltaX) < 55 || Math.abs(deltaX) < Math.abs(deltaY)) return;
-    const rtlComic = novel.format === 'image_archive' && comicProfile.direction === 'rtl';
     turnPage(deltaX < 0 ? (rtlComic ? -1 : 1) : rtlComic ? 1 : -1);
   };
   const handleViewportScroll = () => {

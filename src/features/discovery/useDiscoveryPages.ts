@@ -1,3 +1,4 @@
+import { transientSourceFailure } from '../../external-sources/cache-policy';
 import { useEffect, useRef, useState } from 'react';
 import type { ExternalItemPage, ExternalSourceListInput } from '../../external-sources/contracts';
 import { useNavigationViewState } from '../navigation/navigation-view-state';
@@ -28,8 +29,12 @@ export function useDiscoveryPages(
   filterSignature?: string,
   stateScope?: string,
 ) {
-  const key = session.key(source, input);
-  const [depth, setDepth] = useNavigationViewState(`discovery-pages:${stateScope ? `${stateScope}:` : ''}${key}`, 1);
+  const listKey = session.key(source, input);
+  const key = JSON.stringify([session.instance, listKey]);
+  const [depth, setDepth] = useNavigationViewState(
+    `discovery-pages:${stateScope ? `${stateScope}:` : ''}${listKey}`,
+    1,
+  );
   const [result, setResult] = useState<{ key: string; pages: ExternalItemPage[] }>(() => ({
     key,
     pages: cachedPages(session, source, input, depth),
@@ -45,6 +50,7 @@ export function useDiscoveryPages(
     const abort = new AbortController();
     const force = previous.current.refresh !== refresh || previous.current.retry !== retry;
     previous.current = { refresh, retry };
+    const loaded: ExternalItemPage[] = [];
     setBusy(true);
     setError('');
     void (async () => {
@@ -62,7 +68,6 @@ export function useDiscoveryPages(
           throw new Error('소스의 필터가 변경되었습니다. 탐색 편집에서 목록을 다시 설정해 주세요.');
         if (!active) return;
       }
-      const loaded: ExternalItemPage[] = [];
       const visited = new Set<string | undefined>();
       let cursor: string | undefined;
       for (let i = 0; i < depth && !visited.has(cursor); i++) {
@@ -84,7 +89,9 @@ export function useDiscoveryPages(
       if (loaded.some((page) => page.cache?.stale)) setError('저장된 목록입니다. 다시 시도해 주세요.');
     })()
       .catch((reason: unknown) => {
-        if (active) setError(reason instanceof Error ? reason.message : '목록을 불러오지 못했습니다.');
+        if (!active) return;
+        if (loaded.length || !transientSourceFailure(reason)) setResult({ key, pages: loaded });
+        setError(reason instanceof Error ? reason.message : '목록을 불러오지 못했습니다.');
       })
       .finally(() => {
         if (active) setBusy(false);

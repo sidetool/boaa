@@ -33,7 +33,7 @@ export interface SourceCatalogQueryPort extends Pick<
   'hostContext' | 'settingsScope' | 'notify'
 > {
   registry: Pick<UseExternalSourceControllerOptions['registry'], 'getExternalSourceStatus' | 'listExternalSource'>;
-  state: Pick<UseExternalSourceControllerOptions['state'], 'getCachePage' | 'saveCachePage'>;
+  state: Pick<UseExternalSourceControllerOptions['state'], 'getCachePage' | 'saveCachePage' | 'deleteCachePage'>;
   reconcile: ReturnType<typeof useSourceSubscriptionRefresh>['reconcileSubscriptionPage'];
   retainSelection: (visibleKeys: ReadonlySet<string>) => void;
 }
@@ -125,20 +125,15 @@ export async function runSourceCatalogQuery(request: SourceCatalogRequest): Prom
     port.settingsScope,
     connection.connectionGeneration,
   );
+  const policy = sourceCachePolicy(
+    normalizedInput,
+    false,
+    port.settingsScope?.startsWith('hosted-account:') ? port.settingsScope : undefined,
+  );
   let cached: ExternalCatalogCachePage | undefined;
   try {
-    cached = await port.state.getCachePage(id).catch(() => undefined);
-    if (
-      cached &&
-      Date.parse(cached.fetchedAt) +
-        sourceCachePolicy(
-          input,
-          false,
-          port.settingsScope?.startsWith('hosted-account:') ? port.settingsScope : undefined,
-        ).keep <=
-        Date.now()
-    )
-      cached = undefined;
+    if (policy.fresh > 0) cached = await port.state.getCachePage(id).catch(() => undefined);
+    if (cached && Date.parse(cached.fetchedAt) + policy.keep <= Date.now()) cached = undefined;
     const snapshot = !append ? cached : undefined;
     if (!connectionIsCurrent()) {
       setLoading(false);
@@ -184,13 +179,7 @@ export async function runSourceCatalogQuery(request: SourceCatalogRequest): Prom
         !forceRefresh &&
         (!snapshot.items.some((item) => item.release && item.collection) || snapshot.completeSeries === true) &&
         Date.parse(snapshot.expiresAt) > Date.now() &&
-        Date.parse(snapshot.fetchedAt) +
-          sourceCachePolicy(
-            input,
-            false,
-            port.settingsScope?.startsWith('hosted-account:') ? port.settingsScope : undefined,
-          ).fresh >
-          Date.now()
+        Date.parse(snapshot.fetchedAt) + policy.fresh > Date.now()
       ) {
         setCatalogLoading(false);
         return true;
@@ -306,20 +295,11 @@ export async function runSourceCatalogQuery(request: SourceCatalogRequest): Prom
     return true;
   } catch (error) {
     if (isAbort(error) || !connectionIsCurrent()) return undefined;
-    cached ??= await port.state.getCachePage(id).catch(() => undefined);
-    if (
-      !transientSourceFailure(error) ||
-      (error instanceof RemoteFileRequestError && !error.transient) ||
-      (cached &&
-        Date.parse(cached.fetchedAt) +
-          sourceCachePolicy(
-            input,
-            false,
-            port.settingsScope?.startsWith('hosted-account:') ? port.settingsScope : undefined,
-          ).keep <=
-          Date.now())
-    )
-      cached = undefined;
+    if (policy.fresh > 0) cached ??= await port.state.getCachePage(id).catch(() => undefined);
+    if (!connectionIsCurrent()) return undefined;
+    const transient = transientSourceFailure(error) && !(error instanceof RemoteFileRequestError && !error.transient);
+    if (!transient && cached) await port.state.deleteCachePage?.(id).catch(() => undefined);
+    if (!transient || (cached && Date.parse(cached.fetchedAt) + policy.keep <= Date.now())) cached = undefined;
     if (!connectionIsCurrent()) return undefined;
     const failureMessage =
       packageOperationMessage(error) ??

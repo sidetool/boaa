@@ -64,7 +64,8 @@ describe('ReaderSettingsPanel', () => {
     expect(markup).toContain('id="un-settings-tab-storage"');
     expect(markup).toContain('동기화');
     expect(markup).not.toContain('원격 접속');
-    expect(markup).toContain('모양');
+    expect(markup).toContain('시작 화면');
+    expect(markup).not.toContain('앱 테마');
     expect(markup).toContain('글자, 여백, 읽기 방식');
     expect(markup).toContain('자동 저장');
     expect(markup).not.toContain('aria-label="테마 적용 대상"');
@@ -155,6 +156,8 @@ describe('ReaderSettingsPanel', () => {
     expect(readerMarkup).toContain('aria-label="밝기"');
     const sourceMarkup = renderToStaticMarkup(<ReaderSettingsPanel {...common} initialTab="sources" />);
     const extensionMarkup = renderToStaticMarkup(<ReaderSettingsPanel {...common} initialTab="extensions" />);
+    expect(sourceMarkup).not.toContain('자동 저장');
+    expect(extensionMarkup).not.toContain('자동 저장');
     expect(sourceMarkup).toContain('설치된 소스 패키지');
     expect(sourceMarkup).toContain('받은 회차 기준으로 진행률 보기');
     expect(extensionMarkup).not.toContain('설치된 소스 패키지');

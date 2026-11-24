@@ -1,5 +1,5 @@
 import 'fake-indexeddb/auto';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ExternalSourceLocalStateStore, resetExternalSourceLocalStateForTests } from './local-state';
 import {
   releasePreferenceId,
@@ -41,6 +41,43 @@ describe('durable source user state', () => {
     expect((await second.listDownloadQueues())[0]!.items.map((x) => x.key.remoteId)).toEqual(['release-2']);
     await second.pruneDownloadQueue(queue([]).id, [item(2)]);
     expect(await first.listDownloadQueues()).toEqual([]);
+  });
+  it('merges older array records without exposing new rows to an older tab, and checkpoints in constant writes', async () => {
+    const state = new ExternalSourceLocalStateStore();
+    const items = Array.from({ length: 200 }, (_, i) => item(i));
+    await state.saveDownloadQueue(queue(items));
+    const db = await new Promise<IDBDatabase>((resolve, reject) => {
+      const request = indexedDB.open('boaa-external-sources');
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+    try {
+      const store = () => db.transaction('browsePreferences', 'readwrite').objectStore('browsePreferences');
+      const get = <T>(req: IDBRequest<T>) =>
+        new Promise<T>((resolve, reject) => {
+          req.onsuccess = () => resolve(req.result);
+          req.onerror = () => reject(req.error);
+        });
+      expect((await get(store().getAll())).filter((row) => row.kind === 'downloadQueue')).toEqual([]);
+      await get(store().put(queue([item(0, 'old-tab'), item(999)])));
+      expect((await state.listDownloadQueues())[0]!.items).toEqual([...items, item(999)]);
+      const puts = vi.spyOn(IDBObjectStore.prototype, 'put');
+      const getAll = vi.spyOn(IDBObjectStore.prototype, 'getAll');
+      try {
+        await state.checkpointDownloadItems(queue([]).id, [item(0)]);
+        expect(getAll).not.toHaveBeenCalled();
+        expect(puts).toHaveBeenCalledTimes(1);
+        expect(puts.mock.calls[0]![0]).not.toHaveProperty('items');
+      } finally {
+        puts.mockRestore();
+        getAll.mockRestore();
+      }
+      // An old tab can recreate its array after migration without overwriting progress.
+      await get(store().put(queue([item(1000)])));
+      expect((await state.listDownloadQueues())[0]!.items).toEqual([...items.slice(1), item(999), item(1000)]);
+    } finally {
+      db.close();
+    }
   });
   it('shares personal chapter metadata without exporting or replacing the local queue', async () => {
     const store = new ExternalSourceLocalStateStore();

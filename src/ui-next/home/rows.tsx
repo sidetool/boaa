@@ -1,10 +1,11 @@
 import { useTranslatedTitle } from '../../features/translation/use-translated-title';
 import { ChevronLeft, ChevronRight, RotateCw } from 'lucide-react';
-import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { cx } from '../components/primitives';
 import { RemoteCover } from '../library/WorkTile';
 import type { HomeDiscoveryItem, HomeRowView } from './contract';
 import { useRowRefresh } from './use-row-refresh';
+import { hasNavigationScroll, useNavigationScroll } from '../../features/navigation/navigation-view-state';
 
 /** Calls back once when the element comes within a screen of the viewport. */
 export function useNearOnce(ref: React.RefObject<HTMLElement>, onNear?: () => void) {
@@ -67,6 +68,7 @@ export function DiscoveryCard({
     <button
       ref={ref}
       type="button"
+      data-navigation-item={work.id}
       className={cx('un-poster', ranked && 'has-rank')}
       aria-label={`${title} ${work.actionLabel ?? '상세 보기'}`}
       onClick={() => void work.open()}
@@ -118,21 +120,26 @@ export function RowRail({
   busy,
   count,
   startKey,
+  scrollKey,
 }: {
   children: ReactNode;
   busy?: boolean;
   count: number;
   startKey?: string;
+  scrollKey?: string;
 }) {
   const track = useRef<HTMLDivElement>(null);
   const touched = useRef(false);
+  const restored = useMemo(() => hasNavigationScroll(scrollKey), [scrollKey]);
   const touch = () => {
     touched.current = true;
   };
   useLayoutEffect(() => {
     const element = track.current;
-    if (element && !touched.current && element.scrollLeft !== 0) element.scrollTo({ left: 0, behavior: 'instant' });
-  }, [startKey]);
+    if (element && !touched.current && !restored && element.scrollLeft !== 0)
+      element.scrollTo({ left: 0, behavior: 'instant' });
+  }, [startKey, restored]);
+  useNavigationScroll(track, scrollKey, !busy && count > 0, 'scrollLeft');
   const [edges, setEdges] = useState({ start: true, end: true });
   useEffect(() => {
     const element = track.current;
@@ -162,6 +169,7 @@ export function RowRail({
       <div
         ref={track}
         className="un-row-track"
+        data-navigation-rail={scrollKey}
         aria-busy={busy}
         onPointerDown={touch}
         onWheel={touch}
@@ -257,7 +265,12 @@ export function HomeRow({ row, children }: { row: HomeRowView; children: ReactNo
         )}
         <RowMeta row={row} />
       </header>
-      <RowRail busy={row.status === 'loading'} count={row.items.length} startKey={row.items[0]?.key}>
+      <RowRail
+        scrollKey={`home:row:${row.config.id}`}
+        busy={row.status === 'loading'}
+        count={row.items.length}
+        startKey={row.items[0]?.key}
+      >
         {children}
       </RowRail>
     </section>

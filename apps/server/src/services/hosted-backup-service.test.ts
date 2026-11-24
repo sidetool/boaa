@@ -24,6 +24,36 @@ async function collect(stream: ReadableStream<Uint8Array>): Promise<Uint8Array> 
 }
 
 describe('hosted backup restore', () => {
+  it('replaces only a reviewed book and skips a conflicting book created since inspection', async () => {
+    const books = ['reviewed', 'late'].map((id) => ({ id, title: id, format: 'txt' }));
+    const streamed = createHostedBackupStream(
+      {
+        books,
+        tables: new Map([
+          ['library_books', books.map(({ id, title }) => ({ id, title, user_id: 'owner' }))],
+          ['reader_settings', []],
+        ]),
+        objects: [],
+        exportedAt: '2026-11-22T00:00:00Z',
+        appVersion: 'test',
+      },
+      async () => Buffer.alloc(0),
+    );
+    const [archive] = await Promise.all([collect(streamed.readable), streamed.completion]);
+    const query = vi.fn(async (sql: string, _values?: unknown[]) =>
+      sql.includes('select id, title from library_books') ? { rows: books } : { rows: [] },
+    );
+    const pool = { connect: async () => ({ query, release: vi.fn() }) } as unknown as pg.Pool;
+    const result = await restoreHostedBackup(pool, { defaultUserId: 'owner', s3: {} } as ServerConfig, archive, {
+      defaultConflictResolution: 'skip',
+      conflictResolutions: { reviewed: 'replace' },
+    });
+    expect(result).toMatchObject({ restoredBooks: 1, skippedBooks: 1 });
+    expect(
+      query.mock.calls.filter(([sql]) => sql.startsWith('delete from library_books')).map((call) => call[1]),
+    ).toEqual([['reviewed', 'owner']]);
+  });
+
   it('ignores superseded asset metadata from older archives when no object blob was exported', async () => {
     const snapshot: HostedBackupSnapshot = {
       tables: new Map([

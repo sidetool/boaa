@@ -8,6 +8,7 @@ import {
   type PointerEvent,
   type WheelEvent,
 } from 'react';
+import { useDismissibleLayer } from '../../shared/ui/use-dismissible-layer';
 import type { WebNovelMetadataCollectorBrowserFrame } from '../../services/webnovel-metadata-collector-client';
 import type { WebNovelMetadataCollectorBroker } from '../../services/webnovel-metadata-collector-broker';
 
@@ -46,6 +47,17 @@ export function RemoteCollectorAuthBrowser({
   onCancel,
   onDismiss,
 }: RemoteCollectorAuthBrowserProps) {
+  const backdropRef = useRef<HTMLDivElement>(null);
+  const dialogRef = useRef<HTMLElement>(null);
+  const applicationRef = useRef<HTMLDivElement>(null);
+  useDismissibleLayer({
+    open: true,
+    modal: true,
+    containerRef: dialogRef,
+    layerRootRef: backdropRef,
+    keyboardSurfaceRef: applicationRef,
+    onClose: onDismiss,
+  });
   const [frame, setFrame] = useState<WebNovelMetadataCollectorBrowserFrame>();
   const [frameUrl, setFrameUrl] = useState<string>();
   const [error, setError] = useState<string>();
@@ -276,11 +288,14 @@ export function RemoteCollectorAuthBrowser({
 
   return (
     <div
+      ref={backdropRef}
       className="collector-auth-browser-backdrop"
       role="presentation"
       style={viewport ? { top: viewport.top, height: viewport.height, bottom: 'auto' } : undefined}
     >
       <section
+        ref={dialogRef}
+        tabIndex={-1}
         className="collector-auth-browser-dialog"
         role="dialog"
         aria-modal="true"
@@ -313,7 +328,13 @@ export function RemoteCollectorAuthBrowser({
             >
               <RefreshCw size={16} />
             </button>
-            <button type="button" className="icon-btn" aria-label="화면 닫기" onClick={onDismiss}>
+            <button
+              type="button"
+              className="icon-btn"
+              aria-label="화면 닫기"
+              data-dialog-initial-focus
+              onClick={onDismiss}
+            >
               <X size={16} />
             </button>
           </div>
@@ -342,6 +363,7 @@ export function RemoteCollectorAuthBrowser({
 
         <div className="collector-auth-browser-scroll" ref={frameContainerRef}>
           <div
+            ref={applicationRef}
             className="collector-auth-browser-frame"
             style={
               frame

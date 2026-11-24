@@ -36,6 +36,7 @@ export interface UiNextSearchAdapter {
 }
 
 export interface UiNextSearchScreenProps {
+  routeId: string;
   adapter: UiNextSearchAdapter;
   /** Query to start with, e.g. from a tag tap. */
   initialQuery?: string;

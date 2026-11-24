@@ -1,3 +1,4 @@
+import { playDeviceVoicePreview } from './device-voice-preview';
 import { RemoteApiError } from '../../services/remote/remote-api-contracts';
 import { loadPreparedAudio } from './prepared-audio-load';
 import { tracePlaybackWait } from '../../providers/playback-diagnostics';
@@ -8,6 +9,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { AudiobookPort } from '../../providers/plain-audiobook';
 import type { Paragraph, SpokenTextRule, TTSPlaybackSettings } from '../../domain/types';
 import {
+  plainPlaybackVoice,
   plainTTSParagraphHash,
   PLAIN_TTS_SAMPLE,
   type PlainTTSRequest,
@@ -23,6 +25,7 @@ import type { useTTSExecutionController } from './useTTSExecutionController';
 export function usePlainTTS(input: {
   client?: RemoteApiClient;
   owner?: object;
+  accountScope?: string;
   enabled: boolean;
   settings: TTSPlaybackSettings;
   contentRevision?: string;
@@ -40,7 +43,12 @@ export function usePlainTTS(input: {
     [input.client, input.owner],
   );
   useEffect(() => () => audioCache.clear(), [audioCache]);
-  const [catalog, setCatalog] = useState<PlainTTSVoices>();
+  const catalogScope = input.accountScope ?? input.client?.coverCacheScope;
+  const [loadedCatalog, setCatalog] = useState<{ client: RemoteApiClient; scope?: string; value: PlainTTSVoices }>();
+  const catalog =
+    loadedCatalog && loadedCatalog.client === input.client && loadedCatalog.scope === catalogScope
+      ? loadedCatalog.value
+      : undefined;
   const [previewBusy, setPreviewBusy] = useState(false);
   const previewAudio = useMemo(() => new BrowserAudioSession(), []);
   useEffect(() => {
@@ -57,16 +65,21 @@ export function usePlainTTS(input: {
     }
     try {
       const result = await input.client.listPlainTTSVoices();
-      if (generation === refreshGeneration.current) setCatalog(result);
+      if (generation === refreshGeneration.current)
+        setCatalog({ client: input.client, scope: catalogScope, value: result });
     } catch (error) {
       if (generation === refreshGeneration.current)
         setCatalog({
-          available: false,
-          voices: [],
-          message: error instanceof Error ? error.message : '서버 음성 목록을 불러오지 못했습니다.',
+          client: input.client,
+          scope: catalogScope,
+          value: {
+            available: false,
+            voices: [],
+            message: error instanceof Error ? error.message : '서버 음성 목록을 불러오지 못했습니다.',
+          },
         });
     }
-  }, [input.client]);
+  }, [input.client, catalogScope]);
   const invalidateCatalogRequest = useCallback(() => {
     ++refreshGeneration.current;
   }, []);
@@ -85,6 +98,7 @@ export function usePlainTTS(input: {
     [
       stopPreview,
       input.client,
+      input.owner,
       input.settings.mode,
       input.settings.voiceSource,
       input.settings.serverVoiceId,
@@ -92,10 +106,11 @@ export function usePlainTTS(input: {
       input.chapterId,
     ],
   );
-  const voiceId = input.settings.serverVoiceId || (catalog?.defaultVoiceId ?? catalog?.voices[0]?.id);
-  const ready = Boolean(
-    input.client && catalog?.available && catalog.revision && catalog.voices.some((voice) => voice.id === voiceId),
-  );
+  const { voice, voiceId, cacheOnly } = plainPlaybackVoice(catalog, input.settings.serverVoiceId);
+  const liveVoiceAvailable =
+    catalog?.available &&
+    !catalog.providers?.some((provider) => provider.id === voice?.providerId && !provider.available);
+  const ready = Boolean(input.client && catalog?.revision && voice && (cacheOnly || liveVoiceAvailable));
   const latestContent = useRef({ chapterId: input.chapterId, revision: input.contentRevision });
   latestContent.current = { chapterId: input.chapterId, revision: input.contentRevision };
   const scopeFor = (revision = input.contentRevision) =>
@@ -139,7 +154,8 @@ export function usePlainTTS(input: {
     return {
       voiceId,
       modelRevision: catalog.revision,
-      voiceRevision: catalog.voices.find((voice) => voice.id === voiceId)?.model?.revision,
+      voiceRevision: voice?.model?.revision,
+      ...(cacheOnly ? { cacheOnly: true } : {}),
       rate: 1,
       paragraphId: paragraph.id,
       paragraphHash: plainTTSParagraphHash(paragraph),
@@ -222,6 +238,7 @@ export function usePlainTTS(input: {
         input.controller.setHostedStatus(operation, undefined);
         return await input.controller.playAudio(blob, sessionId, onProgress);
       }
+      if (regeneration && cacheOnly) throw new Error('목소리 엔진이 다시 연결되면 음성을 새로 만들 수 있어요.');
       const request = requestFor(playable, paragraph);
       const key = structuredIntegrityHash({ chapter: paragraph.chapterId, request });
       lastPlayback.current = {
@@ -345,15 +362,19 @@ export function usePlainTTS(input: {
     }
   };
 
-  const preview = async () => {
+  const preview = async (selection?: { text: string; signal: AbortSignal }) => {
+    if (selection && (!selection.text.trim() || selection.signal.aborted)) return;
     stopPreview();
-    input.controller.stopAll();
+    if (!selection) input.controller.stopAll();
     input.systemTTS.stop();
     const abort = new AbortController();
     previewAbort.current = abort;
+    const cancelSelection = () => abort.abort();
+    selection?.signal.addEventListener('abort', cancelSelection, { once: true });
     setPreviewBusy(true);
     try {
-      if (input.settings.voiceSource === 'server') {
+      if (!selection && input.settings.voiceSource === 'server') {
+        if (cacheOnly) throw new Error('목소리 엔진이 다시 연결되면 미리듣기를 사용할 수 있어요.');
         if (!ready || !voiceId || !catalog?.revision) throw new Error('서버 목소리를 선택하세요.');
         const blob = await input.client!.synthesizePlainTTS(
           undefined,
@@ -366,38 +387,22 @@ export function usePlainTTS(input: {
           if (!(await previewAudio.playBlob(blob))) throw new Error('음성 미리듣기를 재생하지 못했습니다.');
         }
       } else {
-        await new Promise<void>((resolve, reject) => {
-          const finish = () => {
-            abort.signal.removeEventListener('abort', cancelled);
-            resolve();
-          };
-          const cancelled = () => {
-            input.systemTTS.stop();
-            finish();
-          };
-          abort.signal.addEventListener('abort', cancelled, { once: true });
-          void input.systemTTS
-            .speak({
-              text: PLAIN_TTS_SAMPLE,
-              voiceURI: input.voiceURI,
-              rate: input.settings.rate,
-              pitch: input.settings.pitch,
-              volume: input.settings.volume,
-              onEnd: finish,
-              onError: (message) => {
-                abort.signal.removeEventListener('abort', cancelled);
-                reject(new Error(message));
-              },
-            })
-            .catch((error) => {
-              abort.signal.removeEventListener('abort', cancelled);
-              reject(error);
-            });
-        });
+        await playDeviceVoicePreview(
+          input.systemTTS,
+          {
+            text: selection?.text ?? PLAIN_TTS_SAMPLE,
+            voiceURI: input.voiceURI,
+            rate: input.settings.rate,
+            pitch: input.settings.pitch,
+            volume: input.settings.volume,
+          },
+          abort.signal,
+        );
       }
     } catch (error) {
       if (!abort.signal.aborted) input.onError(error instanceof Error ? error.message : '미리듣기에 실패했습니다.');
     } finally {
+      selection?.signal.removeEventListener('abort', cancelSelection);
       if (previewAbort.current === abort) {
         previewAbort.current = undefined;
         setPreviewBusy(false);
@@ -407,6 +412,8 @@ export function usePlainTTS(input: {
   return {
     catalog,
     ready,
+    voiceId,
+    cacheOnly,
     refresh,
     play,
     prefetch,

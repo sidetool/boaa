@@ -28,7 +28,7 @@ import {
   Trash2,
   X,
 } from 'lucide-react';
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useTranslatedTitle } from '../../features/translation/use-translated-title';
 import { useNearOnce } from '../home/rows';
 import { externalItemKeyId } from '../../external-sources/contracts';
@@ -45,7 +45,6 @@ import {
   updatedLabel,
 } from '../../features/external-sources/source-hub-item-model';
 import { releaseDownloadAction, sourceHubItemActions } from '../../features/external-sources/source-hub-item-actions';
-import { SourceDownloadRecovery } from '../../features/external-sources/SourceDownloadRecovery';
 import { SourceFilterControl } from '../../features/external-sources/SourceFilterControl';
 import { SourceStreamReader } from '../../features/external-sources/SourceStreamReader';
 import { isTextSourceItem } from '../../features/external-sources/source-read-mode';
@@ -53,11 +52,15 @@ import { Pager } from '../chapters/Pager';
 import { Synopsis } from '../chapters/Synopsis';
 import { DetailTags } from '../chapters/DetailTags';
 import { SourceWorkTools as SourceWorkManagement } from './SourceWorkTools';
+import { SourceQueueSheet } from './SourceQueueSheet';
+import { ReleaseNavigation } from './ReleaseNavigation';
 import { SourceFileRow } from './SourceFileRow';
 import { useSourceHubModel } from '../../features/external-sources/useSourceHubModel';
-import { sourceEpisodeNumber } from '../../features/external-sources/source-primary-read';
 import { useSourceReleaseList } from '../../features/external-sources/useSourceReleaseList';
-import { SOURCE_RELEASE_PAGE_SIZE } from '../../features/external-sources/source-release-list-model';
+import {
+  filterAndSortReleases,
+  SOURCE_RELEASE_PAGE_SIZE,
+} from '../../features/external-sources/source-release-list-model';
 import {
   importTaskIsActive,
   importTaskStageLabel,
@@ -107,8 +110,6 @@ function DownloadButton({
         <Trash2 size={18} />
       ) : action.icon === 'update' ? (
         <RefreshCw size={18} />
-      ) : action.icon === 'read' ? (
-        <Play size={18} />
       ) : (
         <Download size={18} />
       )}
@@ -192,19 +193,26 @@ function ReleaseRow({
   task,
   openMenu,
   selecting,
-  index,
+  episodeNumber,
 }: {
   item: ExternalSourceItemView;
   controller: ExternalSourceController;
   task?: ImportTaskView;
   openMenu(): void;
   selecting: boolean;
-  index: number;
+  episodeNumber: number;
 }) {
-  const actions = sourceHubItemActions(item, controller);
+  const actions = sourceHubItemActions(item, controller, task);
   const selectable = canSelectItem(item);
   const reading = releaseReadingStateLabel(item);
-  const state = task ? importTaskStageLabel(task) : (reading ?? importStateLabel(item.importState));
+  const transfer =
+    task && task.phase !== 'complete'
+      ? importTaskStageLabel(task)
+      : item.importState === 'imported'
+        ? '다운로드됨'
+        : item.importState !== 'available'
+          ? importStateLabel(item.importState)
+          : undefined;
   const active = Boolean(task && importTaskIsActive(task));
   const current = item.readingState === 'current';
   const opening = controller.openingItemKey === externalItemKeyId(item.key);
@@ -227,6 +235,8 @@ function ReleaseRow({
         item.selected && 'is-selected',
         opening && 'is-opening',
       )}
+      data-release-key={externalItemKeyId(item.key)}
+      tabIndex={-1}
       aria-current={current ? 'location' : undefined}
     >
       {!selecting ? null : selectable ? (
@@ -234,7 +244,7 @@ function ReleaseRow({
           <input
             type="checkbox"
             checked={item.selected}
-            disabled={controller.busy}
+            disabled={controller.blockingBusy}
             aria-label={`${item.title} 선택`}
             onChange={actions.toggleSelection}
           />
@@ -247,24 +257,28 @@ function ReleaseRow({
         type="button"
         className="un-chapter-open"
         disabled={!open || controller.blockingBusy}
-        aria-label={`${item.title}, ${state}`}
+        aria-label={[`${item.title}, ${reading ?? '회차'}`, opening ? '여는 중' : transfer].filter(Boolean).join(', ')}
         onClick={open}
       >
-        <span className="un-chapter-index">{item.release ? sourceEpisodeNumber(item, index) : '—'}</span>
+        <span className="un-chapter-index">{item.release ? episodeNumber : '—'}</span>
         <span className="un-chapter-text">
           <b>{item.title}</b>
-          <small>
+          <small className="un-release-meta">
+            {reading && <span className={cx('un-release-state', `is-${item.readingState}`)}>{reading}</span>}
+            {(opening || transfer) && (
+              <span
+                className={cx(
+                  'un-release-state',
+                  `is-${task?.phase === 'complete' ? item.importState : (task?.phase ?? item.importState)}`,
+                )}
+              >
+                {opening && <LoaderCircle size={13} className="un-spin" />}
+                {opening ? '여는 중' : transfer}
+              </span>
+            )}
             {[item.subtitle, item.collection?.sourceLabel, updatedLabel(item.updatedAt)].filter(Boolean).join(' · ')}
           </small>
           {active && task && <Progress value={(task.percent ?? 0) / 100} className="un-chapter-progress" />}
-        </span>
-        <span className={cx('un-release-state', `is-${task?.phase ?? item.readingState ?? item.importState}`)}>
-          {opening ? (
-            <LoaderCircle size={13} className="un-spin" />
-          ) : (
-            current && !active && <Play size={12} fill="currentColor" />
-          )}
-          {opening ? '여는 중' : state}
         </span>
       </button>
       {actions.showReleaseDownload && <DownloadButton item={item} controller={controller} task={task} />}
@@ -283,22 +297,47 @@ function ReleaseRow({
   );
 }
 
-function ReleaseList({ model }: { model: Model }) {
+function ReleaseList({
+  model,
+  downloadRequest,
+}: {
+  model: Model;
+  downloadRequest?: SourceHubScreenProps['downloadRequest'];
+}) {
   const { controller, contentItems, taskByItemKey } = model;
   const list = useSourceReleaseList(controller, contentItems);
+  const { episodeNumber } = list;
   const [menu, setMenu] = useState<ExternalSourceItemView | null>(null);
+  const request =
+    downloadRequest && downloadRequest.workId === controller.activeSubscription?.id ? downloadRequest : undefined;
+  const [finishedRequest, setFinishedRequest] = useState<typeof request>();
   const [selectRequested, setSelectRequested] = useState(false);
+  const [navigation, setNavigation] = useState<'jump' | 'range'>();
+  const [jumpKey, setJumpKey] = useState<string>();
+  const rowsRef = useRef<HTMLUListElement>(null);
+  useEffect(() => {
+    if (!jumpKey) return;
+    const row = Array.from(rowsRef.current?.children ?? []).find(
+      (node): node is HTMLElement => node instanceof HTMLElement && node.dataset.releaseKey === jumpKey,
+    );
+    if (row) {
+      row.focus({ preventScroll: true });
+      row.scrollIntoView({ block: 'center' });
+      setJumpKey(undefined);
+    }
+  }, [jumpKey, list.page.page]);
   // A selection that survives navigation keeps the list in select mode.
-  const selecting = selectRequested || model.selectedCount > 0;
+  const selecting = selectRequested || model.selectedCount > 0 || Boolean(request && request !== finishedRequest);
   const finishSelecting = () => {
     controller.selectAllSupported(false);
     setSelectRequested(false);
+    setFinishedRequest(request);
   };
   const filtered = Boolean(list.query) || list.readFilter !== 'all';
   // The first page of a freshly opened work: rows take the list's shape instead of a status line.
   const firstLoad = controller.loading && !contentItems.length && !controller.listError;
   return (
-    <section className={cx('un-detail-chapters', selecting && 'is-selecting')} aria-label="회차">
+    <section data-release-picker className={cx('un-detail-chapters', selecting && 'is-selecting')} aria-label="회차">
       <div className="un-detail-toolbar">
         <label className="un-inline-search">
           <Search size={18} />
@@ -327,6 +366,11 @@ function ReleaseList({ model }: { model: Model }) {
         >
           {list.sort === 'asc' ? '처음 화부터' : '최신 화부터'}
         </button>
+        {contentItems.length > SOURCE_RELEASE_PAGE_SIZE && (
+          <button type="button" className="un-btn is-text is-sm" onClick={() => setNavigation('jump')}>
+            회차 이동
+          </button>
+        )}
         {selecting ? (
           <span className="un-release-select-tools">
             <label className="un-release-page-select">
@@ -334,11 +378,19 @@ function ReleaseList({ model }: { model: Model }) {
                 ref={list.selectionRef}
                 type="checkbox"
                 checked={list.selectable.length > 0 && list.selectedHere === list.selectable.length}
-                disabled={!list.selectable.length || controller.busy}
+                disabled={!list.selectable.length || controller.blockingBusy}
                 onChange={(event) => list.selectPage(event.target.checked)}
               />
               이 페이지 전체
             </label>
+            <button
+              type="button"
+              className="un-btn is-text is-sm"
+              disabled={controller.blockingBusy}
+              onClick={() => setNavigation('range')}
+            >
+              범위 선택
+            </button>
             <button type="button" className="un-btn is-ghost is-sm" onClick={finishSelecting}>
               완료
             </button>
@@ -348,7 +400,7 @@ function ReleaseList({ model }: { model: Model }) {
             <button
               type="button"
               className="un-btn is-text is-sm un-release-select-start"
-              disabled={controller.busy}
+              disabled={controller.blockingBusy}
               onClick={() => setSelectRequested(true)}
             >
               <ListChecks size={16} aria-hidden="true" />
@@ -378,7 +430,7 @@ function ReleaseList({ model }: { model: Model }) {
             <button
               type="button"
               className="un-btn is-text is-sm"
-              disabled={controller.blockingBusy || controller.importBusy}
+              disabled={controller.blockingBusy}
               onClick={list.loadMore}
             >
               목차 더 불러오기
@@ -406,10 +458,10 @@ function ReleaseList({ model }: { model: Model }) {
       )}
 
       {list.sorted.length ? (
-        <ul className="un-chapter-list" aria-label="작품 회차 목록">
+        <ul ref={rowsRef} className="un-chapter-list" aria-label="작품 회차 목록">
           {list.page.items.map((item) => (
             <ReleaseRow
-              index={list.sorted.indexOf(item)}
+              episodeNumber={episodeNumber(item)}
               key={externalItemKeyId(item.key)}
               item={item}
               controller={controller}
@@ -454,6 +506,29 @@ function ReleaseList({ model }: { model: Model }) {
         </footer>
       )}
 
+      {navigation && (
+        <ReleaseNavigation
+          items={filterAndSortReleases(contentItems, '', 'all', list.sort)}
+          episodeNumber={episodeNumber}
+          mode={navigation}
+          partial={list.partial}
+          onClose={() => setNavigation(undefined)}
+          onJump={(item, index) => {
+            list.setQuery('');
+            list.setReadFilter('all');
+            list.setRequestedPage(Math.floor(index / SOURCE_RELEASE_PAGE_SIZE) + 1);
+            setJumpKey(externalItemKeyId(item.key));
+            setNavigation(undefined);
+          }}
+          onSelect={(items) => {
+            controller.selectAllSupported(
+              true,
+              items.map((item) => externalItemKeyId(item.key)),
+            );
+            setNavigation(undefined);
+          }}
+        />
+      )}
       {menu && (
         <ReleaseSheet
           key={externalItemKeyId(menu.key)}
@@ -515,7 +590,7 @@ function SourceItem({ item, model }: { item: ExternalSourceItemView; model: Mode
           <button
             type="button"
             className="un-tile-more"
-            disabled={controller.busy}
+            disabled={controller.blockingBusy}
             aria-label={`${item.title} 선택 목록에서 제거`}
             onClick={() => void actions.remove()}
           >
@@ -595,6 +670,7 @@ function WorkHero({ model, props }: { model: Model; props: SourceHubScreenProps 
       <button
         type="button"
         className="un-detail-back"
+        aria-label="뒤로"
         disabled={controller.blockingBusy && !seriesNovel}
         onClick={commands.back}
       >
@@ -769,6 +845,7 @@ function SourceHead({ model }: { model: Model }) {
             type="button"
             className="un-btn is-primary is-sm"
             disabled={controller.busy || controller.loading}
+            aria-label="파일 추가"
             onClick={commands.pickItems}
           >
             {controller.busy ? <LoaderCircle size={15} className="un-spin" /> : <FilePlus2 size={15} />}
@@ -808,23 +885,66 @@ function sourceListBusy(controller: ExternalSourceController) {
 export default function UiNextSourceHubScreen(props: SourceHubScreenProps) {
   const model = useSourceHubModel(props);
   const [filtersOpen, setFiltersOpen] = useState(false);
+  const [queueOpen, setQueueOpen] = useState(false);
   const { controller, activeSource, commands, contentItems, folders } = model;
 
   if (model.streamReaderProps) return <SourceStreamReader {...model.streamReaderProps} />;
-  if (!model.seriesNovel && (!activeSource || !model.connected)) return null;
+  const queueBusy =
+    controller.importBusy ||
+    controller.tasks.some((task) => task.source === 'external_source' && importTaskIsActive(task));
+  const failedCount = controller.tasks.filter(
+    (task) => task.source === 'external_source' && task.phase === 'failed',
+  ).length;
+  const interruptedCount = controller.recoverableDownloads?.length ?? 0;
+  const queueButton = (interruptedCount > 0 || (!queueBusy && failedCount > 0)) && (
+    <div className="un-source-manage">
+      <button type="button" className="un-btn is-ghost" onClick={() => setQueueOpen(true)}>
+        {failedCount ? <AlertTriangle size={16} /> : <Download size={16} />}
+        {failedCount ? `다운로드 실패 ${failedCount}개 · 대기열 열기` : `중단된 다운로드 ${interruptedCount}`}
+      </button>
+    </div>
+  );
+  const queueSheet = queueOpen && <SourceQueueSheet controller={controller} onClose={() => setQueueOpen(false)} />;
+  if (!model.seriesNovel && (!activeSource || !model.connected))
+    return (
+      <main className="un-source">
+        <div className="un-empty">
+          <b>{activeSource ? `${activeSource.title}에 연결할 수 없어요` : '소스를 찾을 수 없어요'}</b>
+          <p>소스 관리에서 설치 및 연결 상태를 확인해 주세요.</p>
+          <div className="un-empty-actions">
+            <button type="button" className="un-btn is-ghost" onClick={commands.close}>
+              닫기
+            </button>
+            <button type="button" className="un-btn is-primary" onClick={commands.openSourceSettings}>
+              소스 관리
+            </button>
+          </div>
+          {(queueButton || queueBusy) && (
+            <button type="button" className="un-btn is-text is-sm" onClick={() => setQueueOpen(true)}>
+              {failedCount
+                ? `다운로드 실패 ${failedCount}개 · 대기열 열기`
+                : interruptedCount
+                  ? `중단된 다운로드 ${interruptedCount}`
+                  : '다운로드 대기열 열기'}
+            </button>
+          )}
+        </div>
+        {queueSheet}
+      </main>
+    );
 
   const catalog = activeSource?.kind === 'catalog';
   const listBusy = sourceListBusy(controller);
   const browse = controller.browse;
   const selectedItems = contentItems.filter((item) => item.selected);
-  const showBatch =
-    (controller.selectedBatchActive && controller.importBusy) || (model.selectedCount > 0 && !controller.importBusy);
+  const showBatch = queueBusy || model.selectedCount > 0;
 
   return (
     <div ref={model.scrollRef} className={cx('un-source', model.hasWorkHero && 'is-work')} aria-busy={listBusy}>
       {!model.hasWorkHero && <SourceHead model={model} />}
-      <SourceDownloadRecovery controller={controller} />
       {model.hasWorkHero && <WorkHero model={model} props={props} />}
+      {queueButton}
+      {queueSheet}
       {model.hasWorkHero && (
         <div className="un-source-manage">
           <SourceWorkManagement novel={model.seriesNovel} controller={controller} library={props.library} />
@@ -980,7 +1100,7 @@ export default function UiNextSourceHubScreen(props: SourceHubScreenProps) {
       )}
 
       {model.releaseList ? (
-        <ReleaseList key={model.releaseLocationKey} model={model} />
+        <ReleaseList key={model.releaseLocationKey} model={model} downloadRequest={props.downloadRequest} />
       ) : (
         <section className="un-source-items" aria-label={controller.detail ? '회차' : catalog ? '작품' : '파일'}>
           <div className="un-source-toolbar">
@@ -1015,7 +1135,7 @@ export default function UiNextSourceHubScreen(props: SourceHubScreenProps) {
                 <input
                   type="checkbox"
                   checked={model.allSelected}
-                  disabled={controller.busy}
+                  disabled={controller.blockingBusy}
                   onChange={(event) => commands.selectAllSupported(event.target.checked)}
                 />
                 모두 선택
@@ -1132,9 +1252,14 @@ export default function UiNextSourceHubScreen(props: SourceHubScreenProps) {
 
       {showBatch && (
         <div className="un-select-bar un-source-batch" role={controller.importBusy ? 'status' : undefined}>
-          {controller.selectedBatchActive && controller.importBusy ? (
+          {queueBusy && (
             <>
-              <span className="un-source-batch-label">
+              <button
+                type="button"
+                className="un-source-batch-label"
+                aria-label="다운로드 대기열 열기"
+                onClick={() => setQueueOpen(true)}
+              >
                 <LoaderCircle size={17} className="un-spin" />
                 <b>{model.releaseList || catalog ? '선택 회차 다운로드 중' : '선택 파일 가져오는 중'}</b>
                 {controller.progress && (
@@ -1144,19 +1269,22 @@ export default function UiNextSourceHubScreen(props: SourceHubScreenProps) {
                     {formatCount(controller.progress.completed)}/{formatCount(controller.progress.total)}
                   </small>
                 )}
-              </span>
-              <button type="button" onClick={commands.cancel}>
-                <X size={20} />
-                <span>중단</span>
               </button>
+              {controller.importBusy && (
+                <button type="button" onClick={commands.cancel}>
+                  <X size={20} />
+                  <span>현재 묶음 중단</span>
+                </button>
+              )}
             </>
-          ) : (
+          )}
+          {model.selectedCount > 0 && (
             <>
               <span className="un-source-batch-label">
                 <b>{formatCount(model.selectedCount)}개 선택</b>
               </span>
               {model.selectedDownloadCount > 0 && (
-                <button type="button" disabled={controller.busy} onClick={commands.importSelected}>
+                <button type="button" disabled={controller.blockingBusy} onClick={commands.importSelected}>
                   {model.selectedUpdateCount === model.selectedDownloadCount ? (
                     <RefreshCw size={20} />
                   ) : (

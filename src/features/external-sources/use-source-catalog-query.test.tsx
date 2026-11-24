@@ -6,6 +6,7 @@ import type {
   ExternalCatalogCachePage,
   ExternalSourceConnectionStatus,
 } from '../../external-sources/contracts';
+import { storedSourcePage } from '../../external-sources/cached-page';
 import { useSourceCatalogQuery, type SourceCatalogQueryInput } from './use-source-catalog-query';
 function deferred<T>() {
   let resolve!: (value: T) => void, reject!: (error: unknown) => void;
@@ -45,7 +46,11 @@ function fixture() {
       listExternalSource: vi.fn(async () => ({ items: [item('fresh')] })),
     },
     hostContext: { brokers: { get: () => undefined } },
-    state: { getCachePage: vi.fn(async () => undefined), saveCachePage: vi.fn(async () => {}) },
+    state: {
+      getCachePage: vi.fn(async () => undefined),
+      saveCachePage: vi.fn(async () => {}),
+      deleteCachePage: vi.fn(async () => {}),
+    },
     reconcile: vi.fn(async () => {}),
     retainSelection: vi.fn(),
     notify: vi.fn(),
@@ -71,6 +76,19 @@ function fixture() {
     },
   };
 }
+it('clears the persisted preview when a refresh reports a permission change', async () => {
+  const h = fixture();
+  const page = storedSourcePage('preview', sourceId, {}, { items: [item('previous')] });
+  vi.mocked(h.port.state.getCachePage).mockResolvedValue(page);
+  vi.mocked(h.port.registry.listExternalSource).mockRejectedValue(
+    Object.assign(new Error('Forbidden'), { status: 403 }),
+  );
+  await act(async () => {
+    await h.hook.loadPage({}, false, undefined, false, true);
+  });
+  expect(h.port.state.deleteCachePage).toHaveBeenCalledOnce();
+  expect(h.hook.state.catalogItems).toEqual([]);
+});
 it('supersedes cache reads and prevents old finally from ending a newer load', async () => {
   const h = fixture(),
     oldCache = deferred<ExternalCatalogCachePage | undefined>(),

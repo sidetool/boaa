@@ -76,6 +76,7 @@ async function createHarness(input: {
   resolveCover?: () => Promise<string | undefined>;
   chapters?: Chapter[];
   supportsSubscriptions?: boolean;
+  otherSource?: ExtensionContributionId;
   subscriptions?: ExternalSourceSubscriptionRecord[];
   catalogPreference?: ExternalSourceCatalogPreference;
   browse?: ExternalSourceBrowseState;
@@ -190,6 +191,20 @@ async function createHarness(input: {
             runtimes: ['web-direct'],
           } satisfies ExternalSourceContributionDescriptor),
       },
+      ...(input.otherSource
+        ? [
+            {
+              descriptor: {
+                id: input.otherSource,
+                schemaVersion: 1,
+                title: 'Other source',
+                kind: 'catalog',
+                capabilities: ['browse', 'work-import'],
+                runtimes: ['web-direct'],
+              } satisfies ExternalSourceContributionDescriptor,
+            },
+          ]
+        : []),
     ],
     getExternalSourceStatus: () => ({
       state: 'connected',
@@ -363,31 +378,36 @@ async function createHarness(input: {
   };
 }
 
-async function createDocumentHarness(serialCount = 3, chapters: Chapter[] = []) {
+async function createDocumentHarness(serialCount = 3, chapters: Chapter[] = [], otherSource?: ExtensionContributionId) {
   await resetExternalSourceLocalStateForTests();
   const sourceState = new ExternalSourceLocalStateStore();
-  let current: Novel | undefined;
-  let source: File | undefined;
+  const books = new Map<string, Novel>();
+  const sources = new Map<string, File>();
   let revision = 0;
-  const libraryBooks = vi.fn(async () => (current ? [current] : []));
+  const libraryBooks = vi.fn(async () => [...books.values()]);
   const assets = {
-    exportSource: async () =>
-      source && {
-        blob: source,
-        metadata: { contentHash: current!.sourceContentHash, contentType: source.type },
-      },
+    exportSource: async (id: string) => {
+      const source = sources.get(id);
+      return (
+        source && {
+          blob: source,
+          metadata: { contentHash: books.get(id)!.sourceContentHash, contentType: source.type },
+        }
+      );
+    },
   } as unknown as BookAssetRepository;
   const harness = await createHarness({
     downloadedContent: '',
     chapters,
     serial: true,
     documentSerial: true,
+    otherSource,
     serialCount,
     localBookMissing: true,
     sourceState,
     assets,
     libraryBooks,
-    getNovel: async (id) => (current?.id === id ? current : undefined),
+    getNovel: async (id) => books.get(id),
   });
   harness.importFile.mockImplementation((request, onProgress) => ({
     jobId: 'document-import',
@@ -401,19 +421,20 @@ async function createDocumentHarness(serialCount = 3, chapters: Chapter[] = []) 
         chaptersDetected: 1,
         paragraphsWritten: 1,
       });
-      source = request.file;
+      sources.set(request.clientBookId!, request.file);
       const parsed = await materializeDocumentSeriesArchive(request.file, {
         fileName: request.file.name,
         clientBookId: request.clientBookId,
       });
       chapters.splice(0, chapters.length, ...parsed.chapters);
-      current = novel({
+      const current = novel({
         ...parsed.novel,
         id: request.clientBookId!,
         format: 'txt',
         activeContentRevisionId: `revision-${++revision}`,
         sourceContentHash: await sha256(await request.file.arrayBuffer()),
       });
+      books.set(current.id, current);
       return { novel: current };
     })(),
   }));
@@ -507,7 +528,8 @@ describe('plain file download task feedback', () => {
   });
 
   it('retains the failed file for retry and removes that failure after a successful retry', async () => {
-    const h = await createHarness({ downloadedContent: 'synthetic retry file' });
+    const otherSource = 'fixture.other' as ExtensionContributionId;
+    const h = await createHarness({ downloadedContent: 'synthetic retry file', otherSource });
     try {
       vi.mocked(h.registry.downloadExternalSource).mockRejectedValueOnce(new Error('fixture transfer failed'));
       await act(async () => h.controller.importItem(h.controller.items[0]!));
@@ -519,8 +541,28 @@ describe('plain file download task feedback', () => {
         }),
       ]);
       expect(h.controller.importBusy).toBe(false);
-      await act(async () => h.controller.importItem(h.controller.items[0]!));
+      const failed = h.controller.tasks[0]!;
+      const connection = vi.spyOn(h.registry, 'getExternalSourceStatus').mockReturnValue({
+        state: 'connected',
+        accountConnectionId: 'different-account',
+      });
+      expect(h.controller.canRetryTask(failed.id)).toBe(false);
+      await act(async () => h.controller.retryTask(failed.id));
+      expect(h.registry.downloadExternalSource).toHaveBeenCalledTimes(1);
+      connection.mockRestore();
+      vi.mocked(h.registry.listExternalSource).mockResolvedValueOnce({ items: [] });
+      await act(async () => h.controller.selectSource(otherSource));
+      expect(h.controller.items).toHaveLength(0);
+      expect(h.controller.canRetryTask(failed.id)).toBe(true);
+      await act(async () => {
+        await Promise.all([h.controller.retryTask(failed.id), h.controller.retryTask(failed.id)]);
+      });
+      expect(h.registry.downloadExternalSource).toHaveBeenCalledTimes(2);
+      await act(async () => h.controller.retryTask(failed.id));
+      expect(h.registry.downloadExternalSource).toHaveBeenCalledTimes(2);
+      expect(vi.mocked(h.registry.downloadExternalSource).mock.lastCall?.[0]).toBe(SOURCE_ID);
       expect(h.controller.tasks).toEqual([]);
+      await act(async () => h.controller.selectSource(SOURCE_ID));
       expect(h.controller.items[0]!.importState).toBe('imported');
     } finally {
       await act(async () => h.renderer.unmount());
@@ -1002,9 +1044,38 @@ describe('text serial download task parity', () => {
       expect(harness.controller.tasks).toMatchObject([
         { phase: 'failed', externalItemKey: 'fixture.source::fixture-account::work-2' },
       ]);
+      const failedId = harness.controller.tasks[0]!.id;
+      expect(harness.controller.canRetryTask(failedId)).toBe(true);
+      // Another download makes retry unavailable until it settles.
+      let releaseThird!: () => void;
+      const third = new Promise<void>((resolve) => {
+        releaseThird = resolve;
+      });
+      const heldDownload = harness.download.getMockImplementation()!;
+      harness.download.mockImplementation(async (...args) => {
+        if (args[2].key.remoteId === 'work-3') await third;
+        return heldDownload(...args);
+      });
+      let thirdPending!: Promise<void>;
+      await act(async () => {
+        thirdPending = harness.controller.importItem(harness.controller.items[2]!);
+        await vi.waitFor(() => expect(harness.download).toHaveBeenCalledTimes(3));
+      });
+      expect(harness.controller.importBusy).toBe(true);
+      expect(harness.controller.canRetryTask(failedId)).toBe(false);
+      releaseThird();
+      await act(async () => thirdPending);
+      expect(harness.controller.importBusy).toBe(false);
+      expect(harness.controller.canRetryTask(failedId)).toBe(true);
       failSecond = false;
-      await act(async () => harness.controller.importItem(harness.controller.items[1]!));
-      expect(await harness.sourceState.listLinks()).toHaveLength(2);
+      await act(async () => harness.controller.retryTask(failedId));
+      expect(harness.download.mock.calls.map((call) => call[2].key.remoteId)).toEqual([
+        'work-1',
+        'work-2',
+        'work-3',
+        'work-2',
+      ]);
+      expect(await harness.sourceState.listLinks()).toHaveLength(3);
       expect(harness.controller.tasks).toEqual([]);
     } finally {
       release();
@@ -1013,6 +1084,196 @@ describe('text serial download task parity', () => {
     }
   });
 
+  it('cancels active and pending episodes independently, then drains another work in order', async () => {
+    const otherSource = 'fixture.other' as ExtensionContributionId;
+    const h = await createDocumentHarness(4, [], otherSource);
+    const normal = h.download.getMockImplementation()!;
+    h.download.mockImplementation(async (...args) => {
+      if (args[2].key.remoteId === 'work-1')
+        await new Promise<void>((_, reject) =>
+          args[3]!.addEventListener('abort', () => reject(args[3]!.reason), { once: true }),
+        );
+      return normal(...args);
+    });
+    const other = {
+      ...h.controller.items[0]!,
+      key: { ...ITEM_KEY, connectorId: otherSource, remoteId: 'other-1' },
+      collection: { ...h.controller.items[0]!.collection!, remoteId: 'other-work', title: 'Other' },
+    };
+    let first!: Promise<void>;
+    try {
+      await act(async () => h.controller.selectAllSupported(true));
+      await act(async () => {
+        first = h.controller.importSelected();
+        await vi.waitFor(() => expect(h.download).toHaveBeenCalledTimes(2));
+      });
+      vi.mocked(h.registry.listExternalSource).mockResolvedValueOnce({ items: [other] });
+      await act(async () => h.controller.openDiscovery!(otherSource, { parentRef: 'other-work' }, 'Other'));
+      expect(h.controller.activeSourceId).toBe(otherSource);
+      expect(h.controller.items[0]!.key).toEqual(other.key);
+      await act(async () => h.controller.importItem(h.controller.items[0]!));
+      const secondOther = { ...other, key: { ...other.key, remoteId: 'other-2' } };
+      await act(async () => h.controller.importItem(secondOther));
+      const cancel = async (remoteId: string) => {
+        const task = h.controller.tasks.find((row) => row.externalItemKey?.endsWith('::' + remoteId))!;
+        expect(task).toBeDefined();
+        await act(async () => h.controller.cancelTask(task));
+      };
+      await cancel('other-2');
+      await cancel('work-4');
+      await cancel('work-1');
+      await act(async () => {
+        await first;
+        await vi.waitFor(() => expect(h.controller.tasks).toHaveLength(0));
+      });
+      expect(h.download.mock.calls.map((call) => call[2].key.remoteId)).toEqual([
+        'work-1',
+        'work-2',
+        'work-3',
+        'other-1',
+      ]);
+      expect((await h.sourceState.listLinks()).map((link) => link.source.remoteId).sort()).toEqual([
+        'other-1',
+        'work-2',
+        'work-3',
+      ]);
+      expect(await h.sourceState.listDownloadQueues()).toEqual([]);
+    } finally {
+      await act(async () => {
+        h.controller.cancel();
+        await first;
+        h.renderer.unmount();
+      });
+    }
+  });
+
+  it.each(['next work', 'changed account'] as const)(
+    'stops the current batch while preserving %s ownership',
+    async (mode) => {
+      const h = await createDocumentHarness(2);
+      const normal = h.download.getMockImplementation()!;
+      h.download.mockImplementation(async (...args) => {
+        if (args[2].key.remoteId.startsWith('work-'))
+          await new Promise<void>((_, reject) =>
+            args[3]!.addEventListener('abort', () => reject(args[3]!.reason), { once: true }),
+          );
+        return normal(...args);
+      });
+      let first!: Promise<void>;
+      try {
+        await act(async () => h.controller.selectAllSupported(true));
+        await act(async () => {
+          first = h.controller.importSelected();
+          await vi.waitFor(() => expect(h.download).toHaveBeenCalledTimes(2));
+        });
+        const other = {
+          ...h.controller.items[0]!,
+          key: { ...ITEM_KEY, remoteId: 'other-1' },
+          collection: { ...h.controller.items[0]!.collection!, remoteId: 'other-work', title: 'Other' },
+        };
+        await act(async () => h.controller.importItem(other));
+        if (mode === 'changed account')
+          vi.spyOn(h.registry, 'getExternalSourceStatus').mockReturnValue({
+            state: 'connected',
+            accountConnectionId: 'different',
+          });
+        await act(async () => {
+          h.controller.cancel();
+          await first;
+          await vi.waitFor(() => expect(h.controller.tasks).toHaveLength(0));
+        });
+        const queues = await h.sourceState.listDownloadQueues();
+        expect(queues.find((q) => q.collectionRemoteId === 'manga:1')?.items).toHaveLength(2);
+        expect(h.download.mock.calls.some((call) => call[2].key.remoteId === 'other-1')).toBe(mode === 'next work');
+        expect(queues.some((q) => q.collectionRemoteId === 'other-work')).toBe(mode === 'changed account');
+      } finally {
+        await act(async () => {
+          h.controller.cancel();
+          await first;
+          h.renderer.unmount();
+        });
+      }
+    },
+  );
+
+  it.each(['stop', 'reconnect'] as const)('rechecks %s while durable admission is pending', async (mode) => {
+    const h = await createDocumentHarness(1);
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const save = h.sourceState.saveDownloadQueue.bind(h.sourceState);
+    const pendingSave = vi.spyOn(h.sourceState, 'saveDownloadQueue').mockImplementation(async (queue) => {
+      await gate;
+      await save(queue);
+    });
+    let run!: Promise<void>;
+    try {
+      await act(async () => {
+        run = h.controller.importItem(h.controller.items[0]!);
+        await vi.waitFor(() => expect(pendingSave).toHaveBeenCalledOnce());
+      });
+      if (mode === 'stop') await act(async () => h.controller.cancel());
+      else
+        vi.spyOn(h.registry, 'getExternalSourceStatus').mockReturnValue({
+          state: 'connected',
+          accountConnectionId: ITEM_KEY.accountConnectionId,
+          connectionGeneration: 'new-generation',
+        });
+      await act(async () => {
+        release();
+        await run;
+      });
+      expect(h.download).not.toHaveBeenCalled();
+      expect((await h.sourceState.listDownloadQueues())[0]!.items).toHaveLength(1);
+    } finally {
+      release();
+      await run;
+      await act(async () => h.renderer.unmount());
+    }
+  });
+
+  it('appends only new revisions when a selection includes an episode already committed in this batch', async () => {
+    const h = await createDocumentHarness(3);
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const normal = h.download.getMockImplementation()!;
+    h.download.mockImplementation(async (...args) => {
+      if (args[2].key.remoteId === 'work-2') await gate;
+      return normal(...args);
+    });
+    let run!: Promise<void>;
+    const first = h.controller.items[0]!;
+    try {
+      await act(async () => h.controller.toggleItem('fixture.source::fixture-account::work-2'));
+      await act(async () => {
+        run = h.controller.importSelected();
+        await vi.waitFor(async () =>
+          expect(
+            (await h.sourceState.listLinks()).some((link) => !link.pendingImport && link.source.remoteId === 'work-1'),
+          ).toBe(true),
+        );
+      });
+      await act(async () => h.controller.importItem(first));
+      expect((await h.sourceState.listDownloadQueues())[0]!.items.map((item) => item.key.remoteId)).toEqual(['work-2']);
+      await act(async () => h.controller.importItem(h.controller.items[2]!));
+      expect((await h.sourceState.listDownloadQueues())[0]!.items.map((item) => item.key.remoteId)).toEqual([
+        'work-2',
+        'work-3',
+      ]);
+      await act(async () => {
+        release();
+        await run;
+      });
+      expect(await h.sourceState.listDownloadQueues()).toEqual([]);
+    } finally {
+      release();
+      await run;
+      await act(async () => h.renderer.unmount());
+    }
+  });
   it('cancels a blocked body request without leaving a busy task or activating content', async () => {
     const harness = await createDocumentHarness();
     harness.download.mockImplementation(
@@ -2126,7 +2387,7 @@ describe('useExternalSourceController remote updates', () => {
         ...harness.controller.items[1]!,
         collection: { ...harness.controller.items[1]!.collection!, remoteId: 'manga:other' },
       }),
-    ).toBe(false);
+    ).toBe(true);
     expect(harness.controller.tasks).toMatchObject([
       { externalItemKey: 'fixture.source::fixture-account::work-1', phase: 'downloading', total: 2 },
       { externalItemKey: 'fixture.source::fixture-account::work-2', phase: 'queued', total: 2 },
@@ -4002,7 +4263,25 @@ describe('stream-only library works', () => {
     }
   });
 
-  it('replaces the previous work before the new library projection or catalog resolves', async () => {
+  it.each(['removed', 'trashed'] as const)('rejects a %s membership after the library was hydrated', async (state) => {
+    const h = await make();
+    try {
+      const stale = h.controller.libraryWorks[0]!;
+      if (state === 'trashed') await h.state.saveSubscription({ ...subscription, deletedAt: new Date().toISOString() });
+      else await h.state.deleteSubscription(subscription.id);
+      vi.mocked(h.registry.listExternalSource).mockClear();
+      vi.mocked(h.state.listLinks).mockClear();
+      await act(async () => h.controller.openSubscription(stale));
+      expect(h.controller.open).toBe(false);
+      expect(h.controller.libraryWorks.some((work) => work.id === subscription.id && !work.deletedAt)).toBe(false);
+      expect(h.registry.listExternalSource).not.toHaveBeenCalled();
+      expect(h.state.listLinks).not.toHaveBeenCalled();
+    } finally {
+      await act(async () => h.renderer.unmount());
+    }
+  });
+
+  it('replaces the previous work before membership or catalog resolves, without reloading the library', async () => {
     const h = await make();
     let release!: () => void;
     const gate = new Promise<void>((resolve) => {
@@ -4021,11 +4300,11 @@ describe('stream-only library works', () => {
         title: '다른 작품',
         thumbnailUrl: 'https://example.test/new.jpg',
       };
-      const listLinks = h.state.listLinks;
-      h.state.listLinks = async () => {
+      vi.mocked(h.state.listLinks).mockClear();
+      vi.mocked(h.state.listSubscriptions).mockImplementationOnce(async () => {
         await gate;
-        return listLinks();
-      };
+        return [next];
+      });
       vi.mocked(h.registry.listExternalSource).mockImplementation(async () => ({
         items: [],
         detail: { title: next.title, thumbnailUrl: next.thumbnailUrl },
@@ -4042,6 +4321,7 @@ describe('stream-only library works', () => {
         await opening;
       });
       expect(h.controller.detail?.title).toBe(next.title);
+      expect(h.state.listLinks).not.toHaveBeenCalled();
     } finally {
       release();
       await opening;
@@ -4589,7 +4869,7 @@ it.each(['item-account', 'item-generation', 'subscription-account', 'subscriptio
     });
     const subscription = scenario.startsWith('subscription');
     if (subscription)
-      vi.mocked(h.state.listLinks).mockImplementationOnce(async () => {
+      vi.mocked(h.state.listSubscriptions).mockImplementationOnce(async () => {
         await gate;
         return [];
       });

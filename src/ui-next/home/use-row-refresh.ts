@@ -8,6 +8,7 @@ export function useRowRefresh(row: HomeRowView, near: boolean) {
   const canLoad = Boolean(row.requestLoad);
   useEffect(() => {
     if (!near || !canLoad) return;
+    const release = current.current.releaseLoad;
     const refresh = () => {
       if (document.visibilityState !== 'hidden') current.current.requestLoad?.();
     };
@@ -16,6 +17,7 @@ export function useRowRefresh(row: HomeRowView, near: boolean) {
     window.addEventListener('pageshow', refresh);
     document.addEventListener('visibilitychange', refresh);
     return () => {
+      release?.();
       window.removeEventListener('focus', refresh);
       window.removeEventListener('pageshow', refresh);
       document.removeEventListener('visibilitychange', refresh);

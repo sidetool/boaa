@@ -35,6 +35,7 @@ export interface ImportBatchCallbacks {
   onProgress(progress: ImportProgress): void;
   onFileStarted?(file: File): void;
   onFileProgress?(file: File, progress: ImportProgress): void;
+  onFileStored?(file: File): void;
   onFileCommitted?(file: File, novel: Novel): void | Promise<void>;
   onFileRefreshFailed?(file: File, bookId: string, error: unknown): void;
   onFileFailed(file: File, error: unknown): void;
@@ -153,6 +154,7 @@ export async function runImportBatch(
       // A resolved import confirms storage, independently of the following UI refresh.
       completed += 1;
       committed = true;
+      callbacks.onFileStored?.(file);
       if (cancellation.isRequested) {
         aborted = true;
         callbacks.onCancelled(file);
@@ -181,6 +183,7 @@ export async function runImportBatch(
       if (error instanceof ImportCommittedRefreshError && !committed) {
         completed += 1;
         committed = true;
+        callbacks.onFileStored?.(file);
         if (!cancellation.isRequested) {
           refreshFailed += 1;
           try {

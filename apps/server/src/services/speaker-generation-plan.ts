@@ -269,22 +269,7 @@ export async function loadSpeakerChapter(
     )
   ).rows[0];
   if (!row) throw audiobookError(409, '회차가 변경됐어요.');
-  const rows = (
-    await pool.query(
-      'select paragraph_id,paragraph_index,paragraph,text from paragraph_search where book_id=$1 and chapter_id=$2 order by paragraph_index limit 10001',
-      [bookId, chapterId],
-    )
-  ).rows;
-  if (!rows.length || rows.length > 10000 || rows.reduce((n, r) => n + r.text.length, 0) > 120000)
-    throw audiobookError(413, '본문 크기를 확인해 주세요.');
-  const paragraphs = rows.map((r) => ({
-    ...r.paragraph,
-    id: r.paragraph_id,
-    index: r.paragraph_index,
-    text: r.text,
-    chapterId,
-    novelId: bookId,
-  })) as Paragraph[];
+  const paragraphs = await readSpeakerParagraphs(pool, owner, bookId, chapterId);
   return {
     chapter: {
       id: chapterId,
@@ -295,6 +280,52 @@ export async function loadSpeakerChapter(
     paragraphs,
   };
 }
+async function readSpeakerParagraphs(
+  pool: Pick<pg.Pool, 'query'>,
+  owner: string,
+  bookId: string,
+  chapterId: string,
+  paragraphIds?: readonly string[],
+): Promise<Paragraph[]> {
+  const rows = (
+    await pool.query(
+      `select p.paragraph_id, p.paragraph_index, p.paragraph, p.text from paragraph_search p
+       join chapters c on c.id=p.chapter_id and c.book_id=p.book_id
+       join library_books b on b.id=c.book_id
+       where p.book_id=$1 and p.chapter_id=$2 and b.user_id=$3 and b.deleted_at is null
+       ${paragraphIds ? 'and p.paragraph_id=any($4::text[])' : ''}
+       order by p.paragraph_index limit 10001`,
+      paragraphIds ? [bookId, chapterId, owner, paragraphIds] : [bookId, chapterId, owner],
+    )
+  ).rows;
+  if (paragraphIds && rows.length !== paragraphIds.length) throw audiobookError(409, '본문이 변경됐어요.');
+  if (!rows.length || rows.length > 10000 || rows.reduce((n, r) => n + r.text.length, 0) > 120000)
+    throw audiobookError(413, '본문 크기를 확인해 주세요.');
+  return rows.map((r) => ({
+    ...r.paragraph,
+    id: r.paragraph_id,
+    index: r.paragraph_index,
+    text: r.text,
+    chapterId,
+    novelId: bookId,
+  }));
+}
+
+/** The caller has checked the job owner and revision. Each span still verifies its source hash and offsets. */
+export async function loadCastPlayable(
+  pool: Pick<pg.Pool, 'query'>,
+  owner: string,
+  bookId: string,
+  chapterId: string,
+  request: CastRequest,
+  rules: readonly SpokenTextRule[],
+): Promise<PlayableTtsSegment> {
+  const batch = request.cast.batch ?? [];
+  if (batch.length > 15) throw audiobookError(409, '묶음 낭독 위치가 올바르지 않아요.');
+  const ids = [...new Set([request.paragraphId, ...batch.map((part) => part.paragraphId)])];
+  return castPlayable(await readSpeakerParagraphs(pool, owner, bookId, chapterId, ids), request, rules);
+}
+
 function sourceSlice(p: Paragraph, start: number, end: number): Paragraph {
   return {
     ...p,

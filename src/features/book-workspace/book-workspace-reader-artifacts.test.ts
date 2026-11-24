@@ -1,12 +1,23 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   loadBookWorkspaceReaderArtifacts,
+  publishReaderSnapshot,
   invalidateBookWorkspaceReaderArtifacts,
 } from './book-workspace-reader-artifacts';
 
 afterEach(() => vi.useRealTimers());
 
 describe('chapter reader artifact loading', () => {
+  it('applies late hydration only to the original field snapshot after an edit or sync', () => {
+    const initial: string[] = [];
+    const loaded = ['loaded'];
+    const edited = ['edited'];
+    const publish = publishReaderSnapshot(loaded, initial);
+    expect(publish(initial)).toBe(loaded);
+    expect(publish(edited)).toBe(edited);
+    expect(publishReaderSnapshot(loaded)(edited)).toBe(loaded);
+  });
+
   it('overlaps independent reads instead of adding a second network round trip', async () => {
     vi.useFakeTimers();
     const response = () => new Promise<[]>((resolve) => setTimeout(() => resolve([]), 80));

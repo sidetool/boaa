@@ -10,7 +10,7 @@ import './translation.css';
 function useTranslationActivity(t: ReaderTranslationController): ReaderActivity | undefined {
   const status = t.result?.status;
   const active = t.busy || status === 'queued' || status === 'running';
-  const failed = Boolean(t.error) || status === 'failed';
+  const failed = status === 'failed' || (Boolean(t.error) && status !== 'complete' && status !== 'cancelled');
   const [ended, setEnded] = useState(false);
   const wasActive = useRef(false);
   useEffect(() => {

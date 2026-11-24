@@ -6,18 +6,28 @@ const minute = 60_000,
 export const COVER_FRESH_MS = 30 * day;
 export const COVER_KEEP_MS = 365 * day;
 export const DETAIL_FRESH_MS = 6 * hour;
-function defaultSourceCachePolicy(input: ExternalSourceListInput, completed = false) {
-  if (input.parentRef) return { fresh: completed ? 6 * hour : 2 * minute, keep: 7 * day };
-  if (input.query || input.filters?.length || input.browseMode === 'search')
-    return { fresh: 10 * minute, keep: 6 * hour };
-  return { fresh: input.browseMode === 'latest' ? 2 * minute : 30 * minute, keep: day };
+function defaultSourceCachePolicy(input: ExternalSourceListInput, workMetadata = false) {
+  if (workMetadata) return { fresh: 6 * hour, keep: 7 * day };
+  if (input.accountConnectionId && !input.browseMode) {
+    if (input.parentRef) return { fresh: 2 * minute, keep: 7 * day };
+    if (input.query) return { fresh: 10 * minute, keep: 6 * hour };
+  }
+  if (input.query || input.filters?.length || input.browseMode === 'search' || input.browseMode === 'popular')
+    return { fresh: 6 * hour, keep: 7 * day };
+  if (input.browseMode === 'latest') return { fresh: 5 * minute, keep: 2 * day };
+  if (input.parentRef) return { fresh: 15 * minute, keep: 7 * day };
+  return { fresh: 30 * minute, keep: day };
 }
-export function sourceCachePolicy(input: ExternalSourceListInput, completed = false, scope?: string) {
-  const policy = defaultSourceCachePolicy(input, completed);
+export function sourceCachePolicy(input: ExternalSourceListInput, workMetadata = false, scope?: string) {
+  const policy = defaultSourceCachePolicy(input, workMetadata);
   const value = input.cacheMaxAgeMs ?? sourceReadingPreferences(scope).listMinutes * minute;
   const max =
     typeof value === 'number' && Number.isFinite(value) && value >= 0 ? Math.min(value, 6 * hour) : policy.fresh;
   return { ...policy, fresh: Math.min(policy.fresh, max) };
+}
+/** A new work should become discoverable soon after an empty search or listing. */
+export function sourcePageFreshness(fresh: number, itemCount: number) {
+  return itemCount ? fresh : Math.min(fresh, minute);
 }
 export function sourcePageTime(page: ExternalItemPage, fallback = Date.now()) {
   const time = page.cache?.fetchedAt;

@@ -1,6 +1,7 @@
 import { ChevronLeft, ChevronRight, GripVertical, Pencil, Plus, X } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { cx, Switch } from '../components/primitives';
+import { ConfirmSheet } from '../components/dialogs';
 import type { HomeRowConfig, HomeRowOption, HomeSourceRowSection, UiNextHomeAdapter } from './contract';
 import { HomeRowBuilder } from './HomeRowBuilder';
 
@@ -31,6 +32,7 @@ export function HomeEditor({ adapter }: { adapter: UiNextHomeAdapter }) {
   const [rows, setRows] = useState(adapter.config);
   const [drag, setDrag] = useState<{ id: string; offset: number } | null>(null);
   const [adding, setAdding] = useState(false);
+  const [confirmReset, setConfirmReset] = useState(false);
   /** Source row being built (new) or edited (existing row id). */
   const [building, setBuilding] = useState<{ sourceId: string; rowId?: string } | null>(null);
   const origin = useRef(0);
@@ -252,10 +254,19 @@ export function HomeEditor({ adapter }: { adapter: UiNextHomeAdapter }) {
         <button type="button" className="un-btn is-ghost" onClick={() => setAdding(true)}>
           <Plus size={18} />줄 추가
         </button>
-        <button type="button" className="un-btn is-text" onClick={adapter.resetConfig}>
+        <button type="button" className="un-btn is-text" onClick={() => setConfirmReset(true)}>
           기본값으로
         </button>
       </div>
+      <ConfirmSheet
+        open={confirmReset}
+        title="홈 구성을 기본값으로 되돌릴까요?"
+        confirmLabel="기본 구성으로 복원"
+        onConfirm={adapter.resetConfig}
+        onClose={() => setConfirmReset(false)}
+      >
+        직접 추가한 줄이 홈에서 빠지고, 줄 순서와 표시 설정이 초기화돼요. 서재의 작품과 책장은 그대로예요.
+      </ConfirmSheet>
     </div>
   );
 }

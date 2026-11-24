@@ -64,6 +64,7 @@ export interface LibraryScreenModel {
     };
   };
   filter: LibraryFilter;
+  favoritesOnly: boolean;
   sort: LibrarySort;
   viewMode: LibraryViewMode;
   collection: LibraryCollectionModel;
@@ -123,6 +124,7 @@ export interface LibraryScreenActions {
   };
   controls: {
     setFilter(filter: LibraryFilter): void;
+    setFavoritesOnly(value: boolean): void;
     setSort(sort: LibrarySort): void;
     setViewMode(mode: LibraryViewMode): void;
     emptyTrash(): MaybePromise;
@@ -162,6 +164,8 @@ export interface LibraryScreenActions {
   };
   imports: {
     open(task?: ImportTaskView): void;
+    canRetry(task: ImportTaskView): boolean;
+    retry(task: ImportTaskView): void;
     dismiss(taskId: string): void;
   };
 }

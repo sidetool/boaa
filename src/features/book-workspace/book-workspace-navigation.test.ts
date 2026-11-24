@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import type { BookWorkspaceReaderArtifacts } from './book-workspace-contract';
 import { BookWorkspaceController } from './book-workspace-controller';
 import { selectContinueChapter } from './book-workspace-projection';
 import {
@@ -88,7 +89,7 @@ describe('BookWorkspaceController navigation', () => {
     expect(harness.calls.filter((call) => call === 'adjacent.applyBookAnnotations')).toHaveLength(3);
   });
 
-  it('does not enter a stale chapter after a newer chapter finishes loading', async () => {
+  it('ignores stale hydration after the reader has already opened a newer chapter', async () => {
     const novel = testNovel();
     const firstChapter = testChapter(1);
     const secondChapter = testChapter(2);
@@ -108,14 +109,97 @@ describe('BookWorkspaceController navigation', () => {
       testWorkspaceState({ selectedNovel: novel, chapters: [firstChapter, secondChapter], view: 'chapters' }),
     );
 
-    const firstOpen = controller.openChapter(firstChapter);
-    await Promise.resolve();
+    const apply = vi.spyOn(harness.ports.adjacent, 'applyReaderArtifacts');
+    await controller.openChapter(firstChapter);
+    expect(controller.getSnapshot().currentChapter?.id).toBe(firstChapter.id);
     await controller.openChapter(secondChapter);
+    apply.mockClear();
     resolveFirst?.();
-    await firstOpen;
+    await Promise.resolve();
 
     expect(controller.getSnapshot()).toMatchObject({ currentChapter: secondChapter, view: 'reader' });
-    expect(harness.calls).not.toContain(`transition.activateChapter:${firstChapter.id}`);
+    expect(apply).not.toHaveBeenCalled();
+  });
+
+  it('keeps the text open when voice data fails and retries only the currently open chapter', async () => {
+    const novel = testNovel();
+    const chapter = testChapter(1);
+    const harness = createBookWorkspaceTestHarness({ novel, chapters: [chapter] });
+    const load = vi
+      .spyOn(harness.ports.adjacent, 'loadReaderArtifacts')
+      .mockRejectedValueOnce(new Error('voice lookup failed'));
+    const apply = vi.spyOn(harness.ports.adjacent, 'applyReaderArtifacts');
+    const controller = new BookWorkspaceController(
+      harness.ports,
+      testWorkspaceState({ selectedNovel: novel, chapters: [chapter] }),
+    );
+    await controller.openChapter(chapter);
+    expect(controller.getSnapshot()).toMatchObject({
+      view: 'reader',
+      readerArtifactsStatus: 'failed',
+      navigationPending: false,
+    });
+    controller.retryReaderArtifacts();
+    controller.retryReaderArtifacts();
+    expect(controller.getSnapshot().readerArtifactsStatus).toBe('loading');
+    await Promise.resolve();
+    expect(controller.getSnapshot().readerArtifactsStatus).toBeUndefined();
+    expect(load).toHaveBeenCalledTimes(2);
+    expect(apply).toHaveBeenCalledTimes(2);
+    // The completion carries the same empty arrays installed on entry, so newer edits win field by field.
+    expect(apply.mock.calls[1][1]).toBe(apply.mock.calls[0][0]);
+    expect(harness.preparedOpens).toHaveLength(1);
+  });
+
+  it('clears a pending cast load on leaving the reader so other views can use their own controls', async () => {
+    const novel = testNovel();
+    const chapter = testChapter(1);
+    const harness = createBookWorkspaceTestHarness({ novel, chapters: [chapter] });
+    let finish!: (value: BookWorkspaceReaderArtifacts) => void;
+    vi.spyOn(harness.ports.adjacent, 'loadReaderArtifacts').mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    );
+    const apply = vi.spyOn(harness.ports.adjacent, 'applyReaderArtifacts');
+    const controller = new BookWorkspaceController(harness.ports, testWorkspaceState({ selectedNovel: novel }));
+    await controller.openChapter(chapter);
+    expect(controller.getSnapshot().readerArtifactsStatus).toBe('loading');
+    controller.setView('document');
+    finish({ segments: [], characters: [], voiceProfiles: [] });
+    await Promise.resolve();
+    expect(controller.getSnapshot().readerArtifactsStatus).toBeUndefined();
+    expect(apply).toHaveBeenCalledTimes(1);
+  });
+
+  it('refreshes the artifact snapshot if sync changes the active revision during hydration', async () => {
+    const novel = testNovel({ activeContentRevisionId: 'r1' });
+    const chapter = testChapter(1);
+    const harness = createBookWorkspaceTestHarness({ novel, chapters: [chapter] });
+    let finish!: (value: BookWorkspaceReaderArtifacts) => void;
+    vi.spyOn(harness.ports.adjacent, 'loadReaderArtifacts').mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    );
+    const apply = vi.spyOn(harness.ports.adjacent, 'applyReaderArtifacts');
+    const controller = new BookWorkspaceController(
+      harness.ports,
+      testWorkspaceState({ selectedNovel: novel, chapters: [chapter] }),
+    );
+    await controller.openChapter(chapter);
+    controller.replaceSelection({
+      selectedNovel: { ...novel, activeContentRevisionId: 'r2' },
+      currentChapter: chapter,
+    });
+    await Promise.resolve();
+    apply.mockClear();
+    finish({ segments: [], characters: [], voiceProfiles: [] });
+    await Promise.resolve();
+    expect(apply).not.toHaveBeenCalled();
+    expect(controller.getSnapshot().readerArtifactsStatus).toBeUndefined();
   });
 
   it('invalidates delayed continue-reading data when sync replaces the same book selection', async () => {
@@ -279,7 +363,9 @@ describe('BookWorkspaceController navigation', () => {
             finish = () => resolve({ segments: [], characters: [], voiceProfiles: [] });
           });
       const controller = new BookWorkspaceController(harness.ports);
-      const pending = controller.openDocumentSection(novel, 'release-one');
+      const pending = controller.openDocumentSection(novel, 'release-one', undefined, undefined, {
+        initialMode: 'correction',
+      });
       await vi.waitFor(() => expect(finish).toBeDefined());
       const newer = testNovel({ id: 'new-book' });
       controller.replaceSelection({ selectedNovel: newer, chapters: [], currentChapter: undefined });

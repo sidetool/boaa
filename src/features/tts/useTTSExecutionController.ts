@@ -66,6 +66,7 @@ export function useTTSExecutionController(input: TTSExecutionControllerInput) {
 
   const inputRef = useRef(input);
   const sessionRef = useRef(0);
+  const startRequest = useRef(0);
   const audioInvocationRef = useRef(0);
   const sessionTargetRef = useRef<{ bookId: string; chapterId: string; owner?: object }>();
   const sessionAbortRef = useRef<AbortController>();
@@ -202,6 +203,19 @@ export function useTTSExecutionController(input: TTSExecutionControllerInput) {
     [stopAll],
   );
 
+  // A device voice lookup can outlive a stop, a changed target or a second tap.
+  const requestStart = useCallback(() => {
+    const request = ++startRequest.current;
+    const epoch = sessionRef.current;
+    const { bookId, chapterId, sessionOwner } = inputRef.current;
+    return () =>
+      request === startRequest.current &&
+      epoch === sessionRef.current &&
+      bookId === inputRef.current.bookId &&
+      chapterId === inputRef.current.chapterId &&
+      sessionOwner === inputRef.current.sessionOwner;
+  }, []);
+
   const beginSession = useCallback(
     (bookId: string, chapterId: string, startIndex?: number, options: { preserveSleepTimer?: boolean } = {}) => {
       if (inputRef.current.bookId !== bookId || inputRef.current.chapterId !== chapterId) return;
@@ -226,7 +240,7 @@ export function useTTSExecutionController(input: TTSExecutionControllerInput) {
       abortOperation('playback');
       abortPrefetch(options.preserveSleepTimer === true);
       audioSession.stop(true);
-      if (options.preserveSleepTimer && sleepTimerRef.current.activePreset !== undefined) {
+      if (options.preserveSleepTimer && sleepTimerRef.current.initialized) {
         sleepTimerRef.current.resume();
       } else {
         sleepTimerRef.current.start(inputRef.current.sleepTimerPreset);
@@ -415,13 +429,6 @@ export function useTTSExecutionController(input: TTSExecutionControllerInput) {
     setSleepTimerPresetState(preset);
     setSleepTimerRemainingSeconds(sleepTimerRef.current.remainingSeconds);
   }, []);
-
-  const previousTimerPreset = useRef(input.sleepTimerPreset);
-  useEffect(() => {
-    if (previousTimerPreset.current === input.sleepTimerPreset) return;
-    previousTimerPreset.current = input.sleepTimerPreset;
-    if (playingRef.current) setSleepTimer(input.sleepTimerPreset);
-  }, [input.sleepTimerPreset, setSleepTimer]);
 
   const setItemActive = useCallback(
     (sessionId: number, active: boolean) => {
@@ -624,6 +631,7 @@ export function useTTSExecutionController(input: TTSExecutionControllerInput) {
     playbackWaiting: playbackBusy && !itemActive && !(paused && audioSession.hasActivePlayback),
     playbackStatus,
     warmupBusy,
+    requestStart,
     beginSession,
     isSessionCurrent,
     waitForResume,

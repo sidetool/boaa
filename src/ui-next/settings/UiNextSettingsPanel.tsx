@@ -13,7 +13,7 @@ import {
   type SettingsTab,
 } from '../../features/reader-settings/settings-panel-contract';
 import { UiNextSettingsTabContent } from './UiNextSettingsTabContent';
-import { cx, Switch } from '../components/primitives';
+import { cx, navigateChoices, Switch, useModalFocus } from '../components/primitives';
 import { UiNextSourceReadingSettings } from './UiNextSourceReadingSettings';
 import '../styles/tokens.css';
 import '../styles/kit.css';
@@ -42,6 +42,7 @@ export default function UiNextSettingsPanel(props: ReaderSettingsPanelProps) {
   const [detail, setDetail] = useState(Boolean(props.initialTab));
   const [storageBusy, setStorageBusy] = useState(false);
   const [focusDownloads, setFocusDownloads] = useState(props.initialTab === 'downloads');
+  const dialogRef = useRef<HTMLDivElement>(null);
   const titleRef = useRef<HTMLHeadingElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
   const embedded = useContext(EmbeddedAccessContext);
@@ -59,7 +60,8 @@ export default function UiNextSettingsPanel(props: ReaderSettingsPanelProps) {
     return true;
   });
   const current = sections.find((section) => section.id === tab) ?? sections[0];
-  const status = current.id === 'translation' ? '저장 버튼으로 적용' : saveStatusLabel(controller);
+  const readingTab = current.id === 'appearance' || current.id === 'layout' || current.id === 'gesture';
+  const status = readingTab ? saveStatusLabel(controller) : current.id === 'translation' ? '저장 버튼으로 적용' : '';
 
   const focusTitle = () =>
     requestAnimationFrame(() => {
@@ -77,7 +79,7 @@ export default function UiNextSettingsPanel(props: ReaderSettingsPanelProps) {
   };
   const back = () => {
     setDetail(false);
-    requestAnimationFrame(() => document.getElementById(`un-settings-tab-${tab}`)?.focus());
+    requestAnimationFrame(() => document.getElementById(`un-settings-tab-${current.id}`)?.focus());
   };
   const close = () => {
     if (!storageBusy) controller.closePanel();
@@ -101,33 +103,19 @@ export default function UiNextSettingsPanel(props: ReaderSettingsPanelProps) {
     focusTitle();
   }, [props.updatesRequest, props.initialTab, storageBusy]);
 
-  useEffect(() => {
-    if (!controller.open) return;
-    const previous = document.activeElement as HTMLElement | null;
-    document.documentElement.style.overflow = 'hidden';
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key !== 'Escape' || event.defaultPrevented) return;
-      // Nested classic dialogs handle their own Escape first.
-      if (document.querySelector('.modal-backdrop, .un-layer')) return;
-      event.preventDefault();
-      if (detail && window.matchMedia(PHONE).matches) back();
-      else close();
-    };
-    window.addEventListener('keydown', onKey);
-    return () => {
-      window.removeEventListener('keydown', onKey);
-      document.documentElement.style.overflow = '';
-      previous?.focus?.({ preventScroll: true });
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [controller.open, detail, storageBusy]);
+  useModalFocus(dialogRef, controller.open, () => {
+    if (storageBusy) return;
+    if (detail && window.matchMedia(PHONE).matches) back();
+    else close();
+  });
 
   if (!controller.open) return null;
-  const readingTab = tab === 'appearance' || tab === 'layout' || tab === 'gesture';
-  const showReadingFooter = tab === 'layout';
+  const showReadingFooter = current.id === 'layout';
 
   return createPortal(
     <div
+      ref={dialogRef}
+      tabIndex={-1}
       className={cx('ui-next un-settings reader-settings-dialog', detail && 'is-detail')}
       role="dialog"
       aria-modal="true"
@@ -157,19 +145,30 @@ export default function UiNextSettingsPanel(props: ReaderSettingsPanelProps) {
           {GROUPS.map((group) => {
             const items = sections.filter((section) => group.ids.includes(section.id));
             if (!items.length) return null;
+            const tabStop = Math.max(
+              0,
+              items.findIndex((section) => section.id === current.id),
+            );
             return (
               <section key={group.title} className="un-settings-group">
                 <h2>{group.title}</h2>
-                <div className="un-settings-list" role="tablist" aria-orientation="vertical" aria-label={group.title}>
-                  {items.map((section) => {
+                <div
+                  className="un-settings-list"
+                  role="tablist"
+                  aria-orientation="vertical"
+                  aria-label={group.title}
+                  onKeyDown={navigateChoices}
+                >
+                  {items.map((section, index) => {
                     const Icon = section.icon;
-                    const selected = section.id === tab;
+                    const selected = section.id === current.id;
                     return (
                       <button
                         key={section.id}
                         id={`un-settings-tab-${section.id}`}
                         type="button"
                         role="tab"
+                        tabIndex={index === tabStop ? 0 : -1}
                         aria-selected={selected}
                         aria-controls="un-settings-panel"
                         disabled={storageBusy}
@@ -182,11 +181,9 @@ export default function UiNextSettingsPanel(props: ReaderSettingsPanelProps) {
                         <span className="un-settings-item-text">
                           <b>{section.label}</b>
                           <small>
-                            {section.id === 'appearance'
-                              ? '시작 화면'
-                              : section.id === 'account' && selfHostAuth
-                                ? `${selfHostAuth.account.displayName}${accountManager ? ' · 회원 관리' : ''}`
-                                : section.detail}
+                            {section.id === 'account' && selfHostAuth
+                              ? `${selfHostAuth.account.displayName}${accountManager ? ' · 회원 관리' : ''}`
+                              : section.detail}
                           </small>
                         </span>
                         <ChevronRight size={18} className="un-settings-chevron" aria-hidden="true" />
@@ -207,12 +204,12 @@ export default function UiNextSettingsPanel(props: ReaderSettingsPanelProps) {
             <div
               id="un-settings-panel"
               role="tabpanel"
-              aria-labelledby={`un-settings-tab-${tab}`}
+              aria-labelledby={`un-settings-tab-${current.id}`}
               className="reader-settings-panel un-settings-panel"
             >
               <UiNextSettingsTabContent
                 {...props}
-                tab={tab}
+                tab={current.id}
                 onStorageBusyChange={setStorageBusy}
                 openDestination={openDestination}
                 sourceReadingSettings={

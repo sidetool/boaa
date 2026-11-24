@@ -122,7 +122,7 @@ store의 `device-reader-settings:v1:<scope>` 레코드를 관리합니다. 스�
   derived indexes remain excluded.
 - Hosted browser backup downloads use short-lived single-use URLs after authenticated issuance. Restore uploads and
   binary extraction use request-owned disk files rather than archive-sized RAM buffers; inspected files are retained
-  for 30 minutes and reused for restore. See the [resource limits and verification](../operations/docker-compose-deployment.md).
+  for 30 minutes and reused for restore. After a restore commits, its file selection is consumed. If refreshing the library fails, the retry action reloads the catalog. See the [resource limits and verification](../operations/docker-compose-deployment.md).
 - Legacy local books can bind a byte-identical user-reselected original after raw hash verification. If the original is
   unavailable, a UTF-8 `canonical_reconstruction` is generated from the active revision's chapter/paragraph pages and
   never represented as an original source.
@@ -438,7 +438,7 @@ Search routes use this table:
 - `/api/books/:bookId/search`
 - `/api/chapters/:chapterId/search`
 
-`pg_trgm` backs the `text_lower` GIN index so hosted searches avoid repeatedly expanding `paragraph_pages.paragraphs` JSON for every query. Legacy `limit` requests still return the existing paragraph array. New `pageSize` requests use chapter/book keyset cursors bound to scope, target, and normalized query, return `nextCursor`/`capped` diagnostics, and enforce the same 200/300 cumulative hard limits. `RemoteSearchTransport` passes the caller `AbortSignal` to fetch and validates the paginated response before the repository sees it.
+Book search matches lowercased text within the owner's book and joins chapters by both book and chapter identity. PostgreSQL can use the book/chapter order indexes to stop at the requested page. Migration 0043 removed the global text trigram index to reduce import overhead. The `db_search` metric in the `Server-Timing` response header measures the search query round trip in milliseconds. The existing `scannedRows` and `scannedTextCharacters` fields count returned paragraphs and their text length. Legacy `limit` requests still return the existing paragraph array. New `pageSize` requests use chapter/book keyset cursors bound to scope, target, and normalized query, return `nextCursor`/`capped` diagnostics, and enforce the same 200/300 cumulative hard limits. `RemoteSearchTransport` passes the caller `AbortSignal` to fetch and validates the paginated response before the repository sees it.
 
 ## Hosted Analysis And Replacement Revisions
 

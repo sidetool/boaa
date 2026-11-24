@@ -1520,7 +1520,11 @@ export class RemoteApiClient {
     input: PlainTTSRequest | { voiceId: string; modelRevision: string; rate: number },
     signal?: AbortSignal,
   ): Promise<Blob> {
-    const path = chapterId ? `/chapters/${encodeURIComponent(chapterId)}/tts/plain` : '/tts/plain/sample';
+    const cacheOnly = 'cacheOnly' in input && input.cacheOnly;
+    if (cacheOnly && !chapterId) throw new Error('저장된 음성은 책의 본문에서 재생할 수 있어요.');
+    const path = chapterId
+      ? `/chapters/${encodeURIComponent(chapterId)}/tts/plain${cacheOnly ? '/cached' : ''}`
+      : '/tts/plain/sample';
     const response = await this.requestBlob(
       path,
       {

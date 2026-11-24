@@ -9,7 +9,8 @@ import { configKey, emptyConfig } from './discovery-config';
 
 type Client = Pick<RemoteApiClient, 'getDiscoverySettings' | 'saveDiscoverySettings'>;
 const conflict = '다른 기기에서 탐색 구성이 변경됐습니다. 최신 구성을 확인한 뒤 다시 편집해 주세요.';
-const read = (storage: Storage, key: string) => {
+const read = (storage: Storage | undefined, key: string) => {
+  if (!storage) return;
   try {
     return normalizeDiscoveryConfig(JSON.parse(readBrandStorage(storage, key) ?? 'null'));
   } catch {
@@ -30,7 +31,7 @@ export class DiscoverySettingsStore {
   constructor(
     scope: string,
     private readonly client?: Client,
-    private readonly storage: Storage = localStorage,
+    private readonly storage: Storage | undefined = globalThis.window?.localStorage,
     allowLegacyImport = true,
   ) {
     this.key = configKey(scope);
@@ -66,7 +67,7 @@ export class DiscoverySettingsStore {
     this.revision = settings.revision;
     this.legacy = undefined;
     try {
-      writeBrandStorage(this.storage, `${this.key}:account-cache`, JSON.stringify(config));
+      if (this.storage) writeBrandStorage(this.storage, `${this.key}:account-cache`, JSON.stringify(config));
     } catch {
       /* Server save remains authoritative. */
     }
@@ -127,6 +128,7 @@ export class DiscoverySettingsStore {
       if (!this.snapshot.ready) throw new Error('서버에 연결한 뒤 다시 저장해 주세요.');
       if (JSON.stringify(base) !== JSON.stringify(this.snapshot.config)) throw new Error(conflict);
       if (!this.client) {
+        if (!this.storage) throw new Error('이 기기의 탐색 설정 저장소를 사용할 수 없습니다.');
         writeBrandStorage(this.storage, this.key, JSON.stringify(config));
         this.publish({ config, error: '' });
       } else {

@@ -222,6 +222,19 @@ async function fixture(format: 'txt' | 'image_archive' = 'txt', showPanel = fals
 }
 
 describe('source series pagination integration', () => {
+  it('finds an unnumbered release by its displayed catalog number in reverse sort', async () => {
+    const h = await fixture('txt', true);
+    const interlude = { ...release(9), title: '외전', release: { title: '외전' } };
+    h.setPage(async () => ({ items: [interlude, release(1), release(2), release(3)], detail: { title: 'Work' } }));
+    try {
+      await act(async () => h.controller.showLocalSeries(h.novel));
+      await act(async () => h.releases.changeSort('desc'));
+      await act(async () => h.releases.changeQuery('4화'));
+      expect(h.releases.page.items.map((item) => item.key.remoteId)).toEqual([interlude.key.remoteId]);
+    } finally {
+      await act(async () => h.renderer.unmount());
+    }
+  });
   it('opens detail before remote metadata arrives without fetching the whole library, and respects closing', async () => {
     const h = await fixture();
     let finish!: (value: typeof h.novel) => void;
@@ -277,7 +290,7 @@ describe('source series pagination integration', () => {
         await opening;
       });
       expect(h.controller.loading).toBe(false);
-      expect(h.releases.page.page).toBe(5);
+      expect(h.releases.page.page).toBe(2);
       expect(h.releases.page.items.some((row) => row.title === '46화')).toBe(true);
       await act(async () => h.renderer.unmount());
     },
@@ -306,14 +319,14 @@ describe('source series pagination integration', () => {
       ];
       try {
         await act(async () => h.controller.showLocalSeries(h.novel));
-        expect(h.releases.page.page).toBe(5);
+        expect(h.releases.page.page).toBe(2);
         expect(h.controller.items.filter((item) => item.readingState === 'current').map((item) => item.title)).toEqual([
           '46화',
         ]);
         await act(async () => h.controller.close());
         currentEpisode = 86;
         await act(async () => h.controller.showLocalSeries(h.novel));
-        expect(h.releases.page.page).toBe(9);
+        expect(h.releases.page.page).toBe(3);
       } finally {
         await act(async () => h.renderer.unmount());
       }

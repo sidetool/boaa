@@ -6,13 +6,17 @@ import {
   createVoiceLibraryPort,
 } from './services/remote/speaker-generation-client';
 import type { SavedAudiobook } from './providers/plain-audiobook';
-import { preparedNarrationSession, preparedNarrationJump } from './providers/prepared-narration';
+import { loadPreparedNarration, preparedNarrationSession, preparedNarrationJump } from './providers/prepared-narration';
 import type { PreparedNarration } from './providers/plain-audiobook';
 import { RemoteFileManager } from './external-sources/remote-files/remote-file-manager';
 import { TTSContentIdentity } from './providers/tts-content-identity';
 import { useSpokenTextFilters } from './features/tts/use-spoken-text-filters';
 import { createAccountReaderDb } from './storage/reader-database';
-import { prepareNextTTSChapter, type PreparedTTSChapter } from './features/tts/next-tts-chapter';
+import {
+  openChapterForPlayback,
+  prepareNextTTSChapter,
+  type PreparedTTSChapter,
+} from './features/tts/next-tts-chapter';
 import { externalItemSectionId } from './features/external-sources/serial-work-projection';
 import { estimatedPlainTTSParagraph } from './providers/plain-tts-progress';
 import { loadSharedParagraphPage } from './features/reader/shared-paragraph-pages';
@@ -88,7 +92,10 @@ import type {
   BookWorkspaceTransitionPort,
 } from './features/book-workspace/book-workspace-contract';
 import { createBookWorkspacePortProxy } from './features/book-workspace/book-workspace-port-proxy';
-import { loadBookWorkspaceReaderArtifacts } from './features/book-workspace/book-workspace-reader-artifacts';
+import {
+  loadBookWorkspaceReaderArtifacts,
+  publishReaderSnapshot,
+} from './features/book-workspace/book-workspace-reader-artifacts';
 import { preloadBookWorkspaceReaderBody } from './features/book-workspace/book-workspace-reader-preload';
 import { useBookWorkspaceController } from './features/book-workspace/useBookWorkspaceController';
 import { useBookWorkspaceProjection } from './features/book-workspace/useBookWorkspaceProjection';
@@ -213,6 +220,8 @@ import type { BookAIWorkflowReviewItem } from './providers/book-ai-workflow-revi
 import type { TTSStatus, TTSVoice } from './providers/tts';
 import { voiceApprovalForProfile, type VoiceProductStateV1 } from './providers/voice-product';
 import type { PlayableTtsSegment } from './providers/tts-playback';
+import { VoiceSamplePlayback } from './features/tts/voice-sample-playback';
+import { playDeviceVoicePreview } from './features/tts/device-voice-preview';
 import { BrowserAudioSession } from './providers/browser-audio-session';
 import { BookPlaybackCoordinator, deferChapterPlayback } from './providers/book-playback-coordinator';
 import {
@@ -270,6 +279,7 @@ import { waitForPlaybackDelay } from './providers/tts-playback-delay';
 import {
   clearTTSPlaybackResume,
   loadTTSPlaybackResume,
+  loadTTSResumeSettingsFingerprint,
   saveTTSPlaybackResume,
   ttsQueueItemFingerprint,
   ttsPlaybackSettingsFingerprint,
@@ -684,6 +694,13 @@ export default function App() {
   const [addonOpen, setAddonOpen] = useState(false);
   const [addonTab, setAddonTab] = useState<AddonTab>('outline');
   const [spokenPreviewRequest, setSpokenPreviewRequest] = useState<{ id: number; text: string }>();
+  const [listenPlayerRequest, setListenPlayerRequest] = useState(0);
+  const openListenPlayer = () => {
+    setSpokenPreviewRequest(undefined);
+    setListenPlayerRequest((request) => request + 1);
+    setAddonTab('tts');
+    setAddonOpen(true);
+  };
   const { toasts: toastList, showToast, dismissToast } = useToastController();
   const readerScreenHandle = useMemo(() => new ReaderScreenHandle(), []);
   const bookWorkspaceTransitionRef = useRef<BookWorkspaceTransitionPort>({
@@ -817,6 +834,9 @@ export default function App() {
     openChapter: (chapter, position) =>
       bookWorkspace.openChapter(chapter, { restore: true, novel: selectedNovel, position }),
     onMutationCommitted: () => readerMutationCommittedRef.current('annotations'),
+    onNavigated: () => {
+      if (addonOpen && addonTab === 'notes' && window.matchMedia('(max-width: 699px)').matches) setAddonOpen(false);
+    },
     onPersistenceError: (error) => readerPersistenceErrorRef.current(error),
     notify: showToast,
   });
@@ -964,6 +984,22 @@ export default function App() {
     ttsPositionWriter.current = writer;
     return () => writer.close();
   }, [ttsSessionOwner]);
+  const [preparedChoice, setPreparedChoice] = useState<{ owner: object; id: string; label: string }>();
+  const preparedChoiceRef = useRef(preparedChoice);
+  preparedChoiceRef.current = preparedChoice;
+  useEffect(() => {
+    if (!addonOpen || addonTab !== 'tts' || view !== 'reader') setSpokenPreviewRequest(undefined);
+  }, [addonOpen, addonTab, view]);
+  const activePrepared = preparedChoice?.owner === ttsSessionOwner ? preparedChoice : undefined;
+  const preparedPlanRef = useRef<{ owner: object; plan: PreparedNarration }>();
+  const clearPreparedChoice = () => {
+    preparedChoiceRef.current = undefined;
+    preparedPlanRef.current = undefined;
+    setPreparedChoice(undefined);
+  };
+  const listeningMode = activePrepared ? 'plain' : (ttsPlaybackSettings.mode ?? 'plain');
+  const plainMode = listeningMode === 'plain';
+  const plainServerSelected = !!activePrepared || (plainMode && ttsPlaybackSettings.voiceSource === 'server');
   const ttsExecutionController = useTTSExecutionController({
     sessionOwner: ttsSessionOwner,
     systemTTS,
@@ -972,10 +1008,7 @@ export default function App() {
     bookId: selectedNovel?.id,
     chapterId: ttsControllerChapterId,
     volume: ttsPlaybackSettings.volume,
-    playbackRate:
-      ttsPlaybackSettings.mode !== 'cast' && ttsPlaybackSettings.voiceSource === 'server'
-        ? ttsPlaybackSettings.rate
-        : 1,
+    playbackRate: plainServerSelected ? ttsPlaybackSettings.rate : 1,
     sleepTimerPreset: ttsPlaybackSettings.sleepTimerDefault,
     preserveSystemPlaybackOnUnmount: platformRuntime.kind === 'tauri-mobile',
   });
@@ -1021,12 +1054,15 @@ export default function App() {
     averageResolveLatencyMs: 0,
     consecutiveFailures: 0,
   });
-  const voiceProfileStateRevision = useMemo(() => voiceProfilesRevision(voiceProfiles), [voiceProfiles]);
+  const voiceProfileStateRevision = useMemo(
+    () => (ttsPlaybackSettings.mode === 'cast' ? voiceProfilesRevision(voiceProfiles) : undefined),
+    [ttsPlaybackSettings.mode, voiceProfiles],
+  );
   const ttsResumeFingerprint = useMemo(
     () =>
       ttsPlaybackSettingsFingerprint({
         settings: ttsPlaybackSettings,
-        voiceRevision: ttsPlaybackSettings.mode === 'cast' ? voiceProfileStateRevision : (settings.ttsVoiceURI ?? ''),
+        voiceRevision: voiceProfileStateRevision ?? settings.ttsVoiceURI ?? '',
       }),
     [ttsPlaybackSettings, voiceProfileStateRevision, settings.ttsVoiceURI],
   );
@@ -1045,7 +1081,7 @@ export default function App() {
         setTTSStatus(status);
         syncExternalTTSPlayback(status.playback);
       } catch {
-        // Bootstrap and the provider fallback own user-facing availability errors.
+        // Explicit voice checks report availability in the listening controls.
       }
     };
     const unsubscribe = systemTTS.subscribePlaybackState?.(applyNativePlayback);
@@ -1139,15 +1175,11 @@ export default function App() {
       return;
     }
     let cancelled = false;
-    void readerRepository
-      .listVoiceProfiles(bookId)
-      .then(async (storedProfiles) => {
+    void loadTTSResumeSettingsFingerprint(ttsPlaybackSettings, settings.ttsVoiceURI, () =>
+      readerRepository.listVoiceProfiles(bookId),
+    )
+      .then(async (settingsFingerprint) => {
         if (cancelled) return;
-        const settingsFingerprint = ttsPlaybackSettingsFingerprint({
-          settings: ttsPlaybackSettings,
-          voiceRevision:
-            ttsPlaybackSettings.mode === 'cast' ? voiceProfilesRevision(storedProfiles) : (settings.ttsVoiceURI ?? ''),
-        });
         const durable = await getListeningPosition(bookId);
         if (cancelled) return;
         if (durable && durable.contentRevisionId === contentRevisionId && durable.anchor.kind === 'reflowable_text') {
@@ -1241,7 +1273,13 @@ export default function App() {
   const hostedTTSVoicesByProvider = providerSettings.voicesByProvider;
   const hostedTTSVoicesLoadingProvider = providerSettings.voicesLoadingProvider;
   const refreshHostedTTSVoices = providerSettings.refreshVoices;
-  const stopProviderSamples = providerSettings.stopSamples;
+  const voiceProfileSample = useMemo(() => new VoiceSamplePlayback(), []);
+  const stopSettingsSamples = providerSettings.stopSamples;
+  const stopProviderSamples = useCallback(() => {
+    stopSettingsSamples();
+    voiceProfileSample.stop();
+  }, [voiceProfileSample, stopSettingsSamples]);
+  useEffect(() => () => voiceProfileSample.stop(), [voiceProfileSample, ttsSessionOwner, ttsControllerChapterId]);
   const providerSettingsPanelController = providerSettings.panelController;
   const providerSettingsLoading = providerSettingsPanelController.loading;
   const refreshProviderSettings = providerSettings.refresh;
@@ -1713,19 +1751,20 @@ export default function App() {
         ]);
         return { bookmarks, highlights, notes };
       },
-      applyBookAnnotations: ({ bookmarks, highlights, notes }) => {
-        setBookmarks(bookmarks);
-        setHighlights(highlights);
-        setNotes(notes);
+      applyBookAnnotations: ({ bookmarks, highlights, notes }, expected) => {
+        setBookmarks(publishReaderSnapshot(bookmarks, expected?.bookmarks));
+        setHighlights(publishReaderSnapshot(highlights, expected?.highlights));
+        setNotes(publishReaderSnapshot(notes, expected?.notes));
       },
       loadReaderArtifacts: (chapterId, novelId, preparation) =>
         loadBookWorkspaceReaderArtifacts(readerRepository, chapterId, novelId, preparation),
       preloadReaderBody: (novel, chapter, options) =>
         preloadBookWorkspaceReaderBody(readerRepository, novel, chapter, options),
-      applyReaderArtifacts: ({ segments, characters, voiceProfiles }) => {
-        setSegmentsState(segments);
-        setCharacters(characters);
-        setVoiceProfiles(voiceProfiles);
+      applyReaderArtifacts: ({ segments, characters, voiceProfiles }, expected) => {
+        // A sync refresh or completed edit may have published fresher data during hydration.
+        setSegmentsState(publishReaderSnapshot(segments, expected?.segments));
+        setCharacters(publishReaderSnapshot(characters, expected?.characters));
+        setVoiceProfiles(publishReaderSnapshot(voiceProfiles, expected?.voiceProfiles));
       },
       resetCorrection: () => setCorrectionTarget(undefined),
       resetAnnotationEditor: annotationsController.resetEditor,
@@ -2092,7 +2131,16 @@ export default function App() {
   const refreshTTSState = useCallback(async () => {
     const result = await connectedSyncController.runRuntimeTask('system-tts-refresh', {
       load: async () => {
-        const [status, voiceList] = await Promise.all([systemTTS.getStatus(), systemTTS.listVoices()]);
+        const [status, voiceList] = await Promise.all([
+          systemTTS.getStatus().catch((): TTSStatus => ({
+            supported: false,
+            canSpeak: false,
+            voicesAvailable: false,
+            voiceCount: 0,
+            message: '기기 목소리를 확인하지 못했어요. 다시 시도해 주세요.',
+          })),
+          systemTTS.listVoices().catch(() => []),
+        ]);
         return { status, voiceList };
       },
       commit: ({ status, voiceList }) => {
@@ -2103,27 +2151,28 @@ export default function App() {
     return result?.status;
   }, [connectedSyncController, systemTTS]);
 
+  useEffect(() => {
+    // A slow device voice service must not hold the library skeleton open.
+    void refreshTTSState();
+  }, [refreshTTSState]);
+
   const retryAppBootstrap = useAppBootstrap(connectedSyncController, async (context) => {
     if (context.isCurrent()) setBootstrapState({ status: 'loading' });
     try {
       await runGuardedAppBootstrap(context, {
         load: async () => {
-          const [settings, activeNovels, trashNovels, state, ttsStatus, voiceList] = await Promise.all([
+          const [settings, activeNovels, trashNovels, state] = await Promise.all([
             readerRepository.getSettings(),
             readerRepository.listNovels(),
             libraryCatalogRepository?.listTrash() ?? Promise.resolve([]),
             readerRepository.getSyncState(),
-            systemTTS.getStatus(),
-            systemTTS.listVoices(),
           ]);
-          return { settings, novels: [...activeNovels, ...trashNovels], state, ttsStatus, voiceList };
+          return { settings, novels: [...activeNovels, ...trashNovels], state };
         },
-        commit: ({ settings, novels, state, ttsStatus, voiceList }) => {
+        commit: ({ settings, novels, state }) => {
           setReaderSettings(settings);
           setNovels(novels);
           setSyncState(state);
-          setTTSStatus(ttsStatus);
-          setVoices(voiceList);
         },
         afterCommit: async ({ state }, activeContext) => {
           if (state.status !== 'conflict') await flushSyncState();
@@ -2333,8 +2382,6 @@ export default function App() {
     : true;
   const ttsBookOverrideEnabled = hasBookTTSPlaybackOverride(settings, selectedNovel?.id);
   const changeTTSPlaybackSettings = (patch: TTSPlaybackSettingsOverride) => {
-    if ('sleepTimerDefault' in patch && ttsPlaying)
-      ttsExecutionController.setSleepTimer(patch.sleepTimerDefault ?? undefined);
     if (
       'mode' in patch ||
       'voiceSource' in patch ||
@@ -2504,11 +2551,10 @@ export default function App() {
   const hostedVoiceProfiles = selectedHostedTTSProvider
     ? voiceProfiles.filter((profile) => profile.providerId === selectedHostedTTSProvider.providerId)
     : [];
-  const voiceSampleAudioSession = useMemo(() => new BrowserAudioSession(), []);
   useEffect(() => {
     const stop = () => {
       ttsAudioSession.stop(false);
-      voiceSampleAudioSession.stop(false);
+      voiceProfileSample.stop();
       bookPlaybackCoordinator.cancel();
       mediaSession.clear();
     };
@@ -2517,22 +2563,20 @@ export default function App() {
       readerRuntime.session?.signal.removeEventListener('abort', stop);
       stop();
     };
-  }, [readerRuntime.session, ttsAudioSession, voiceSampleAudioSession, bookPlaybackCoordinator, mediaSession]);
+  }, [readerRuntime.session, ttsAudioSession, voiceProfileSample, bookPlaybackCoordinator, mediaSession]);
 
   const voiceProductStateRef = useRef<VoiceProductStateV1 | undefined>(undefined);
   const playVoiceProductSample = useCallback(
     async (profile: VoiceProfile, text: string, kind: 'neutral' | 'in_context'): Promise<boolean> => {
       stopProviderSamples();
-      voiceSampleAudioSession.stop(true);
       if (profile.providerId === 'system') {
-        return new Promise((resolve) => {
-          void systemTTS.speak({
-            text,
-            rate: profile.speed,
-            voiceURI: profile.providerVoiceId,
-            onEnd: () => resolve(true),
-            onError: () => resolve(false),
-          });
+        return voiceProfileSample.play(async (signal) => {
+          await playDeviceVoicePreview(
+            systemTTS,
+            { text, rate: profile.speed, voiceURI: profile.providerVoiceId },
+            signal,
+          );
+          return true;
         });
       }
       if (desktopProviderMode && selectedHostedTTSProvider?.providerId === profile.providerId && ttsSynthesisDraft) {
@@ -2553,40 +2597,35 @@ export default function App() {
         text === ttsVoiceSampleText(TTS_NEUTRAL_SAMPLE_KO_V1)
       ) {
         try {
-          const { buildHostedNeutralVoiceSampleRequest } = await import('./providers/hosted-tts-playback');
-          const sample = buildHostedNeutralVoiceSampleRequest({
-            novelId: selectedNovel.id,
-            chapterId: currentChapter.id,
-            voiceProfile: profile,
-            providerOptionsByProvider: savedTTSSettings?.providerOptionsByProvider,
-            modelByProvider: savedTTSSettings?.modelByProvider,
-            pronunciationRevisionId: voiceProductStateRef.current?.pronunciationProfile.revisionId,
-            capability: selectedHostedTTSCapability,
-            voiceEntryFingerprint: voiceProductStateRef.current?.catalogSnapshots
-              .flatMap((snapshot) => snapshot.entries)
-              .find(
-                (entry) =>
-                  entry.providerId === profile.providerId &&
-                  entry.voiceId === profile.providerVoiceId &&
-                  entry.available,
-              )?.fingerprint,
+          return await voiceProfileSample.play(async (signal, playBlob) => {
+            const { buildHostedNeutralVoiceSampleRequest } = await import('./providers/hosted-tts-playback');
+            signal.throwIfAborted();
+            const sample = buildHostedNeutralVoiceSampleRequest({
+              novelId: selectedNovel.id,
+              chapterId: currentChapter.id,
+              voiceProfile: profile,
+              providerOptionsByProvider: savedTTSSettings?.providerOptionsByProvider,
+              modelByProvider: savedTTSSettings?.modelByProvider,
+              pronunciationRevisionId: voiceProductStateRef.current?.pronunciationProfile.revisionId,
+              capability: selectedHostedTTSCapability,
+              voiceEntryFingerprint: voiceProductStateRef.current?.catalogSnapshots
+                .flatMap((snapshot) => snapshot.entries)
+                .find(
+                  (entry) =>
+                    entry.providerId === profile.providerId &&
+                    entry.voiceId === profile.providerVoiceId &&
+                    entry.available,
+                )?.fingerprint,
+            });
+            if (!sample) return false;
+            const resolved = await providerApiClient.resolveTTSCache(currentChapter.id, sample.request, signal);
+            if (resolved.job) await ttsExecutionController.pollHostedJob(resolved.job.id, signal, { silent: true });
+            signal.throwIfAborted();
+            const audio = await providerApiClient.fetchTTSCacheAudio(currentChapter.id, resolved.cacheKey, signal);
+            return playBlob(audio);
           });
-          if (!sample) return false;
-          const controller = new AbortController();
-          const resolved = await providerApiClient.resolveTTSCache(
-            currentChapter.id,
-            sample.request,
-            controller.signal,
-          );
-          if (resolved.job)
-            await ttsExecutionController.pollHostedJob(resolved.job.id, controller.signal, { silent: true });
-          const audio = await providerApiClient.fetchTTSCacheAudio(
-            currentChapter.id,
-            resolved.cacheKey,
-            controller.signal,
-          );
-          return voiceSampleAudioSession.playBlob(audio);
         } catch (error) {
+          if (isAbortError(error)) throw error;
           showToast(error instanceof Error ? error.message : 'Hosted 음성 샘플을 재생하지 못했습니다.', 'warning');
           return false;
         }
@@ -2610,7 +2649,7 @@ export default function App() {
       systemTTS,
       ttsExecutionController,
       ttsSynthesisDraft,
-      voiceSampleAudioSession,
+      voiceProfileSample,
     ],
   );
   const voiceProductController = useVoiceProductController({
@@ -2760,13 +2799,6 @@ export default function App() {
     void ttsAccountScope;
     return speakerEngines && providerApiClient ? createVoiceLibraryPort(providerApiClient) : undefined;
   }, [speakerEngines, providerApiClient, ttsAccountScope]);
-  const [preparedChoice, setPreparedChoice] = useState<{ owner: object; id: string; label: string }>();
-  const preparedChoiceRef = useRef(preparedChoice);
-  preparedChoiceRef.current = preparedChoice;
-  const activePrepared = preparedChoice?.owner === ttsSessionOwner ? preparedChoice : undefined;
-  const preparedPlanRef = useRef<{ owner: object; plan: PreparedNarration }>();
-  const plainMode = !!activePrepared || ttsPlaybackSettings.mode !== 'cast';
-  const plainServerSelected = !!activePrepared || (plainMode && ttsPlaybackSettings.voiceSource === 'server');
   const listenPreparedNarration = async (item: SavedAudiobook) => {
     if (!selectedNovel) return;
 
@@ -2781,16 +2813,20 @@ export default function App() {
     preparedChoiceRef.current = selection;
     setPreparedChoice(selection);
     setAddonOpen(false);
-    bookPlaybackCoordinator.schedule({
-      bookId: selectedNovel.id,
-      chapterId: target.id,
-      startIndex: target.id === currentChapter?.id ? (ttsIndex ?? readerScreenHandle.getLocation()?.ttsIndex ?? 0) : 0,
-    });
-    if (target.id !== currentChapter?.id)
-      await bookWorkspace.openChapter(target, { novel: selectedNovel, initialMode: 'listen' });
+    await openChapterForPlayback(
+      bookPlaybackCoordinator,
+      bookWorkspace,
+      { novel: selectedNovel, chapter: target },
+      {
+        listeningMode: 'plain',
+        startIndex:
+          target.id === currentChapter?.id ? (ttsIndex ?? readerScreenHandle.getLocation()?.ttsIndex ?? 0) : 0,
+      },
+    );
   };
   const plainTTS = usePlainTTS({
     prepared: audiobookPort,
+    accountScope: ttsAccountScope,
     owner: ttsSessionOwner,
     client: readerRuntime.mode === 'remote' ? providerApiClient : undefined,
     enabled: (addonOpen && addonTab === 'tts') || plainServerSelected,
@@ -2902,7 +2938,8 @@ export default function App() {
     setSyncPanelOpen(false);
   };
 
-  const openSelectionNote = (_selection?: ReaderSelection) => {
+  const openSelectionNote = (selection: ReaderSelection) => {
+    annotationsController.composeSelectionNote(selection);
     setAddonTab('notes');
     setAddonOpen(true);
     revealChrome();
@@ -4365,6 +4402,7 @@ export default function App() {
   };
 
   const playVoiceProfileSample = async (profile: VoiceProfile, kind: 'neutral' | 'in_context'): Promise<void> => {
+    plainTTS.stopPreview();
     if (kind === 'neutral') {
       await voiceProductController.playAndRecordSample(
         profile,
@@ -4451,23 +4489,18 @@ export default function App() {
       import('./providers/epub-footnote-playback'),
     ]);
     const choice = preparedChoiceRef.current?.owner === ttsSessionOwner ? preparedChoiceRef.current : undefined;
+    const preparedForChapter = (chapterId: string) =>
+      audiobookPort &&
+      loadPreparedNarration(
+        audiobookPort,
+        chapterId,
+        choice ? { id: choice.id } : { voiceId: plainTTS.voiceId },
+        plainTTS.cacheOnly,
+        sessionSignal,
+      );
     const prepared =
       plainServerSelected && audiobookPort && chapter
-        ? await tracePlaybackWait('manifest', () =>
-            audiobookPort.reader(
-              chapter.id,
-              {
-                ...(choice
-                  ? { id: choice.id }
-                  : {
-                      voiceId:
-                        ttsPlaybackSettings.serverVoiceId ||
-                        (plainTTS.catalog?.defaultVoiceId ?? plainTTS.catalog?.voices[0]?.id),
-                    }),
-              },
-              sessionSignal,
-            ),
-          )
+        ? await tracePlaybackWait('manifest', async () => preparedForChapter(chapter.id))
         : undefined;
     if (!ttsExecutionController.isSessionCurrent(sessionId)) return;
     if (prepared?.contentRevision !== undefined && prepared.contentRevision !== selectedNovel?.activeContentRevisionId)
@@ -4624,7 +4657,7 @@ export default function App() {
                     .filter((range) => range.paragraphId === target.paragraphId)
                     .map((range) => ({ start: range.startOffset, end: range.endOffset })),
                 });
-                if (document.visibilityState === 'visible') void scrollToParagraph(target.paragraphId);
+                void readerScreenHandle.scrollToParagraph(target.paragraphId, 'playback');
               },
               retry,
             );
@@ -4654,13 +4687,7 @@ export default function App() {
               const next = preparedNext?.chapter;
               if (!next || !ttsExecutionController.isSessionCurrent(sessionId)) return;
               if (audiobookPort) {
-                const nextPlan = await audiobookPort.reader(
-                  next.id,
-                  choice
-                    ? { id: choice.id }
-                    : { voiceId: ttsPlaybackSettings.serverVoiceId || plainTTS.catalog?.defaultVoiceId },
-                  sessionSignal,
-                );
+                const nextPlan = await preparedForChapter(next.id);
                 if (!ttsExecutionController.isSessionCurrent(sessionId)) return;
                 const first = nextPlan?.items[0];
                 if (first) {
@@ -4767,7 +4794,7 @@ export default function App() {
           saveTTSPlaybackResume(resumeRecord);
           setTTSResumeRecord(resumeRecord);
         }
-        if (document.visibilityState === 'visible') void scrollToParagraph(paragraph.id);
+        void readerScreenHandle.scrollToParagraph(paragraph.id, 'playback');
       },
       onPlayableStart: (_playableIndex, playable, paragraphIndex, paragraph) => {
         if (!selectedNovel?.activeContentRevisionId) return;
@@ -4843,14 +4870,13 @@ export default function App() {
       }
       if (!ttsExecutionController.isSessionCurrent(sessionId)) return;
     }
-    const nextChapter = preparedNext?.chapter;
-    if (stopAtChapterEnd || ttsPlaybackSettings.chapterEndBehavior === 'stop' || !nextChapter) {
+    if (stopAtChapterEnd || ttsPlaybackSettings.chapterEndBehavior === 'stop' || !preparedNext) {
       ttsExecutionController.finishSession(sessionId);
       clearTTSPlaybackResume(chapter.novelId);
       void clearListeningPosition(chapter.novelId).then(() => readerMutationCommittedRef.current('progress'));
       setTTSListeningPosition(undefined);
       setTTSResumeRecord(undefined);
-      if (!nextChapter && ttsPlaybackSettings.chapterEndBehavior === 'continue') {
+      if (!preparedNext && ttsPlaybackSettings.chapterEndBehavior === 'continue') {
         showToast('마지막 화 재생을 마쳤습니다.', 'info');
       }
       return;
@@ -4862,13 +4888,11 @@ export default function App() {
       signal: sessionSignal,
     });
     if (!continueAfterPause || !ttsExecutionController.isSessionCurrent(sessionId, false)) return;
-    bookPlaybackCoordinator.schedule({ bookId: chapter.novelId, chapterId: nextChapter.id, startIndex: 0 });
     playbackDiagnostics.record('chapter-open');
     ttsExecutionController.finishSession(sessionId, { preserveSleepTimer: true });
-    await bookWorkspace.openChapter(nextChapter, {
-      novel: preparedNext?.novel ?? selectedNovel,
-      chapters: preparedNext?.chapters,
-      initialMode: 'listen',
+    await openChapterForPlayback(bookPlaybackCoordinator, bookWorkspace, preparedNext, {
+      listeningMode,
+      startIndex: 0,
       preserveTTS: true,
     });
   };
@@ -4890,6 +4914,22 @@ export default function App() {
     }
   };
 
+  const canStartNarration = async (isCurrent: () => boolean) => {
+    // Saved and server audio do not need the device's speech service.
+    if (plainMode && selectedTTSPlaybackReady) return true;
+    try {
+      const status = await refreshTTSState();
+      if (!isCurrent() || !status) return false;
+      if (status.canSpeak || selectedTTSPlaybackReady) return true;
+      showToast(status.message, 'warning');
+    } catch {
+      if (!isCurrent()) return false;
+      if (selectedTTSPlaybackReady) return true;
+      showToast('기기 목소리를 확인하지 못했어요. 다시 시도해 주세요.', 'warning');
+    }
+    return false;
+  };
+
   const startTTS = async (
     requestedIndex?: number,
     options: {
@@ -4899,14 +4939,23 @@ export default function App() {
       regeneration?: { prepared(): void; isCurrent(): boolean };
     } = {},
   ) => {
+    const isCurrent = ttsExecutionController.requestStart();
     if (!options.regeneration) {
       retryAudioToken.current = undefined;
       setRetryAudioBusy(false);
     }
     const chapter = currentChapter;
     if (!chapter?.paragraphCount) return;
+    if (bookWorkspace.getSnapshot().readerArtifactsStatus && !plainMode) {
+      setAddonOpen(true);
+      setAddonTab('tts');
+      return;
+    }
     if (!spokenFilters.ready) {
-      showToast('낭독 필터를 불러오는 중이에요. 잠시 후 재생해 주세요.', 'info');
+      showToast(
+        spokenFilters.error ?? '낭독 필터를 불러오는 중이에요. 잠시 후 재생해 주세요.',
+        spokenFilters.error ? 'warning' : 'info',
+      );
       return;
     }
     plainTTS.stopPreview();
@@ -4915,18 +4964,12 @@ export default function App() {
       showToast('서버 목소리를 준비하지 못했습니다. 목소리 목록을 새로고침하거나 기기 목소리를 선택하세요.', 'warning');
       return;
     }
-    setReaderMode('listen');
     if (options.revealPanel) {
       setAddonOpen(true);
       setAddonTab('tts');
     }
-    const status = await refreshTTSState();
+    if (!(await canStartNarration(isCurrent)) || !isCurrent()) return;
     if (options.regeneration && !options.regeneration.isCurrent()) return;
-    if (!status) return;
-    if (!status.canSpeak && !selectedTTSPlaybackReady) {
-      showToast(status.message, 'warning');
-      return;
-    }
     const requestedStart = requestedIndex ?? ttsIndex ?? readerScreenHandle.getLocation()?.ttsIndex ?? 0;
     const startIndex =
       plainServerSelected && !activePrepared && !options.regeneration
@@ -4936,6 +4979,7 @@ export default function App() {
       preserveSleepTimer: options.preserveSleepTimer,
     });
     if (sessionId === undefined) return;
+    setReaderMode('listen');
     await speakAt(startIndex, sessionId, options.queueItemFingerprint, options.regeneration);
   };
 
@@ -4944,7 +4988,7 @@ export default function App() {
     // hostedBusy includes playing/paused audio; only preparation blocks regeneration.
     if (
       !plainServerSelected ||
-      (!plainTTS.ready && !preparedPlanRef.current) ||
+      ((!plainTTS.ready || plainTTS.cacheOnly) && !preparedPlanRef.current) ||
       !target ||
       ttsIndex === undefined ||
       retryAudioToken.current ||
@@ -5275,6 +5319,7 @@ export default function App() {
     const chapter = currentChapter;
     const paragraphCount = chapter?.paragraphCount ?? 0;
     if (!paragraphCount) return;
+    plainTTS.stopPreview();
     stopProviderSamples();
     const currentIndex = ttsIndex ?? readerScreenHandle.getLocation()?.ttsIndex ?? 0;
     const plan = preparedPlanRef.current;
@@ -5286,13 +5331,8 @@ export default function App() {
     // At the final prepared batch, clamping to its last paragraph would synthesize a new tail batch.
     if (plainServerSelected && direction === 1 && requestedNextIndex >= paragraphCount) return;
     const nextIndex = clamp(requestedNextIndex, 0, paragraphCount - 1);
-    const status = await refreshTTSState();
-    if (!status) return;
-    if (!status.canSpeak && !selectedTTSPlaybackReady) {
-      showToast(status.message, 'warning');
-      return;
-    }
-    if (!chapter) return;
+    const isCurrent = ttsExecutionController.requestStart();
+    if (!chapter || !(await canStartNarration(isCurrent)) || !isCurrent()) return;
     const sessionId = ttsExecutionController.beginSession(chapter.novelId, chapter.id, nextIndex, {
       preserveSleepTimer: ttsPlaying,
     });
@@ -5319,13 +5359,16 @@ export default function App() {
       });
       return;
     }
-    bookPlaybackCoordinator.schedule({
-      bookId: selectedNovel.id,
-      chapterId: chapter.id,
-      startIndex: Math.min(ttsResumeRecord.paragraphIndex, Math.max(0, chapter.paragraphCount - 1)),
-      queueItemFingerprint: ttsListeningPosition?.queueItemFingerprint,
-    });
-    await bookWorkspace.openChapter(chapter, { novel: selectedNovel, initialMode: 'listen' });
+    await openChapterForPlayback(
+      bookPlaybackCoordinator,
+      bookWorkspace,
+      { novel: selectedNovel, chapter },
+      {
+        listeningMode,
+        startIndex: Math.min(ttsResumeRecord.paragraphIndex, Math.max(0, chapter.paragraphCount - 1)),
+        queueItemFingerprint: ttsListeningPosition?.queueItemFingerprint,
+      },
+    );
   };
 
   const pauseTTS = ttsExecutionController.pause;
@@ -5456,6 +5499,13 @@ export default function App() {
     addonTab,
     overlays: { syncPanelOpen, importOpen: importFeature.isOpen },
     ttsIndex,
+    ttsPlaybackState: ttsPlaying
+      ? ttsPaused
+        ? 'paused'
+        : !ttsExecutionController.itemActive
+          ? 'preparing'
+          : 'playing'
+      : undefined,
     openRequestVersion: readerOpenRequestVersion,
     effectiveSettings: effectiveReaderSettings,
   });
@@ -5496,6 +5546,11 @@ export default function App() {
     openSync: () => setSyncPanelOpen(true),
     toggleAddon: () => setAddonOpen((open) => !open),
     openAddon: (tab: AddonTab) => {
+      if (tab === 'tts') {
+        openListenPlayer();
+        revealChrome();
+        return;
+      }
       setAddonTab(
         tab === 'info'
           ? extensionRuntime.trustedExtensions.getReaderAddon(READER_INFO_ADDON_ID)
@@ -5530,7 +5585,23 @@ export default function App() {
       color: ReaderHighlight['color'] | 'remove',
     ) => addHighlight(color, location, selection),
     openSelectionNote,
-    previewSelectionTTS: (selection: ReaderSelection) => {
+    previewSelectionTTS: async (selection, signal) => {
+      if (!selection.text.trim() || signal.aborted) return;
+      if (ttsUnavailable) {
+        showToast('선택 문장을 들으려면 기기의 음성 설정을 확인해 주세요.', 'warning');
+        return;
+      }
+      if (ttsPlaying) {
+        if (!window.confirm('현재 낭독을 정지하고 선택한 문장만 기기 목소리로 들을까요?')) return;
+        stopTTS();
+      } else {
+        bookPlaybackCoordinator.cancel();
+        ttsExecutionController.requestStart();
+      }
+      stopProviderSamples();
+      await plainTTS.preview({ text: selection.text, signal });
+    },
+    editSelectionPronunciation: (selection: ReaderSelection) => {
       const text = selection.text.trim();
       if (!text) return;
       setSpokenPreviewRequest((current) => ({ id: (current?.id ?? 0) + 1, text }));
@@ -5551,6 +5622,10 @@ export default function App() {
       bookWorkspace.commitLocation({
         novelId: selectedNovel.id,
         chapterId: location.chapterId ?? currentChapter.id,
+        visibleListeningChapterId:
+          ttsPlaying && effectiveReaderSettings.readingProfile.scrollChapterTransition === 'continuous'
+            ? readerScreenHandle.getLocation()?.chapterId
+            : undefined,
         location,
         bookProgress,
         updatedAt,
@@ -5822,6 +5897,21 @@ export default function App() {
       />
     </Suspense>
   );
+  const artifactStatus = bookWorkspaceState.readerArtifactsStatus;
+  const artifactNotice = artifactStatus && (
+    <div className="panel-body" role="status">
+      {artifactStatus === 'loading' ? (
+        '화자와 목소리 정보를 불러오는 중이에요.'
+      ) : (
+        <>
+          화자와 목소리 정보를 불러오지 못했어요.
+          <button type="button" className="un-btn is-ghost" onClick={bookWorkspace.retryReaderArtifacts}>
+            다시 시도
+          </button>
+        </>
+      )}
+    </div>
+  );
   const trustedReaderAddonHostContext: TrustedReaderAddonHostContext | undefined =
     selectedNovel && currentChapter
       ? {
@@ -5836,7 +5926,7 @@ export default function App() {
             openSettings: openReaderSettings,
             openSync: () => setSyncPanelOpen(true),
           },
-          aiPanel: aiReaderAddonSurface,
+          aiPanel: artifactNotice || aiReaderAddonSurface,
         }
       : undefined;
 
@@ -6014,6 +6104,8 @@ export default function App() {
           {addonTab === 'tts' && (
             <Suspense fallback={<div className="panel-body" aria-busy="true" />}>
               <TTSAddonPanel
+                key={listenPlayerRequest}
+                castArtifactsNotice={artifactNotice}
                 status={ttsStatus}
                 statusTone={ttsStatusTone}
                 selectedVoiceMissing={selectedTTSVoiceMissing}
@@ -6033,11 +6125,19 @@ export default function App() {
                     : undefined
                 }
                 preparedVoiceLabel={activePrepared?.label}
+                leavePreparedNarration={() => {
+                  stopTTS();
+                  clearPreparedChoice();
+                }}
+                sessionTimer={{
+                  preset: ttsExecutionController.sleepTimerPreset,
+                  remainingSeconds: ttsExecutionController.sleepTimerRemainingSeconds,
+                  set: ttsExecutionController.setSleepTimer,
+                }}
                 plainVoices={plainTTS.catalog}
                 plainPreviewBusy={plainTTS.previewBusy}
                 previewPlainVoice={async () => {
                   stopProviderSamples();
-                  voiceSampleAudioSession.stop(true);
                   await plainTTS.preview();
                 }}
                 refreshPlainVoices={plainTTS.refresh}
@@ -6096,12 +6196,13 @@ export default function App() {
                           .map(({ id, title }) => ({ id, title })),
                         currentChapterId: currentChapter.id,
                         generation:
-                          plainServerSelected && plainTTS.ready && spokenFilters.ready && plainTTS.catalog
+                          plainServerSelected &&
+                          plainTTS.ready &&
+                          !plainTTS.cacheOnly &&
+                          spokenFilters.ready &&
+                          plainTTS.catalog
                             ? {
-                                voiceId:
-                                  ttsPlaybackSettings.serverVoiceId ||
-                                  (plainTTS.catalog.defaultVoiceId ?? plainTTS.catalog.voices[0]?.id) ||
-                                  '',
+                                voiceId: plainTTS.voiceId!,
                                 modelRevision: plainTTS.catalog.revision!,
                                 chunking: ttsPlaybackSettings.plainChunking ?? 'sentence',
                                 batchCharacters:
@@ -6163,7 +6264,7 @@ export default function App() {
                 start={startTTS}
                 retryAudio={plainServerSelected ? retryPlainAudio : undefined}
                 retryAudioAvailable={Boolean(
-                  (plainTTS.ready || preparedPlanRef.current?.owner === ttsSessionOwner) &&
+                  ((plainTTS.ready && !plainTTS.cacheOnly) || preparedPlanRef.current?.owner === ttsSessionOwner) &&
                   ttsIndex !== undefined &&
                   plainTTS.retryTarget() &&
                   !ttsExecutionController.playbackWaiting,
@@ -6179,9 +6280,7 @@ export default function App() {
                     patch.serverVoiceId !== undefined ||
                     patch.mode !== undefined
                   ) {
-                    preparedChoiceRef.current = undefined;
-                    preparedPlanRef.current = undefined;
-                    setPreparedChoice(undefined);
+                    clearPreparedChoice();
                   }
                   changeTTSPlaybackSettings(patch);
                 }}
@@ -6208,6 +6307,8 @@ export default function App() {
                 decideVoice={voiceProductController.decide}
                 savePronunciationRule={voiceProductController.savePronunciationRule}
                 deletePronunciationRule={voiceProductController.deletePronunciationRule}
+                spokenFilterError={spokenFilters.error}
+                retrySpokenFilters={spokenFilters.retry}
                 saveSpokenTextFilter={spokenFilters.save}
                 importSpokenTextFilters={spokenFilters.saveMany}
                 saveSpokenTextSkipRule={saveSpokenTextSkipRule}
@@ -6311,20 +6412,16 @@ export default function App() {
             stop={stopTTS}
             openSettings={() => {
               if (view === 'reader') {
-                setAddonTab('tts');
-                setAddonOpen(true);
+                openListenPlayer();
                 return;
               }
               void bookWorkspace
                 .openChapter(currentChapter, {
                   novel: selectedNovel,
-                  initialMode: 'listen',
+                  listeningMode: view === 'document' ? 'cast' : listeningMode,
                   preserveTTS: true,
                 })
-                .then(() => {
-                  setAddonTab('tts');
-                  setAddonOpen(true);
-                });
+                .then(openListenPlayer);
             }}
             setTimer={ttsExecutionController.setSleepTimer}
           />

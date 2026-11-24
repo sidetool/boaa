@@ -6,8 +6,13 @@ export { requestToPromise } from './indexeddb-request';
 export function transactionDone(transaction: IDBTransaction): Promise<void> {
   return new Promise((resolve, reject) => {
     transaction.oncomplete = () => resolve();
-    transaction.onerror = () => reject(transaction.error);
-    transaction.onabort = () => reject(transaction.error);
+    transaction.onerror = (event) => {
+      // A failed request bubbles before WebKit assigns the transaction's abort error.
+      const requestError = event.target instanceof IDBRequest ? event.target.error : null;
+      reject(transaction.error ?? requestError ?? new DOMException('IndexedDB transaction failed', 'UnknownError'));
+    };
+    transaction.onabort = () =>
+      reject(transaction.error ?? new DOMException('IndexedDB transaction aborted', 'AbortError'));
   });
 }
 

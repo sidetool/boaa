@@ -52,6 +52,20 @@ const harness = await startPostgresIntegrationHarness();
           ).rows,
         ).toEqual([{ document_section_id: 'one' }, { document_section_id: 'two' }]);
         expect((await a.inject({ ...request, payload: { ...request.payload, previous: false } })).statusCode).toBe(200);
+        const unread = {
+          ...request,
+          url: '/api/books/book/chapters/unread',
+          payload: { ...request.payload, previous: false },
+        };
+        expect((await b.inject(unread)).statusCode).toBe(409);
+        expect((await a.inject(unread)).statusCode).toBe(200);
+        expect(
+          (
+            await pool.query(
+              'select document_section_id from fixed_document_section_read_states order by document_section_id',
+            )
+          ).rows,
+        ).toEqual([{ document_section_id: 'one' }, { document_section_id: 'two' }]);
         const rename = {
           method: 'PATCH' as const,
           url: '/api/books/book/chapters/two',

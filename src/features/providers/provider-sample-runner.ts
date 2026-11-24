@@ -36,7 +36,7 @@ export async function playDesktopTTSSampleRequest(input: {
   provider: ProviderCatalogItem;
   draft: ProviderSettingsDraft;
   voices: readonly TTSVoice[];
-  audio: BrowserAudioSession;
+  audio: Pick<BrowserAudioSession, 'playBlob'>;
   text: string;
   voiceId?: string;
 }): Promise<boolean> {

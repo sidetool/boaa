@@ -167,9 +167,11 @@ describe('reader opening body preload', () => {
     expect(preload).toHaveBeenCalledExactlyOnceWith(novel, chapter, { restore: true });
     await expect(loadSharedParagraphPage(repository, 'proxy-revision', chapter.id, 0)).resolves.toBe(page);
     expect(getParagraphPage).toHaveBeenCalledExactlyOnceWith(chapter.id, 0);
-    expect(controller.getSnapshot().view).toBe('chapters');
-    finish();
     await opening;
+    expect(controller.getSnapshot()).toMatchObject({ view: 'reader', readerArtifactsStatus: 'loading' });
+    finish();
+    await Promise.resolve();
+    expect(controller.getSnapshot().readerArtifactsStatus).toBeUndefined();
     expect(controller.getSnapshot()).toMatchObject({ view: 'reader', currentChapter: chapter });
   });
 });

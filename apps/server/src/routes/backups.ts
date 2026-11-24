@@ -23,18 +23,27 @@ function headerValue(value: string | string[] | undefined): string | undefined {
   return Array.isArray(value) ? value[0] : value;
 }
 
-function restoreOptions(headers: Record<string, string | string[] | undefined>): HostedBackupRestoreOptions {
-  const defaultValue = headerValue(headers['x-backup-default-resolution']) ?? 'skip';
+function restoreOptions(
+  headers: Record<string, string | string[] | undefined>,
+  body?: unknown,
+): HostedBackupRestoreOptions {
+  let defaultValue: unknown = headerValue(headers['x-backup-default-resolution']) ?? 'skip';
+  let parsed: unknown;
+  if (defaultValue === 'body' && body && typeof body === 'object' && 'defaultConflictResolution' in body) {
+    defaultValue = body.defaultConflictResolution;
+    parsed = 'conflictResolutions' in body ? body.conflictResolutions : undefined;
+  } else {
+    const rawOverrides = headerValue(headers['x-backup-conflict-resolutions']);
+    parsed = rawOverrides ? JSON.parse(rawOverrides) : undefined;
+  }
   if (!resolutions.has(defaultValue as HostedBackupConflictResolution)) {
     throw new Error('Invalid default backup conflict resolution');
   }
-  const rawOverrides = headerValue(headers['x-backup-conflict-resolutions']);
-  if (!rawOverrides) return { defaultConflictResolution: defaultValue as HostedBackupConflictResolution };
-  const parsed = JSON.parse(rawOverrides) as unknown;
+  if (parsed === undefined) return { defaultConflictResolution: defaultValue as HostedBackupConflictResolution };
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
     throw new Error('Invalid backup conflict resolution map');
   }
-  const conflictResolutions: Record<string, HostedBackupConflictResolution> = {};
+  const conflictResolutions: Record<string, HostedBackupConflictResolution> = Object.create(null);
   for (const [bookId, value] of Object.entries(parsed)) {
     if (!bookId || !resolutions.has(value as HostedBackupConflictResolution)) {
       throw new Error('Invalid backup conflict resolution entry');
@@ -144,36 +153,40 @@ export async function registerBackupRoutes(app: FastifyInstance, pool: pg.Pool, 
     await staging.discard(request.params.id);
     return { ok: true };
   });
-  app.post<{ Params: { id: string } }>('/api/backups/staged/:id/restore', async (request, reply) => {
-    requireAdmin(request);
-    const config = requestOwnerConfig(deploymentConfig, request);
-    const staging = ownerStaging(config.defaultUserId);
-    if (restoring) return reply.code(409).send({ error: '다른 백업을 복원 중입니다. 완료 후 다시 시도해 주세요.' });
-    // Validate choices before claiming the inspected archive.
-    let options: HostedBackupRestoreOptions;
-    try {
-      options = restoreOptions(request.headers);
-    } catch {
-      return reply.code(400).send({ error: '복원 선택값을 확인해 주세요.' });
-    }
-    let stage: ReturnType<BackupStaging['take']>;
-    try {
-      stage = staging.take(request.params.id);
-    } catch (error) {
-      return reply.code(410).send({ error: error instanceof Error ? error.message : 'Backup expired' });
-    }
-    restoring = true;
-    const progress = track(request.query, requirePrincipal(request).userId);
-    try {
-      return await restoreHostedBackup(pool, config, stage.parsed, options, undefined, progress);
-    } catch (error) {
-      return reply.code(400).send({ error: error instanceof Error ? error.message : 'Backup restore failed' });
-    } finally {
-      restoring = false;
-      progress({ phase: 'finalizing' });
-      await stage.dispose();
-    }
-  });
+  app.post<{ Params: { id: string } }>(
+    '/api/backups/staged/:id/restore',
+    { bodyLimit: 16 * 1024 * 1024 },
+    async (request, reply) => {
+      requireAdmin(request);
+      const config = requestOwnerConfig(deploymentConfig, request);
+      const staging = ownerStaging(config.defaultUserId);
+      if (restoring) return reply.code(409).send({ error: '다른 백업을 복원 중입니다. 완료 후 다시 시도해 주세요.' });
+      // Validate choices before claiming the inspected archive.
+      let options: HostedBackupRestoreOptions;
+      try {
+        options = restoreOptions(request.headers, request.body);
+      } catch {
+        return reply.code(400).send({ error: '복원 선택값을 확인해 주세요.' });
+      }
+      let stage: ReturnType<BackupStaging['take']>;
+      try {
+        stage = staging.take(request.params.id);
+      } catch (error) {
+        return reply.code(410).send({ error: error instanceof Error ? error.message : 'Backup expired' });
+      }
+      restoring = true;
+      const progress = track(request.query, requirePrincipal(request).userId);
+      try {
+        return await restoreHostedBackup(pool, config, stage.parsed, options, undefined, progress);
+      } catch (error) {
+        return reply.code(400).send({ error: error instanceof Error ? error.message : 'Backup restore failed' });
+      } finally {
+        restoring = false;
+        progress({ phase: 'finalizing' });
+        await stage.dispose();
+      }
+    },
+  );
 
   // Encapsulate streaming parsers so unrelated upload routes keep their existing bounded buffers.
   await app.register(async (scope) => {

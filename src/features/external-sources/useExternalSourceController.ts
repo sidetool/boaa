@@ -1,3 +1,6 @@
+import { useSourceCommandScope } from './use-source-command-scope';
+import { useSourceImportSubmissions, type SourceImportSubmissions } from './use-source-import-submissions';
+import { DownloadItemSignals } from './download-item-signals';
 import { sourceReadingPreferences } from '../../external-sources/source-reading-preferences';
 import { createLibraryCoverResolver } from './library-cover-resolver';
 import { isTextStream } from '../../external-sources/source-text-stream';
@@ -48,7 +51,6 @@ import { useDownloadRetention } from './use-download-retention';
 import {
   releasePreferenceId,
   type SourceReleasePreference,
-  type SourceDownloadQueue,
   sourceDownloadQueueId,
 } from '../../external-sources/source-user-state';
 import type { ExtensionContributionId } from '@boaa/extension-contracts';
@@ -110,7 +112,8 @@ interface ActiveSerialImportQueue {
   targetBookId: string;
   readonly externalWorkId?: string;
   readonly items: SerialSourceItem[];
-  readonly itemKeys: Set<string>;
+  readonly revisions: Map<string, string | undefined>;
+  readonly cancelledKeys: Set<string>;
   readonly taskIdByItemKey: Map<string, string>;
   accepting: boolean;
   silentSuccess: boolean;
@@ -126,6 +129,10 @@ import type {
   ExternalSourceNavigationSnapshot,
   UseExternalSourceControllerOptions,
 } from './external-source-controller-contract';
+
+interface SourceDownloadTask extends ImportTaskView {
+  retrySelection?: { item: ExternalSourceItemView; isCurrent(): boolean };
+}
 
 function isAbort(error: unknown): boolean {
   return error instanceof DOMException
@@ -299,7 +306,34 @@ export function useExternalSourceController(options: UseExternalSourceController
   const streamCatalog = useSourceReaderCatalog(streaming?.item, options, loading || catalogLoading);
   const [importBusy, setImportBusy] = useState(false);
   const [selectedBatchActive, setSelectedBatchActive] = useState(false);
-  const [tasks, setTasks] = useState<ImportTaskView[]>([]);
+  const [tasks, setTasks] = useState<SourceDownloadTask[]>([]);
+  const tasksById = useMemo(() => new Map(tasks.map((task) => [task.id, task])), [tasks]);
+  const tasksRef = useRef(tasksById);
+  tasksRef.current = tasksById;
+  const retrying = useRef(new Set<string>());
+  const { capture: captureDownloadOwner } = useSourceCommandScope(options);
+  const captureRetryConnection = useCallback(
+    (sourceId: ExtensionContributionId) => {
+      const currentOwner = captureDownloadOwner();
+      const { registry, hostContext } = optionsRef.current;
+      const connection = registry.getExternalSourceStatus(sourceId, hostContext);
+      return () => {
+        if (!currentOwner()) return false;
+        try {
+          const current = registry.getExternalSourceStatus(sourceId, optionsRef.current.hostContext);
+          return (
+            current.state === 'connected' &&
+            current.accountConnectionId === connection.accountConnectionId &&
+            current.connectionGeneration === connection.connectionGeneration
+          );
+        } catch {
+          // Uninstalling a source invalidates its in-memory file selections.
+          return false;
+        }
+      };
+    },
+    [captureDownloadOwner],
+  );
   const [releasePreferences, setReleasePreferences] = useState<readonly SourceReleasePreference[]>([]);
   const preferenceByKey = useMemo(
     () => new Map(releasePreferences.map((item) => [externalItemKeyId(item.source), item])),
@@ -341,6 +375,8 @@ export function useExternalSourceController(options: UseExternalSourceController
   const [brokerRevision, setBrokerRevision] = useState(0);
   const itemNavigationPendingRef = useRef(false);
   const serialImportQueueRef = useRef<ActiveSerialImportQueue>();
+  const [submissions] = useState<SourceImportSubmissions>(() => ({ running: false, waiting: [] }));
+  const cancelActiveItemRef = useRef<(taskId: string) => ExternalSourceItemView | undefined>();
   const downloadAbortRef = useRef<AbortController>();
   const libraryAddAbortRef = useRef<AbortController>();
   const importRef = useRef<ImportController>();
@@ -368,12 +404,14 @@ export function useExternalSourceController(options: UseExternalSourceController
     hostContext: options.hostContext,
     notify: options.notify,
     isMounted: () => mountedRef.current,
-    isBusy: () => busy,
+    scheduledQueueIds: () => submissions.waiting.flatMap((job) => (job.queueId ? [job.queueId] : [])),
+    isBusy: () => busy || submissions.running || submissions.waiting.length > 0,
     setImportBusy,
     setDownloadAbort: (abort) => {
       downloadAbortRef.current = abort;
     },
-    importSerialItems: (sourceId, items) => importSerialItems(sourceId, items, undefined, true),
+    importSerialItems: (sourceId, items, startup) =>
+      importSerialItems(sourceId, items, undefined, true, false, startup),
   });
 
   const contributions = useMemo(() => {
@@ -466,15 +504,19 @@ export function useExternalSourceController(options: UseExternalSourceController
 
   useEffect(() => {
     mountedRef.current = true;
+    setTasks([]);
+    setProgress(undefined);
     return () => {
       mountedRef.current = false;
       cancelResume();
+      submissions.waiting = [];
+      submissions.startup?.abort();
       listAbortRef.current?.abort();
       downloadAbortRef.current?.abort();
       libraryAddAbortRef.current?.abort();
       importRef.current?.cancel();
     };
-  }, [cancelResume, listAbortRef]);
+  }, [cancelResume, listAbortRef, options.state, options.settingsScope, submissions]);
 
   useEffect(() => {
     let current = true;
@@ -630,8 +672,9 @@ export function useExternalSourceController(options: UseExternalSourceController
   }, [streamLibraryVersion, reconcileStreamProgress]);
 
   const publishCommittedNovel = useCallback(
-    async (novel: Novel) => {
-      const links = await optionsRef.current.state.listLinks();
+    async (novel: Novel, state = optionsRef.current.state) => {
+      const links = await state.listLinks();
+      if (!mountedRef.current || state !== optionsRef.current.state) return;
       // Recovery still needs an authoritative catalog read before reconciling pending links.
       if (links.some((link) => link.localBookId === novel.id && link.pendingImport)) {
         await refreshLocalProjection();
@@ -784,7 +827,6 @@ export function useExternalSourceController(options: UseExternalSourceController
   const show = useCallback(
     (requestedSourceId?: ExtensionContributionId) => {
       if (blockingBusy) return;
-      if (importBusy && requestedSourceId && requestedSourceId !== activeSourceId) return;
       if (importBusy && activeSourceId && (!requestedSourceId || requestedSourceId === activeSourceId)) {
         setOpen(true);
         return;
@@ -978,7 +1020,7 @@ export function useExternalSourceController(options: UseExternalSourceController
 
   const selectSource = useCallback(
     async (id: ExtensionContributionId) => {
-      if (importBusy && id !== activeSourceId) return;
+      if (blockingBusy) return;
       listAbortRef.current?.abort();
       setListFailure(undefined);
       setLocalSeriesBookId(undefined);
@@ -989,7 +1031,7 @@ export function useExternalSourceController(options: UseExternalSourceController
       setActiveSourceId(id);
       await loadSourceStart(id);
     },
-    [activeSourceId, importBusy, listAbortRef, loadSourceStart, setListFailure],
+    [blockingBusy, listAbortRef, loadSourceStart, setListFailure],
   );
 
   const search = useCallback(async () => {
@@ -1446,12 +1488,11 @@ export function useExternalSourceController(options: UseExternalSourceController
       accountConnectionId: string | undefined,
       collectionRemoteId: string,
       releaseIds: readonly string[],
+      state = optionsRef.current.state,
     ) => {
       if (releaseIds.length === 0) return;
       const id = externalSourceSubscriptionId(sourceId, accountConnectionId, collectionRemoteId);
-      const current = (await optionsRef.current.state.listSubscriptions(sourceId, accountConnectionId)).find(
-        (item) => item.id === id,
-      );
+      const current = (await state.listSubscriptions(sourceId, accountConnectionId)).find((item) => item.id === id);
       if (!current) return;
       const acknowledged = new Set(releaseIds);
       const next = {
@@ -1459,8 +1500,8 @@ export function useExternalSourceController(options: UseExternalSourceController
         newReleaseIds: current.newReleaseIds.filter((releaseId) => !acknowledged.has(releaseId)),
         updatedAt: currentIso(),
       } satisfies ExternalSourceSubscriptionRecord;
-      await optionsRef.current.state.saveSubscription(next);
-      if (mountedRef.current) replaceSubscription(next);
+      await state.saveSubscription(next);
+      if (mountedRef.current && state === optionsRef.current.state) replaceSubscription(next);
     },
     [replaceSubscription],
   );
@@ -1573,16 +1614,14 @@ export function useExternalSourceController(options: UseExternalSourceController
 
   const canQueueItem = useCallback(
     (item: ExternalSourceItemView) => {
-      const queue = serialImportQueueRef.current;
-      return Boolean(
-        importBusy &&
-        queue?.accepting &&
-        queue.sourceId === activeSourceId &&
-        isSerialSourceItem(item) &&
-        serialCollectionKey(item) === queue.collectionKey,
+      if (!importBusy || blockingBusy || item.kind === 'folder' || item.importState === 'unsupported') return false;
+      const status = optionsRef.current.registry.getExternalSourceStatus(
+        item.key.connectorId as ExtensionContributionId,
+        optionsRef.current.hostContext,
       );
+      return status.state === 'connected' && status.accountConnectionId === item.key.accountConnectionId;
     },
-    [activeSourceId, importBusy],
+    [importBusy, blockingBusy],
   );
 
   const importSerialItems = useCallback(
@@ -1592,12 +1631,17 @@ export function useExternalSourceController(options: UseExternalSourceController
       background?: AbortSignal,
       detached = false,
       silentSuccess = false,
+      startup?: AbortSignal,
     ): Promise<boolean> => {
-      const importable = filterAndSortReleases(initialItems, '', 'all', 'asc') as SerialSourceItem[];
+      const owner = optionsRef.current;
+      const isCurrent = captureRetryConnection(sourceId);
+      const importable = [...initialItems];
       const collectionKeys = new Set(importable.map(serialCollectionKey));
       if (collectionKeys.size !== 1) return false;
       let collection = importable[0]!.collection;
       const accountConnectionId = importable[0]!.key.accountConnectionId;
+      const queueId = sourceDownloadQueueId(importable[0]!.key, collection.remoteId);
+      const generation = owner.registry.getExternalSourceStatus(sourceId, owner.hostContext).connectionGeneration;
       const currentSubscription =
         subscriptions.find(
           (record) =>
@@ -1606,13 +1650,14 @@ export function useExternalSourceController(options: UseExternalSourceController
             record.collectionRemoteId === collection.remoteId,
         ) ??
         (
-          await optionsRef.current.state
+          await owner.state
             .listSubscriptions(sourceId, accountConnectionId)
             .catch(() => [] as readonly ExternalSourceSubscriptionRecord[])
         ).find((record) => record.collectionRemoteId === collection.remoteId);
       if (currentSubscription?.titleOverride) collection = { ...collection, title: currentSubscription.titleOverride };
       background?.throwIfAborted();
-      if (background && automaticDownloadBlockedRef.current) return true;
+      if (background && (automaticDownloadBlockedRef.current || submissions.running || submissions.waiting.length > 0))
+        return true;
       const sourceDetail = background || detached ? undefined : detail;
       let sourceThumbnailUrl = sourceDetail?.thumbnailUrl ?? currentSubscription?.thumbnailUrl;
       // Reader/background downloads have no mounted detail page. Resolve the work's
@@ -1620,15 +1665,14 @@ export function useExternalSourceController(options: UseExternalSourceController
       const canResolveSourceCover = Boolean(
         sourceThumbnailUrl ||
         sourceDetail?.coverRef ||
-        (optionsRef.current.assets?.saveApprovedEnrichmentCover &&
-          optionsRef.current.registry.resolveExternalSourceCover),
+        (owner.assets?.saveApprovedEnrichmentCover && owner.registry.resolveExternalSourceCover),
       );
       const resolveSourceThumbnail = async (signal: AbortSignal) => {
         if (sourceThumbnailUrl) return sourceThumbnailUrl;
         if (sourceDetail?.coverRef) sourceThumbnailUrl = await resolveDetailThumbnail(sourceDetail, signal);
-        return (sourceThumbnailUrl ??= await optionsRef.current.registry.resolveExternalSourceCover?.(
+        return (sourceThumbnailUrl ??= await owner.registry.resolveExternalSourceCover?.(
           sourceId,
-          optionsRef.current.hostContext,
+          owner.hostContext,
           { connectorId: sourceId, accountConnectionId, remoteId: collection.remoteId },
           signal,
         ));
@@ -1636,7 +1680,7 @@ export function useExternalSourceController(options: UseExternalSourceController
       const selectedUpdateCount = importable.filter((item) => item.importState === 'update_available').length;
       if (
         selectedUpdateCount > 0 &&
-        !optionsRef.current.confirm(
+        !owner.confirm(
           `${selectedUpdateCount}개 회차의 원격 revision이 변경되었습니다. 본문이나 회차 구성이 달라졌으면 기존 작품 ID를 유지한 채 갱신합니다. 완료된 회차는 이후 실패에도 유지됩니다. 계속할까요?`,
         )
       ) {
@@ -1648,13 +1692,40 @@ export function useExternalSourceController(options: UseExternalSourceController
         import('../../external-sources/series/hosted-image-download-queue'),
       ]);
       background?.throwIfAborted();
-      if (background && automaticDownloadBlockedRef.current) return true;
+      if (background && (automaticDownloadBlockedRef.current || submissions.running || submissions.waiting.length > 0))
+        return true;
+      if (startup?.aborted) return true;
+      const status = owner.registry.getExternalSourceStatus(sourceId, owner.hostContext);
+      if (
+        !mountedRef.current ||
+        owner.state !== optionsRef.current.state ||
+        owner.settingsScope !== optionsRef.current.settingsScope ||
+        status.state !== 'connected' ||
+        status.accountConnectionId !== accountConnectionId ||
+        status.connectionGeneration !== generation
+      )
+        throw new Error('소스 연결이 변경되어 다운로드를 중단했습니다.');
+      const slots = new DownloadItemSignals();
+      const starting = submissions.starting;
+      if (starting)
+        importable.forEach((item, i) => {
+          if (!starting.items.has(externalItemKeyId(item.key))) slots.cancel(i);
+        });
+      const registerCancellation = (tasks: Map<string, string>) => {
+        cancelActiveItemRef.current = (id) => {
+          const index = importable.findIndex((item) => tasks.get(externalItemKeyId(item.key)) === id);
+          if (index < 0) return;
+          slots.cancel(index);
+          return importable[index];
+        };
+      };
       const createDownloads = (signal: AbortSignal, taskIds: Map<string, string>) =>
         createSeriesDownloadQueue({
           sourceId,
-          registry: optionsRef.current.registry,
-          hostContext: optionsRef.current.hostContext,
+          registry: owner.registry,
+          hostContext: owner.hostContext,
           items: importable,
+          itemSignal: slots.signal,
           signal,
           onStage: (item, phase) => {
             if (!mountedRef.current) return;
@@ -1675,12 +1746,13 @@ export function useExternalSourceController(options: UseExternalSourceController
           targetBookId: externalDocumentCollectionId(importable[0]!.key, collection.remoteId),
           externalWorkId: currentSubscription?.id,
           items: importable,
-          itemKeys: new Set(importable.map((item) => externalItemKeyId(item.key))),
+          cancelledKeys: new Set(),
+          revisions: new Map(importable.map((item) => [externalItemKeyId(item.key), item.remoteRevision])),
           taskIdByItemKey,
           accepting: true,
           silentSuccess,
         };
-        const queuedTasks = importable.map((item, index): ImportTaskView => {
+        const queuedTasks = importable.map((item, index): SourceDownloadTask => {
           const itemKey = externalItemKeyId(item.key);
           const id = `${batchId}-${index}`;
           taskIdByItemKey.set(itemKey, id);
@@ -1692,6 +1764,7 @@ export function useExternalSourceController(options: UseExternalSourceController
             fileName: item.release.title,
             targetBookId: serialQueue.targetBookId,
             externalWorkId: currentSubscription?.id,
+            retrySelection: { item, isCurrent },
             externalItemKey: itemKey,
             phase: 'queued',
             current: index + 1,
@@ -1702,21 +1775,23 @@ export function useExternalSourceController(options: UseExternalSourceController
           ...current.filter((task) => !task.externalItemKey || !taskIdByItemKey.has(task.externalItemKey)),
           ...queuedTasks,
         ]);
+        registerCancellation(taskIdByItemKey);
         serialImportQueueRef.current = serialQueue;
         const abort = new AbortController();
         downloadAbortRef.current = abort;
-        const documentPort = optionsRef.current.importService.importPrepared
-          ? optionsRef.current.registry.getHostedDocumentImport?.(sourceId)
+        const documentPort = owner.importService.importPrepared
+          ? owner.registry.getHostedDocumentImport?.(sourceId)
           : undefined;
         const hostedDocumentDownloads = documentPort
           ? createHostedImageDownloadQueue({
               sourceId,
-              registry: optionsRef.current.registry,
-              hostContext: optionsRef.current.hostContext,
+              registry: owner.registry,
+              hostContext: owner.hostContext,
               port: documentPort,
               document: true,
               items: importable,
               signal: abort.signal,
+              itemSignal: slots.signal,
               onStage: (item, phase) => {
                 if (!mountedRef.current) return;
                 const id = taskIdByItemKey.get(externalItemKeyId(item.key));
@@ -1743,108 +1818,116 @@ export function useExternalSourceController(options: UseExternalSourceController
             abort.signal.throwIfAborted();
             const selectedItems = importable.slice(offset, offset + 1);
             const committedBefore = completed;
-            await importDocumentSeries({
-              sourceId,
-              items: selectedItems.map((item) => ({ ...item, collection })),
-              registry: optionsRef.current.registry,
-              hostContext: optionsRef.current.hostContext,
-              state: optionsRef.current.state,
-              assets: optionsRef.current.assets,
-              importService: optionsRef.current.importService,
-              getNovel: (id) => optionsRef.current.getNovel(id),
-              signal: abort.signal,
-              download: localDocumentDownloads ? () => localDocumentDownloads.take(offset) : undefined,
-              hosted:
-                documentPort && hostedDocumentDownloads
-                  ? {
-                      port: documentPort,
-                      download: async () => {
-                        const receipt = await hostedDocumentDownloads.take(offset);
-                        hostedDocumentDownloads.forget(receipt.artifactId);
-                        return receipt;
-                      },
-                    }
-                  : undefined,
-              onReplacedRelease: () => {
-                replacedRelease = true;
-              },
-              onProgress: (value) => {
-                completed = committedBefore + value.committed;
-                if (mountedRef.current) {
-                  const activeKey = value.item && externalItemKeyId(value.item.key);
-                  const batchKeys = new Set(value.items?.map((item) => externalItemKeyId(item.key)));
-                  setTasks((current) =>
-                    current.map((task) => {
-                      if (task.batchId !== batchId || task.phase === 'complete' || task.phase === 'cancelling')
+            const itemSignal = AbortSignal.any([slots.signal(offset), abort.signal]);
+            try {
+              itemSignal.throwIfAborted();
+              await importDocumentSeries({
+                sourceId,
+                items: selectedItems.map((item) => ({ ...item, collection })),
+                registry: owner.registry,
+                hostContext: owner.hostContext,
+                state: owner.state,
+                assets: owner.assets,
+                importService: owner.importService,
+                getNovel: (id) => owner.getNovel(id),
+                signal: itemSignal,
+                download: localDocumentDownloads ? () => localDocumentDownloads.take(offset) : undefined,
+                hosted:
+                  documentPort && hostedDocumentDownloads
+                    ? {
+                        port: documentPort,
+                        download: async () => {
+                          const receipt = await hostedDocumentDownloads.take(offset);
+                          hostedDocumentDownloads.forget(receipt.artifactId);
+                          return receipt;
+                        },
+                      }
+                    : undefined,
+                onReplacedRelease: () => {
+                  replacedRelease = true;
+                },
+                onProgress: (value) => {
+                  completed = committedBefore + value.committed;
+                  if (mountedRef.current) {
+                    const activeKey = value.item && externalItemKeyId(value.item.key);
+                    const batchKeys = new Set(value.items?.map((item) => externalItemKeyId(item.key)));
+                    setTasks((current) =>
+                      current.map((task) => {
+                        if (task.batchId !== batchId || task.phase === 'complete' || task.phase === 'cancelling')
+                          return task;
+                        if (value.detail && task.externalItemKey && batchKeys.has(task.externalItemKey))
+                          return { ...task, ...projectImportProgress(value.detail) };
+                        if (activeKey === task.externalItemKey)
+                          return { ...task, phase: value.stage ?? 'downloading', percent: undefined };
                         return task;
-                      if (value.detail && task.externalItemKey && batchKeys.has(task.externalItemKey))
-                        return { ...task, ...projectImportProgress(value.detail) };
-                      if (activeKey === task.externalItemKey)
-                        return { ...task, phase: value.stage ?? 'downloading', percent: undefined };
-                      return task;
-                    }),
-                  );
-                  setProgress({
-                    current: committedBefore + value.received,
-                    total: importable.length,
-                    completed,
-                    failed: 0,
-                    linkedExisting: 0,
-                    fileName: value.title,
-                    phase: value.detail ? 'importing' : 'downloading',
-                    detail: value.detail,
-                  });
-                }
-              },
-              onCommitted: async (novel, committedItems) => {
-                const keys = new Set(committedItems.map((item) => externalItemKeyId(item.key)));
-                await checkpointDownloadQueue(committedItems);
-                serialQueue.targetBookId = novel.id;
-                if (mountedRef.current)
-                  setTasks((current) =>
-                    current.map((task) =>
-                      task.batchId === batchId
-                        ? {
-                            ...task,
-                            targetBookId: novel.id,
-                            ...(task.externalItemKey && keys.has(task.externalItemKey)
-                              ? { phase: 'complete' as const, percent: 100, error: undefined }
-                              : {}),
-                          }
-                        : task,
-                    ),
-                  );
-                await acknowledgeImportedReleaseIds(
-                  sourceId,
-                  accountConnectionId,
-                  collection.remoteId,
-                  committedItems.map((item) => item.key.remoteId),
-                );
-                if (mountedRef.current)
-                  setSelectedKeys((current) => new Set([...current].filter((key) => !keys.has(key))));
-                await Promise.all([publishCommittedNovel(novel), optionsRef.current.onLibraryItemCommitted?.(novel)]);
-                if (!coverAttempted && canResolveSourceCover) {
-                  coverAttempted = true;
-                  try {
-                    await (
-                      await import('./source-cover')
-                    ).persistSourceCover(
-                      optionsRef.current.assets,
-                      novel,
-                      () => resolveSourceThumbnail(abort.signal),
-                      abort.signal,
+                      }),
                     );
-                  } catch (error) {
-                    coverWarning = error instanceof Error ? error.message : '원격 표지를 저장하지 못했습니다.';
+                    setProgress({
+                      current: committedBefore + value.received,
+                      total: importable.length,
+                      completed,
+                      failed: 0,
+                      linkedExisting: 0,
+                      fileName: value.title,
+                      phase: value.detail ? 'importing' : 'downloading',
+                      detail: value.detail,
+                    });
                   }
-                }
-              },
-            });
+                },
+                onCommitted: async (novel, committedItems) => {
+                  const keys = new Set(committedItems.map((item) => externalItemKeyId(item.key)));
+                  await checkpointDownloadQueue(committedItems, queueId, owner.state);
+                  serialQueue.targetBookId = novel.id;
+                  if (mountedRef.current)
+                    setTasks((current) =>
+                      current.map((task) =>
+                        task.batchId === batchId
+                          ? {
+                              ...task,
+                              targetBookId: novel.id,
+                              ...(task.externalItemKey && keys.has(task.externalItemKey)
+                                ? { phase: 'complete' as const, percent: 100, error: undefined }
+                                : {}),
+                            }
+                          : task,
+                      ),
+                    );
+                  await acknowledgeImportedReleaseIds(
+                    sourceId,
+                    accountConnectionId,
+                    collection.remoteId,
+                    committedItems.map((item) => item.key.remoteId),
+                    owner.state,
+                  );
+                  if (mountedRef.current)
+                    setSelectedKeys((current) => new Set([...current].filter((key) => !keys.has(key))));
+                  await Promise.all([publishCommittedNovel(novel, owner.state), owner.onLibraryItemCommitted?.(novel)]);
+                  if (!coverAttempted && canResolveSourceCover) {
+                    coverAttempted = true;
+                    try {
+                      await (
+                        await import('./source-cover')
+                      ).persistSourceCover(
+                        owner.assets,
+                        novel,
+                        () => resolveSourceThumbnail(abort.signal),
+                        abort.signal,
+                      );
+                    } catch (error) {
+                      coverWarning = error instanceof Error ? error.message : '원격 표지를 저장하지 못했습니다.';
+                    }
+                  }
+                },
+              });
+            } catch (error) {
+              if (abort.signal.aborted || !slots.signal(offset).aborted) throw error;
+              await downloads.skip(offset);
+            }
             offset += selectedItems.length;
           }
           serialQueue.accepting = false;
           if ((!background && !serialQueue.silentSuccess) || coverWarning)
-            optionsRef.current.notify(
+            owner.notify(
               `${collection.title}의 ${completed}개 회차를 저장하거나 확인했습니다.${
                 replacedRelease ? ' 수정 회차에서 연결할 수 없는 위치·메모는 복구 대기로 보관합니다.' : ''
               }${coverWarning ? ` 표지는 저장하지 못했습니다. ${coverWarning}` : ''}`,
@@ -1871,7 +1954,7 @@ export function useExternalSourceController(options: UseExternalSourceController
                   : task,
               ),
             );
-          optionsRef.current.notify(
+          owner.notify(
             `${completed}개 회차는 저장되었습니다. ${
               isAbort(error)
                 ? '진행 중인 묶음 가져오기를 취소했습니다.'
@@ -1884,10 +1967,13 @@ export function useExternalSourceController(options: UseExternalSourceController
         } finally {
           downloads.close();
           serialQueue.accepting = false;
-          if (serialImportQueueRef.current === serialQueue) serialImportQueueRef.current = undefined;
+          if (serialImportQueueRef.current === serialQueue) {
+            serialImportQueueRef.current = undefined;
+            cancelActiveItemRef.current = undefined;
+          }
           if (downloadAbortRef.current === abort) downloadAbortRef.current = undefined;
           if (!documentPort || !serialQueue.silentSuccess || completed < serialQueue.items.length)
-            await Promise.all([optionsRef.current.onLibraryChanged(), refreshLocalProjection()]).catch(() => undefined);
+            await Promise.all([owner.onLibraryChanged(), refreshLocalProjection()]).catch(() => undefined);
           if (mountedRef.current) {
             setTasks((current) =>
               current.filter((task) => task.batchId !== batchId || (!abort.signal.aborted && task.phase === 'failed')),
@@ -1900,8 +1986,8 @@ export function useExternalSourceController(options: UseExternalSourceController
         return true;
       }
 
-      const hostedPort = optionsRef.current.importService.importPrepared
-        ? optionsRef.current.registry.getHostedImageImport?.(sourceId)
+      const hostedPort = owner.importService.importPrepared
+        ? owner.registry.getHostedImageImport?.(sourceId)
         : undefined;
       let hostedDownloads: ReturnType<typeof createHostedImageDownloadQueue> | undefined;
       let useHosted: boolean | undefined;
@@ -1920,6 +2006,7 @@ export function useExternalSourceController(options: UseExternalSourceController
           fileName: item.release.title,
           targetBookId,
           externalWorkId: currentSubscription?.id,
+          retrySelection: { item, isCurrent },
           externalItemKey: itemKey,
           phase: 'queued' as const,
           current: index + 1,
@@ -1937,11 +2024,13 @@ export function useExternalSourceController(options: UseExternalSourceController
         targetBookId,
         externalWorkId: currentSubscription?.id,
         items: importable,
-        itemKeys: new Set(importable.map((item) => externalItemKeyId(item.key))),
+        cancelledKeys: new Set(),
+        revisions: new Map(importable.map((item) => [externalItemKeyId(item.key), item.remoteRevision])),
         taskIdByItemKey,
         accepting: true,
         silentSuccess,
       };
+      registerCancellation(taskIdByItemKey);
       serialImportQueueRef.current = serialQueue;
       setImportBusy(true);
       const abort = new AbortController();
@@ -1959,10 +2048,10 @@ export function useExternalSourceController(options: UseExternalSourceController
       const completedKeys = new Set<string>();
       let activeTaskId: string | undefined;
       try {
-        let { novels: knownNovels, links: knownLinks } = await loadSourceLibrary(optionsRef.current);
+        let { novels: knownNovels, links: knownLinks } = await loadSourceLibrary(owner);
         // Fetch ahead, but build/commit one chapter at a time. Completed chapters
         // survive a later failure/cancel and remain immediately readable.
-        for (let batchIndex = 0; batchIndex < importable.length; batchIndex += 1) {
+        const importEpisode = async (batchIndex: number) => {
           const selectedItem = importable[batchIndex]!;
           const selectedItemKey = externalItemKeyId(selectedItem.key);
           activeTaskId = taskIdByItemKey.get(selectedItemKey);
@@ -1970,6 +2059,7 @@ export function useExternalSourceController(options: UseExternalSourceController
           previousLinks = [];
           contentApplied = false;
           abort.signal.throwIfAborted();
+          const itemSignal = AbortSignal.any([slots.signal(batchIndex), abort.signal]);
           const sameConnection = (link: ExternalSourceLink) =>
             link.source.connectorId === importable[0]!.key.connectorId &&
             (link.source.accountConnectionId ?? '') === (importable[0]!.key.accountConnectionId ?? '');
@@ -2006,7 +2096,7 @@ export function useExternalSourceController(options: UseExternalSourceController
           if (existingNovel?.deletedAt)
             throw new Error('휴지통에 있는 작품입니다. 복원하거나 영구 삭제한 뒤 다시 가져와 주세요.');
           const incrementalSeriesAppend = Boolean(
-            optionsRef.current.importService.supportsIncrementalImageSeriesAppend &&
+            owner.importService.supportsIncrementalImageSeriesAppend &&
             existingNovel?.format === 'image_archive' &&
             existingNovel.activeContentRevisionId &&
             existingNovel.documentSectionCount !== undefined &&
@@ -2018,11 +2108,12 @@ export function useExternalSourceController(options: UseExternalSourceController
             if (useHosted)
               hostedDownloads = createHostedImageDownloadQueue({
                 sourceId,
-                registry: optionsRef.current.registry,
-                hostContext: optionsRef.current.hostContext,
+                registry: owner.registry,
+                hostContext: owner.hostContext,
                 port: hostedPort!,
                 items: importable,
                 signal: abort.signal,
+                itemSignal: slots.signal,
                 onProgress: (item, value) => {
                   if (!mountedRef.current || abort.signal.aborted) return;
                   const id = taskIdByItemKey.get(externalItemKeyId(item.key));
@@ -2052,11 +2143,12 @@ export function useExternalSourceController(options: UseExternalSourceController
                 },
               });
           }
+          itemSignal.throwIfAborted();
           const existingSource =
             existingLocalBookId && !incrementalSeriesAppend
               ? await (
                   await import('../../repositories/comic-source-export')
-                ).exportPortableBookSource(optionsRef.current.assets, existingLocalBookId)
+                ).exportPortableBookSource(owner.assets, existingLocalBookId)
               : undefined;
           if (existingLocalBookId && !incrementalSeriesAppend && !existingSource) {
             throw new Error('기존 연재 작품의 원본을 찾지 못해 회차를 안전하게 합칠 수 없습니다.');
@@ -2081,7 +2173,7 @@ export function useExternalSourceController(options: UseExternalSourceController
                     (existingSource
                       ? (normalizedHash(
                           await hashBlobInChunks(existingSource.blob, {
-                            shouldCancel: () => abort.signal.aborted,
+                            shouldCancel: () => itemSignal.aborted,
                           }),
                         ) ?? '')
                       : ''),
@@ -2096,7 +2188,7 @@ export function useExternalSourceController(options: UseExternalSourceController
             { item: SerialSourceItem; sourceHash: string; remoteRevision?: string; existingLink?: ExternalSourceLink }
           >();
           for (const item of [selectedItem]) {
-            abort.signal.throwIfAborted();
+            itemSignal.throwIfAborted();
             if (activeTaskId) {
               setTasks((current) =>
                 current.map((task) =>
@@ -2127,7 +2219,7 @@ export function useExternalSourceController(options: UseExternalSourceController
             setProgress((current) => (current ? { ...current, phase: 'verifying' } : current));
             const sourceHash =
               preparedDownload?.sourceContentHash ??
-              normalizedHash(await hashBlobInChunks(downloaded!.file, { shouldCancel: () => abort.signal.aborted })) ??
+              normalizedHash(await hashBlobInChunks(downloaded!.file, { shouldCancel: () => itemSignal.aborted })) ??
               '';
             const existingLink = knownLinks.find(
               (link) =>
@@ -2197,7 +2289,7 @@ export function useExternalSourceController(options: UseExternalSourceController
                       }
                     : {}),
                 },
-                abort.signal,
+                itemSignal,
               );
               hostedDownloads!.release(preparedDownload.artifactId);
             } else {
@@ -2209,13 +2301,13 @@ export function useExternalSourceController(options: UseExternalSourceController
                 chapters: downloadedChapters,
                 existingArchive: incrementalSeriesAppend ? undefined : existingSource?.blob,
                 existingLegacyChapter: incrementalSeriesAppend ? undefined : existingLegacyChapter,
-                signal: abort.signal,
+                signal: itemSignal,
               });
             }
             const uploadedSourceContentHash =
               preparedImport?.sourceContentHash ??
               (await hashBlobInChunks(aggregate!, {
-                shouldCancel: () => abort.signal.aborted,
+                shouldCancel: () => itemSignal.aborted,
               }));
             const localBookId =
               existingLocalBookId ?? persistentId128('external_series', [serialCollectionKey(importable[0]!)]);
@@ -2234,7 +2326,7 @@ export function useExternalSourceController(options: UseExternalSourceController
                     hadExistingLink: true,
                     previousActiveContentRevisionId: existingNovel?.activeContentRevisionId,
                     expectedActiveSourceContentHash: uploadedSourceContentHash,
-                    bookIdMayChange: optionsRef.current.importService.mayChangeBookId,
+                    bookIdMayChange: owner.importService.mayChangeBookId,
                     sourceHashResolvedByImporter: incrementalSeriesAppend || undefined,
                     collectionRemoteId: collection.remoteId,
                     importedRemoteRevision: link.importedRemoteRevision,
@@ -2258,7 +2350,7 @@ export function useExternalSourceController(options: UseExternalSourceController
                   hadExistingLink: Boolean(existingLink),
                   previousActiveContentRevisionId: existingNovel?.activeContentRevisionId,
                   expectedActiveSourceContentHash: uploadedSourceContentHash,
-                  bookIdMayChange: optionsRef.current.importService.mayChangeBookId,
+                  bookIdMayChange: owner.importService.mayChangeBookId,
                   sourceHashResolvedByImporter: incrementalSeriesAppend || undefined,
                   collectionRemoteId: collection.remoteId,
                   importedRemoteRevision: remoteRevision,
@@ -2268,7 +2360,7 @@ export function useExternalSourceController(options: UseExternalSourceController
             });
             const nextStagedLinks = [...stagedByKey.values()];
             previousLinks = relatedLinks;
-            await acquireExternalSourcePendingLinks(optionsRef.current.state, nextStagedLinks);
+            await acquireExternalSourcePendingLinks(owner.state, nextStagedLinks);
             stagedLinks = nextStagedLinks;
             const onImportProgress = (progressDetail: ImportProgress) => {
               if (!mountedRef.current) return;
@@ -2289,10 +2381,10 @@ export function useExternalSourceController(options: UseExternalSourceController
                 detail: progressDetail,
               });
             };
-            const importState = optionsRef.current.state;
+            const importState = owner.state;
             const controller = preparedImport
-              ? optionsRef.current.importService.importPrepared!(preparedImport, onImportProgress)
-              : optionsRef.current.importService.importFile(
+              ? owner.importService.importPrepared!(preparedImport, onImportProgress)
+              : owner.importService.importFile(
                   {
                     file: aggregate!,
                     encoding: 'auto',
@@ -2304,35 +2396,35 @@ export function useExternalSourceController(options: UseExternalSourceController
                           baseActiveContentRevisionId: existingNovel?.activeContentRevisionId,
                         }
                       : {}),
-                    ...(optionsRef.current.importService.supportsExpectedSourceContentHash
+                    ...(owner.importService.supportsExpectedSourceContentHash
                       ? { expectedSourceContentHash: uploadedSourceContentHash }
                       : {}),
                   },
                   onImportProgress,
                 );
             importRef.current = controller;
-            if (abort.signal.aborted) controller.cancel();
-            const result = await controller.promise.catch(async (error: unknown) => {
-              if (error instanceof ImportCommittedRefreshError) {
-                contentApplied = true;
-                changedCount += preparedChanged ? 1 : downloadedChapters.length;
-                // Persist the canonical identity, leaving source/revision validation to reconciliation.
-                stagedLinks = await checkpointImportedExternalSourceLinks(importState, stagedLinks, {
-                  id: error.bookId,
-                });
-              }
-              throw error;
-            });
+            const cancelImport = () => controller.cancel();
+            itemSignal.addEventListener('abort', cancelImport, { once: true });
+            if (itemSignal.aborted) cancelImport();
+            const result = await controller.promise
+              .catch(async (error: unknown) => {
+                if (error instanceof ImportCommittedRefreshError) {
+                  contentApplied = true;
+                  changedCount += preparedChanged ? 1 : downloadedChapters.length;
+                  // Persist the canonical identity, leaving source/revision validation to reconciliation.
+                  stagedLinks = await checkpointImportedExternalSourceLinks(importState, stagedLinks, {
+                    id: error.bookId,
+                  });
+                }
+                throw error;
+              })
+              .finally(() => itemSignal.removeEventListener('abort', cancelImport));
             importRef.current = undefined;
             contentApplied = true;
             changedCount += preparedChanged ? 1 : downloadedChapters.length;
             importedNovel = result.novel;
-            stagedLinks = await checkpointImportedExternalSourceLinks(
-              optionsRef.current.state,
-              stagedLinks,
-              result.novel,
-            );
-            importedNovel = (await optionsRef.current.getNovel(result.novel.id).catch(() => undefined)) ?? result.novel;
+            stagedLinks = await checkpointImportedExternalSourceLinks(owner.state, stagedLinks, result.novel);
+            importedNovel = (await owner.getNovel(result.novel.id).catch(() => undefined)) ?? result.novel;
           } else {
             importedNovel = existingNovel;
           }
@@ -2342,8 +2434,8 @@ export function useExternalSourceController(options: UseExternalSourceController
           let nextLinks: readonly ExternalSourceLink[];
           if (stagedLinks.length > 0) {
             nextLinks = incrementalSeriesAppend
-              ? await finalizeImporterResolvedExternalSourceLinks(optionsRef.current.state, stagedLinks, importedNovel)
-              : await finalizeExternalSourceLinks(optionsRef.current.state, stagedLinks, importedNovel);
+              ? await finalizeImporterResolvedExternalSourceLinks(owner.state, stagedLinks, importedNovel)
+              : await finalizeExternalSourceLinks(owner.state, stagedLinks, importedNovel);
           } else {
             const byKey = new Map<string, ExternalSourceLink>();
             relatedLinks
@@ -2370,20 +2462,23 @@ export function useExternalSourceController(options: UseExternalSourceController
               });
             });
             nextLinks = [...byKey.values()];
-            await saveExternalSourceLinks(optionsRef.current.state, nextLinks);
+            await saveExternalSourceLinks(owner.state, nextLinks);
           }
           await acknowledgeImportedReleaseIds(
             sourceId,
             importable[0]!.key.accountConnectionId,
             collection.remoteId,
             [...checked.values()].map(({ item }) => item.key.remoteId),
+            owner.state,
           );
 
           completedKeys.add(externalItemKeyId(selectedItem.key));
-          await checkpointDownloadQueue([selectedItem]);
+          await checkpointDownloadQueue([selectedItem], queueId, owner.state);
           const nextKeys = new Set(nextLinks.map((link) => externalItemKeyId(link.source)));
           knownLinks = [...knownLinks.filter((link) => !nextKeys.has(externalItemKeyId(link.source))), ...nextLinks];
           knownNovels = [...knownNovels.filter((novel) => novel.id !== importedNovel!.id), importedNovel];
+          if (owner.state !== optionsRef.current.state || owner.settingsScope !== optionsRef.current.settingsScope)
+            throw new DOMException('Owner changed', 'AbortError');
           setLinks(knownLinks);
           setNovels(knownNovels);
           setSelectedKeys((current) => new Set([...current].filter((key) => key !== selectedItemKey)));
@@ -2404,7 +2499,7 @@ export function useExternalSourceController(options: UseExternalSourceController
           }
           activeTaskId = undefined;
           if (importedNovel && !libraryProjectionPublished) {
-            const published = await optionsRef.current
+            const published = await owner
               .onLibraryItemCommitted?.(importedNovel)
               .then(() => true)
               .catch(() => false);
@@ -2419,19 +2514,30 @@ export function useExternalSourceController(options: UseExternalSourceController
             try {
               await (
                 await import('./source-cover')
-              ).persistSourceCover(
-                optionsRef.current.assets,
-                importedNovel,
-                () => resolveSourceThumbnail(abort.signal),
-                abort.signal,
-              );
+              ).persistSourceCover(owner.assets, importedNovel, () => resolveSourceThumbnail(itemSignal), itemSignal);
             } catch (error) {
               coverWarning = error instanceof Error ? error.message : '원격 표지를 저장하지 못했습니다.';
             }
           }
+        };
+        for (let batchIndex = 0; batchIndex < importable.length; batchIndex++) {
+          try {
+            await importEpisode(batchIndex);
+          } catch (error) {
+            if (abort.signal.aborted || !slots.signal(batchIndex).aborted || contentApplied) throw error;
+            importRef.current = undefined;
+            if (
+              stagedLinks.length &&
+              !stagedLinks.some((link) => link.pendingImport?.bookIdMayChange && !link.pendingImport.hadExistingLink)
+            ) {
+              await restoreExternalSourceLinks(owner.state, stagedLinks, previousLinks);
+            }
+            await (hostedDownloads ?? downloads).skip(batchIndex);
+            activeTaskId = undefined;
+          }
         }
         serialQueue.accepting = false;
-        await optionsRef.current.onLibraryChanged();
+        await owner.onLibraryChanged();
         await refreshLocalProjection();
         setSelectedKeys((current) => new Set([...current].filter((key) => !completedKeys.has(key))));
         const importedMessage =
@@ -2439,7 +2545,7 @@ export function useExternalSourceController(options: UseExternalSourceController
             ? `${collection.title}에 ${changedCount}개 회차를 추가하거나 갱신했습니다.${revisionChecked > 0 ? ` ${revisionChecked}개 회차는 원문이 같아 연결 revision만 갱신했습니다.` : ''}`
             : `${revisionChecked}개 회차는 원문이 같아 연결 revision만 갱신했습니다.`;
         if ((!background && !serialQueue.silentSuccess) || coverWarning)
-          optionsRef.current.notify(
+          owner.notify(
             coverWarning ? `${importedMessage} 표지는 저장하지 못했습니다. ${coverWarning}` : importedMessage,
             coverWarning ? 'warning' : 'success',
           );
@@ -2452,10 +2558,10 @@ export function useExternalSourceController(options: UseExternalSourceController
           stagedLinks.length > 0 &&
           !stagedLinks.some((link) => link.pendingImport?.bookIdMayChange && !link.pendingImport.hadExistingLink)
         ) {
-          await restoreExternalSourceLinks(optionsRef.current.state, stagedLinks, previousLinks).catch(() => undefined);
+          await restoreExternalSourceLinks(owner.state, stagedLinks, previousLinks).catch(() => undefined);
         }
         if (changedCount > 0 || completedKeys.size > 0) {
-          await optionsRef.current.onLibraryChanged().catch(() => undefined);
+          await owner.onLibraryChanged().catch(() => undefined);
           await refreshLocalProjection().catch(() => undefined);
           setSelectedKeys((current) => new Set([...current].filter((key) => !completedKeys.has(key))));
         }
@@ -2472,7 +2578,7 @@ export function useExternalSourceController(options: UseExternalSourceController
                     : task,
                 ),
         );
-        optionsRef.current.notify(
+        owner.notify(
           (changedCount > 0 ? `${changedCount}개 회차는 저장되었습니다. ` : '') +
             (contentApplied
               ? `연재 본문 적용은 완료했으며 소스 연결은 다음 새로고침에서 복구합니다. ${
@@ -2489,7 +2595,10 @@ export function useExternalSourceController(options: UseExternalSourceController
         downloads.close();
         hostedDownloads?.close();
         serialQueue.accepting = false;
-        if (serialImportQueueRef.current === serialQueue) serialImportQueueRef.current = undefined;
+        if (serialImportQueueRef.current === serialQueue) {
+          serialImportQueueRef.current = undefined;
+          cancelActiveItemRef.current = undefined;
+        }
         downloadAbortRef.current = undefined;
         importRef.current = undefined;
         if (mountedRef.current) {
@@ -2502,6 +2611,7 @@ export function useExternalSourceController(options: UseExternalSourceController
     },
     [
       acknowledgeImportedReleaseIds,
+      captureRetryConnection,
       detail,
       rawItems,
       refreshLocalProjection,
@@ -2509,14 +2619,20 @@ export function useExternalSourceController(options: UseExternalSourceController
       subscriptions,
       resolveDetailThumbnail,
       checkpointDownloadQueue,
+      submissions,
     ],
   );
 
   const executeImportItems = useCallback(
-    async (selected: readonly ExternalSourceItemView[], detached = false, silentSuccess = false) => {
-      const sourceId = detached
-        ? (selected[0]?.key.connectorId as ExtensionContributionId | undefined)
-        : activeSourceId;
+    async (
+      selected: readonly ExternalSourceItemView[],
+      detached = false,
+      silentSuccess = false,
+      append = false,
+      startup?: AbortSignal,
+    ) => {
+      const owner = optionsRef.current;
+      const sourceId = selected[0]?.key.connectorId as ExtensionContributionId | undefined;
       const importable = selected.filter(
         (item) =>
           item.kind !== 'folder' &&
@@ -2524,8 +2640,11 @@ export function useExternalSourceController(options: UseExternalSourceController
           (item.importState !== 'imported' || item.collection?.seriesProfile?.kind === 'document_series'),
       );
       if (!sourceId || importable.length === 0) return;
-      const serialItems = importable.filter((item): item is SerialSourceItem => isSerialSourceItem(item));
-      if (importBusy) {
+      const isCurrent = captureRetryConnection(sourceId);
+      const serialItems = filterAndSortReleases(importable, '', 'all', 'asc').filter((item): item is SerialSourceItem =>
+        isSerialSourceItem(item),
+      );
+      if (append) {
         const queue = serialImportQueueRef.current;
         const sameActiveSeries = Boolean(
           !blockingBusy &&
@@ -2536,16 +2655,14 @@ export function useExternalSourceController(options: UseExternalSourceController
         );
         if (!sameActiveSeries || !queue) return;
         if (!silentSuccess) queue.silentSuccess = false;
-        const additions = (filterAndSortReleases(serialItems, '', 'all', 'asc') as SerialSourceItem[]).filter(
-          (item) => !queue.itemKeys.has(externalItemKeyId(item.key)),
-        );
+        const additions = serialItems.filter((item) => !queue.revisions.has(externalItemKeyId(item.key)));
         if (additions.length === 0) return;
         const firstIndex = queue.items.length;
         additions.forEach((item, offset) => {
           const itemKey = externalItemKeyId(item.key);
           const taskId = `${queue.batchId}-${firstIndex + offset}`;
           queue.items.push(item);
-          queue.itemKeys.add(itemKey);
+          queue.revisions.set(itemKey, item.remoteRevision);
           queue.taskIdByItemKey.set(itemKey, taskId);
         });
         const total = queue.items.length;
@@ -2559,6 +2676,7 @@ export function useExternalSourceController(options: UseExternalSourceController
             fileName: item.release.title,
             targetBookId: queue.targetBookId,
             externalWorkId: queue.externalWorkId,
+            retrySelection: { item, isCurrent },
             externalItemKey: externalItemKeyId(item.key),
             phase: 'queued' as const,
             current: firstIndex + offset + 1,
@@ -2568,16 +2686,16 @@ export function useExternalSourceController(options: UseExternalSourceController
         setProgress((current) => (current ? { ...current, total } : current));
         return;
       }
-      if (busy) return;
+      if (startup?.aborted) return;
       if (
         serialItems.length === importable.length &&
-        (await importSerialItems(sourceId, serialItems, undefined, detached, silentSuccess))
+        (await importSerialItems(sourceId, serialItems, undefined, detached, silentSuccess, startup))
       )
         return;
       const selectedUpdateCount = importable.filter((item) => item.importState === 'update_available').length;
       if (
         selectedUpdateCount > 0 &&
-        !optionsRef.current.confirm(
+        !owner.confirm(
           `${selectedUpdateCount}개 작품의 원격 revision이 변경되었습니다. 계속하면 선택한 원문을 내려받아 해시를 확인하고, 실제 내용이 달라진 작품만 기존 작품 ID를 유지한 채 새 content revision으로 교체합니다. 실패한 작품은 현재 본문을 유지합니다. 계속할까요?`,
         )
       ) {
@@ -2588,12 +2706,13 @@ export function useExternalSourceController(options: UseExternalSourceController
       const itemKeys = new Set(importable.map((item) => externalItemKeyId(item.key)));
       setTasks((current) => [
         ...current.filter((task) => !task.externalItemKey || !itemKeys.has(task.externalItemKey)),
-        ...importable.map((item, index): ImportTaskView => ({
+        ...importable.map((item, index): SourceDownloadTask => ({
           id: `${batchId}-${index}`,
           batchId,
           source: 'external_source',
           title: item.title,
           fileName: item.title,
+          retrySelection: { item, isCurrent },
           externalItemKey: externalItemKeyId(item.key),
           phase: 'queued',
           current: index + 1,
@@ -2617,8 +2736,28 @@ export function useExternalSourceController(options: UseExternalSourceController
           ),
         );
       };
+      const slots = new DownloadItemSignals();
+      cancelActiveItemRef.current = (id) => {
+        const index = importable.findIndex((_, index) => id === `${batchId}-${index}`);
+        if (index < 0) return;
+        slots.cancel(index);
+        return importable[index];
+      };
       const abort = new AbortController();
       downloadAbortRef.current = abort;
+      const generation = owner.registry.getExternalSourceStatus(sourceId, owner.hostContext).connectionGeneration;
+      const assertOwner = (item: ExternalSourceItemView) => {
+        const status = owner.registry.getExternalSourceStatus(sourceId, owner.hostContext);
+        if (
+          !mountedRef.current ||
+          optionsRef.current.state !== owner.state ||
+          owner.settingsScope !== optionsRef.current.settingsScope ||
+          status.state !== 'connected' ||
+          status.accountConnectionId !== item.key.accountConnectionId ||
+          status.connectionGeneration !== generation
+        )
+          throw new Error('소스 연결이 변경되어 가져오기를 중단했습니다.');
+      };
       let completed = 0;
       let failed = 0;
       let linkedExisting = 0;
@@ -2629,11 +2768,14 @@ export function useExternalSourceController(options: UseExternalSourceController
       let firstFailureMessage: string | undefined;
       setProgress({ current: 0, total: importable.length, completed, failed, linkedExisting });
       try {
-        const { novels: knownNovels, links } = await loadSourceLibrary(optionsRef.current);
+        const { novels: knownNovels, links } = await loadSourceLibrary(owner);
         const knownLinks = new Map(links.map((link) => [externalItemKeyId(link.source), link]));
         for (const [index, item] of importable.entries()) {
           if (!mountedRef.current) break;
           abort.signal.throwIfAborted();
+          const itemSignal = AbortSignal.any([slots.signal(index), abort.signal]);
+          if (itemSignal.aborted) continue;
+          assertOwner(item);
           updateTask(index, { phase: 'downloading' });
           let stagedLinks: readonly ExternalSourceLink[] = [];
           let previousLinks: readonly ExternalSourceLink[] = [];
@@ -2648,9 +2790,9 @@ export function useExternalSourceController(options: UseExternalSourceController
             phase: 'downloading',
           });
           try {
-            const downloaded = await optionsRef.current.registry.downloadExternalSource(
+            const downloaded = await owner.registry.downloadExternalSource(
               sourceId,
-              optionsRef.current.hostContext,
+              owner.hostContext,
               {
                 key: item.key,
                 fileName: item.importFileName ?? item.title,
@@ -2658,8 +2800,10 @@ export function useExternalSourceController(options: UseExternalSourceController
                 byteLength: item.byteLength,
                 remoteRevision: item.remoteRevision,
               },
-              abort.signal,
+              itemSignal,
             );
+            assertOwner(item);
+            itemSignal.throwIfAborted();
             setProgress({
               current: index + 1,
               total: importable.length,
@@ -2673,7 +2817,7 @@ export function useExternalSourceController(options: UseExternalSourceController
             const sourceHash =
               normalizedHash(
                 await hashBlobInChunks(downloaded.file, {
-                  shouldCancel: () => abort.signal.aborted,
+                  shouldCancel: () => itemSignal.aborted,
                 }),
               ) ?? '';
             const existingLink = knownLinks.get(externalItemKeyId(item.key));
@@ -2728,18 +2872,18 @@ export function useExternalSourceController(options: UseExternalSourceController
                   hadExistingLink: Boolean(existingLink),
                   previousActiveContentRevisionId: target?.activeContentRevisionId,
                   expectedActiveSourceContentHash: sourceHash,
-                  bookIdMayChange: optionsRef.current.importService.mayChangeBookId,
+                  bookIdMayChange: owner.importService.mayChangeBookId,
                   collectionRemoteId: existingLink?.collectionRemoteId,
                   importedRemoteRevision: downloaded.remoteRevision ?? item.remoteRevision,
                   importedSourceContentHash: sourceHash,
                 },
               };
               previousLinks = existingLink ? [existingLink] : [];
-              await acquireExternalSourcePendingLinks(optionsRef.current.state, [stagedLink]);
+              await acquireExternalSourcePendingLinks(owner.state, [stagedLink]);
               stagedLinks = [stagedLink];
 
-              const importState = optionsRef.current.state;
-              const controller = optionsRef.current.importService.importFile(
+              const importState = owner.state;
+              const controller = owner.importService.importFile(
                 {
                   file: downloaded.file,
                   encoding: 'auto',
@@ -2762,24 +2906,24 @@ export function useExternalSourceController(options: UseExternalSourceController
                 },
               );
               importRef.current = controller;
-              const result = await controller.promise.catch(async (error: unknown) => {
-                if (error instanceof ImportCommittedRefreshError) {
-                  contentApplied = true;
-                  stagedLinks = await checkpointImportedExternalSourceLinks(importState, stagedLinks, {
-                    id: error.bookId,
-                  });
-                }
-                throw error;
-              });
+              const cancelImport = () => controller.cancel();
+              itemSignal.addEventListener('abort', cancelImport, { once: true });
+              if (itemSignal.aborted) cancelImport();
+              const result = await controller.promise
+                .catch(async (error: unknown) => {
+                  if (error instanceof ImportCommittedRefreshError) {
+                    contentApplied = true;
+                    stagedLinks = await checkpointImportedExternalSourceLinks(importState, stagedLinks, {
+                      id: error.bookId,
+                    });
+                  }
+                  throw error;
+                })
+                .finally(() => itemSignal.removeEventListener('abort', cancelImport));
               importRef.current = undefined;
               contentApplied = true;
-              stagedLinks = await checkpointImportedExternalSourceLinks(
-                optionsRef.current.state,
-                stagedLinks,
-                result.novel,
-              );
-              importedNovel =
-                (await optionsRef.current.getNovel(result.novel.id).catch(() => undefined)) ?? result.novel;
+              stagedLinks = await checkpointImportedExternalSourceLinks(owner.state, stagedLinks, result.novel);
+              importedNovel = (await owner.getNovel(result.novel.id).catch(() => undefined)) ?? result.novel;
               knownNovels.push(importedNovel);
               completed += 1;
               if (existingLink) updated += 1;
@@ -2790,7 +2934,7 @@ export function useExternalSourceController(options: UseExternalSourceController
             const linkedAt = currentIso();
             let link: ExternalSourceLink;
             if (stagedLinks.length > 0) {
-              link = (await finalizeExternalSourceLinks(optionsRef.current.state, stagedLinks, importedNovel))[0]!;
+              link = (await finalizeExternalSourceLinks(owner.state, stagedLinks, importedNovel))[0]!;
             } else {
               link = {
                 id: externalSourceLinkId(item.key),
@@ -2802,7 +2946,7 @@ export function useExternalSourceController(options: UseExternalSourceController
                 linkedAt: existingLink?.linkedAt ?? linkedAt,
                 lastCheckedAt: linkedAt,
               };
-              await saveExternalSourceLinks(optionsRef.current.state, [link]);
+              await saveExternalSourceLinks(owner.state, [link]);
             }
             knownLinks.set(externalItemKeyId(item.key), link);
             updateTask(index, { phase: 'complete' });
@@ -2816,16 +2960,15 @@ export function useExternalSourceController(options: UseExternalSourceController
                   ? error.message
                   : '파일을 가져오지 못했습니다.',
             });
-            if (isAbort(error)) {
+            if (isAbort(error) || itemSignal.aborted) {
               if (
                 !contentApplied &&
                 stagedLinks.length > 0 &&
                 !stagedLinks.some((link) => link.pendingImport?.bookIdMayChange && !link.pendingImport.hadExistingLink)
               ) {
-                await restoreExternalSourceLinks(optionsRef.current.state, stagedLinks, previousLinks).catch(
-                  () => undefined,
-                );
+                await restoreExternalSourceLinks(owner.state, stagedLinks, previousLinks).catch(() => undefined);
               }
+              if (!abort.signal.aborted && slots.signal(index).aborted) continue;
               cancelled = true;
               break;
             }
@@ -2839,9 +2982,7 @@ export function useExternalSourceController(options: UseExternalSourceController
               stagedLinks.length > 0 &&
               !stagedLinks.some((link) => link.pendingImport?.bookIdMayChange && !link.pendingImport.hadExistingLink)
             ) {
-              await restoreExternalSourceLinks(optionsRef.current.state, stagedLinks, previousLinks).catch(
-                () => undefined,
-              );
+              await restoreExternalSourceLinks(owner.state, stagedLinks, previousLinks).catch(() => undefined);
             }
             failed += 1;
             firstFailureMessage ??=
@@ -2850,7 +2991,7 @@ export function useExternalSourceController(options: UseExternalSourceController
                 : String(error || '외부 작품을 가져오지 못했습니다.');
           }
         }
-        await optionsRef.current.onLibraryChanged();
+        await owner.onLibraryChanged();
         await refreshLocalProjection();
         setSelectedKeys(new Set());
         const connected = completed - updated + linkedExisting;
@@ -2865,7 +3006,7 @@ export function useExternalSourceController(options: UseExternalSourceController
           .filter((message): message is string => Boolean(message))
           .join(' ');
         if (!silentSuccess || cancelled || failed > 0 || linkRepairPending > 0)
-          optionsRef.current.notify(
+          owner.notify(
             cancelled
               ? `${successMessage ? `${successMessage} ` : ''}가져오기를 취소했습니다. 취소된 작품은 기존 본문과 연결을 유지합니다.`
               : failed > 0
@@ -2892,11 +3033,12 @@ export function useExternalSourceController(options: UseExternalSourceController
                 : task,
             ),
           );
-        optionsRef.current.notify(
+        owner.notify(
           error instanceof Error ? error.message : '라이브러리를 확인하지 못했습니다. 다시 시도해 주세요.',
           'warning',
         );
       } finally {
+        cancelActiveItemRef.current = undefined;
         downloadAbortRef.current = undefined;
         importRef.current = undefined;
         if (mountedRef.current) {
@@ -2920,63 +3062,24 @@ export function useExternalSourceController(options: UseExternalSourceController
         }
       }
     },
-    [activeSourceId, blockingBusy, busy, importBusy, importSerialItems, refreshLocalProjection],
+    [blockingBusy, captureRetryConnection, importSerialItems, refreshLocalProjection],
   );
 
-  const importItems = useCallback(
-    async (
-      selected: readonly ExternalSourceItemView[],
-      reportRejection = false,
-      detached = false,
-      silentSuccess = false,
-    ) => {
-      if (isRecovering() || blockingBusy || (importBusy && !selected.every(canQueueItem))) {
-        if (reportRejection) throw new Error('다른 다운로드가 끝난 후 저장할 수 있습니다.');
-        return;
-      }
-      const run = async () => {
-        let queue: SourceDownloadQueue | undefined;
-        try {
-          queue = await persistDownloadIntent(selected);
-          if (queue) activateQueue(queue.id);
-          await executeImportItems(selected, detached, silentSuccess);
-        } catch (error) {
-          if (reportRejection) throw error;
-          optionsRef.current.notify(
-            error instanceof Error ? error.message : '다운로드 대기열을 저장하지 못했습니다.',
-            'warning',
-          );
-        } finally {
-          if (!serialImportQueueRef.current) clearActiveQueue();
-          await refreshRecovery();
-        }
-      };
-      const first = selected[0];
-      if (!importBusy && first?.collection && globalThis.navigator?.locks) {
-        await navigator.locks.request(
-          `boaa-source-queue:${sourceDownloadQueueId(first.key, first.collection.remoteId)}`,
-          { ifAvailable: true },
-          async (lock) => {
-            if (lock) await run();
-            else if (reportRejection)
-              throw new Error('다른 탭에서 이 작품을 다운로드하고 있습니다. 완료 후 다시 시도해 주세요.');
-            else optionsRef.current.notify('다른 탭에서 이 작품을 다운로드하고 있습니다.', 'warning');
-          },
-        );
-      } else await run();
-    },
-    [
-      executeImportItems,
-      persistDownloadIntent,
-      refreshRecovery,
-      importBusy,
-      blockingBusy,
-      canQueueItem,
-      activateQueue,
-      clearActiveQueue,
-      isRecovering,
-    ],
-  );
+  const importItems = useSourceImportSubmissions({
+    owner: options,
+    queue: submissions,
+    importBusy,
+    blockingBusy,
+    isMounted: () => mountedRef.current,
+    executing: () => Boolean(downloadAbortRef.current || isRecovering()),
+    activeSeries: () => serialImportQueueRef.current,
+    executeImportItems,
+    persistDownloadIntent,
+    activateQueue,
+    clearActiveQueue,
+    refreshRecovery,
+    setTasks,
+  });
 
   const { enqueue: saveStream, cancel: cancelStreamSaves } = useStreamSaveQueue<ExternalSourceItemView>({
     key: (item) => externalItemKeyId(item.key),
@@ -3009,6 +3112,8 @@ export function useExternalSourceController(options: UseExternalSourceController
     busy: busy || importBusy || blockingBusy,
     queue: {
       canAccept: () =>
+        !submissions.running &&
+        !submissions.waiting.length &&
         !busy &&
         !importBusy &&
         !blockingBusy &&
@@ -3123,8 +3228,9 @@ export function useExternalSourceController(options: UseExternalSourceController
         return;
       }
       if (mode !== 'download' && beginStream(item)) return;
+      const navigation = listAbortRef.current;
       await importItems([item]);
-      if (!openRef.current) return;
+      if (!openRef.current || listAbortRef.current !== navigation) return;
       const link = (await optionsRef.current.state.listLinks(item.key.connectorId)).find(
         (candidate) => externalItemKeyId(candidate.source) === externalItemKeyId(item.key),
       );
@@ -3141,7 +3247,7 @@ export function useExternalSourceController(options: UseExternalSourceController
         documentSectionTitle: item.release.title,
       });
     },
-    [importItems, beginStream, sourceReadMode],
+    [importItems, beginStream, sourceReadMode, listAbortRef],
   );
 
   const libraryReader = useSourceLibraryReader(
@@ -3156,14 +3262,14 @@ export function useExternalSourceController(options: UseExternalSourceController
     const selected = items.filter(
       (item) => item.selected && (item.importState === 'available' || item.importState === 'update_available'),
     );
-    if (selected.length === 0 || importBusy) return;
+    if (selected.length === 0) return;
     setSelectedBatchActive(true);
     try {
       await importItems(selected);
     } finally {
       if (mountedRef.current) setSelectedBatchActive(false);
     }
-  }, [importBusy, importItems, items]);
+  }, [importItems, items]);
 
   const openImported = useCallback(
     async (item: ExternalSourceItemView, reportRejection = false) => {
@@ -3214,26 +3320,100 @@ export function useExternalSourceController(options: UseExternalSourceController
     [blockingBusy, rawItems, refreshLocalProjection, beginStream, sourceReadMode],
   );
 
+  const cancelTask = useCallback(
+    async (task: ImportTaskView) => {
+      if (!task.externalItemKey || task.finalizing || task.phase === 'complete' || task.phase === 'failed') return;
+      const owner = optionsRef.current;
+      const waiting = [...submissions.waiting, submissions.starting].find((job) => job?.id === task.batchId);
+      const item = waiting?.items.get(task.externalItemKey) ?? cancelActiveItemRef.current?.(task.id);
+      if (!item) return;
+      if (!waiting) serialImportQueueRef.current?.cancelledKeys.add(task.externalItemKey);
+      waiting?.items.delete(task.externalItemKey);
+      setTasks((current) => current.filter((row) => row.id !== task.id));
+      setSelectedKeys((current) => {
+        const next = new Set(current);
+        next.delete(task.externalItemKey!);
+        return next;
+      });
+      if (!item.collection) return;
+      try {
+        await waiting?.durable;
+        await checkpointDownloadQueue([item], sourceDownloadQueueId(item.key, item.collection.remoteId), owner.state);
+      } catch {
+        owner.notify(
+          '취소한 회차를 저장 대기열에서 제거하지 못했습니다. 중단된 다운로드에서 확인해 주세요.',
+          'warning',
+        );
+      }
+    },
+    [checkpointDownloadQueue, submissions],
+  );
+
   const cancel = useCallback(() => {
-    cancelStreamSaves();
+    const activeDownload = Boolean(submissions.startup || downloadAbortRef.current);
+    submissions.startup?.abort();
     if (serialImportQueueRef.current) serialImportQueueRef.current.accepting = false;
     setTasks((current) =>
       current.map((task) =>
-        task.phase !== 'complete' && task.phase !== 'failed' ? { ...task, phase: 'cancelling' } : task,
+        task.phase !== 'complete' &&
+        task.phase !== 'failed' &&
+        !submissions.waiting.some((job) => job.id === task.batchId)
+          ? { ...task, phase: 'cancelling' }
+          : task,
       ),
     );
-    listAbortRef.current?.abort();
     downloadAbortRef.current?.abort();
+    if (activeDownload) return;
+    cancelStreamSaves();
+    listAbortRef.current?.abort();
     libraryAddAbortRef.current?.abort();
     cancelSubscriptionChecks();
     importRef.current?.cancel();
-  }, [cancelStreamSaves, cancelSubscriptionChecks, listAbortRef]);
+  }, [cancelStreamSaves, cancelSubscriptionChecks, listAbortRef, submissions]);
 
   const dismissTask = useCallback((taskId: string) => {
     setTasks((current) =>
       current.filter((task) => task.id !== taskId || (task.phase !== 'failed' && task.phase !== 'cancelling')),
     );
   }, []);
+
+  // Mirrors retryTask's guards so retry is offered only when it can start now.
+  const canRetryTask = useCallback(
+    (taskId: string) => {
+      if (busy || submissions.running || downloadAbortRef.current) return false;
+      const task = tasksRef.current.get(taskId);
+      return task?.phase === 'failed' && task.retrySelection?.isCurrent() === true;
+    },
+    [busy, submissions],
+  );
+
+  const retryTask = useCallback(
+    async (taskId: string) => {
+      const task = tasksRef.current.get(taskId);
+      if (task?.phase !== 'failed' || !task.retrySelection || retrying.current.has(taskId)) return;
+      const { item, isCurrent } = task.retrySelection;
+      if (!isCurrent()) {
+        optionsRef.current.notify('소스 연결이 변경되었습니다. 목록을 다시 열어 다운로드해 주세요.', 'warning');
+        return;
+      }
+      if (busy || submissions.running || downloadAbortRef.current) {
+        optionsRef.current.notify('진행 중인 작업이 끝난 뒤 다시 시도해 주세요.', 'warning');
+        return;
+      }
+      const target = items.find((candidate) => externalItemKeyId(candidate.key) === task.externalItemKey) ?? item;
+      if (target.importState === 'imported') {
+        dismissTask(taskId);
+        return;
+      }
+      retrying.current.add(taskId);
+      try {
+        await importItems([target], false, true);
+      } finally {
+        retrying.current.delete(taskId);
+      }
+    },
+    [busy, dismissTask, importItems, items, submissions],
+  );
 
   const connect = useCallback(
     async (input?: ExternalSourceConnectionInput) => {
@@ -3900,7 +4080,7 @@ export function useExternalSourceController(options: UseExternalSourceController
       directStreamEntry.current = false;
       cancelResume();
       const sourceId = subscription.connectorId as ExtensionContributionId;
-      if (blockingBusy || (importBusy && sourceId !== activeSourceId)) return;
+      if (blockingBusy) return;
       const connection = optionsRef.current.registry.getExternalSourceStatus(sourceId, optionsRef.current.hostContext);
       if (connection.state !== 'connected' || connection.accountConnectionId !== subscription.accountConnectionId) {
         optionsRef.current.notify('작품 소스에 다시 연결한 뒤 회차를 확인할 수 있습니다.', 'warning');
@@ -3941,44 +4121,62 @@ export function useExternalSourceController(options: UseExternalSourceController
           : []),
         { label: subscription.title, parentRef: subscription.navigationRef },
       ]);
-      const refreshed = await refreshLocalProjection();
-      if (!navigationIsCurrent(sourceId, connection, navigation)) return;
-      if (!libraryCurrent && !refreshed) {
-        setLoading(false);
-        return;
-      }
-      // A startup preview is not authority to reopen a remotely removed work.
       if (!libraryCurrent) {
-        const fresh = (await optionsRef.current.state.listSubscriptions()).find((work) => work.id === subscription.id);
+        const refreshed = await refreshLocalProjection();
         if (!navigationIsCurrent(sourceId, connection, navigation)) return;
-        if (!fresh || fresh.deletedAt) {
+        if (!refreshed) {
+          cancelResume();
           setLoading(false);
-          setOpen(false);
           return;
         }
-        subscription = fresh;
       }
-      await loadPage(
-        { parentRef: subscription.navigationRef },
-        false,
-        sourceId,
-        true,
-        false,
-        'navigation',
-        workPreview,
-      );
+      // Recheck the selected membership even after bootstrap: another tab or device may have removed it.
+      let fresh: ExternalSourceSubscriptionRecord | undefined;
+      try {
+        const works = await sourceLibraryLoad(
+          optionsRef.current.state.listSubscriptions(sourceId, connection.accountConnectionId),
+        );
+        fresh = works.find(
+          (work) =>
+            work.id === subscription.id &&
+            work.connectorId === sourceId &&
+            work.accountConnectionId === connection.accountConnectionId,
+        );
+      } catch (error) {
+        if (!navigationIsCurrent(sourceId, connection, navigation)) return;
+        cancelResume();
+        setLoading(false);
+        setDetail(undefined);
+        setOpen(false);
+        optionsRef.current.notify(
+          error instanceof Error ? error.message : '작품의 보관 상태를 확인하지 못했습니다.',
+          'warning',
+        );
+        return;
+      }
+      if (!navigationIsCurrent(sourceId, connection, navigation)) return;
+      if (!fresh || fresh.deletedAt) {
+        if (fresh) replaceSubscription(fresh);
+        else setSubscriptions((previous) => previous.filter((work) => work.id !== subscription.id));
+        cancelResume();
+        setLoading(false);
+        setDetail(undefined);
+        setOpen(false);
+        optionsRef.current.notify('이 작품은 더 이상 서재에 없습니다.', 'warning');
+        return;
+      }
+      await loadPage({ parentRef: fresh.navigationRef }, false, sourceId, true, false, 'navigation', workPreview);
     },
     [
-      activeSourceId,
       blockingBusy,
       cancelResume,
       clearStream,
-      importBusy,
       listAbortRef,
       loadPage,
       navigationIsCurrent,
       localSeriesPageSeedRef,
       refreshLocalProjection,
+      replaceSubscription,
       libraryCurrent,
       setBrowse,
       setCatalogLoading,
@@ -4216,7 +4414,7 @@ export function useExternalSourceController(options: UseExternalSourceController
     title?: string,
     item?: ExternalItemSummary,
   ) => {
-    if (blockingBusy || (importBusy && sourceId !== activeSourceId)) return;
+    if (blockingBusy) return;
     cancelResume();
     const connection = optionsRef.current.registry.getExternalSourceStatus(sourceId, optionsRef.current.hostContext);
     const workPreview =
@@ -4340,7 +4538,9 @@ export function useExternalSourceController(options: UseExternalSourceController
     renameRelease: options.state.saveReleasePreferences ? renameRelease : undefined,
     setReleasesRead: options.state.saveReleasePreferences ? setReleasesRead : undefined,
     markPreviousReleasesRead: options.state.saveReleasePreferences ? markPreviousReleasesRead : undefined,
-    recoverableDownloads,
+    recoverableDownloads: recoverableDownloads.filter(
+      (queue) => !submissions.waiting.some((job) => job.queueId === queue.id),
+    ),
     resumeDownloadQueue,
     discardDownloadQueue,
     autoDownloadNext: automaticDownload.enabled,
@@ -4492,6 +4692,9 @@ export function useExternalSourceController(options: UseExternalSourceController
     openImported,
     cancel,
     dismissTask,
+    canRetryTask,
+    retryTask,
+    cancelTask,
     connect,
     disconnect,
     openItem,

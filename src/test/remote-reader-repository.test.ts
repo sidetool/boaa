@@ -1,8 +1,6 @@
 import 'fake-indexeddb/auto';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { resetReaderDbForTests } from '../storage/db';
-
-beforeEach(() => resetReaderDbForTests());
 import { ParsedNovel } from '../domain/types';
 import { ResourceRevisionConflictError } from '../domain/resource-revisions';
 import {
@@ -12,6 +10,9 @@ import {
 } from '../repositories/remote-reader-repository';
 import { defaultSettings } from '../repositories/reader-defaults';
 import { RemoteApiClient, RemoteApiError } from '../services/remote/remote-api-client';
+
+beforeEach(() => resetReaderDbForTests());
+afterEach(() => vi.restoreAllMocks());
 
 const now = '2026-07-05T00:00:00.000Z';
 
@@ -313,28 +314,43 @@ function hostedClient() {
 }
 
 describe('RemoteReaderRepository', () => {
-  it('preserves hosted AI workflow preferences while merging reader defaults', async () => {
-    const client = {
-      getSettings: vi.fn(async () => ({
-        settings: {
-          aiWorkflows: {
-            schemaVersion: 1,
-            defaultWorkflowId: 'moya.ai.analysis.character-bundle',
-            bookOverrides: { book_1: 'example.ai.alternate-workflow' },
-          },
-        },
-      })),
-    } as unknown as RemoteApiClient;
-    const repository = new RemoteReaderRepository(client);
+  it('preserves hosted workflow choices when saving reader settings and reopens with the device theme', async () => {
+    const aiWorkflows = {
+      schemaVersion: 1,
+      defaultWorkflowId: 'moya.ai.analysis.character-bundle',
+      bookOverrides: { book_1: 'example.ai.alternate-workflow' },
+    };
+    const latestWorkflows = { ...aiWorkflows, defaultWorkflowId: 'example.ai.updated-workflow' };
+    const fetch = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('Unexpected settings request'));
+    fetch.mockResolvedValueOnce(Response.json({ settings: { aiWorkflows } }));
+    const repository = new RemoteReaderRepository(new RemoteApiClient('/api'));
+    const settings = await repository.getSettings();
+    expect(settings).toMatchObject({ theme: defaultSettings.theme, aiWorkflows });
 
-    await expect(repository.getSettings()).resolves.toMatchObject({
-      theme: defaultSettings.theme,
-      aiWorkflows: {
-        schemaVersion: 1,
-        defaultWorkflowId: 'moya.ai.analysis.character-bundle',
-        bookOverrides: { book_1: 'example.ai.alternate-workflow' },
-      },
+    await repository.saveSettings({ ...settings, theme: 'sepia' });
+    expect(fetch).toHaveBeenCalledTimes(1);
+
+    fetch.mockResolvedValueOnce(Response.json({ ok: true }));
+    await repository.saveSettings({ ...settings, theme: 'sepia', recentSearches: ['chapter'] });
+    expect(JSON.parse(String(fetch.mock.calls[1]?.[1]?.body))).toMatchObject({
+      aiWorkflows,
+      recentSearches: ['chapter'],
     });
+
+    fetch.mockResolvedValueOnce(
+      Response.json({ settings: { ...defaultSettings, aiWorkflows: latestWorkflows, recentSearches: ['chapter'] } }),
+    );
+    const reopened = new RemoteReaderRepository(new RemoteApiClient('/api'));
+    await expect(reopened.getSettings()).resolves.toMatchObject({
+      theme: 'sepia',
+      aiWorkflows: latestWorkflows,
+      recentSearches: ['chapter'],
+    });
+    expect(fetch.mock.calls.map(([url, init]) => [init?.method ?? 'GET', url])).toEqual([
+      ['GET', '/api/settings'],
+      ['PUT', '/api/settings'],
+      ['GET', '/api/settings'],
+    ]);
   });
 
   it('maps hosted books, page data, and reader annotations through the repository boundary', async () => {

@@ -211,6 +211,9 @@ export interface ExternalSourceController {
   deleteDownloads(items: readonly ExternalSourceItemView[]): Promise<void>;
   openImported(item: ExternalSourceItemView, reportRejection?: boolean): Promise<void>;
   cancel(): void;
+  cancelTask(task: ImportTaskView): Promise<void>;
+  canRetryTask(taskId: string): boolean;
+  retryTask(taskId: string): Promise<void>;
   dismissTask(taskId: string): void;
   connect(input?: ExternalSourceConnectionInput): Promise<void>;
   disconnect(): Promise<void>;

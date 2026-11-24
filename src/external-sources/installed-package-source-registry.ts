@@ -2,7 +2,7 @@ import { PersistentCoverCache } from './persistent-cover-cache';
 import type { TaskProgressCallback } from '@boaa/contracts';
 import { SourcePageCursors } from './source-page-cursors';
 import { SourceReadCache } from './source-read-cache';
-import { DETAIL_FRESH_MS, sourceCachePolicy, sourceListIdentity } from './cache-policy';
+import { DETAIL_FRESH_MS, sourceCachePolicy, sourcePageFreshness, sourceListIdentity } from './cache-policy';
 import { SessionCoverCache } from './session-cover-cache';
 import type { ExternalSourceContributionDescriptorV2 } from '@boaa/extension-contracts';
 import type { SourceWork } from '@boaa/extension-contracts/source-sdk';
@@ -152,9 +152,9 @@ export class InstalledPackageSourceRegistry<
     const cursor = this.cursors.open(id, generation, input);
     const policy = sourceCachePolicy(input);
     const key = JSON.stringify(['page', id, generation, sourceListIdentity(input)]);
-    const cached = await this.reads.read(
+    const cached = await this.reads.read<ExternalItemPage>(
       key,
-      policy.fresh,
+      (page) => sourcePageFreshness(policy.fresh, page.items.length),
       policy.keep,
       signal,
       input.cacheMode === 'reload',

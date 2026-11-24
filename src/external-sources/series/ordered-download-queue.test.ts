@@ -11,12 +11,13 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 
-function fixture(concurrency = 2, estimate = 1) {
+function fixture(concurrency = 2, estimate = 1, itemSignal?: (index: number) => AbortSignal) {
   const abort = new AbortController();
   const pending = Array.from({ length: 6 }, () => deferred<number>());
   const download = vi.fn((index: number, _signal: AbortSignal) => pending[index]!.promise);
   const queue = new OrderedDownloadQueue({
     signal: abort.signal,
+    itemSignal,
     concurrency,
     maxBufferedBytes: 8,
     count: () => pending.length,
@@ -120,6 +121,28 @@ describe('ordered download prefetch', () => {
     h.pending[1]!.reject(new Error('late provider failure'));
     await Promise.resolve();
     expect(h.download).toHaveBeenCalledTimes(2);
+  });
+
+  it('cancels one request and holds its admission slot until the provider settles', async () => {
+    const slots = Array.from({ length: 6 }, () => new AbortController());
+    const h = fixture(1, 1, (index) => slots[index]!.signal);
+    try {
+      const rejected = expect(h.queue.take(0)).rejects.toMatchObject({ name: 'AbortError' });
+      await vi.waitFor(() => expect(h.download).toHaveBeenCalledOnce());
+      slots[0]!.abort();
+      await rejected;
+      const release = h.queue.skip(0);
+      await Promise.resolve();
+      expect(h.download).toHaveBeenCalledTimes(1);
+      h.pending[0]!.resolve(1);
+      await release;
+      const second = h.queue.take(1);
+      h.pending[1]!.resolve(2);
+      expect(await second).toBe(2);
+      expect(h.download.mock.calls[1]![1].aborted).toBe(false);
+    } finally {
+      h.queue.close();
+    }
   });
 
   it('accepts appended selections without downloading previous entries again', async () => {

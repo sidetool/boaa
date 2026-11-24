@@ -180,6 +180,8 @@ export function createUiNextHomeAdapter(props: LibraryScreenProps, input: HomeAd
     });
   return {
     status: model.bootstrap.status,
+    retryBootstrap: actions.header.retryBootstrap,
+    bootstrapMessage: model.bootstrap.message,
     hero,
     rows,
     config,

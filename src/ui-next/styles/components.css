@@ -345,6 +345,13 @@
   white-space: nowrap;
 }
 
+/* A dialog title is usually a question: wrap it rather than cut it off. */
+.un-layer.is-dialog .un-sheet-head h2 {
+  line-height: 1.35;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
 .un-sheet-body {
   flex: 1;
   overflow: auto;
@@ -444,7 +451,11 @@
 
 @keyframes un-slide-up {
   from {
-    transform: translateY(100%);
+    transform: translate3d(0, 100%, 0);
+  }
+
+  to {
+    transform: translate3d(0, 0, 0);
   }
 }
 
@@ -480,6 +491,8 @@
     max-height: 88dvh;
     border-left: 0;
     border-radius: 22px 22px 0 0;
+    /* Match the final slide frame so mobile panels do not drop their transform on entry completion. */
+    transform: translate3d(0, 0, 0);
     animation: un-slide-up 0.3s var(--un-ease);
   }
 

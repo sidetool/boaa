@@ -680,16 +680,24 @@
 .un-select-bar {
   position: fixed;
   bottom: 24px;
-  left: 50%;
+  inset-inline: 8px;
   z-index: 65;
   display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
   gap: 4px;
+  width: max-content;
+  max-width: calc(100% - 16px);
+  margin-inline: auto;
   padding: 6px;
   border-radius: 18px;
   background: var(--un-bg-2);
   box-shadow: 0 16px 40px rgb(0 0 0 / 50%);
-  transform: translateX(-50%);
   animation: un-rise 0.25s var(--un-ease);
+}
+
+.un-select-bar > * {
+  flex: none;
 }
 
 .un-select-bar button {
@@ -821,6 +829,12 @@
 
   .un-library-actions {
     gap: 0;
+    max-width: 100%;
+  }
+
+  .un-library-actions .un-inline-search,
+  .un-library-actions .un-inline-search input {
+    min-width: 0;
   }
 
   .un-add {
@@ -868,6 +882,11 @@
 
   .un-select-bar {
     bottom: calc(var(--un-tabbar) + var(--un-safe-b) + 14px);
+  }
+
+  .un-select-bar button {
+    min-width: 44px;
+    padding-inline: 6px;
   }
 }
 

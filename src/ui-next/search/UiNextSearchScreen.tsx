@@ -1,7 +1,14 @@
 import { ChevronLeft, ChevronRight, History, Search, X } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
+import {
+  useNavigationResultFocus,
+  useNavigationScroll,
+  useNavigationViewState,
+} from '../../features/navigation/navigation-view-state';
+import { Pager } from '../chapters/Pager';
+import '../chapters/chapters.css';
 import type { LibraryWorkItem } from '../../features/library/library-work-order';
-import { ActionList, Sheet, type ActionEntry } from '../components/primitives';
+import { ActionList, Sheet, useModalFocus, type ActionEntry } from '../components/primitives';
 import { DiscoveryCard, RowRail } from '../home/rows';
 import { WorkTile } from '../library/WorkTile';
 import type { UiNextSearchScreenProps, UiNextSearchSourceGroup } from './contract';
@@ -9,13 +16,13 @@ import '../home/home.css';
 import '../library/library.css';
 import './search.css';
 
-const LIBRARY_LIMIT = 30;
+const LIBRARY_PAGE_SIZE = 30;
 
 function itemTitle(item: LibraryWorkItem) {
   return item.kind === 'book' ? item.book.novel.title : item.work.title;
 }
 
-function SourceRow({ group }: { group: UiNextSearchSourceGroup }) {
+function SourceRow({ group, scrollKey }: { group: UiNextSearchSourceGroup; scrollKey: string }) {
   return (
     <section className="un-row un-search-row" aria-label={group.title}>
       <header className="un-row-head">
@@ -35,7 +42,7 @@ function SourceRow({ group }: { group: UiNextSearchSourceGroup }) {
           </button>
         )}
       </header>
-      <RowRail count={group.items.length} startKey={group.items[0]?.id}>
+      <RowRail count={group.items.length} startKey={group.items[0]?.id} scrollKey={scrollKey}>
         {group.items.map((work) => (
           <DiscoveryCard key={work.id} work={work} />
         ))}
@@ -45,25 +52,35 @@ function SourceRow({ group }: { group: UiNextSearchSourceGroup }) {
 }
 
 /** Library and source results together. The library answers while typing; sources answer to 검색 only. */
-export function UiNextSearchScreen({ adapter, initialQuery, close }: UiNextSearchScreenProps) {
+export function UiNextSearchScreen({ adapter, routeId, initialQuery, close }: UiNextSearchScreenProps) {
+  const dialog = useRef<HTMLDivElement>(null);
   const input = useRef<HTMLInputElement>(null);
-  const [query, setQuery] = useState(initialQuery ?? '');
+  const body = useRef<HTMLDivElement>(null);
+  const viewKey = `search:${routeId}`;
+  const [view, setView] = useNavigationViewState(viewKey, { query: initialQuery ?? '', page: 1 });
+  const { query } = view;
+  const setQuery = (next: string) =>
+    setView((previous) => (previous.query === next ? previous : { query: next, page: 1 }));
+  const resultKey = JSON.stringify([viewKey, query.trim()]);
+  useNavigationScroll(body, resultKey);
+  useNavigationResultFocus(body, resultKey);
   const [menu, setMenu] = useState<LibraryWorkItem | null>(null);
   const trimmed = query.trim();
   const { libraryHelpers: library } = adapter;
 
   const adapterRef = useRef(adapter);
   adapterRef.current = adapter;
+  const openingQuery = useRef(query);
   useEffect(() => {
-    if (initialQuery?.trim()) adapterRef.current.submit(initialQuery);
-    else input.current?.focus();
-    return () => adapterRef.current.cancel();
+    if (initialQuery?.trim() && initialQuery === openingQuery.current && !adapterRef.current.submitted)
+      adapterRef.current.submit(initialQuery);
   }, [initialQuery]);
 
   const leave = () => {
     adapter.cancel();
     close();
   };
+  useModalFocus(dialog, true, leave, openingQuery.current ? dialog : input);
   const search = (value: string) => {
     if (!value.trim()) return;
     setQuery(value);
@@ -73,15 +90,18 @@ export function UiNextSearchScreen({ adapter, initialQuery, close }: UiNextSearc
   };
 
   const hits = trimmed ? adapter.library(trimmed) : [];
+  const pageCount = Math.ceil(hits.length / LIBRARY_PAGE_SIZE);
+  const page = Math.max(1, Math.min(view.page, pageCount));
+  const pageHits = hits.slice((page - 1) * LIBRARY_PAGE_SIZE, page * LIBRARY_PAGE_SIZE);
   const asked = trimmed !== '' && adapter.submitted === trimmed;
   const groups = asked ? adapter.sources : [];
-  const found = groups.filter((group) => group.status === 'ready' && group.items.length > 0);
+  const found = groups.filter((group) => group.items.length > 0);
   const waiting = groups.filter((group) => group.status === 'loading' || group.status === 'idle');
   const empty = groups.filter((group) => group.status === 'ready' && group.items.length === 0);
   const failed = groups.filter((group) => group.status === 'failed');
 
   return (
-    <div className="ui-next un-search" role="dialog" aria-modal="true" aria-label="검색">
+    <div ref={dialog} tabIndex={-1} className="ui-next un-search" role="dialog" aria-modal="true" aria-label="검색">
       <form
         className="un-search-bar"
         role="search"
@@ -105,9 +125,6 @@ export function UiNextSearchScreen({ adapter, initialQuery, close }: UiNextSearc
             aria-label="검색어"
             value={query}
             onChange={(event) => setQuery(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === 'Escape' && !query) leave();
-            }}
           />
           {query && (
             <button
@@ -125,7 +142,7 @@ export function UiNextSearchScreen({ adapter, initialQuery, close }: UiNextSearc
         </label>
       </form>
 
-      <div className="un-search-body">
+      <div className="un-search-body" ref={body}>
         {!trimmed ? (
           adapter.recent.length > 0 ? (
             <section className="un-search-recent" aria-label="최근 검색">
@@ -175,8 +192,13 @@ export function UiNextSearchScreen({ adapter, initialQuery, close }: UiNextSearc
                 </h2>
               </header>
               {hits.length > 0 ? (
-                <RowRail count={hits.length} startKey={hits[0]?.key}>
-                  {hits.slice(0, LIBRARY_LIMIT).map((item) => (
+                <RowRail
+                  key={page}
+                  count={pageHits.length}
+                  startKey={pageHits[0]?.key}
+                  scrollKey={`${resultKey}:library:${page}`}
+                >
+                  {pageHits.map((item) => (
                     <WorkTile
                       key={item.key}
                       item={item}
@@ -199,6 +221,16 @@ export function UiNextSearchScreen({ adapter, initialQuery, close }: UiNextSearc
               ) : (
                 <p className="un-search-none">내 서재에는 없어요.</p>
               )}
+              {pageCount > 1 && (
+                <div className="un-search-pages">
+                  <Pager
+                    page={page}
+                    count={pageCount}
+                    label="서재 검색 결과 페이지"
+                    onPage={(next) => setView({ query, page: next })}
+                  />
+                </div>
+              )}
             </section>
 
             {adapter.sources.length > 0 &&
@@ -214,6 +246,9 @@ export function UiNextSearchScreen({ adapter, initialQuery, close }: UiNextSearc
                 </button>
               ) : (
                 <>
+                  {found.map((group) => (
+                    <SourceRow key={group.sourceId} group={group} scrollKey={`${resultKey}:source:${group.sourceId}`} />
+                  ))}
                   {waiting.length > 0 && (
                     <div className="un-search-progress" role="status">
                       <span>
@@ -222,10 +257,7 @@ export function UiNextSearchScreen({ adapter, initialQuery, close }: UiNextSearc
                       <i aria-hidden="true" />
                     </div>
                   )}
-                  {found.map((group) => (
-                    <SourceRow key={group.sourceId} group={group} />
-                  ))}
-                  {!waiting.length && !found.length && (
+                  {!waiting.length && !found.length && !failed.length && (
                     <p className="un-search-none is-sources">소스에서도 찾지 못했어요. 다른 검색어로 해 보세요.</p>
                   )}
                   {(empty.length > 0 || failed.length > 0) && (
@@ -233,7 +265,7 @@ export function UiNextSearchScreen({ adapter, initialQuery, close }: UiNextSearc
                       {failed.map((group) => (
                         <li key={group.sourceId} className="is-failed">
                           <span>
-                            <b>{group.title}</b> · 불러오지 못했어요
+                            <b>{group.title}</b> · {group.items.length ? '갱신하지 못했어요' : '불러오지 못했어요'}
                           </span>
                           <button type="button" className="un-btn is-text is-sm" onClick={group.retry}>
                             다시 시도

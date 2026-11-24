@@ -3,18 +3,21 @@ import type { LibraryScreenProps } from '../../features/library/library-screen-c
 import { HomeDataContext } from '../home/context';
 import { useSearchAdapter } from './use-search-adapter';
 import { UiNextSearchScreen } from './UiNextSearchScreen';
-import { closeSearch, useSearchRoute } from './route';
+import { closeSearch, useSearchRoute, type SearchRoute } from './route';
 
-function SearchWorkspace(props: LibraryScreenProps & { initialQuery?: string }) {
+function SearchWorkspace(props: LibraryScreenProps & { route: SearchRoute }) {
   const home = useContext(HomeDataContext);
-  const adapter = useSearchAdapter(props, home, home?.search);
-  return createElement(UiNextSearchScreen, { adapter, initialQuery: props.initialQuery, close: closeSearch });
+  const adapter = useSearchAdapter(props, home, home?.search, props.route);
+  return createElement(UiNextSearchScreen, {
+    adapter,
+    initialQuery: props.route.initialQuery,
+    routeId: props.route.id,
+    close: closeSearch,
+  });
 }
 
 /** Route selection only; presentation is supplied by UiNextSearchScreen. */
 export function useWorkspaceSearch(props: LibraryScreenProps) {
   const route = useSearchRoute();
-  return route
-    ? createElement(SearchWorkspace, { ...props, key: route.id, initialQuery: route.initialQuery })
-    : undefined;
+  return route ? createElement(SearchWorkspace, { ...props, key: route.id, route }) : undefined;
 }

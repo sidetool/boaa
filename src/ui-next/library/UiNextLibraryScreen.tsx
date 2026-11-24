@@ -136,7 +136,7 @@ export function UiNextLibraryScreen({ model, actions, notice, navigation, adapte
   const [sheet, setSheet] = useState<SheetState>(null);
   useNavigationScroll(
     scrollRef,
-    `ui-next-library:${model.management.activeShelfId ?? ''}:${model.query}:${model.filter}:${model.sort}`,
+    `ui-next-library:${model.management.activeShelfId ?? ''}:${model.query}:${model.favoritesOnly}:${model.filter}:${model.sort}`,
     model.bootstrap.status === 'ready',
   );
 
@@ -153,6 +153,7 @@ export function UiNextLibraryScreen({ model, actions, notice, navigation, adapte
     total === 0 &&
     !model.query &&
     model.filter === 'all' &&
+    !model.favoritesOnly &&
     !activeShelf &&
     adapter.standaloneImportTasks.length === 0;
   const close = () => setSheet(null);
@@ -296,20 +297,17 @@ export function UiNextLibraryScreen({ model, actions, notice, navigation, adapte
           <div className="un-chip-row" role="toolbar" aria-label="책장">
             <button
               type="button"
-              className={cx('un-chip', !activeShelf && model.filter !== 'favorite' && 'is-active')}
-              aria-pressed={!activeShelf && model.filter !== 'favorite'}
-              onClick={() => {
-                actions.controls.setShelf(undefined);
-                if (model.filter === 'favorite') actions.controls.setFilter('all');
-              }}
+              className={cx('un-chip', !activeShelf && 'is-active')}
+              aria-pressed={!activeShelf}
+              onClick={() => actions.controls.setShelf(undefined)}
             >
               모든 책장
             </button>
             <button
               type="button"
-              className={cx('un-chip', model.filter === 'favorite' && 'is-active')}
-              aria-pressed={model.filter === 'favorite'}
-              onClick={() => actions.controls.setFilter(model.filter === 'favorite' ? 'all' : 'favorite')}
+              className={cx('un-chip', model.favoritesOnly && 'is-active')}
+              aria-pressed={model.favoritesOnly}
+              onClick={() => actions.controls.setFavoritesOnly(!model.favoritesOnly)}
             >
               즐겨찾기 <small>{counts.favorite}</small>
             </button>
@@ -422,7 +420,14 @@ export function UiNextLibraryScreen({ model, actions, notice, navigation, adapte
         </div>
       )}
 
-      {selecting && <SelectionBar batch={adapter.batchActions} shelves={management.shelves} inTrash={inTrash} />}
+      {selecting && (
+        <SelectionBar
+          count={management.selectedBookIds.size}
+          batch={adapter.batchActions}
+          shelves={management.shelves}
+          inTrash={inTrash}
+        />
+      )}
 
       <Sheet open={sheet?.kind === 'import'} onClose={close} title="서재에 추가">
         <div className="un-import-options">

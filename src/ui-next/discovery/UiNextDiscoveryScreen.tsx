@@ -536,7 +536,11 @@ export default function UiNextDiscoveryScreen(props: DiscoveryScreenProps) {
       {state.dedicated ? (
         <div className="un-discover-dedicated" data-discovery-section={state.dedicated.id}>
           <SourceView
-            key={JSON.stringify([state.dedicated, state.session.key(state.dedicated.sourceId, {})])}
+            key={JSON.stringify([
+              state.session.instance,
+              state.dedicated,
+              state.session.key(state.dedicated.sourceId, {}),
+            ])}
             section={state.dedicated}
             source={sources.sources.find((source) => source.id === state.dedicated!.sourceId)}
             session={state.session}
@@ -573,6 +577,7 @@ export default function UiNextDiscoveryScreen(props: DiscoveryScreenProps) {
             return (
               <SectionRow
                 key={JSON.stringify([
+                  state.session.instance,
                   section,
                   state.query,
                   source?.connection.state,
@@ -606,6 +611,7 @@ export default function UiNextDiscoveryScreen(props: DiscoveryScreenProps) {
       {state.quickJump && (
         <SourceQuickJump
           sources={sources.sources}
+          manageSources={library.actions.header.openExternalSourceSettings}
           close={() => state.setQuickJump(false)}
           open={(sourceId: string, input: ExternalSourceListInput) => state.openQuick(sourceId, input)}
           error={state.pinError}

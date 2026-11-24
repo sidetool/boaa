@@ -21,7 +21,7 @@ afterEach(() => {
   setSearchRoute(undefined);
   vi.unstubAllGlobals();
 });
-function fixture() {
+function fixture(route?: ReturnType<typeof getSearchRoute>) {
   const pending: { input: ExternalSourceListInput; signal: AbortSignal; resolve(page: ExternalItemPage): void }[] = [];
   const registry = {
     getExternalSourceStatus: () => ({ state: 'connected' }),
@@ -76,14 +76,32 @@ function fixture() {
           return settings;
         }),
     };
-    adapter = useSearchAdapter(props, { books, externalWorks: [] }, data);
+    adapter = useSearchAdapter(props, { books, externalWorks: [] }, data, route);
     return null;
   }
   let renderer!: ReactTestRenderer;
   act(() => {
     renderer = create(createElement(Harness));
   });
-  return { data, props, session, registry, pending, adapter: () => adapter, renderer, settings: () => settings };
+  const remount = () => {
+    act(() => renderer.unmount());
+    act(() => {
+      renderer = create(createElement(Harness));
+    });
+  };
+  return {
+    data,
+    props,
+    session,
+    registry,
+    pending,
+    adapter: () => adapter,
+    get renderer() {
+      return renderer;
+    },
+    settings: () => settings,
+    remount,
+  };
 }
 
 it('uses full local data, records eight recent terms through settings, and cancels on unmount', async () => {
@@ -176,4 +194,64 @@ it('reuses cover lookup, projects ownership, opens detail, and hands the exact q
     f.renderer.unmount();
   });
   f.session.dispose();
+});
+
+it('restores settled source results without searching again, and resumes an interrupted request on return', async () => {
+  const f = fixture({ id: 'search-history' });
+  try {
+    await act(async () => f.adapter().submit('first'));
+    f.remount();
+    await act(async () => {});
+    expect(f.pending[0].signal.aborted).toBe(true);
+    expect(f.pending).toHaveLength(2);
+    await act(async () => f.pending[1].resolve({ items: [] }));
+    f.remount();
+    expect(f.adapter().submitted).toBe('first');
+    expect(f.adapter().sources[0].status).toBe('ready');
+    expect(f.pending).toHaveLength(2);
+
+    vi.spyOn(f.session, 'key').mockReturnValue('changed-identity');
+    f.remount();
+    expect(f.adapter().submitted).toBe('');
+    expect(f.adapter().sources[0].status).toBe('idle');
+  } finally {
+    act(() => f.renderer.unmount());
+    f.session.dispose();
+  }
+});
+
+it('keeps the first visible source row in place while another source finishes', async () => {
+  const f = fixture();
+  try {
+    const offline = f.data.externalSources.sources.find((source) => source.id === 'fixture.offline')!;
+    Object.assign(offline, { connection: { state: 'connected' } });
+    f.remount();
+    await act(async () => f.adapter().submit('titles'));
+    const giveResult = async (index: number) => {
+      await act(async () =>
+        f.pending[index].resolve({
+          items: [
+            {
+              key: { connectorId: 'fixture.search', remoteId: 'id' },
+              title: 'Title',
+              kind: 'work',
+              importability: 'supported',
+            },
+          ],
+        }),
+      );
+    };
+    await giveResult(1);
+    const visible = () =>
+      f
+        .adapter()
+        .sources.filter((source) => source.items.length)
+        .map((source) => source.sourceId);
+    expect(visible()).toEqual(['fixture.offline']);
+    await giveResult(0);
+    expect(visible()).toEqual(['fixture.offline', 'fixture.search']);
+  } finally {
+    act(() => f.renderer.unmount());
+    f.session.dispose();
+  }
 });

@@ -287,3 +287,37 @@
     display: none;
   }
 }
+
+/* Same glass as the mini player: both belong to listening, not to the page. */
+.reader-playback-return {
+  position: fixed;
+  z-index: 24;
+  top: calc(74px + env(safe-area-inset-top, 0px));
+  left: 50%;
+  min-height: 36px;
+  padding: 0 16px;
+  border: 0;
+  border-radius: 999px;
+  background: rgb(30 30 36 / 94%);
+  box-shadow:
+    0 0 0 1px rgb(255 255 255 / 7%),
+    0 10px 28px rgb(0 0 0 / 40%);
+  color: var(--un-accent-2);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 650;
+  /* `translate` keeps it centered while the entrance animation scales it. */
+  translate: -50% 0;
+  animation: un-pop-in 0.18s var(--un-ease);
+  cursor: pointer;
+  -webkit-backdrop-filter: blur(22px) saturate(1.4);
+  backdrop-filter: blur(22px) saturate(1.4);
+}
+
+.reader-playback-return:hover {
+  background: rgb(40 40 48 / 96%);
+}
+
+.reader-screen.immersive .reader-playback-return {
+  top: calc(12px + env(safe-area-inset-top, 0px));
+}

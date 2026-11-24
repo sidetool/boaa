@@ -3,7 +3,7 @@ import { expect, it, vi } from 'vitest';
 import type { Paragraph } from '../domain/types';
 import type { PreparedNarration } from './plain-audiobook';
 import { buildPlainTTSBatch, buildPlainTTSItems } from './plain-tts';
-import { preparedNarrationJump, preparedNarrationSession } from './prepared-narration';
+import { loadPreparedNarration, preparedNarrationJump, preparedNarrationSession } from './prepared-narration';
 import { runTTSPlaybackSession } from './tts-playback-session-runner';
 import { ttsQueueItemFingerprint } from './tts-playback-resume';
 import { PlainTTSSessionCache } from './plain-tts-session-cache';
@@ -33,6 +33,31 @@ const plan: PreparedNarration = {
     },
   ],
 };
+
+it('keeps the original saved chunks during a catalog outage and only auto-selects complete chapters', async () => {
+  const signal = new AbortController().signal;
+  const choice = { voiceId: 'recorded-voice' };
+  const saved = { ...plan, items: plan.items.slice(0, 1) };
+  const reader = vi.fn().mockResolvedValueOnce(saved).mockResolvedValue(plan);
+  expect(await loadPreparedNarration({ reader }, 'c', choice, true, signal)).toBe(saved);
+  expect(reader).toHaveBeenCalledWith('c', choice, signal);
+  expect(await loadPreparedNarration({ reader }, 'c', choice, true, signal)).toBeUndefined();
+  expect(await loadPreparedNarration({ reader }, 'c', { id: plan.id }, true, signal)).toBe(plan);
+  expect(await loadPreparedNarration({ reader }, 'c', choice, false, signal)).toBe(plan);
+});
+
+it('allows a cache-only lookup after a missing manifest and preserves ownership and content errors', async () => {
+  const signal = new AbortController().signal;
+  const choice = { voiceId: 'recorded-voice' };
+  const reader = vi
+    .fn()
+    .mockRejectedValueOnce({ status: 503 })
+    .mockRejectedValueOnce({ status: 403 })
+    .mockRejectedValueOnce({ status: 409 });
+  expect(await loadPreparedNarration({ reader }, 'c', choice, true, signal)).toBeUndefined();
+  await expect(loadPreparedNarration({ reader }, 'c', choice, true, signal)).rejects.toMatchObject({ status: 403 });
+  await expect(loadPreparedNarration({ reader }, 'c', choice, true, signal)).rejects.toMatchObject({ status: 409 });
+});
 
 it('buffers six saved clips during the first clip and keeps playing those clips while later downloads fail', async () => {
   const cache = new PlainTTSSessionCache();

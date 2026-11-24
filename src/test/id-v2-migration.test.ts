@@ -209,8 +209,10 @@ function canonicalParsedFixture(fixture: LegacyFixture): ParsedNovel {
       rawTextHash: `sha256:${fixture.normalizedHash}`,
       normalizedTextHash: `sha256:${fixture.normalizedHash}`,
       lastReadChapterId: fixture.canonicalChapterId,
-      lastReadParagraphId: paragraphs[0]?.id,
-      favorite: true,
+      lastReadParagraphId: undefined,
+      lastReadOffset: 0,
+      lastReadProgress: 0,
+      favorite: false,
     },
     chapters: [chapter],
     paragraphs,
@@ -955,10 +957,11 @@ describe('IndexedDB v13 ID/hash migration through the current schema', () => {
     expect(await getNovel(secondFixture.canonicalNovelId)).toMatchObject({ favorite: true });
   });
 
-  it('reimports the same parsed file into the single canonical book', async () => {
+  it('reimports the file into the canonical book and preserves its favorite, reading position and bookmark', async () => {
     const db = await openReaderDb();
     const fixture = legacyFixture('same-file');
-    await insertLegacyFixture(db, fixture);
+    fixture.novel.favorite = true;
+    await insertLegacyFixture(db, fixture, true);
     await runIdV2MigrationsInDatabase(db);
 
     const resolved = await resolveCanonicalNovelIdentityInDatabase(
@@ -967,9 +970,25 @@ describe('IndexedDB v13 ID/hash migration through the current schema', () => {
       fixture.normalizedHash,
     );
     expect(resolved).toBe(fixture.canonicalNovelId);
-    await saveImportedNovel(canonicalParsedFixture(fixture));
+    const migrated = (await getNovel(fixture.canonicalNovelId))!;
+    const parsed = canonicalParsedFixture(fixture);
+    await saveImportedNovel(parsed);
     expect(await getNovels()).toHaveLength(1);
-    expect(await getNovel(fixture.canonicalNovelId)).toMatchObject({ favorite: true });
+    const saved = (await getNovel(fixture.canonicalNovelId))!;
+    expect(saved.activeContentRevisionId).toEqual(expect.any(String));
+    expect(saved.activeContentRevisionId).not.toBe(migrated.activeContentRevisionId);
+    const anchor = { chapterId: fixture.canonicalChapterId, paragraphId: parsed.paragraphs[0].id };
+    expect(saved).toMatchObject({
+      favorite: true,
+      lastReadChapterId: anchor.chapterId,
+      lastReadParagraphId: anchor.paragraphId,
+    });
+    expect(await getReadingPosition(saved.id)).toMatchObject({
+      ...anchor,
+      offsetInParagraph: 1,
+      chapterProgress: 0.25,
+    });
+    expect(await getBookmarks(saved.id)).toMatchObject([{ ...anchor, label: 'anchor' }]);
     expect(await getParagraphs(fixture.canonicalChapterId)).toHaveLength(fixture.paragraphs.length);
     expect(paragraphPageId(fixture.canonicalNovelId, fixture.canonicalChapterId, 0)).toMatch(/^page_[0-9a-f]{32}$/);
   });

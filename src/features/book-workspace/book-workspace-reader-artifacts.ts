@@ -1,6 +1,11 @@
 import type { ReaderRepository } from '../../repositories/reader-repository';
 import type { BookWorkspaceReaderArtifacts } from './book-workspace-contract';
 
+/** Sync and edits replace the field snapshot; a delayed chapter load must preserve that newer value. */
+export function publishReaderSnapshot<T>(loaded: T[], expected?: T[]) {
+  return (current: T[]) => (expected === undefined || current === expected ? loaded : current);
+}
+
 type ReaderArtifactRepository = Pick<ReaderRepository, 'listSegments' | 'listCharacters' | 'listVoiceProfiles'>;
 
 const prepared = new WeakMap<

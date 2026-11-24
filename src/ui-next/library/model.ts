@@ -56,7 +56,7 @@ export function createUiNextLibraryAdapter(props: LibraryScreenProps): UiNextLib
   const externalIds = new Set(model.externalSources.libraryWorks?.map((work) => work.id));
   const query = model.query.trim().toLocaleLowerCase();
   const standaloneImportTasks =
-    !model.management.selectionMode && model.filter === 'all' && !model.management.activeShelfId
+    !model.management.selectionMode && !model.favoritesOnly && model.filter === 'all' && !model.management.activeShelfId
       ? tasks.filter(
           (task) =>
             !(task.targetBookId && bookIds.has(task.targetBookId)) &&
@@ -72,14 +72,29 @@ export function createUiNextLibraryAdapter(props: LibraryScreenProps): UiNextLib
     filterCounts: model.collection.filterCounts,
     bookProgress,
     externalProgress,
-    bookMenu: (book) => bookMenuActions(props, book),
+    bookMenu: (book) => {
+      const task = tasks.find(
+        (candidate) =>
+          candidate.targetBookId === book.novel.id && candidate.source === 'local_file' && candidate.phase === 'failed',
+      );
+      const menu = bookMenuActions(props, book);
+      return task
+        ? [libraryAction('import-failure', '가져오기 실패 내용 보기', () => actions.imports.open(task)), ...menu]
+        : menu;
+    },
     externalMenu: (work) => externalMenuActions(props, work),
     batchActions: (input) => batchLibraryActions(props, input),
     importActions: (task) => [
-      libraryAction('open', '가져오기 상태 열기', () => actions.imports.open(task)),
+      libraryAction(
+        'open',
+        task.phase === 'failed' && task.source === 'local_file' ? '실패 내용 보기' : '가져오기 상태 열기',
+        () => actions.imports.open(task),
+      ),
       ...(!importTaskIsActive(task)
         ? [
-            libraryAction('retry', '다시 시도', () => actions.imports.open(task)),
+            ...(task.source === 'external_source' && actions.imports.canRetry(task)
+              ? [libraryAction('retry', '다시 시도', () => actions.imports.retry(task))]
+              : []),
             libraryAction('dismiss', '닫기', () => actions.imports.dismiss(task.id)),
           ]
         : []),

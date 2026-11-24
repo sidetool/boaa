@@ -71,8 +71,21 @@ it('authenticates issue/inspect/restore, streams past the default body limit, an
     const { stagedId } = inspect.json();
     const restoreUrl = `/api/backups/staged/${stagedId}/restore`;
     expect((await app.inject({ method: 'POST', url: restoreUrl })).statusCode).toBe(401);
-    const restored = await app.inject({ method: 'POST', url: restoreUrl, headers });
+    const bodyHeaders = { ...headers, 'x-backup-default-resolution': 'body' };
+    const options = {
+      defaultConflictResolution: 'skip',
+      conflictResolutions: Object.fromEntries(Array.from({ length: 500 }, (_, i) => [`book_${i}`, 'replace'])),
+    };
+    const invalid = await app.inject({
+      method: 'POST',
+      url: restoreUrl,
+      headers: bodyHeaders,
+      payload: { ...options, conflictResolutions: { book: 'unknown' } },
+    });
+    expect(invalid.statusCode).toBe(400);
+    const restored = await app.inject({ method: 'POST', url: restoreUrl, headers: bodyHeaders, payload: options });
     expect(restored.statusCode, restored.body).toBe(200);
+    expect(vi.mocked(restoreHostedBackup).mock.calls.at(-1)![3]).toEqual(options);
     const parsed = vi.mocked(restoreHostedBackup).mock.calls.at(-1)![2];
     expect('assetBlobs' in parsed && parsed.assetBlobs.get('source')).toBeInstanceOf(Blob);
     expect(

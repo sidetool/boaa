@@ -237,7 +237,9 @@ export async function markChaptersRead(
   chapterId: string,
   previous: boolean,
   expectedContentRevisionId?: string,
+  read = true,
 ): Promise<void> {
+  if (previous && !read) throw new Error('안 읽음은 회차별로 변경할 수 있어요.');
   const chapters = await getChapters(novelId);
   const target = chapters.find((chapter) => chapter.id === chapterId);
   if (!target) throw new RepositoryEntityNotFoundError('chapter', chapterId);
@@ -250,7 +252,7 @@ export async function markChaptersRead(
     await done.catch(() => undefined);
     throw new ContentRevisionConflictError('회차가 변경되었습니다. 다시 열어 주세요.');
   }
-  const readAt = nowIso();
+  const readAt = read ? nowIso() : undefined;
   for (const chapter of chapters.filter((chapter) =>
     previous ? chapter.index < target.index : chapter.id === chapterId,
   )) {

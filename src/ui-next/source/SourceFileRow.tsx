@@ -74,7 +74,7 @@ export function SourceFileRow({
           <input
             type="checkbox"
             checked={item.selected}
-            disabled={controller.busy}
+            disabled={controller.blockingBusy}
             aria-label={`${item.title} 선택`}
             onChange={actions.toggleSelection}
           />
@@ -112,9 +112,9 @@ export function SourceFileRow({
         <button
           type="button"
           className="un-btn is-sm is-ghost un-source-file-action is-progress"
-          disabled={task.phase === 'cancelling'}
+          disabled={task.phase === 'cancelling' || task.finalizing}
           aria-label={`${item.title} ${task.phase === 'cancelling' ? '취소 중' : '가져오기 중단'}`}
-          onClick={controller.cancel}
+          onClick={() => void controller.cancelTask(task)}
         >
           <span
             className={cx('un-source-file-ring', task.percent === undefined && 'is-indeterminate')}

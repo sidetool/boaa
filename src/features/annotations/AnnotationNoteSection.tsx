@@ -36,7 +36,11 @@ export function AnnotationNoteSection({ controller }: { controller: AnnotationsC
                 <button type="button" onClick={() => controller.editNote(note)}>
                   수정
                 </button>
-                <button type="button" onClick={() => void controller.deleteNote(note.id)}>
+                <button
+                  type="button"
+                  disabled={controller.noteBusy}
+                  onClick={() => void controller.deleteNote(note.id)}
+                >
                   삭제
                 </button>
               </footer>

@@ -270,6 +270,8 @@ Do not put a Windows host path in that variable.
 
 ## Backup and restore
 
+For an installation that keeps persistent volumes in place during updates, set `/state/update-backup-policy.json` to `{"scope":"database"}` in the updater state volume. Updates then retain the PostgreSQL dump and the previous deployment reference. The resulting snapshot is marked `backupScope: database`. File migrations require a separate backup of the affected files before the update. The default installation policy also copies server data and enabled metadata storage.
+
 Managed updater recovery snapshots in `/state/backups` are trimmed only after a successfully verified deployment.
 The default policy keeps the newest three within an 8 GiB budget. `/state/backup-retention.json` can set
 `keep`, `maxBytes` and a `pins` array of snapshot directory IDs. The newest complete recovery point, pinned IDs

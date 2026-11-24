@@ -6,7 +6,6 @@ import {
   analysisReviewSegmentText,
   analysisReviewSpeakerOptions,
   cloneAnalysisReviewCandidate,
-  parseAnalysisReviewListeners,
   preferredAnalysisReview,
   prepareAnalysisReviewDraft,
   replaceAnalysisReviewParagraphWithNarration,
@@ -123,7 +122,29 @@ describe('analysis review workspace model', () => {
     expect(preferredAnalysisReview([promoted, editing])).toBe(editing);
     expect(analysisReviewSegmentText(editing, editing.candidate.segments[0])).toBe('안녕');
     expect(analysisReviewSpeakerOptions(editing, editing.candidate)).toEqual(
-      expect.arrayContaining([expect.objectContaining({ id: 'character-1', label: '주인공 · character-1' })]),
+      expect.arrayContaining([expect.objectContaining({ id: 'character-1', label: '주인공' })]),
+    );
+  });
+
+  it('distinguishes characters with the same name and keeps unnamed existing listeners selectable', () => {
+    const artifact = review();
+    const options = analysisReviewSpeakerOptions(
+      {
+        ...artifact,
+        characterOptions: [...artifact.characterOptions, { id: 'other', canonicalName: '주인공', aliases: [] }],
+      },
+      {
+        ...artifact.candidate,
+        segments: artifact.candidate.segments.map((segment) => ({ ...segment, listenerIds: ['older-id'] })),
+      },
+    );
+    expect(options).toEqual(
+      expect.arrayContaining([
+        { id: 'character-1', label: '주인공 · character-1' },
+        { id: 'other', label: '주인공 · other' },
+        { id: 'older-id', label: 'older-id' },
+        { id: 'narrator', label: '내레이터' },
+      ]),
     );
   });
 
@@ -132,7 +153,7 @@ describe('analysis review workspace model', () => {
     const original = cloneAnalysisReviewCandidate(artifact.candidate);
     const labeled = updateAnalysisReviewSegment(original, 'segment-1', {
       speakerId: 'character-1',
-      listenerIds: parseAnalysisReviewListeners('unknown, character-1, unknown'),
+      listenerIds: ['unknown', 'character-1'],
       emotion: 'happy',
     });
     const withProsody = updateAnalysisReviewProsody(labeled, 'segment-1', 'delivery', 'soft');

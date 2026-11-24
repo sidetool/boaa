@@ -14,5 +14,5 @@ export function batchFailure(errors: unknown[], classify: (error: unknown) => { 
   const transient = errors.find((error) => error instanceof TransientTTSError);
   if (transient instanceof TransientTTSError)
     return new TransientTTSError(transient.kind, transient.upstreamStatus, Math.max(...errors.map(retryDelay)));
-  return errors.reduce<unknown>((a, b) => (retryDelay(a) >= retryDelay(b) ? a : b), undefined);
+  return errors.reduce((a, b) => (retryDelay(a) >= retryDelay(b) ? a : b));
 }

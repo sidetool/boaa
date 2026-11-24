@@ -44,6 +44,11 @@ export interface AnnotationReaderPort {
   scrubTo(progress: number): Promise<void>;
 }
 
+export interface NoteAnchor {
+  readonly selection: AnnotationSelection;
+  readonly location?: AnnotationLocation;
+}
+
 export interface AnnotationControllerOptions {
   readonly repository: AnnotationRepository;
   readonly reader: AnnotationReaderPort;
@@ -54,6 +59,7 @@ export interface AnnotationControllerOptions {
   readonly readerProgress: number;
   readonly openChapter: (chapter: Chapter, position: ReadingPosition) => Promise<void>;
   readonly onMutationCommitted: () => Promise<unknown>;
+  readonly onNavigated?: () => void;
   readonly onPersistenceError: (error: unknown) => Promise<boolean> | boolean;
   readonly notify: (message: string, tone?: AnnotationNoticeTone) => void;
 }

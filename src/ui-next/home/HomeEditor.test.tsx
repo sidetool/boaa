@@ -41,6 +41,7 @@ function mount(config: HomeRowConfig[] = [{ id: 'recent', kind: 'recently-added'
   };
   const adapter: UiNextHomeAdapter = {
     status: 'ready',
+    retryBootstrap: vi.fn(),
     hero: [],
     rows: [],
     config,

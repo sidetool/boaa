@@ -141,7 +141,12 @@ it('adds enabled plugin sections to home and opens a title search that automatic
   };
   act(() =>
     renderer!.update(
-      <UiNextSearchScreen adapter={search} initialQuery={getSearchRoute()?.initialQuery} close={vi.fn()} />,
+      <UiNextSearchScreen
+        routeId={getSearchRoute()!.id}
+        adapter={search}
+        initialQuery={getSearchRoute()?.initialQuery}
+        close={vi.fn()}
+      />,
     ),
   );
   expect(search.submit).toHaveBeenCalledWith('검색할 제목');

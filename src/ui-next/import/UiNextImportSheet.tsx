@@ -1,5 +1,5 @@
 import { TEXT_ENCODING_LABELS } from '@boaa/text-core/parser';
-import { BookOpen, FileArchive, FileText, ListTree, Trash2, Upload } from 'lucide-react';
+import { BookOpen, FileArchive, FileText, ListTree, Trash2, Upload, X } from 'lucide-react';
 import { useRef, useState, type DragEvent } from 'react';
 import type { ChapterSplitMode, EncodingMode } from '../../domain/types';
 import {
@@ -219,6 +219,47 @@ function Running({ controller }: { controller: ImportFeatureController }) {
   );
 }
 
+function PendingFiles({ controller }: { controller: ImportFeatureController }) {
+  const [expanded, setExpanded] = useState(false);
+  const files = controller.pendingFiles;
+  const canRemove =
+    !controller.busy &&
+    !controller.refreshPendingBooks?.length &&
+    !controller.uploadSessions.some((session) => session.completion);
+  const fileRow = (file: File, index: number) => (
+    <li key={`${file.name}:${file.size}:${file.lastModified}:${index}`}>
+      {fileIcon(file.name)}
+      <span>{file.name}</span>
+      <small>{formatImportBytes(file.size)}</small>
+      {canRemove && (
+        <button
+          type="button"
+          className="un-icon-btn is-sm"
+          aria-label={`${file.name} 제외`}
+          onClick={() => controller.removePendingFile(file)}
+        >
+          <X size={16} />
+        </button>
+      )}
+    </li>
+  );
+  return (
+    <>
+      <ul className="un-import-files">{(expanded ? files : files.slice(0, 4)).map(fileRow)}</ul>
+      {files.length > 4 && (
+        <button
+          type="button"
+          className="un-btn is-text is-sm"
+          aria-expanded={expanded}
+          onClick={() => setExpanded(!expanded)}
+        >
+          {expanded ? '목록 접기' : `나머지 ${formatCount(files.length - 4)}개 보기`}
+        </button>
+      )}
+    </>
+  );
+}
+
 /** 책 가져오기: pick files, check how they join the library, then start. Imports keep running when closed. */
 export function UiNextImportSheet({ controller }: { controller: ImportFeatureController }) {
   const input = useRef<HTMLInputElement>(null);
@@ -239,9 +280,29 @@ export function UiNextImportSheet({ controller }: { controller: ImportFeatureCon
     if (dropped.length) controller.selectFiles(dropped);
   };
   const series = controller.seriesPlan ?? controller.documentSeriesPlan;
-  const startLabel = series?.targetNovel ? '새 회차 더하기' : series ? '연재 작품으로 가져오기' : '가져오기';
+  const failedTasks = controller.tasks.filter((task) => task.phase === 'failed');
+  const showFailures = !controller.busy && failedTasks.length > 0;
+  const showPickedFiles = picked && (!showFailures || Boolean(series));
+  const showFileOptions =
+    picked &&
+    (showPickedFiles ||
+      archiveChosen ||
+      controller.duplicateBusy ||
+      controller.preparationError ||
+      controller.seriesError);
+  const startLabel = showFailures
+    ? '다시 시도'
+    : series?.targetNovel
+      ? '새 회차 더하기'
+      : series
+        ? '연재 작품으로 가져오기'
+        : '가져오기';
   const startBlocked =
     controller.busy ||
+    Boolean(
+      controller.refreshPendingBooks?.length || controller.uploadSessions.some((session) => session.completion),
+    ) ||
+    Boolean(controller.preparationError) ||
     controller.duplicateBusy ||
     controller.seriesBusy ||
     Boolean(controller.seriesInspection && !controller.seriesPlan) ||
@@ -306,7 +367,31 @@ export function UiNextImportSheet({ controller }: { controller: ImportFeatureCon
           }}
         />
 
-        <Running controller={controller} />
+        {showFailures ? (
+          <PrefSection title="가져오지 못한 항목">
+            <PrefGroup>
+              {failedTasks.map((task) => (
+                <Pref
+                  key={task.id}
+                  title={task.fileName ?? task.title}
+                  help={task.error}
+                  control={
+                    <button
+                      type="button"
+                      className="un-icon-btn is-sm"
+                      aria-label={`${task.fileName ?? task.title} 재시도 목록에서 제외`}
+                      onClick={() => controller.dismissTask(task.id)}
+                    >
+                      <X size={16} />
+                    </button>
+                  }
+                />
+              ))}
+            </PrefGroup>
+          </PrefSection>
+        ) : (
+          <Running controller={controller} />
+        )}
 
         <button
           type="button"
@@ -334,20 +419,9 @@ export function UiNextImportSheet({ controller }: { controller: ImportFeatureCon
           </span>
         </button>
 
-        {picked && (
-          <PrefSection title={`고른 파일 ${formatCount(files.length)}개`}>
-            <ul className="un-import-files">
-              {files.slice(0, 4).map((file) => (
-                <li key={`${file.name}:${file.size}:${file.lastModified}`}>
-                  {fileIcon(file.name)}
-                  <span>{file.name}</span>
-                  <small>{formatImportBytes(file.size)}</small>
-                </li>
-              ))}
-            </ul>
-            {files.length > 4 && (
-              <p className="un-import-muted">외 {formatCount(files.length - 4)}개도 같은 설정으로 차례로 가져와요.</p>
-            )}
+        {showFileOptions && (
+          <PrefSection title={showPickedFiles ? `고른 파일 ${formatCount(files.length)}개` : undefined}>
+            {showPickedFiles && <PendingFiles controller={controller} />}
             {archiveChosen &&
               (controller.supportsArchivePassword ? (
                 <PrefGroup>
@@ -366,6 +440,18 @@ export function UiNextImportSheet({ controller }: { controller: ImportFeatureCon
                 <Notice>서버로 가져올 때는 암호 없는 압축 파일만 돼요.</Notice>
               ))}
             {controller.duplicateBusy && <p className="un-import-muted">서재에 이미 있는지 확인하는 중…</p>}
+            {controller.preparationError && (
+              <Notice
+                tone="warning"
+                action={
+                  <button type="button" className="un-btn is-text is-sm" onClick={controller.retryPreparation}>
+                    다시 확인
+                  </button>
+                }
+              >
+                {controller.preparationError}
+              </Notice>
+            )}
             {controller.seriesError && <Notice tone="danger">{controller.seriesError}</Notice>}
           </PrefSection>
         )}

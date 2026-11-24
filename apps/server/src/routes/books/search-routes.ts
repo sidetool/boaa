@@ -130,6 +130,7 @@ function paginatedResponse(
     paragraphs: returnedParagraphs,
     nextCursor,
     capped,
+    // Remote budgets count returned matches. Server-Timing reports the SQL round-trip separately.
     scannedRows: returnedParagraphs.length,
     scannedTextCharacters: returnedParagraphs.reduce((total, paragraph) => total + paragraph.text.length, 0),
   };
@@ -160,49 +161,29 @@ export async function registerBookSearchRoutes(
       const cursorChapterIndex = search.cursor?.chapterIndex;
       const cursorParagraphIndex = search.cursor?.paragraphIndex;
       const sqlLimit = search.pageSize + (search.paginated ? 1 : 0);
-      const result = search.paginated
-        ? await pool.query(
-            `
-              select ps.paragraph,
-                     c.chapter_index as search_chapter_index,
-                     ps.paragraph_index as search_paragraph_index
-              from paragraph_search ps
-              join chapters c on c.id = ps.chapter_id
-              join library_books b on b.id = ps.book_id
-              where b.user_id = $1 and b.deleted_at is null
-                and ps.book_id = $2
-                and ps.text_lower like $3 escape '\\'
-                and (
-                  $4::integer is null
-                  or c.chapter_index > $4
-                  or (c.chapter_index = $4 and ps.paragraph_index > $5)
-                )
-              order by c.chapter_index asc, ps.paragraph_index asc
-              limit $6
-            `,
-            [
-              config.defaultUserId,
-              request.params.bookId,
-              escapedContainsLikePattern(search.query),
-              cursorChapterIndex ?? null,
-              cursorParagraphIndex ?? null,
-              sqlLimit,
-            ],
-          )
-        : await pool.query(
-            `
-              select ps.paragraph
-              from paragraph_search ps
-              join chapters c on c.id = ps.chapter_id
-              join library_books b on b.id = ps.book_id
-              where b.user_id = $1 and b.deleted_at is null
-                and ps.book_id = $2
-                and ps.text_lower like $3 escape '\\'
-              order by c.chapter_index asc, ps.paragraph_index asc
-              limit $4
-            `,
-            [config.defaultUserId, request.params.bookId, escapedContainsLikePattern(search.query), search.pageSize],
-          );
+      const started = performance.now();
+      // Bind the chapter order to the same book so both chapter and paragraph indexes can serve a page.
+      const result = await pool.query(
+        `select ps.paragraph, c.chapter_index as search_chapter_index, ps.paragraph_index as search_paragraph_index
+         from paragraph_search ps
+         join chapters c on c.id = ps.chapter_id and c.book_id = ps.book_id
+         join library_books b on b.id = c.book_id
+         where b.user_id = $1 and b.deleted_at is null and c.book_id = $2
+           and ps.text_lower like $3 escape '\\'
+           and ($4::integer is null or c.chapter_index >= $4)
+           and ($4::integer is null or (c.chapter_index, ps.paragraph_index) > ($4, $5::integer))
+         order by c.chapter_index asc, ps.paragraph_index asc
+         limit $6`,
+        [
+          config.defaultUserId,
+          request.params.bookId,
+          escapedContainsLikePattern(search.query),
+          cursorChapterIndex ?? null,
+          cursorParagraphIndex ?? null,
+          sqlLimit,
+        ],
+      );
+      reply.header('Server-Timing', `db_search;dur=${(performance.now() - started).toFixed(2)}`);
       if (!result.rows.length) {
         const book = await pool.query(
           'select id from library_books where id = $1 and user_id = $2 and deleted_at is null',
@@ -234,41 +215,25 @@ export async function registerBookSearchRoutes(
       }
       const cursorParagraphIndex = search.cursor?.paragraphIndex;
       const sqlLimit = search.pageSize + (search.paginated ? 1 : 0);
-      const result = search.paginated
-        ? await pool.query(
-            `
-              select ps.paragraph,
-                     ps.paragraph_index as search_paragraph_index
-              from paragraph_search ps
-              join library_books b on b.id = ps.book_id
-              where b.user_id = $1 and b.deleted_at is null
-                and ps.chapter_id = $2
-                and ps.text_lower like $3 escape '\\'
-                and ($4::integer is null or ps.paragraph_index > $4)
-              order by ps.paragraph_index asc
-              limit $5
-            `,
-            [
-              config.defaultUserId,
-              request.params.chapterId,
-              escapedContainsLikePattern(search.query),
-              cursorParagraphIndex ?? null,
-              sqlLimit,
-            ],
-          )
-        : await pool.query(
-            `
-              select ps.paragraph
-              from paragraph_search ps
-              join library_books b on b.id = ps.book_id
-              where b.user_id = $1 and b.deleted_at is null
-                and ps.chapter_id = $2
-                and ps.text_lower like $3 escape '\\'
-              order by ps.paragraph_index asc
-              limit $4
-            `,
-            [config.defaultUserId, request.params.chapterId, escapedContainsLikePattern(search.query), search.pageSize],
-          );
+      const started = performance.now();
+      const result = await pool.query(
+        `select ps.paragraph, ps.paragraph_index as search_paragraph_index
+         from paragraph_search ps
+         join library_books b on b.id = ps.book_id
+         where b.user_id = $1 and b.deleted_at is null and ps.chapter_id = $2
+           and ps.text_lower like $3 escape '\\'
+           and ($4::integer is null or ps.paragraph_index > $4)
+         order by ps.paragraph_index asc
+         limit $5`,
+        [
+          config.defaultUserId,
+          request.params.chapterId,
+          escapedContainsLikePattern(search.query),
+          cursorParagraphIndex ?? null,
+          sqlLimit,
+        ],
+      );
+      reply.header('Server-Timing', `db_search;dur=${(performance.now() - started).toFixed(2)}`);
       const chapter = result.rows.length
         ? undefined
         : await pool.query(

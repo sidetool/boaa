@@ -3,7 +3,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const repoRoot = path.resolve(fileURLToPath(new URL('..', import.meta.url)));
-const mainPath = path.join(repoRoot, 'src', 'main.tsx');
+const styleEntryPath = path.join(repoRoot, 'src', 'reader-styles.ts');
 const stylesDir = path.join(repoRoot, 'src', 'styles');
 const legacyStylesPath = path.join(repoRoot, 'src', 'styles.css');
 
@@ -110,15 +110,15 @@ function collectMatches(source, pattern) {
   return new Set([...source.matchAll(pattern)].map((match) => match[1]));
 }
 
-const mainSource = fs.readFileSync(mainPath, 'utf8');
-const actualStyleImports = [...mainSource.matchAll(/^import ['"](\.\/styles\/[^'"]+\.css)['"];?$/gm)].map(
+const styleEntry = fs.readFileSync(styleEntryPath, 'utf8');
+const actualStyleImports = [...styleEntry.matchAll(/^import ['"](\.\/styles\/[^'"]+\.css)['"];?$/gm)].map(
   (match) => match[1],
 );
 
 assert(!fs.existsSync(legacyStylesPath), 'src/styles.css must be removed after explicit entry imports are in place');
 assert(
   JSON.stringify(actualStyleImports) === JSON.stringify(expectedStyleImports),
-  `Unexpected CSS import order in src/main.tsx:\n${actualStyleImports.join('\n')}`,
+  `Unexpected CSS import order in src/reader-styles.ts:\n${actualStyleImports.join('\n')}`,
 );
 
 const expectedFileNames = expectedStyleImports.map((styleImport) => path.basename(styleImport)).sort();
@@ -128,7 +128,7 @@ const actualFileNames = fs
   .sort();
 assert(
   JSON.stringify(actualFileNames) === JSON.stringify(expectedFileNames),
-  `CSS file set does not match src/main.tsx imports:\n${actualFileNames.join('\n')}`,
+  `CSS file set does not match src/reader-styles.ts imports:\n${actualFileNames.join('\n')}`,
 );
 
 const cssSources = expectedStyleImports.map((styleImport) => {
@@ -136,7 +136,7 @@ const cssSources = expectedStyleImports.map((styleImport) => {
   const source = fs.readFileSync(path.join(stylesDir, fileName), 'utf8');
   const lines = lineCount(source);
 
-  assert(!/@import\b/.test(source), `${fileName} uses @import; keep the order explicit in src/main.tsx`);
+  assert(!/@import\b/.test(source), `${fileName} uses @import; keep the order explicit in src/reader-styles.ts`);
   assertBalancedBraces(source, fileName);
 
   return { fileName, lines, source };

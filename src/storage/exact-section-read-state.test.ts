@@ -135,6 +135,12 @@ describe('exact fixed-document section read state', () => {
     const chapters = await getChapters(book.id);
     expect(chapters[2]).toMatchObject({ id: target, title: 'New title', normalizedText: 'Keep original text' });
     expect(chapters.every((value) => value.documentSectionReadAt)).toBe(true);
+    await markChaptersRead(book.id, target, false, 'revision-active', false);
+    expect((await getChapters(book.id)).map((value) => Boolean(value.documentSectionReadAt))).toEqual([
+      true,
+      true,
+      false,
+    ]);
     const tx = db.transaction('novels', 'readonly');
     expect(await requestToPromise(tx.objectStore('novels').get(book.id))).toMatchObject({
       lastReadProgress: 0.4,

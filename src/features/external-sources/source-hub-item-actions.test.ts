@@ -18,6 +18,7 @@ function controller(patch: Partial<ExternalSourceController> = {}) {
     importBusy: false,
     canQueueItem: vi.fn(() => false),
     canStreamItem: vi.fn(() => false),
+    cancelTask: vi.fn(),
     cancel: vi.fn(),
     importItem: vi.fn(),
     importAndOpen: vi.fn(),
@@ -35,11 +36,12 @@ it('keeps active/cancelling task precedence over saved-item deletion', () => {
   const action = releaseDownloadAction(saved, c, { phase: 'cancelling' } as ImportTaskView);
   expect(action).toMatchObject({ id: 'cancel', disabled: true, title: '취소 중' });
   action.run();
-  expect(c.cancel).toHaveBeenCalledOnce();
+  expect(c.cancelTask).toHaveBeenCalledWith(expect.objectContaining({ phase: 'cancelling' }));
+  expect(c.cancel).not.toHaveBeenCalled();
   expect(releaseDownloadAction(saved, c, { phase: 'failed' } as ImportTaskView).id).toBe('delete-download');
   expect(releaseDownloadAction(item, c, { phase: 'failed' } as ImportTaskView).id).toBe('retry');
 });
-it('routes queue and update to import, streaming to read, and keeps blocked labels', () => {
+it('routes queue and update to import, streaming downloads to the queue, and keeps blocked labels', () => {
   const c = controller({ importBusy: true });
   expect(releaseDownloadAction(item, c)).toMatchObject({ disabled: true, title: '다른 작품 다운로드 중' });
   c.canQueueItem = () => true;
@@ -49,7 +51,8 @@ it('routes queue and update to import, streaming to read, and keeps blocked labe
   expect(c.importItem).toHaveBeenCalledWith(item);
   c.canStreamItem = () => true;
   releaseDownloadAction(item, c).run();
-  expect(c.importAndOpen).toHaveBeenCalledWith(item);
+  expect(c.importAndOpen).not.toHaveBeenCalled();
+  expect(c.importItem).toHaveBeenLastCalledWith(item);
   const update = { ...item, importState: 'update_available' as const };
   releaseDownloadAction(update, c).run();
   expect(c.importItem).toHaveBeenLastCalledWith(update);

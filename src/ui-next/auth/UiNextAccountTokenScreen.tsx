@@ -39,6 +39,7 @@ function Problem({ message }: { message: string }) {
  */
 export function UiNextAccountTokenScreen(props: {
   readonly kind: 'invitation' | 'password-reset';
+  readonly setupRequired?: boolean;
   /** Set when another account is signed in on this browser. */
   readonly signedIn?: SignedInAccountView;
   readonly password: string;
@@ -127,6 +128,9 @@ export function UiNextAccountTokenScreen(props: {
           ) : (
             '비밀번호 정하기'
           )}
+        </button>
+        <button type="button" className="un-btn is-text" disabled={props.submitting} onClick={props.onDismiss}>
+          {props.setupRequired ? '서버 초기 설정으로 돌아가기' : '로그인 화면으로 돌아가기'}
         </button>
       </form>
     </AuthShell>

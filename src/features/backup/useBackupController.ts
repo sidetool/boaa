@@ -1,11 +1,13 @@
+import { backupConflictResolution } from '../../repositories/backup-repository';
 import type { TaskProgress } from '@boaa/contracts';
 import { useCallback, useRef, useState } from 'react';
 import type {
   BackupConflictResolution,
   BackupInspection,
   BackupRepository,
+  BackupRestoreResult,
 } from '../../repositories/backup-repository';
-import type { ToastTone } from '../../shared/ui/ToastHost';
+import type { ToastAction, ToastTone } from '../../shared/ui/ToastHost';
 import type { PlatformDocumentIo } from '../../platform/document-io';
 
 export interface BackupFeatureController {
@@ -32,7 +34,7 @@ export interface UseBackupControllerOptions {
   repository?: BackupRepository;
   documentIo?: PlatformDocumentIo;
   refreshLibrary(): Promise<unknown>;
-  notify(message: string, tone?: ToastTone): void;
+  notify(message: string, tone?: ToastTone, action?: ToastAction): void;
   onExported?(exportedAt: string): void;
 }
 
@@ -205,38 +207,62 @@ export function useBackupController(options: UseBackupControllerOptions): Backup
     }
   }, [busy, inspectFile]);
 
+  const refreshRestoredLibrary = useCallback(async function refresh(repository: BackupRepository) {
+    if (optionsRef.current.repository !== repository) return;
+    try {
+      await optionsRef.current.refreshLibrary();
+    } catch {
+      if (optionsRef.current.repository === repository)
+        optionsRef.current.notify('복원은 완료됐지만 서재 목록을 갱신하지 못했어요.', 'warning', {
+          label: '목록 새로고침',
+          onSelect: () => refresh(repository),
+        });
+    }
+  }, []);
+
   const restoreBackup = useCallback(async () => {
     const repository = optionsRef.current.repository;
     const archive = archiveRef.current;
     if (!repository || !archive || !inspection || busy) return;
     setBusy(true);
+    archiveRef.current = undefined;
     setOperation('restore');
     setProgress({ phase: 'preparing' });
+    let result: BackupRestoreResult;
     try {
-      const result = await repository.restoreBackup(
+      // The preview only authorizes replacement of books that were already present.
+      const fallback = defaultResolution === 'replace' ? 'skip' : defaultResolution;
+      const reviewed = Object.fromEntries(
+        inspection.conflicts
+          .map(
+            ({ bookId }) => [bookId, backupConflictResolution(bookId, conflictResolutions, defaultResolution)] as const,
+          )
+          .filter(([, resolution]) => resolution !== fallback),
+      );
+      result = await repository.restoreBackup(
         archive,
         {
-          defaultConflictResolution: defaultResolution,
-          conflictResolutions,
+          defaultConflictResolution: fallback,
+          conflictResolutions: reviewed,
         },
         setProgress,
       );
-      setProgress({ phase: 'finalizing' });
-      await optionsRef.current.refreshLibrary();
-      optionsRef.current.notify(
-        `${result.restoredBooks}권을 복원했습니다.${result.skippedBooks ? ` ${result.skippedBooks}권은 건너뛰었습니다.` : ''}`,
-        'success',
-      );
-      archiveRef.current = undefined;
-      setInspection(undefined);
-      setOpen(false);
     } catch (error) {
+      archiveRef.current = archive;
       optionsRef.current.notify(error instanceof Error ? error.message : '백업을 복원하지 못했습니다.', 'danger');
+      return;
     } finally {
       setBusy(false);
       setProgress(undefined);
     }
-  }, [busy, conflictResolutions, defaultResolution, inspection]);
+    setInspection(undefined);
+    setOpen(false);
+    optionsRef.current.notify(
+      `${result.restoredBooks}권을 복원했습니다.${result.skippedBooks ? ` ${result.skippedBooks}권은 건너뛰었습니다.` : ''}`,
+      'success',
+    );
+    await refreshRestoredLibrary(repository);
+  }, [busy, conflictResolutions, defaultResolution, inspection, refreshRestoredLibrary]);
 
   const setConflictResolution = useCallback((bookId: string, value: BackupConflictResolution) => {
     setConflictResolutions((current) => ({ ...current, [bookId]: value }));

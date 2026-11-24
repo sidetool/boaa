@@ -756,7 +756,8 @@
   }
 
   .un-detail-pager small {
-    display: none;
+    flex-basis: 100%;
+    text-align: center;
   }
 
   .un-detail-facts {

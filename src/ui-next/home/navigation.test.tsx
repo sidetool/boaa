@@ -54,7 +54,7 @@ it('records home/library in existing history, restores shelf, supports native ba
     return 0;
   });
   setHomeActive(true);
-  const state = testWorkspaceState({ view: 'library' });
+  const state = testWorkspaceState({ view: 'library', libraryFilter: 'reading', libraryFavoritesOnly: true });
   const shelf = {
     activeShelfId: undefined as string | undefined,
     setActiveShelf: vi.fn((id?: string) => {
@@ -70,6 +70,7 @@ it('records home/library in existing history, restores shelf, supports native ba
       cancelNavigation: vi.fn(),
       setLibraryQuery: vi.fn(),
       setLibraryFilter: vi.fn(),
+      setLibraryFavoritesOnly: vi.fn(),
       setLibrarySort: vi.fn(),
       setLibraryViewMode: vi.fn(),
       setView: vi.fn(),
@@ -109,6 +110,8 @@ it('records home/library in existing history, restores shelf, supports native ba
     });
     expect(getHomeActive()).toBe(false);
     expect(shelf.setActiveShelf).toHaveBeenLastCalledWith('s1');
+    expect(options.workspace.setLibraryFilter).toHaveBeenLastCalledWith('reading');
+    expect(options.workspace.setLibraryFavoritesOnly).toHaveBeenLastCalledWith(true);
     await act(async () => {
       expect(handleAppBackNavigation(native).handled).toBe(true);
       await Promise.resolve();
@@ -155,6 +158,7 @@ it.each([true, false])('restores the originating tab through reader → chapters
       cancelNavigation: vi.fn(),
       setLibraryQuery: vi.fn(),
       setLibraryFilter: vi.fn(),
+      setLibraryFavoritesOnly: vi.fn(),
       setLibrarySort: vi.fn(),
       setLibraryViewMode: vi.fn(),
       setChapterQuery: vi.fn(),

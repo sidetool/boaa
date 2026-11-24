@@ -12,7 +12,7 @@ import ReaderScreen from './ReaderScreen';
 const mocks = vi.hoisted(() => ({
   enabled: true,
   repository: { searchParagraphPage: vi.fn() },
-  viewport: { scrollToSearchMatch: vi.fn().mockResolvedValue(true) },
+  viewport: { detachPlaybackFollow: vi.fn(), scrollToSearchMatch: vi.fn().mockResolvedValue(true) },
   viewportRender: vi.fn(),
   chrome: {
     visible: true,
@@ -29,6 +29,7 @@ const mocks = vi.hoisted(() => ({
 }));
 // Keep ReaderScreen's branch and the real transition; isolate viewport/plugin/browser ownership.
 vi.mock('../../app/runtime/RuntimeProvider', () => ({
+  useOptionalAppRuntime: () => undefined,
   useAppRuntime: () => ({ readerRuntime: { readerRepository: mocks.repository } }),
 }));
 vi.mock('../../extensions/ui/ReaderPluginProvider', () => ({
@@ -146,15 +147,17 @@ describe('reader search dismissal and destination navigation', () => {
     },
   );
   it('jumps directly to the match index without rerendering the body for a cursor change', async () => {
-    const { root } = mount(fixture());
+    const { root } = mount({ ...fixture(), ttsPlaybackState: 'playing' });
     act(() => root.findByType(ReaderChrome).props.search.setQuery('needle'));
     await act(async () => {
       await vi.advanceTimersByTimeAsync(200);
     });
     const rendered = mocks.viewportRender.mock.calls.length;
+    expect(mocks.viewport.detachPlaybackFollow).not.toHaveBeenCalled();
     await act(async () => {
       await root.findByType(ReaderChrome).props.search.jump(1);
     });
+    expect(mocks.viewport.detachPlaybackFollow).toHaveBeenCalledTimes(1);
     expect(mocks.viewport.scrollToSearchMatch).toHaveBeenLastCalledWith(
       expect.objectContaining({ index: 2, id: 'p2' }),
     );

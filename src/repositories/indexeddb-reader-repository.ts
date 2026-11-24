@@ -130,9 +130,10 @@ export class IndexedDbReaderRepository
     chapterId: string,
     previous: boolean,
     expectedContentRevisionId?: string,
+    read = true,
   ): Promise<void> {
     const { markChaptersRead } = await import('../storage/reader-state-store');
-    return markChaptersRead(novelId, chapterId, previous, expectedContentRevisionId);
+    return markChaptersRead(novelId, chapterId, previous, expectedContentRevisionId, read);
   }
 
   patchNovelMetadata(novelId: string, patch: NovelMetadataPatch): Promise<void> {

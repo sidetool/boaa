@@ -96,6 +96,7 @@
   }
 
   .toast-region[data-reader-active='true'][data-addon-open='true'] {
+    top: auto;
     bottom: calc(18px + env(safe-area-inset-bottom, 0px));
   }
 

@@ -3,6 +3,7 @@ import { labeledSegmentId, segmentTextIntegrityHash } from '../../domain/identit
 import type { ChapterLabelAnalysisReviewArtifact } from '../../providers/analysis-review';
 import type { ChapterLabelingResult } from '../../providers/ai';
 import type { AnalysisReviewEditIntentMap } from '../../providers/analysis-review-correction';
+import { speakerIdLabel } from './speaker-label';
 
 export const EDITABLE_ANALYSIS_REVIEW_STATUSES = new Set(['open', 'editing', 'validating']);
 export const ACTIVE_ANALYSIS_REVIEW_STATUSES = new Set(['open', 'editing', 'validating', 'approved', 'promoting']);
@@ -100,12 +101,17 @@ export function analysisReviewSpeakerOptions(
     segment.candidateSpeakers.forEach((id) => ids.add(id));
     segment.listenerIds.forEach((id) => ids.add(id));
   }
-  review.characterOptions.forEach((character) => ids.add(character.id));
-  review.candidate.characters.forEach((character) => ids.add(character.id));
-  return [...ids]
-    .filter(Boolean)
-    .sort((left, right) => (names.get(left) ?? left).localeCompare(names.get(right) ?? right, 'ko'))
-    .map((id) => ({ id, label: names.get(id) ? `${names.get(id)} · ${id}` : id }));
+  for (const id of names.keys()) ids.add(id);
+  const options = [...ids].filter(Boolean).map((id) => ({ id, label: names.get(id) || speakerIdLabel(id) }));
+  const usedNames = new Set<string>();
+  const repeatedNames = new Set<string>();
+  for (const { label } of options) {
+    if (usedNames.has(label)) repeatedNames.add(label);
+    usedNames.add(label);
+  }
+  return options
+    .map(({ id, label }) => ({ id, label: repeatedNames.has(label) ? `${label} · ${id}` : label }))
+    .sort((left, right) => left.label.localeCompare(right.label, 'ko'));
 }
 
 export function updateAnalysisReviewSegment(
@@ -192,15 +198,4 @@ export function updateAnalysisReviewProsody(
       [segmentId]: { ...previous, prosodyIntent },
     },
   };
-}
-
-export function parseAnalysisReviewListeners(value: string): string[] {
-  return [
-    ...new Set(
-      value
-        .split(',')
-        .map((item) => item.trim())
-        .filter(Boolean),
-    ),
-  ];
 }

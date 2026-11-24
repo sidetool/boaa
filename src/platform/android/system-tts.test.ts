@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { SystemTTSProvider } from '../../providers/tts';
 import {
   ANDROID_SYSTEM_TTS_EVENT,
   AndroidSystemTTSProvider,
@@ -149,6 +150,52 @@ describe('Android system TTS provider boundary', () => {
         expect.arrayContaining(['speak', 'pause', 'resume', 'stop']),
       );
     });
+  });
+
+  it('keeps device previews out of book session recovery while delivering their callbacks', async () => {
+    const bridge = new FakeSystemTtsBridge();
+    const provider = new AndroidSystemTTSProvider(bridge);
+    const onPlaybackState = vi.fn();
+    const onStart = vi.fn();
+    const onEnd = vi.fn();
+    provider.subscribePlaybackState(onPlaybackState);
+    await provider.speak({ text: '선택 부분', rate: 1, previewSignal: new AbortController().signal, onStart, onEnd });
+    const utteranceId = bridge.calls.find((call) => call.command === 'speak')?.args?.utteranceId;
+    const playback = { active: true, playing: true, utteranceId, itemIndex: 0 };
+    bridge.emit(ANDROID_SYSTEM_TTS_EVENT, { utteranceId, phase: 'start', playback });
+    expect(onStart).toHaveBeenCalledOnce();
+    expect(onPlaybackState).toHaveBeenCalledExactlyOnceWith(undefined);
+    bridge.emit(ANDROID_SYSTEM_TTS_EVENT, { utteranceId, phase: 'end' });
+    expect(onEnd).toHaveBeenCalledOnce();
+    vi.spyOn(bridge, 'invoke').mockResolvedValue({ playback });
+    expect((await provider.getStatus()).playback).toBeUndefined();
+  });
+  it('does not start a cancelled preview while the native bridge becomes ready', async () => {
+    const bridge = new FakeSystemTtsBridge();
+    const provider = new AndroidSystemTTSProvider(bridge);
+    const request = new AbortController();
+    const done = provider.speak({ text: '선택 부분', rate: 1, previewSignal: request.signal });
+    request.abort();
+    await done;
+    expect(bridge.calls.some((call) => call.command === 'speak')).toBe(false);
+  });
+  it('cancels a preview on the fallback engine after native status polling succeeds again', async () => {
+    const bridge = new FakeSystemTtsBridge();
+    vi.spyOn(bridge, 'invoke').mockRejectedValueOnce(new Error('Speech engine initializing'));
+    const provider = new AndroidSystemTTSProvider(bridge);
+    const speak = vi.spyOn(SystemTTSProvider.prototype, 'speak').mockResolvedValue();
+    const stop = vi.spyOn(SystemTTSProvider.prototype, 'stop').mockImplementation(() => {});
+    try {
+      await provider.speak({ text: '선택 부분', rate: 1, previewSignal: new AbortController().signal });
+      expect(speak).toHaveBeenCalledOnce();
+      await provider.getStatus();
+      provider.stop();
+      expect(stop).toHaveBeenCalledOnce();
+      await vi.waitFor(() => expect(bridge.calls.some((call) => call.command === 'stop')).toBe(true));
+    } finally {
+      speak.mockRestore();
+      stop.mockRestore();
+    }
   });
 
   it('hands a sentence window to one native playlist and routes callbacks per item', async () => {

@@ -56,6 +56,8 @@ export type TTSPlaybackTrackingAnchor =
     };
 
 export interface SpeakInput {
+  /** A short sample outside the book playback session. */
+  previewSignal?: AbortSignal;
   text: string;
   rate: number;
   pitch?: number;

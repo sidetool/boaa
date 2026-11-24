@@ -27,6 +27,7 @@ import { attributionKey, prepareAttributionBatch } from './speaker-attribution-p
 import {
   speakerPlan,
   loadSpeakerChapter,
+  loadCastPlayable,
   castRequests,
   castPlayable,
   type CastRequest,
@@ -785,13 +786,6 @@ export class SpeakerGenerationService {
       )
     ).rows[0];
     if (!row) throw audiobookError(404, '낭독 구간을 찾지 못했어요.');
-    const loaded = await loadSpeakerChapter(
-      this.pool,
-      this.owner,
-      run.book_id,
-      row.chapter_id,
-      run.chapter_ids.indexOf(row.chapter_id) + 1,
-    );
     const request = row.request as CastRequest;
     if (run.settings.cast?.recastSpeakers?.length)
       throw audiobookError(425, '새 목소리 제작이 끝나면 음성을 만들 수 있어요.');
@@ -805,9 +799,14 @@ export class SpeakerGenerationService {
     delete renderRequest.cast.direction;
     if (effectiveInstructions) renderRequest.cast.instructions = effectiveInstructions;
     else delete renderRequest.cast.instructions;
-    const p = loaded.paragraphs.find((p) => p.id === request.paragraphId);
-    if (!p) throw audiobookError(409, '본문이 변경됐어요.');
-    const playable = castPlayable(loaded.paragraphs, request, run.settings.rules);
+    const playable = await loadCastPlayable(
+      this.pool,
+      this.owner,
+      run.book_id,
+      row.chapter_id,
+      request,
+      run.settings.rules,
+    );
     const key = structuredIntegrityHash({
       v: 'cast-prepared-1',
       user: this.owner,

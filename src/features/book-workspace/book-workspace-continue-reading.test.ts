@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { BookWorkspaceController } from './book-workspace-controller';
 import {
   createBookWorkspaceTestHarness,
@@ -9,6 +9,31 @@ import {
 } from './book-workspace-test-fixtures';
 
 describe('continue reading from source series details', () => {
+  it('shows a different book before its annotations arrive, then publishes them for the same book after a chapter turn', async () => {
+    const novel = testNovel();
+    const chapters = [testChapter(1), testChapter(2)];
+    const harness = createBookWorkspaceTestHarness({ novel, chapters });
+    let finish!: () => void;
+    vi.spyOn(harness.ports.adjacent, 'loadBookAnnotations').mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finish = () => resolve({ bookmarks: [], highlights: [], notes: [] });
+        }),
+    );
+    const apply = vi.spyOn(harness.ports.adjacent, 'applyBookAnnotations');
+    const controller = new BookWorkspaceController(
+      harness.ports,
+      testWorkspaceState({ selectedNovel: testNovel({ id: 'previous' }) }),
+    );
+    await controller.continueReading(novel);
+    expect(controller.getSnapshot()).toMatchObject({ view: 'reader', selectedNovel: novel });
+    expect(apply).toHaveBeenCalledTimes(1);
+    await controller.openChapter(chapters[1]!);
+    finish();
+    await vi.waitFor(() => expect(apply).toHaveBeenCalledTimes(2));
+    expect(apply.mock.calls[1][1]).toBe(apply.mock.calls[0][0]);
+  });
+
   it('restores the same-book chapter list so previous and next chapters remain available', async () => {
     const novel = testNovel({ activeContentRevisionId: 'revision-1', lastReadChapterId: 'chapter-2' });
     const chapters = [testChapter(1), testChapter(2), testChapter(3)];

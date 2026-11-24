@@ -15,6 +15,7 @@ export function SourceJumpSheet({
   error,
   pinned,
   togglePin,
+  manageSources,
   saving,
 }: {
   sources: readonly ExternalSourceView[];
@@ -22,6 +23,7 @@ export function SourceJumpSheet({
   saving?: boolean;
   pinned: readonly string[];
   togglePin(source: ExternalSourceView): void;
+  manageSources?(): void;
   close(): void;
   open(source: string, input: ExternalSourceListInput): void | boolean | Promise<void | boolean>;
 }) {
@@ -86,6 +88,21 @@ export function SourceJumpSheet({
             icon={<Search size={22} />}
             title={sources.length ? '맞는 소스가 없어요' : '아직 소스가 없어요'}
             body={sources.length ? undefined : '설정 › 콘텐츠 소스에서 추가해 주세요.'}
+            action={
+              !sources.length &&
+              manageSources && (
+                <button
+                  type="button"
+                  className="un-btn is-ghost"
+                  onClick={() => {
+                    close();
+                    manageSources();
+                  }}
+                >
+                  소스 관리
+                </button>
+              )
+            }
           />
         )}
       </div>

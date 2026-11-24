@@ -24,7 +24,7 @@ export function releaseDownloadAction(
   task?: ImportTaskView,
 ): SourceHubAction & {
   title: string;
-  icon: 'progress' | 'retry' | 'delete' | 'unsupported' | 'update' | 'read' | 'download';
+  icon: 'progress' | 'retry' | 'delete' | 'unsupported' | 'update' | 'download';
 } {
   if (task && importTaskIsActive(task)) {
     const title = task.phase === 'cancelling' ? '취소 중' : '다운로드 중단';
@@ -33,8 +33,8 @@ export function releaseDownloadAction(
       icon: 'progress',
       title,
       label: `${item.title} ${title}`,
-      disabled: task.phase === 'cancelling',
-      run: controller.cancel,
+      disabled: task.phase === 'cancelling' || task.finalizing,
+      run: () => controller.cancelTask(task),
     };
   }
   if (task?.phase === 'failed' && !canReadSourceItem(item))
@@ -43,10 +43,10 @@ export function releaseDownloadAction(
       icon: 'retry',
       title: '다시 시도',
       label: `${item.title} 다시 시도`,
-      disabled: controller.busy || controller.loading,
+      disabled: (controller.busy && !controller.canQueueItem(item)) || controller.loading,
       run: () => controller.importItem(item),
     };
-  if (canReadSourceItem(item))
+  if (canReadSourceItem(item) && item.importState !== 'update_available')
     return {
       id: 'delete-download',
       icon: 'delete',
@@ -68,21 +68,21 @@ export function releaseDownloadAction(
   const streaming = controller.canStreamItem?.(item) === true;
   const updating = item.importState === 'update_available';
   const queueing = controller.canQueueItem(item);
-  const blocked = controller.importBusy && !queueing && !streaming;
+  const blocked = controller.importBusy && !queueing;
   const actionLabel = updating
     ? '업데이트'
-    : queueing && !streaming
+    : queueing
       ? '다운로드 대기열에 추가'
       : streaming
-        ? '바로 읽기'
+        ? '다운로드'
         : '다운로드 후 보기';
   return {
-    id: updating ? 'update' : queueing && !streaming ? 'queue' : 'read',
-    icon: updating ? 'update' : streaming ? 'read' : 'download',
+    id: updating ? 'update' : queueing ? 'queue' : streaming ? 'download' : 'read',
+    icon: updating ? 'update' : 'download',
     title: blocked ? '다른 작품 다운로드 중' : actionLabel,
     label: `${item.title} ${actionLabel}`,
     disabled: controller.blockingBusy || controller.loading || blocked,
-    run: () => (updating || (queueing && !streaming) ? controller.importItem(item) : controller.importAndOpen(item)),
+    run: () => (updating || queueing || streaming ? controller.importItem(item) : controller.importAndOpen(item)),
   };
 }
 export function sourceHubItemActions(
@@ -104,7 +104,7 @@ export function sourceHubItemActions(
   const importAction: SourceHubAction = {
     id: 'import',
     label: item.importState === 'update_available' ? '업데이트' : '라이브러리로 추가',
-    disabled: controller.busy || controller.loading,
+    disabled: (controller.busy && !controller.canQueueItem(item)) || controller.loading,
     run: () => controller.importItem(item),
   };
   const addWork: SourceHubAction | undefined = libraryAddEnabled

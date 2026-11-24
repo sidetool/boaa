@@ -46,6 +46,8 @@ function controller(overrides: Partial<ImportFeatureController> = {}): ImportFea
     openChapterAppend: vi.fn(),
     close: vi.fn(),
     selectFiles: vi.fn(),
+    removePendingFile: vi.fn(),
+    retryPreparation: vi.fn(),
     pickFiles: vi.fn(),
     importFiles: vi.fn(),
     startPendingImport: vi.fn(),
@@ -98,6 +100,18 @@ describe('UiNextImportSheet', () => {
     expect(markup).toContain('작품은 저장했지만 목록을 갱신하지 못했어요.');
     expect(markup).toContain('파일을 다시 가져올 필요는 없어요.');
     expect(markup).toContain('목록 갱신 다시 시도');
+  });
+
+  it('offers to recheck the selected files and prevents importing after a failed inspection', () => {
+    const markup = renderToStaticMarkup(
+      <UiNextImportSheet
+        controller={controller({ pendingFiles: [new File(['body'], 'kept.txt')], preparationError: '서재 조회 실패' })}
+      />,
+    );
+    expect(markup).toContain('kept.txt');
+    expect(markup).toContain('서재 조회 실패');
+    expect(markup).toContain('다시 확인');
+    expect(markup).toMatch(/class="un-btn is-primary" disabled=""/);
   });
 
   it('preserves the import copy and accessible dialog/file controls', () => {
@@ -220,6 +234,31 @@ describe('UiNextImportSheet', () => {
     expect(markup).toContain('이미지 저장 45개');
     expect(markup).not.toContain('aria-valuenow=');
     expect(markup).not.toContain('100%');
+  });
+
+  it('shows retained file errors and the retry action after transient progress expires', () => {
+    const markup = renderToStaticMarkup(
+      <UiNextImportSheet
+        controller={controller({
+          pendingFiles: [new File(['failed'], 'retry.txt')],
+          tasks: [
+            {
+              id: 'failed',
+              batchId: 'batch',
+              title: 'retry',
+              fileName: 'retry.txt',
+              source: 'local_file',
+              phase: 'failed',
+              error: '저장 공간이 부족합니다.',
+            },
+          ],
+        })}
+      />,
+    );
+    expect(markup).toContain('저장 공간이 부족합니다.');
+    expect(markup).toMatch(/<\/svg>다시 시도<\/button>/);
+    expect(markup).not.toContain('남은 항목');
+    expect(markup).toContain('retry.txt 재시도 목록에서 제외');
   });
 
   it('labels failed progress as a failure instead of an active import', () => {

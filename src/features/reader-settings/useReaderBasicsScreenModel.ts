@@ -19,6 +19,7 @@ interface ReaderBasicsScreenModelOptions {
   readonly addonTab: ReaderAddonTab;
   readonly overlays: { readonly syncPanelOpen: boolean; readonly importOpen: boolean };
   readonly ttsIndex?: number;
+  readonly ttsPlaybackState?: ReaderScreenModel['ttsPlaybackState'];
   readonly openRequestVersion: number;
   readonly effectiveSettings?: ReaderScreenModel['settings'];
 }
@@ -63,6 +64,7 @@ export function useReaderBasicsScreenModel(options: ReaderBasicsScreenModelOptio
         addonTab: options.addonTab,
         overlays: { settingsOpen, syncPanelOpen, importOpen },
         ttsIndex: options.ttsIndex,
+        ttsPlaybackState: options.ttsPlaybackState,
         canRestoreSavedPosition: Boolean(options.localReadingPosition || novelLastReadChapterId),
         statsVisible: options.addonOpen && options.addonTab === 'stats',
         openRequestVersion: options.openRequestVersion,
@@ -87,6 +89,7 @@ export function useReaderBasicsScreenModel(options: ReaderBasicsScreenModelOptio
     options.localReadingPosition,
     options.openRequestVersion,
     options.ttsIndex,
+    options.ttsPlaybackState,
     settings,
     options.settingsController.saveStatus,
     options.settingsController.isDirty,

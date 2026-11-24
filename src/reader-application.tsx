@@ -1,0 +1,167 @@
+import { WebNovelMetadataCollectorBroker } from './services/webnovel-metadata-collector-broker';
+import { WebNovelMetadataCollectorClient } from './services/webnovel-metadata-collector-client';
+import { accountStorage } from './storage/account-storage';
+import { ExtensionEnablementStore } from './extensions/extension-enablement-store';
+import { PlatformPluginProvider } from './extensions/platform/PlatformPluginProvider';
+import React, { useEffect, useState, useRef } from 'react';
+import type { SelfHostSession } from './features/auth/self-host-session';
+import { EmbeddedServerGate, type EmbeddedServerConnection } from './platform/EmbeddedServerGate';
+import { createReaderRuntime } from './repositories/reader-runtime';
+import ReactDOM from 'react-dom/client';
+import App from './App';
+import { createAppRuntime } from './app/runtime/app-runtime';
+import { createAppExtensionRuntime } from './extensions/app-extension-runtime';
+import { RuntimeProvider } from './app/runtime/RuntimeProvider';
+import { initializeAppCredentialStore } from './platform/secure-credentials';
+import { SelfHostAccountGate } from './features/auth/SelfHostAccountGate';
+import { DesktopWindowShell } from './platform/DesktopWindowFrame';
+import { DesktopRemoteHome, DesktopServerChoice } from './platform/DesktopServerChoice';
+import { readDesktopServerSelection, type DesktopServerSelection } from './platform/desktop-server-selection';
+import { detectPlatformRuntime } from './platform/runtime';
+import { desktopGoogleSession } from './platform/desktop-google-session';
+import { createPlatformWebNovelMetadataCollector } from './platform/webnovel-metadata-collector';
+
+import './reader-styles';
+
+export function AuthenticatedApplication({ session }: { session: SelfHostSession }) {
+  const [runtime] = useState(() =>
+    createAppRuntime({
+      readerRuntimeFactory: () => createReaderRuntime({ mode: 'remote', apiBaseUrl: session.apiBaseUrl, session }),
+      extensionRuntimeFactory: () => {
+        const storage = accountStorage(localStorage, session.storageScope, session.signal);
+        const client = new WebNovelMetadataCollectorClient(
+          new URL(`${session.apiBaseUrl}/integrations/webnovel-metadata`, location.origin).href,
+          session.fetch.bind(session),
+          { credentials: 'same-origin', allowHttp: true },
+        );
+        return createAppExtensionRuntime({
+          enablementStore: new ExtensionEnablementStore(storage),
+          webNovelMetadataCollector: new WebNovelMetadataCollectorBroker({
+            storage,
+            managedRuntime: { client, stop: async () => undefined },
+          }),
+        });
+      },
+    }),
+  );
+  const mounted = useRef(false);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      queueMicrotask(() => {
+        if (!mounted.current) runtime.dispose?.();
+      });
+    };
+  }, [runtime]);
+  return (
+    <RuntimeProvider runtime={runtime}>
+      <PlatformPluginProvider runtime={runtime.readerRuntime}>
+        <App />
+      </PlatformPluginProvider>
+    </RuntimeProvider>
+  );
+}
+
+export async function startLocalApp(): Promise<void> {
+  const platformRuntime = detectPlatformRuntime();
+  const embedded = platformRuntime.kind === 'tauri-desktop' && import.meta.env.VITE_DESKTOP_EMBEDDED_SERVER === 'true';
+  let desktopSelection: DesktopServerSelection | undefined;
+  let selectionError: string | undefined;
+  if (embedded) {
+    try {
+      desktopSelection = readDesktopServerSelection(window.localStorage);
+    } catch (error) {
+      selectionError = String(error instanceof Error ? error.message : error);
+    }
+  }
+  if (platformRuntime.hasTauri && (!embedded || desktopSelection?.mode === 'embedded')) {
+    try {
+      await initializeAppCredentialStore();
+    } catch (error) {
+      console.warn('Secure credential initialization failed; authenticated server features are unavailable.', error);
+    }
+  }
+  let additionalTrustedRegistrations:
+    | NonNullable<NonNullable<Parameters<typeof createAppExtensionRuntime>[0]>['additionalTrustedRegistrations']>
+    | undefined;
+  if (import.meta.env.DEV && import.meta.env.VITE_ENABLE_BOOK_ENRICHMENT_SMOKE_FIXTURE === 'true') {
+    const { libraryBookEnrichmentTrustedExtension } =
+      await import('./extensions/examples/library-book-enrichment-extension');
+    additionalTrustedRegistrations = [
+      {
+        definition: libraryBookEnrichmentTrustedExtension,
+        origin: 'bundled' as const,
+        trustLevel: 'trusted' as const,
+        defaultEnabled: true,
+        canDisable: true,
+        description: '실제 Web 검증에만 사용하는 개발용 작품 보강 fixture입니다.',
+      },
+    ];
+  }
+  if (import.meta.env.DEV && import.meta.env.VITE_ENABLE_EXTERNAL_SOURCE_SMOKE_FIXTURE === 'true') {
+    const { mockExternalSourceTrustedExtension } = await import('./extensions/examples/mock-external-source-extension');
+    additionalTrustedRegistrations = [
+      ...(additionalTrustedRegistrations ?? []),
+      {
+        definition: mockExternalSourceTrustedExtension,
+        origin: 'bundled' as const,
+        trustLevel: 'trusted' as const,
+        defaultEnabled: true,
+        canDisable: true,
+        description: '실제 Web 검증에만 사용하는 개발용 외부 작품 소스 fixture입니다.',
+      },
+    ];
+  }
+  const renderReader = (connection?: EmbeddedServerConnection) => {
+    const runtime = createAppRuntime({
+      readerRuntimeFactory: connection
+        ? () =>
+            createReaderRuntime({
+              mode: 'remote',
+              apiBaseUrl: `${connection.url}/api`,
+              getAuthToken: () => connection.authToken,
+              managedByDesktop: true,
+            })
+        : undefined,
+      extensionRuntimeFactory: () =>
+        createAppExtensionRuntime({
+          additionalTrustedRegistrations,
+          webNovelMetadataCollector: createPlatformWebNovelMetadataCollector(
+            platformRuntime,
+            connection ? { apiBaseUrl: `${connection.url}/api`, getAuthToken: () => connection.authToken } : undefined,
+          ),
+        }),
+    });
+
+    if (platformRuntime.kind === 'tauri-desktop') void desktopGoogleSession.restore();
+
+    return (
+      <RuntimeProvider runtime={runtime}>
+        <DesktopWindowShell>
+          <SelfHostAccountGate runtime={runtime.readerRuntime}>
+            <PlatformPluginProvider runtime={runtime.readerRuntime}>
+              <App />
+            </PlatformPluginProvider>
+          </SelfHostAccountGate>
+        </DesktopWindowShell>
+      </RuntimeProvider>
+    );
+  };
+  ReactDOM.createRoot(document.getElementById('root') as HTMLElement).render(
+    <React.StrictMode>
+      {embedded ? (
+        desktopSelection?.mode === 'embedded' ? (
+          <>
+            <EmbeddedServerGate>{renderReader}</EmbeddedServerGate>
+            <DesktopServerChoice current={desktopSelection} />
+          </>
+        ) : (
+          <DesktopRemoteHome selection={desktopSelection} configurationError={selectionError} />
+        )
+      ) : (
+        renderReader()
+      )}
+    </React.StrictMode>,
+  );
+}

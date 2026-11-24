@@ -1,14 +1,20 @@
 import type { TTSSleepTimerPreset } from '../domain/types';
 
+export function formatSleepTimerRemaining(seconds?: number, preset?: TTSSleepTimerPreset): string | undefined {
+  if (seconds !== undefined) return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
+  return preset === 'end_of_chapter' ? '화 끝' : undefined;
+}
+
 export class TTSActiveSleepTimer {
-  private preset?: TTSSleepTimerPreset;
+  // null is an explicit "off" choice in a listening session.
+  private preset?: TTSSleepTimerPreset | null;
   private remainingMs?: number;
   private runningSince?: number;
 
   constructor(private readonly now: () => number = () => performance.now()) {}
 
   start(preset?: TTSSleepTimerPreset): void {
-    this.preset = preset;
+    this.preset = preset ?? null;
     this.remainingMs = typeof preset === 'number' ? preset * 60_000 : undefined;
     this.runningSince = this.remainingMs === undefined ? undefined : this.now();
   }
@@ -42,8 +48,12 @@ export class TTSActiveSleepTimer {
     return this.remainingMs === undefined ? undefined : Math.max(0, Math.ceil(this.remainingMs / 1_000));
   }
 
+  get initialized(): boolean {
+    return this.preset !== undefined;
+  }
+
   get activePreset(): TTSSleepTimerPreset | undefined {
-    return this.preset;
+    return this.preset ?? undefined;
   }
 
   private tick(): void {

@@ -33,10 +33,11 @@ async function harness() {
   const listNovels = vi.fn(async (): Promise<Novel[]> => []);
   const listChapters = vi.fn(async (): Promise<Chapter[]> => []);
   const list = vi.fn(async (): Promise<ExternalItemPage> => ({ items: [item] }));
+  let owner = state;
   let control!: ReturnType<typeof useSourceDownloadRecovery>;
   function Probe() {
     control = useSourceDownloadRecovery({
-      state,
+      state: owner,
       listNovels,
       listChapters,
       registry: {
@@ -73,6 +74,10 @@ async function harness() {
     list,
     listNovels,
     listChapters,
+    changeOwner: async (next: ExternalSourceLocalStateStore) => {
+      owner = next;
+      await act(async () => root.update(<Probe />));
+    },
     changeGeneration: () => {
       generation = '2';
     },
@@ -227,5 +232,77 @@ it('does not prune from a superseded recovery pass after the latest snapshot mov
     finish?.(chapters);
     await oldPass;
     h.dispose();
+  }
+});
+
+it('stops catalog paging at the final requested identity', async () => {
+  const h = await harness();
+  h.list
+    .mockResolvedValueOnce({ items: [], nextCursor: 'page-2' })
+    .mockResolvedValueOnce({ items: [item], nextCursor: 'unused-page' });
+  try {
+    await act(async () => h.control.resumeDownloadQueue(h.queue));
+    expect(h.list).toHaveBeenCalledTimes(2);
+    expect(h.execute).toHaveBeenCalledOnce();
+  } finally {
+    h.dispose();
+  }
+});
+
+it('keeps changed and missing identities for review while importing the matching release', async () => {
+  const h = await harness();
+  const changed = { ...item, key: { ...item.key, remoteId: 'changed' }, remoteRevision: 'r1' };
+  const missing = { ...item, key: { ...item.key, remoteId: 'missing' } };
+  await h.control.persistDownloadIntent([changed, missing]);
+  const [queue] = await h.state.listDownloadQueues();
+  h.list.mockResolvedValue({ items: [item, { ...changed, remoteRevision: 'r2' }] });
+  try {
+    await act(async () => h.control.resumeDownloadQueue(queue!));
+    expect(h.execute).toHaveBeenCalledWith(item.key.connectorId, [item], expect.any(AbortSignal));
+    expect(h.notify).toHaveBeenCalledWith(expect.stringContaining('2개 회차'), 'warning');
+    expect((await h.state.listDownloadQueues())[0]!.items).toHaveLength(3);
+  } finally {
+    h.dispose();
+  }
+});
+
+it.each(['lock', 'import'] as const)('does not reconcile another account after waiting for %s', async (phase) => {
+  const h = await harness();
+  const next = new ExternalSourceLocalStateStore('hosted-account:other');
+  await next.saveDownloadQueue(h.queue);
+  const prune = vi.spyOn(next, 'pruneDownloadQueue');
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const request = vi.fn(async (_name: string, _opts: unknown, run: (lock: object) => Promise<void>) => {
+    if (phase === 'lock') await gate;
+    await run({});
+  });
+  vi.stubGlobal('navigator', { locks: { request } });
+  h.execute.mockImplementation(async () => {
+    await gate;
+    return true;
+  });
+  let run!: Promise<void>;
+  try {
+    await act(async () => {
+      run = h.control.resumeDownloadQueue(h.queue);
+      await vi.waitFor(() => expect(phase === 'lock' ? request : h.execute).toHaveBeenCalledOnce());
+    });
+    await h.changeOwner(next);
+    prune.mockClear();
+    await act(async () => {
+      release();
+      await run;
+    });
+    expect(prune).not.toHaveBeenCalled();
+    expect(await next.listDownloadQueues()).toEqual([h.queue]);
+    expect(h.list).toHaveBeenCalledTimes(phase === 'lock' ? 0 : 1);
+  } finally {
+    release();
+    await run;
+    h.dispose();
+    vi.unstubAllGlobals();
   }
 });

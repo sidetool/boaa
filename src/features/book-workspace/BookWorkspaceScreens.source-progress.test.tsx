@@ -26,12 +26,18 @@ function render(
   settings: ReaderSettings,
   libraryBootstrap?: ExternalSourceController['libraryBootstrap'],
   otherBook?: Novel,
+  view?: Partial<ReturnType<typeof testWorkspaceState>>,
+  shelf?: { activeId: string; works: ExternalSourceController['libraryWorks'] },
 ) {
-  const state = testWorkspaceState({ view: 'library', novels: otherBook ? [sourceBook, otherBook] : [sourceBook] });
+  const state = testWorkspaceState({
+    view: 'library',
+    novels: otherBook ? [sourceBook, otherBook] : [sourceBook],
+    ...view,
+  });
   const projection = buildBookWorkspaceLibraryProjection(state) as BookWorkspaceProjection;
   const externalSources = {
     sources: [],
-    libraryWorks: [],
+    libraryWorks: shelf?.works ?? [],
     libraryBootstrap,
     open: false,
     busy: false,
@@ -46,7 +52,8 @@ function render(
   } as unknown as ExternalSourceController;
   const libraryManagement = {
     available: false,
-    shelves: [],
+    activeShelfId: shelf?.activeId,
+    shelves: shelf ? [{ id: shelf.activeId, name: '내 책장' }] : [],
     memberships: [],
     selectionMode: false,
     selectedBookIds: new Set(),
@@ -122,3 +129,69 @@ it.each([false, true])(
     ]);
   },
 );
+
+it('combines favorite and reading filters after remote progress has been applied', () => {
+  const favorites = { libraryFavoritesOnly: true, libraryFilter: 'reading' as const };
+  const novels = [
+    { ...sourceBook, favorite: true, lastReadProgress: 0.5, lastReadChapterIndex: 15 },
+    testNovel({
+      id: 'other-reading',
+      title: '다른 읽는 작품',
+      favorite: false,
+      lastReadAt: '2026-10-10',
+      lastReadProgress: 0.5,
+    }),
+    testNovel({ id: 'other-favorite', title: '읽지 않은 즐겨찾기', favorite: true }),
+  ];
+  const markup = render(defaultSettings, undefined, undefined, { ...favorites, novels });
+  expect([...markup.matchAll(/class="un-tile-title">([^<]+)<\/span>/g)].map((match) => match[1])).toEqual([
+    '소스 작품',
+  ]);
+});
+
+it('counts the selected shelf before search and status filters, including streamed and downloaded works once', () => {
+  const stream = {
+    id: 'stream',
+    connectorId: 'source',
+    collectionRemoteId: 'series',
+    navigationRef: 'series',
+    title: '스트리밍 작품',
+    knownReleaseIds: [],
+    newReleaseIds: [],
+    availableReleaseCount: 2,
+    shelfIds: ['one'],
+    schemaVersion: 1 as const,
+    createdAt: '2026-09-01',
+    updatedAt: '2026-09-01',
+    lastCheckedAt: '2026-09-01',
+  };
+  const works = [
+    stream,
+    { ...stream, id: 'linked', localBookId: sourceBook.id },
+    { ...stream, id: 'other', shelfIds: [] },
+  ];
+  const novels = [
+    testNovel({ id: 'outside', favorite: true }),
+    { ...sourceBook, favorite: true, lastReadProgress: 0.5 },
+  ];
+  const showShelf = (libraryFavoritesOnly: boolean, activeId = 'one') =>
+    render(
+      defaultSettings,
+      undefined,
+      undefined,
+      { novels, libraryFavoritesOnly, libraryFilter: 'unread', libraryQuery: '스트리밍' },
+      { activeId, works },
+    );
+  const shelf = showShelf(false);
+  expect(shelf).toMatch(/내 책장\s*<small>2<\/small>/);
+  expect(shelf).toContain('전체<small>2</small>');
+  expect(shelf).toContain('읽는 중<small>1</small>');
+  expect(shelf).toContain('안 읽음<small>1</small>');
+  expect(shelf).toMatch(/즐겨찾기\s*<small>1<\/small>/);
+  expect(shelf).toContain('스트리밍 작품 열기');
+  const favorites = showShelf(true);
+  expect(favorites).toContain('전체<small>1</small>');
+  expect(favorites).toContain('안 읽음<small>0</small>');
+  expect(favorites).not.toContain('스트리밍 작품 열기');
+  expect(showShelf(false, 'empty')).toMatch(/내 책장\s*<small>0<\/small>/);
+});

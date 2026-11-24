@@ -1,6 +1,10 @@
 import { BookOpen, ChevronLeft, ChevronRight, Compass, FileUp, Info, Pencil, Sparkles } from 'lucide-react';
 import { useEffect, useRef, useState, useLayoutEffect } from 'react';
-import { useNavigationScroll } from '../../features/navigation/navigation-view-state';
+import {
+  hasNavigationScroll,
+  useNavigationResultFocus,
+  useNavigationScroll,
+} from '../../features/navigation/navigation-view-state';
 import type { LibraryWorkItem } from '../../features/library/library-work-order';
 import { ActionList, cx, Progress, Sheet, type ActionEntry } from '../components/primitives';
 import type { LibraryAction } from '../library/contract';
@@ -30,6 +34,7 @@ function useScrollIndex(track: React.RefObject<HTMLElement>, count: number) {
       const step = first ? first.offsetWidth + parseFloat(getComputedStyle(element).columnGap || '0') : 1;
       setIndex(Math.max(0, Math.min(count - 1, Math.round(element.scrollLeft / (step || 1)))));
     };
+    update();
     element.addEventListener('scroll', update, { passive: true });
     return () => element.removeEventListener('scroll', update);
   }, [track, count]);
@@ -58,6 +63,7 @@ function ContinueCard({ hero }: { hero: HomeHeroItem }) {
       <button
         type="button"
         className="un-continue-cover"
+        data-navigation-item={`cover:${hero.item.key}`}
         aria-label={`${title} 작품 정보`}
         onClick={() => void hero.openDetail()}
       >
@@ -77,13 +83,19 @@ function ContinueCard({ hero }: { hero: HomeHeroItem }) {
           </div>
         )}
         <div className="un-continue-actions">
-          <button type="button" className="un-btn is-primary is-sm" onClick={() => void hero.resume()}>
+          <button
+            type="button"
+            className="un-btn is-primary is-sm"
+            data-navigation-item={`resume:${hero.item.key}`}
+            onClick={() => void hero.resume()}
+          >
             <BookOpen size={16} />
             {hero.resumeLabel}
           </button>
           <button
             type="button"
             className="un-icon-btn is-sm un-continue-info"
+            data-navigation-item={`info:${hero.item.key}`}
             aria-label="작품 정보"
             onClick={() => void hero.openDetail()}
           >
@@ -102,12 +114,13 @@ function HomeHero({ items }: { items: readonly HomeHeroItem[] }) {
   const many = items.length > 1;
   // Streamed works join a moment after local books. Snap keeps the old first card in view, which hid the
   // newest work off-screen; until the reader touches the row, a new front card brings the row back to it.
-  const touched = useRef(false);
+  const touched = useRef(hasNavigationScroll('home:hero'));
   const first = items[0]?.item.key;
   useLayoutEffect(() => {
     const element = track.current;
     if (element && !touched.current && element.scrollLeft !== 0) element.scrollTo({ left: 0, behavior: 'instant' });
   }, [first]);
+  useNavigationScroll(track, 'home:hero', true, 'scrollLeft');
   const touch = () => {
     touched.current = true;
   };
@@ -126,6 +139,7 @@ function HomeHero({ items }: { items: readonly HomeHeroItem[] }) {
         <div
           ref={track}
           className="un-continue-track"
+          data-navigation-rail="home:hero"
           tabIndex={many ? 0 : undefined}
           onPointerDown={touch}
           onWheel={touch}
@@ -237,6 +251,7 @@ export function UiNextHomeScreen({ adapter }: UiNextHomeScreenProps) {
   const [sheet, setSheet] = useState<SheetState>(null);
   const close = () => setSheet(null);
   useNavigationScroll(scrollRef, 'ui-next-home', adapter.status === 'ready');
+  useNavigationResultFocus(scrollRef, 'ui-next-home');
 
   const rows = adapter.rows.filter(
     (row) => row.status !== 'ready' || row.items.length > 0 || row.config.kind === 'plugin' || row.error,
@@ -284,7 +299,10 @@ export function UiNextHomeScreen({ adapter }: UiNextHomeScreenProps) {
       ) : adapter.status === 'failed' ? (
         <div className="un-empty">
           <b>서재를 불러오지 못했어요</b>
-          <p>잠시 뒤 다시 열어 주세요.</p>
+          {adapter.bootstrapMessage && <p>{adapter.bootstrapMessage}</p>}
+          <button type="button" className="un-btn is-ghost" onClick={adapter.retryBootstrap}>
+            다시 시도
+          </button>
         </div>
       ) : empty ? (
         <EmptyHome adapter={adapter} />

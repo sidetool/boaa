@@ -63,6 +63,7 @@ export function actions(): LibraryScreenActions {
     },
     controls: {
       setFilter: vi.fn(),
+      setFavoritesOnly: vi.fn(),
       setSort: vi.fn(),
       setViewMode: vi.fn(),
       emptyTrash: vi.fn(),
@@ -90,6 +91,8 @@ export function actions(): LibraryScreenActions {
     },
     imports: {
       open: vi.fn(),
+      canRetry: vi.fn(() => true),
+      retry: vi.fn(),
       dismiss: vi.fn(),
     },
   };
@@ -104,6 +107,7 @@ export function model(novels: Novel[], overrides: Partial<LibraryScreenModel> = 
     externalSources: { active: false, busy: false, sources: [] },
     importTasks: [],
     filter: 'all',
+    favoritesOnly: false,
     sort: 'recent',
     viewMode: 'grid',
     collection: buildLibraryCollectionModel({

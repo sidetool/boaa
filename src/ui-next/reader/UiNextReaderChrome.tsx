@@ -46,14 +46,12 @@ export function UiNextReaderChrome({
   chrome,
   search,
   location,
-  mode,
   readingFlow,
   activeBookmark,
   activeHighlight,
   selection,
   mobileSearchOpen,
   overflowOpen,
-  onSetMode,
   onMobileSearchOpenChanged,
   onOverflowOpenChanged,
   onGoToSavedPosition,
@@ -73,7 +71,9 @@ export function UiNextReaderChrome({
     ? `${formatCount(model.chapter.index)}화 · ${model.chapter.title}`
     : model.chapter.title;
   const busy = model.navigation?.busy || !viewport;
-  const listening = mode === 'listen';
+  const listening = Boolean(model.ttsPlaybackState);
+  const listeningLabel =
+    model.ttsPlaybackState === 'paused' ? '일시정지' : model.ttsPlaybackState === 'preparing' ? '준비 중' : '듣는 중';
 
   const toggleBookmark = async () => {
     if (bookmarkPending) return;
@@ -293,12 +293,12 @@ export function UiNextReaderChrome({
             type="button"
             className={cx('un-reader-tool', listening && 'is-active')}
             disabled={model.transient}
-            aria-label={listening ? '읽기 모드' : '듣기 시작'}
+            aria-label={listening ? '현재 듣기 패널 열기' : '듣기 시작'}
             aria-pressed={listening}
-            onClick={() => (listening ? onSetMode('read') : actions.startTTS(location?.ttsIndex ?? 0))}
+            onClick={() => (listening ? actions.openAddon('tts') : actions.startTTS(location?.ttsIndex ?? 0))}
           >
             <Headphones size={21} />
-            <span>{listening ? '듣는 중' : '듣기'}</span>
+            <span>{listening ? listeningLabel : '듣기'}</span>
           </button>
           <button
             type="button"

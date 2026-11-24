@@ -12,6 +12,7 @@ import type { ImportTaskView } from '../../features/import/import-task-projectio
 import { episode, sourceId } from '../../features/external-sources/source-command-test-fixtures';
 import { canSelectItem } from '../../features/external-sources/source-hub-item-model';
 import { sourceHubItemActions } from '../../features/external-sources/source-hub-item-actions';
+import { sourceEpisodeNumber } from '../../features/external-sources/source-primary-read';
 import { paginateReleases } from '../../features/external-sources/source-release-list-model';
 import { SourceStreamReader } from '../../features/external-sources/SourceStreamReader';
 import { useSourceHubModel } from '../../features/external-sources/useSourceHubModel';
@@ -101,7 +102,10 @@ function controller(): ExternalSourceController {
     importSelected: vi.fn().mockResolvedValue(undefined),
     deleteDownloads: vi.fn().mockResolvedValue(undefined),
     openImported: vi.fn().mockResolvedValue(undefined),
+    canRetryTask: vi.fn(() => true),
+    retryTask: vi.fn(),
     dismissTask: vi.fn(),
+    cancelTask: vi.fn(),
     cancel: vi.fn(),
     connect: vi.fn().mockResolvedValue(undefined),
     disconnect: vi.fn().mockResolvedValue(undefined),
@@ -222,6 +226,7 @@ beforeEach(() => {
     },
   };
   list = {
+    episodeNumber: (item) => sourceEpisodeNumber(item, hub.contentItems.indexOf(item)),
     query: '',
     setQuery: vi.fn(),
     readFilter: 'all',
@@ -339,12 +344,18 @@ describe('routing and catalog header', () => {
     expect(root.findByType(SourceStreamReader).props).toEqual(hub.streamReaderProps);
     expect(root.findAllByType('header')).toHaveLength(0);
   });
-  it.each(['missing', 'disconnected'] as const)('renders null for a %s source without a local series', (state) => {
-    if (state === 'missing') hub.activeSource = undefined;
-    else hub.connected = false;
-    mount();
-    expect(renderer!.toJSON()).toBeNull();
-  });
+  it.each(['missing', 'disconnected'] as const)(
+    'offers settings and exit for a %s source without a local series',
+    (state) => {
+      if (state === 'missing') hub.activeSource = undefined;
+      else hub.connected = false;
+      const root = mount();
+      click(button(root, '소스 관리'));
+      click(button(root, '닫기'));
+      expect(hub.commands.openSourceSettings).toHaveBeenCalledOnce();
+      expect(hub.commands.close).toHaveBeenCalledOnce();
+    },
+  );
   it('keeps local series accessible without a connected source', () => {
     localWork();
     hub.activeSource = undefined;
@@ -799,7 +810,7 @@ describe('source primary read and opening feedback', () => {
   );
 
   it('keeps fallback episode numbering global across pages', () => {
-    const items = Array.from({ length: 12 }, (_, index) => ({
+    const items = Array.from({ length: 32 }, (_, index) => ({
       ...episode(String(index)),
       title: `제목-${index}`,
       release: { title: '번호 없는 제목' },
@@ -807,7 +818,7 @@ describe('source primary read and opening feedback', () => {
     releases(items);
     list.page = paginateReleases(items, 2);
     const root = mount();
-    expect(text(releaseRow(root, items[10]).findByProps({ className: 'un-chapter-index' }))).toBe('11');
+    expect(text(releaseRow(root, items[30]).findByProps({ className: 'un-chapter-index' }))).toBe('31');
   });
 
   it('marks only the opening row and clears its spinner when opening completes', () => {
@@ -887,6 +898,14 @@ describe('release list controls and reading', () => {
     expect(c.importAndOpen).toHaveBeenCalledExactlyOnceWith(item);
     expect(c.openImported).not.toHaveBeenCalled();
   });
+  it.each(['imported', 'update_available'] as const)('shows read status alongside %s', (importState) => {
+    const item = { ...episode(), readingState: 'read' as const, importState, localBookId: 'book' };
+    releases([item]);
+    const row = releaseRow(mount(), item);
+    expect(text(row)).toContain('읽음');
+    expect(text(row)).toContain(importState === 'imported' ? '다운로드됨' : '업데이트 있음');
+  });
+
   it('keeps a non-readable and non-streamable row disabled', () => {
     releases();
     expect(releaseRow(mount()).props.disabled).toBe(true);
@@ -894,6 +913,18 @@ describe('release list controls and reading', () => {
 });
 
 describe('release selection mode', () => {
+  it('opens the requested library work in selection mode without starting a download', () => {
+    const item = episode();
+    props = { ...props, downloadRequest: { workId: 'pick-work', sequence: 1 } };
+    patch({ activeSubscription: { id: 'pick-work' } as NonNullable<ExternalSourceController['activeSubscription']> });
+    releases([item]);
+    const root = mount();
+    expect(root.findByProps({ 'aria-label': `${item.title} 선택` }).props.checked).toBe(false);
+    click(button(root, '완료'));
+    expect(root.findAllByProps({ type: 'checkbox' })).toHaveLength(0);
+    expect(c.importSelected).not.toHaveBeenCalled();
+  });
+
   it('shows row and page checkboxes only after pressing selection', () => {
     const items = [episode('one'), episode('two')];
     releases(items);
@@ -982,7 +1013,7 @@ describe('release download icons and commands', () => {
         retry: `${item.title} 다시 시도`,
         delete: `${item.title} 다운로드 삭제`,
         update: `${item.title} 업데이트`,
-        read: `${item.title} 바로 읽기`,
+        read: `${item.title} 다운로드`,
         download: `${item.title} 다운로드 후 보기`,
         unsupported: '지원하지 않음',
       };
@@ -991,7 +1022,7 @@ describe('release download icons and commands', () => {
         retry: 'lucide-rotate-ccw',
         delete: 'lucide-trash2',
         update: 'lucide-refresh-cw',
-        read: 'lucide-play',
+        read: 'lucide-download',
         download: 'lucide-download',
         unsupported: 'lucide-x',
       };
@@ -1007,9 +1038,10 @@ describe('release download icons and commands', () => {
         return;
       }
       click(action);
-      if (state === 'progress') expect(c.cancel).toHaveBeenCalledExactlyOnceWith();
+      if (state === 'progress') expect(c.cancelTask).toHaveBeenCalledWith(expect.objectContaining({ id: 'task-1' }));
       else if (state === 'delete') expect(c.deleteDownloads).toHaveBeenCalledExactlyOnceWith([item]);
-      else if (state === 'retry' || state === 'update') expect(c.importItem).toHaveBeenCalledExactlyOnceWith(item);
+      else if (state === 'retry' || state === 'update' || state === 'read')
+        expect(c.importItem).toHaveBeenCalledExactlyOnceWith(item);
       else expect(c.importAndOpen).toHaveBeenCalledExactlyOnceWith(item);
     },
   );
@@ -1094,7 +1126,7 @@ describe('release status, paging, and selection summary', () => {
     expect(list.retryList).toHaveBeenCalledExactlyOnceWith();
   });
   it.each([1, 2, 3])('shows page %s and routes previous/next to setRequestedPage', (page) => {
-    const items = Array.from({ length: 25 }, (_, i) => episode(String(i + 1)));
+    const items = Array.from({ length: 65 }, (_, i) => episode(String(i + 1)));
     releases(items);
     list.page = paginateReleases(items, page);
     const root = mount();
@@ -1112,9 +1144,9 @@ describe('release status, paging, and selection summary', () => {
     }
   });
   it('routes selection summary read/unread and clear actions', async () => {
-    const items = Array.from({ length: 12 }, (_, index) => ({
+    const items = Array.from({ length: 32 }, (_, index) => ({
       ...episode(String(index + 1)),
-      selected: index === 0 || index === 11,
+      selected: index === 0 || index === 31,
     }));
     releases(items);
     hub.selectedCount = 2;
@@ -1124,16 +1156,84 @@ describe('release status, paging, and selection summary', () => {
     const bar = batch(root);
     expect(text(bar)).toContain('2개 선택');
     // Include the selected release outside the current page, excluding every unselected release.
-    expect(list.page.items).not.toContain(items[11]);
+    expect(list.page.items).not.toContain(items[31]);
     await clickAsync(button(bar, '읽음'));
     await clickAsync(button(bar, '안 읽음'));
-    expect(c.setReleasesRead).toHaveBeenNthCalledWith(1, [items[0], items[11]], true);
-    expect(c.setReleasesRead).toHaveBeenNthCalledWith(2, [items[0], items[11]], false);
+    expect(c.setReleasesRead).toHaveBeenNthCalledWith(1, [items[0], items[31]], true);
+    expect(c.setReleasesRead).toHaveBeenNthCalledWith(2, [items[0], items[31]], false);
     expect(c.setReleasesRead).toHaveBeenCalledTimes(2);
     expect(list.setSelectedRead).not.toHaveBeenCalled();
     click(button(root, '완료'));
     expect(c.selectAllSupported).toHaveBeenCalledExactlyOnceWith(false);
   });
+  it('uses the same fallback number for a filtered row, jump and range in reverse sort', () => {
+    const items = Array.from({ length: 36 }, (_, i) => ({
+      ...episode(String(i)),
+      title: `release-${i}`,
+      release: { title: 'Interlude', chapterNumber: i < 2 ? 0 : 100 + i },
+      readingState: i === 1 ? ('read' as const) : ('unread' as const),
+    }));
+    releases(items);
+    list.sort = 'desc';
+    list.readFilter = 'read';
+    list.sorted = [items[1]];
+    list.page = paginateReleases(list.sorted, 1);
+    const root = mount();
+    expect(text(releaseRow(root, items[1]).findByProps({ className: 'un-chapter-index' }))).toBe('2');
+    click(button(root, '회차 이동'));
+    const submitNumbers = (values: string[]) => {
+      const form = sheet(root).findByType('form');
+      form
+        .findAllByType('input')
+        .forEach((input, index) => act(() => input.props.onChange({ target: { value: values[index] } })));
+      act(() => form.props.onSubmit({ preventDefault: vi.fn() }));
+    };
+    submitNumbers(['2']);
+    expect(list.setRequestedPage).toHaveBeenCalledWith(2);
+    click(button(root, '선택'));
+    click(button(root, '범위 선택'));
+    submitNumbers(['2', '2']);
+    expect(c.selectAllSupported).toHaveBeenCalledExactlyOnceWith(true, [externalItemKeyId(items[1].key)]);
+  });
+
+  it('jumps to the current release even when a read filter excludes it', () => {
+    const items = Array.from({ length: 64 }, (_, i) => ({
+      ...episode(String(i + 1)),
+      release: { title: `${i + 1}화`, chapterNumber: i + 1 },
+      readingState: i === 61 ? ('current' as const) : ('unread' as const),
+    }));
+    releases(items);
+    list.readFilter = 'read';
+    const root = mount();
+    click(button(root, '회차 이동'));
+    click(button(sheet(root), '읽던 화로 이동'));
+    expect(list.setReadFilter).toHaveBeenCalledWith('all');
+    expect(list.setRequestedPage).toHaveBeenCalledWith(3);
+    expect(c.importAndOpen).not.toHaveBeenCalled();
+  });
+
+  it('adds only downloadable releases in the selected number range across pages', () => {
+    const items = Array.from({ length: 36 }, (_, i) => ({
+      ...episode(String(i + 1)),
+      release: { title: `${i + 1}화`, chapterNumber: i + 1 },
+      importState: i === 30 ? ('imported' as const) : ('available' as const),
+    }));
+    releases(items);
+    const root = mount();
+    click(button(root, '선택'));
+    click(button(root, '범위 선택'));
+    const form = sheet(root).findByType('form');
+    const inputs = form.findAllByType('input');
+    act(() => inputs[0].props.onChange({ target: { value: '30' } }));
+    act(() => inputs[1].props.onChange({ target: { value: '32' } }));
+    act(() => form.props.onSubmit({ preventDefault: vi.fn() }));
+    expect(c.selectAllSupported).toHaveBeenCalledWith(
+      true,
+      [items[29], items[31]].map((item) => externalItemKeyId(item.key)),
+    );
+    expect(c.importSelected).not.toHaveBeenCalled();
+  });
+
   it('offers clearing search and filters for empty release results', () => {
     releases([]);
     list.query = '없는 회차';
@@ -1145,6 +1245,73 @@ describe('release status, paging, and selection summary', () => {
 });
 
 describe('batch action bar', () => {
+  it('reopens standalone failures without reporting an active download', () => {
+    patch({
+      importBusy: false,
+      tasks: [{ ...task('failed'), externalItemKey: 'key', error: '저장 실패' }],
+      recoverableDownloads: [],
+    });
+    const root = mount();
+    const opener = button(root, '다운로드 실패 1개 · 대기열 열기');
+    expect(opener.findAllByProps({ className: 'un-spin' })).toHaveLength(0);
+    expect(root.findAllByProps({ className: 'un-select-bar un-source-batch' })).toHaveLength(0);
+    click(opener);
+    expect(text(sheet(root))).toContain('실패');
+    click(button(sheet(root), '다운로드 작업 다시 시도'));
+    expect(c.retryTask).toHaveBeenCalledExactlyOnceWith('task-1');
+    click(button(sheet(root), '닫기'));
+    click(opener);
+    click(button(sheet(root), '다운로드 작업 오류 닫기'));
+    expect(c.dismissTask).toHaveBeenCalledExactlyOnceWith('task-1');
+  });
+  it('opens failed groups and offers retry only for a recoverable row', () => {
+    const one = { ...task('failed'), id: 'one', fileName: '첫 회차' };
+    const two = { ...task('failed'), id: 'two', fileName: '둘째 회차' };
+    patch({ tasks: [one, two, { ...task('queued'), id: 'next' }], canRetryTask: (id: string) => id === one.id });
+    const root = mount();
+    click(button(root, '다운로드 대기열 열기'));
+    const group = sheet(root).findByType('details');
+    expect(group.props.open).toBe(true);
+    expect(text(group.findByType('summary'))).toContain('실패 2개');
+    expect(button(group, '첫 회차 다시 시도')).toBeTruthy();
+    expect(group.findAllByProps({ 'aria-label': '둘째 회차 다시 시도' })).toHaveLength(0);
+    expect(button(group, '둘째 회차 오류 닫기')).toBeTruthy();
+  });
+  it('hides failed-row retry while another download runs and restores it when idle', () => {
+    const failed = { ...task('failed'), id: 'failed', fileName: '실패 회차' };
+    const active = { ...task('downloading'), id: 'active', fileName: '받는 회차' };
+    patch({ busy: true, importBusy: true, tasks: [failed, active] });
+    const root = mount();
+    click(button(root, '다운로드 대기열 열기'));
+    expect(sheet(root).findAllByProps({ 'aria-label': '실패 회차 다시 시도' })).toHaveLength(0);
+    expect(button(sheet(root), '실패 회차 오류 닫기')).toBeTruthy();
+    patch({ busy: false, importBusy: false, tasks: [failed] });
+    act(() => renderer!.update(<UiNextSourceHubScreen {...props} />));
+    click(button(sheet(root), '실패 회차 다시 시도'));
+    expect(c.retryTask).toHaveBeenCalledExactlyOnceWith('failed');
+  });
+  it('lists multiple works and cancels only the chosen release', () => {
+    const first = { ...task('downloading'), externalItemKey: 'a', fileName: '첫 회차' };
+    const next = {
+      ...task('queued'),
+      id: 'next',
+      batchId: 'next-batch',
+      title: '다음 작품',
+      externalItemKey: 'b',
+      fileName: '다음 회차',
+    };
+    patch({ importBusy: true, tasks: [first, next] });
+    const root = mount();
+    click(button(root, '다운로드 대기열 열기'));
+    const queue = sheet(root);
+    expect(text(queue)).toContain(first.title);
+    expect(text(queue)).toContain(next.title);
+    const group = queue.findAllByType('details').find((details) => text(details).includes(next.title))!;
+    act(() => group.props.onToggle({ currentTarget: { open: true } }));
+    click(button(queue, '다음 회차 다운로드 중단'));
+    expect(c.cancelTask).toHaveBeenCalledExactlyOnceWith(next);
+    expect(c.cancel).not.toHaveBeenCalled();
+  });
   it('shows batch progress and cancels the active download', () => {
     releases();
     patch({
@@ -1157,7 +1324,7 @@ describe('batch action bar', () => {
     expect(bar.props.role).toBe('status');
     expect(text(bar)).toContain('선택 회차 다운로드 중');
     expect(text(bar)).toContain('1/5');
-    click(button(bar, '중단'));
+    click(button(bar, '현재 묶음 중단'));
     expect(hub.commands.cancel).toHaveBeenCalledExactlyOnceWith();
   });
   it.each([

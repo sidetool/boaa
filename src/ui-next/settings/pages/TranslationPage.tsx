@@ -1,6 +1,10 @@
 import { TranslateIcon } from '../../../shared/ui/translate-icon';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { useTranslationClient, translationError } from '../../../features/translation/translation-client';
+import {
+  useTranslationClient,
+  translationError,
+  type TranslationClient,
+} from '../../../features/translation/translation-client';
 import {
   DEFAULT_TRANSLATION_SETTINGS,
   validateTranslationSettings,
@@ -22,46 +26,70 @@ const PROVIDER_NAME: Record<TranslationProvider, string> = {
 
 export function TranslationPage() {
   const client = useTranslationClient();
+  const [owner, setOwner] = useState({ client, generation: 0 });
+  if (owner.client !== client) setOwner({ client, generation: owner.generation + 1 });
+  if (!client) return <Notice>서버의 관리자 계정에서 작품 번역을 설정할 수 있어요.</Notice>;
+  return <TranslationSettingsForm key={owner.generation} client={client} />;
+}
+
+function TranslationSettingsForm({ client }: { client: TranslationClient }) {
   const [configuration, setConfiguration] = useState<TranslationConfiguration>();
   const [draft, setDraft] = useState<TranslationSettings>({ ...DEFAULT_TRANSLATION_SETTINGS });
+  const [draftRevision, setDraftRevision] = useState(0);
+  const [credentials, setCredentials] = useState<TranslationConfiguration['credentials']>({});
+  const [credentialRefreshFailed, setCredentialRefreshFailed] = useState(false);
   const [credential, setCredential] = useState('');
   const [fileName, setFileName] = useState('');
-  const [busy, setBusy] = useState(false);
+  const [busy, setBusy] = useState(true);
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
   const [remove, setRemove] = useState<'key' | 'cache'>();
   const generation = useRef(0);
   const rememberedNextChapters = useRef(1);
+  const editsBeforeConfiguration = useRef<Partial<TranslationSettings>>({});
   const alive = useRef(false);
-  const invalidateRead = useCallback(() => {
+  const invalidateFileRead = useCallback(() => {
     generation.current++;
+  }, []);
+  const applyConfiguration = useCallback((value: TranslationConfiguration, resetDraft: boolean) => {
+    setConfiguration(value);
+    setCredentials(value.credentials);
+    setCredentialRefreshFailed(false);
+    if (resetDraft) {
+      setDraft({ ...value.settings, ...editsBeforeConfiguration.current });
+      editsBeforeConfiguration.current = {};
+      setDraftRevision(value.revision);
+      if (value.settings.nextChapters > 0) rememberedNextChapters.current = value.settings.nextChapters;
+    }
   }, []);
   useEffect(() => {
     alive.current = true;
     const abort = new AbortController();
-    void client?.configuration(abort.signal).then(
+    void client.configuration(abort.signal).then(
       (value) => {
-        setConfiguration(value);
-        setDraft(value.settings);
-        if (value.settings.nextChapters > 0) rememberedNextChapters.current = value.settings.nextChapters;
+        if (abort.signal.aborted) return;
+        applyConfiguration(value, true);
+        setBusy(false);
       },
       (reason) => {
-        if (!abort.signal.aborted) setError(translationError(reason));
+        if (abort.signal.aborted) return;
+        setError(translationError(reason));
+        setBusy(false);
       },
     );
     return () => {
       alive.current = false;
-      invalidateRead();
+      invalidateFileRead();
       abort.abort();
     };
-  }, [client, invalidateRead]);
+  }, [client, applyConfiguration, invalidateFileRead]);
   const clearKey = () => {
-    generation.current++;
+    invalidateFileRead();
     setCredential('');
     setFileName('');
   };
   const run = async (action: () => Promise<void>) => {
-    if (busy || !client) return;
+    if (busy) return;
     setBusy(true);
     setMessage('');
     setError('');
@@ -73,8 +101,10 @@ export function TranslationPage() {
       if (alive.current) setBusy(false);
     }
   };
-  const patch = <K extends keyof TranslationSettings>(key: K, value: TranslationSettings[K]) =>
+  const patch = <K extends keyof TranslationSettings>(key: K, value: TranslationSettings[K]) => {
+    if (!configuration) editsBeforeConfiguration.current[key] = value;
     setDraft((previous) => ({ ...previous, [key]: value }));
+  };
   const field = (
     label: string,
     key: 'model' | 'targetLanguage' | 'endpoint' | 'project' | 'location',
@@ -116,8 +146,24 @@ export function TranslationPage() {
       }
     />
   );
-  if (!client) return <Notice>서버의 관리자 계정에서 작품 번역을 설정할 수 있어요.</Notice>;
-  const saved = configuration?.credentials[draft.provider]?.saved === true;
+  const refreshCredentialStatus = async () => {
+    try {
+      const value = await client.configuration();
+      if (alive.current) applyConfiguration(value, !configuration);
+    } catch {
+      if (alive.current) setCredentialRefreshFailed(true);
+    }
+  };
+  const changeCredential = async (save: boolean) => {
+    const provider = draft.provider;
+    const receipt = save ? await client.credential(provider, credential) : await client.deleteCredential(provider);
+    if (!alive.current) return;
+    clearKey();
+    setCredentials((current) => ({ ...current, [provider]: receipt }));
+    setMessage(`${PROVIDER_NAME[provider]} 키를 ${receipt.saved ? '저장했어요.' : '삭제했어요.'}`);
+    await refreshCredentialStatus();
+  };
+  const saved = credentials[draft.provider]?.saved === true;
   const vertex = draft.provider === 'vertex';
   // The header reports what is saved on the server, not the unsaved draft below it.
   const active = configuration?.settings;
@@ -212,7 +258,11 @@ export function TranslationPage() {
                 <strong>{vertex ? '서비스 계정 JSON' : 'API 키'}</strong>
               </span>
               <span className={cx('un-translation-state', saved && 'is-saved')}>
-                {saved ? '서버에 암호화해 저장됨 · 원문 조회 불가' : '저장된 키 없음'}
+                {saved
+                  ? '서버에 암호화해 저장됨 · 원문 조회 불가'
+                  : configuration || credentials[draft.provider]
+                    ? '저장된 키 없음'
+                    : '키 상태 확인 필요'}
               </span>
             </div>
             {vertex ? (
@@ -279,17 +329,7 @@ export function TranslationPage() {
               <button
                 className="un-btn is-primary is-sm"
                 disabled={busy || !credential}
-                onClick={() =>
-                  void run(async () => {
-                    await client.credential(draft.provider, credential);
-                    clearKey();
-                    const value = await client.configuration();
-                    if (alive.current) {
-                      setConfiguration(value);
-                      setMessage('키를 서버에 저장했어요. 번역 설정도 저장해 주세요.');
-                    }
-                  })
-                }
+                onClick={() => void run(() => changeCredential(true))}
               >
                 키 저장
               </button>
@@ -364,6 +404,12 @@ export function TranslationPage() {
       </PrefSection>
 
       <div className="un-translation-footer">
+        {credential && (
+          <p role="status">입력한 인증 정보를 먼저 ‘키 저장’으로 저장하거나 ‘입력 지우기’를 눌러 주세요.</p>
+        )}
+        {credentialRefreshFailed && (
+          <Notice tone="warning">설정 상태를 갱신하지 못했어요. ‘다시 불러오기’로 확인해 주세요.</Notice>
+        )}
         {error && <Notice tone="danger">{error}</Notice>}
         {message && (
           <p className="un-translation-message" role="status">
@@ -376,10 +422,10 @@ export function TranslationPage() {
             disabled={busy}
             onClick={() =>
               void run(async () => {
+                if (credentialRefreshFailed) return refreshCredentialStatus();
                 const value = await client.configuration();
                 if (alive.current) {
-                  setConfiguration(value);
-                  setDraft(value.settings);
+                  applyConfiguration(value, true);
                   clearKey();
                 }
               })
@@ -389,14 +435,13 @@ export function TranslationPage() {
           </button>
           <button
             className="un-btn is-primary"
-            disabled={busy || !configuration}
+            disabled={busy || !configuration || Boolean(credential)}
             onClick={() =>
               void run(async () => {
                 const settings = validateTranslationSettings(draft);
-                const value = await client.save(settings, configuration!.revision);
+                const value = await client.save(settings, draftRevision);
                 if (alive.current) {
-                  setConfiguration(value);
-                  setDraft(value.settings);
+                  applyConfiguration(value, true);
                   setMessage('번역 설정을 저장했어요.');
                   window.dispatchEvent(new Event('boaa-translation-settings'));
                 }
@@ -421,13 +466,11 @@ export function TranslationPage() {
           const kind = remove;
           setRemove(undefined);
           void run(async () => {
-            if (kind === 'key') {
-              await client.deleteCredential(draft.provider);
-              clearKey();
-            } else await client.clear();
+            if (kind === 'key') return changeCredential(false);
+            await client.clear();
             const value = await client.configuration();
             if (alive.current) {
-              setConfiguration(value);
+              applyConfiguration(value, false);
               setMessage('삭제했어요.');
             }
           });

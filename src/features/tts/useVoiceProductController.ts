@@ -1,3 +1,4 @@
+import { isAbortError } from '../../utils/async';
 import { randomUuid } from '../../utils/random-uuid';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Character, VoiceProfile } from '../../domain/types';
@@ -244,7 +245,8 @@ export function useVoiceProductController(input: VoiceProductControllerInput) {
         });
         return true;
       } catch (error) {
-        input.notify(error instanceof Error ? error.message : '샘플 합성에 실패했습니다.', 'danger');
+        if (!isAbortError(error))
+          input.notify(error instanceof Error ? error.message : '샘플 합성에 실패했습니다.', 'danger');
         return false;
       } finally {
         setSampleBusyProfileId(undefined);

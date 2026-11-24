@@ -57,6 +57,7 @@ export interface ReaderCommands {
     chapterId: string,
     previous: boolean,
     expectedContentRevisionId?: string,
+    read?: boolean,
   ): Promise<void>;
   patchNovelMetadata(novelId: string, patch: NovelMetadataPatch): Promise<void>;
   deleteNovel(novelId: string, expectedRevision?: number): Promise<void>;

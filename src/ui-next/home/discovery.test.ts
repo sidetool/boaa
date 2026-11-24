@@ -396,3 +396,49 @@ it('loads independent filters from the same source using search and keeps disabl
   expect(f.adapter().rows).toHaveLength(2);
   f.session.dispose();
 });
+
+it('hides retained home cards after the retention window or a denied refresh', async () => {
+  const f = fixture();
+  f.row().requestLoad!();
+  await vi.waitFor(() => expect(f.row().status).toBe('ready'));
+  const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 8 * 86400_000);
+  try {
+    expect(f.row().items).toHaveLength(0);
+    f.row().requestLoad!();
+    await vi.waitFor(() => expect(f.row().status).toBe('ready'));
+    f.list.mockRejectedValueOnce(Object.assign(new Error('access_denied'), { status: 403 }));
+    f.row().retry!();
+    await vi.waitFor(() => expect(f.row()).toMatchObject({ status: 'failed', error: 'access_denied', items: [] }));
+    expect(f.session.peek('fixture.source', { browseMode: 'popular' })).toBeUndefined();
+  } finally {
+    clock.mockRestore();
+    f.session.dispose();
+  }
+});
+
+it('waits for revalidation on a new visit when list caching is disabled', async () => {
+  vi.stubGlobal('localStorage', { getItem: () => JSON.stringify({ listMinutes: 0 }) });
+  const f = fixture();
+  try {
+    f.row().requestLoad!();
+    await vi.waitFor(() => expect(f.row().status).toBe('ready'));
+    expect(f.row().refreshAt).toBeUndefined();
+    f.row().releaseLoad!();
+    expect(f.row()).toMatchObject({ status: 'loading', items: [] });
+    let finish!: (page: ExternalItemPage) => void;
+    f.list.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    );
+    f.row().requestLoad!();
+    await vi.waitFor(() => expect(f.list).toHaveBeenCalledTimes(2));
+    expect(f.row().items).toEqual([]);
+    finish({ items: [{ ...work, title: 'New result' }] });
+    await vi.waitFor(() => expect(f.row().items[0]).toMatchObject({ work: { title: 'New result' } }));
+  } finally {
+    f.session.dispose();
+    vi.unstubAllGlobals();
+  }
+});

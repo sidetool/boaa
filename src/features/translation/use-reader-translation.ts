@@ -25,6 +25,7 @@ export function useReaderTranslation(model: ReaderScreenModel, repository: Reade
   const configuration = configurationState?.client === client ? configurationState?.value : undefined;
   const [result, setResult] = useState<TranslationResult>();
   const [error, setError] = useState('');
+  const [jobError, setJobError] = useState<{ source: 'action' | 'status'; message: string }>();
   const [busy, setBusy] = useState(false);
   const [open, setOpen] = useState(false);
   const [wanted, setWanted] = useState(false);
@@ -104,6 +105,7 @@ export function useReaderTranslation(model: ReaderScreenModel, repository: Reade
     cache.current = undefined;
     setResult(undefined);
     setError('');
+    setJobError(undefined);
     setBusy(false);
     if (intent.current.workKey !== sourceSession.workKey || previousClient.current !== sourceSession.client)
       intent.current = { workKey: sourceSession.workKey, display: false };
@@ -166,6 +168,7 @@ export function useReaderTranslation(model: ReaderScreenModel, repository: Reade
       const signal = session.current.signal;
       setBusy(true);
       setError('');
+      setJobError(undefined);
       try {
         const prepared = await prepare();
         if (ticket !== epoch.current || action !== operation.current || signal.aborted) return;
@@ -181,7 +184,7 @@ export function useReaderTranslation(model: ReaderScreenModel, repository: Reade
         setOpen(false);
       } catch (reason) {
         if (ticket === epoch.current && action === operation.current && !signal.aborted)
-          setError(translationError(reason));
+          setJobError({ source: 'action', message: translationError(reason) });
       } finally {
         if (ticket === epoch.current) {
           starting.current = false;
@@ -244,9 +247,16 @@ export function useReaderTranslation(model: ReaderScreenModel, repository: Reade
       if (abort.signal.aborted || ticket !== epoch.current) return;
       try {
         const next = await client.result(resultId, abort.signal);
-        if (!abort.signal.aborted && ticket === epoch.current) setResult(next);
+        if (!abort.signal.aborted && ticket === epoch.current) {
+          const stillRunning = next.status === 'running' || next.status === 'queued';
+          setJobError((previous) => (stillRunning && previous?.source === 'action' ? previous : undefined));
+          setResult(next);
+        }
       } catch (reason) {
-        if (!abort.signal.aborted && ticket === epoch.current) setError(translationError(reason));
+        if (!abort.signal.aborted && ticket === epoch.current)
+          setJobError((previous) =>
+            previous?.source === 'action' ? previous : { source: 'status', message: translationError(reason) },
+          );
       }
       if (!abort.signal.aborted) timer = setTimeout(() => void poll(), 2000);
     };
@@ -386,7 +396,7 @@ export function useReaderTranslation(model: ReaderScreenModel, repository: Reade
     available,
     configuration,
     result,
-    error,
+    error: jobError?.message || error,
     busy,
     open,
     setOpen,
@@ -413,18 +423,23 @@ export function useReaderTranslation(model: ReaderScreenModel, repository: Reade
         const ticket = epoch.current;
         const action = operation.current;
         const signal = session.current.signal;
+        let cancellationAccepted = false;
         try {
           await client.cancel(result.id);
+          cancellationAccepted = true;
           if (ticket !== epoch.current || action !== operation.current || signal.aborted) return;
           polling.current?.abort();
           const next = await client.result(result.id, signal);
           if (ticket === epoch.current && action === operation.current && !signal.aborted) {
+            setError('');
+            setJobError(undefined);
             setResult(next);
             setFollowing(false);
           }
         } catch (reason) {
-          if (ticket === epoch.current && action === operation.current && !signal.aborted)
-            setError(translationError(reason));
+          if (ticket === epoch.current && action === operation.current && !signal.aborted) {
+            setJobError({ source: cancellationAccepted ? 'status' : 'action', message: translationError(reason) });
+          }
         } finally {
           // Resume only after the authoritative read settles, including failure.
           // Never overlap that read with a new poll or revive an obsolete session.

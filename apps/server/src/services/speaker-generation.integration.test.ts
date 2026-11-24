@@ -1445,6 +1445,7 @@ function gate() {
   it('dispatches ordered B1 and B2 while A3 is held with a total cap of 3 and no replacement A4', async () => {
     await withPostgresSchema(harness!, 'speaker_priority_three', async (pool) => {
       const f = await setup(pool, 1, ['c1', 'c2', 'c3', 'c4']);
+      const render = vi.spyOn(f.service, 'render');
       const held = { c1: gate(), c2: gate(), c3: gate(), c4: gate() };
       const b1 = gate();
       const entered: string[] = [];
@@ -1522,15 +1523,19 @@ function gate() {
         expect(active).toBe(1);
         expect(settled).toBe(false);
         expect(entered).not.toContain('c4');
-        expect(f.synthesize).not.toHaveBeenCalled();
-        expect(
-          (
-            await pool.query(
-              "select count(*)::int n from saved_audiobook_items where audiobook_id=$1 and status<>'ready'",
-              [job.id],
-            )
-          ).rows[0].n,
-        ).toBe(6);
+        const committed = (
+          await pool.query<{ ordinal: number; chapter_id: string }>(
+            'select ordinal, chapter_id from saved_audiobook_items where audiobook_id=$1 order by ordinal',
+            [job.id],
+          )
+        ).rows;
+        expect(committed.map((item) => item.chapter_id)).toEqual(['c1', 'c1', 'c1', 'c2', 'c2', 'c2']);
+        // The audio worker can already be rendering any committed items while analysis of c3 is held.
+        const committedOrdinals = committed.map((item) => item.ordinal);
+        for (const [id, ordinal] of render.mock.calls) {
+          expect(id).toBe(job.id);
+          expect(committedOrdinals).toContain(ordinal);
+        }
         held.c3.resolve();
         await pending;
         expect(startedB).toEqual(['c1', 'c2', 'c3']);
@@ -1546,6 +1551,7 @@ function gate() {
         Object.values(held).forEach((g) => g.resolve());
         b1.resolve();
         await pending;
+        render.mockRestore();
         generate.mockRestore();
         await f.cleanup();
       }

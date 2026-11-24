@@ -5,13 +5,19 @@ export function validSourceWebViewRequest(input: unknown): input is SourceWebVie
   if (!input || typeof input !== 'object' || Array.isArray(input)) return false;
   const row = input as Record<string, unknown>;
   return (
-    Object.keys(row).every((key) => ['url', 'script', 'headers', 'timeoutMs', 'waitUntil'].includes(key)) &&
+    Object.keys(row).every((key) =>
+      ['url', 'script', 'headers', 'timeoutMs', 'waitUntil', 'renderedParagraphs'].includes(key),
+    ) &&
     (row.waitUntil === undefined || row.waitUntil === 'load' || row.waitUntil === 'domcontentloaded') &&
     typeof row.url === 'string' &&
     row.url.length <= 8192 &&
     typeof row.script === 'string' &&
     row.script.length > 0 &&
     row.script.length <= 128 * 1024 &&
+    (row.renderedParagraphs === undefined ||
+      (typeof row.renderedParagraphs === 'string' &&
+        row.renderedParagraphs.trim().length > 0 &&
+        row.renderedParagraphs.length <= 256)) &&
     (row.timeoutMs === undefined ||
       (Number.isInteger(row.timeoutMs) && Number(row.timeoutMs) >= 100 && Number(row.timeoutMs) <= 90000)) &&
     (row.headers === undefined ||

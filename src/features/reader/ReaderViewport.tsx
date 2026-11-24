@@ -48,6 +48,7 @@ import { PaginatedReaderViewport } from './PaginatedReaderViewport';
 import { useReaderGestureHandlers } from './use-reader-gestures';
 import { useScrollChapterBoundary } from './use-scroll-chapter-boundary';
 import { SerializedProgressPersistence, sharedReaderPositionPersistence } from './reader-progress-controller';
+import { useReaderPlaybackFollow } from './use-reader-playback-follow';
 import { useReaderScrollPosition } from './use-reader-scroll-position';
 import { AutoReadingPresentation, type AutoReadingMode, type AutoReadingResult } from './auto-reading-modes';
 
@@ -55,6 +56,13 @@ export type ReaderFlowBreaks = Readonly<Record<string, readonly number[]>>;
 
 export interface ReaderViewportApi {
   readonly flow: ReaderRuntimeFlow;
+  readonly detachPlaybackFollow?: () => void;
+  readonly isPlaybackFollowDetached?: () => boolean;
+  readonly seekPlaybackPosition?: (
+    target: string | number,
+    behavior: ScrollBehavior,
+    signal: AbortSignal,
+  ) => Promise<unknown>;
   readonly prepareScrollHandoff?: (
     anchor: ReaderAnchor,
     offsetFromTop: number,
@@ -65,7 +73,7 @@ export interface ReaderViewportApi {
   readonly resetContent: () => void;
   readonly flushPosition: () => Promise<void>;
   readonly scrollToSearchMatch?: (paragraph: Paragraph) => Promise<boolean>;
-  readonly scrollToParagraph: (paragraphId: string) => Promise<boolean>;
+  readonly scrollToParagraph: (paragraphId: string, source?: 'playback', signal?: AbortSignal) => Promise<boolean>;
   readonly scrollToParagraphIndex: (
     paragraphIndex: number,
     align?: 'start' | 'center' | 'end',
@@ -106,6 +114,7 @@ export interface ReaderViewportProps {
   readonly pageTransitionPending?: boolean;
   readonly navigationBusy?: boolean;
   readonly mode: ReaderMode;
+  readonly ttsSessionActive?: boolean;
   readonly ttsIndex?: number;
   readonly ttsParagraphId?: string;
   readonly continuousSource?: ContinuousTextSource;
@@ -127,6 +136,7 @@ export interface ReaderViewportProps {
 
 export interface ReaderViewportLayerProps extends ReaderViewportProps {
   readonly isActive: boolean;
+  readonly seekPlaybackPage?: (target: string | number, signal: AbortSignal) => Promise<unknown>;
   readonly positionPersistence?: SerializedProgressPersistence;
   readonly pageLayer?: ReactNode;
   readonly nativeScrollReady?: boolean;
@@ -149,10 +159,13 @@ function createViewportApiProxy(
     get flow() {
       return current()?.flow ?? fallbackFlow;
     },
+    detachPlaybackFollow: () => current()?.detachPlaybackFollow?.(),
+    isPlaybackFollowDetached: () => current()?.isPlaybackFollowDetached?.() ?? false,
     resetContent: () => current()?.resetContent(),
     flushPosition: () => current()?.flushPosition() ?? Promise.resolve(),
     scrollToSearchMatch: (paragraph) => current()?.scrollToSearchMatch?.(paragraph) ?? Promise.resolve(false),
-    scrollToParagraph: (paragraphId) => current()?.scrollToParagraph(paragraphId) ?? Promise.resolve(false),
+    scrollToParagraph: (paragraphId, source) =>
+      current()?.scrollToParagraph(paragraphId, source) ?? Promise.resolve(false),
     scrollToParagraphIndex: (paragraphIndex, align, behavior) =>
       current()?.scrollToParagraphIndex(paragraphIndex, align, behavior) ?? Promise.resolve(),
     scrubTo: (progress) => current()?.scrubTo(progress) ?? Promise.resolve(),
@@ -287,6 +300,7 @@ function VirtualizedReaderViewportComponent({
   chapters,
   settings,
   mode,
+  ttsSessionActive,
   ttsIndex,
   ttsParagraphId,
   continuousSource,
@@ -307,6 +321,7 @@ function VirtualizedReaderViewportComponent({
   positionPersistence,
   pageLayer,
   nativeScrollReady,
+  seekPlaybackPage,
   onNativeScroll,
   onScrollHandoffInvalidated,
 }: ReaderViewportLayerProps) {
@@ -318,6 +333,7 @@ function VirtualizedReaderViewportComponent({
     chapters,
     novel.activeContentRevisionId ?? novel.id,
     continuousSource,
+    ttsSessionActive,
   );
   const sequence = continuousState.window;
   const initialChapter = useRef(activeChapter);
@@ -653,7 +669,7 @@ function VirtualizedReaderViewportComponent({
     },
     onVisualLocation: (location) => {
       if (isActive) {
-        if (sequence && location.chapterId && location.chapterId !== activeChapter.id) {
+        if (sequence && location.chapterId && location.chapterId !== activeChapter.id && !ttsSessionActive) {
           const observed = sequence.entries.find((entry) => entry.chapter.id === location.chapterId)?.chapter;
           if (observed) {
             screenHandle.getActions().observeChapter?.(observed);
@@ -668,11 +684,18 @@ function VirtualizedReaderViewportComponent({
   });
   const recordVisibleLocation = progress.handleScroll;
 
+  const playbackNavigation = useRef<number>();
   const scrollToParagraphIndex = useCallback(
-    async (index: number, align: 'start' | 'center' | 'end' = 'center', behavior: ScrollBehavior = 'smooth') => {
-      if (opening || chapter.paragraphCount <= 0) return;
+    async (
+      index: number,
+      align: 'start' | 'center' | 'end' = 'center',
+      behavior: ScrollBehavior = 'smooth',
+      existingNavigation?: number,
+      playback?: AbortSignal,
+    ) => {
+      if (opening || chapter.paragraphCount <= 0 || playback?.aborted) return;
+      const navigation = existingNavigation ?? beginNavigation();
       setSearchPlacement(false);
-      const navigation = beginNavigation();
       let targetIndex = clamp(index, 0, chapter.paragraphCount - 1);
       const targetRow = sequence?.row(targetIndex);
       await pages.loadIndexes([targetIndex]);
@@ -682,9 +705,10 @@ function VirtualizedReaderViewportComponent({
         targetIndex = current;
       }
       if (searchPlacement) await nextFrame();
-      if (!isCurrentNavigation(navigation)) return;
+      if (!isCurrentNavigation(navigation) || playback?.aborted) return;
+      playbackNavigation.current = playback ? navigation : undefined;
       virtualizer.scrollToIndex(targetIndex, { align, behavior: translationActive.current ? 'auto' : behavior });
-      onRevealChrome();
+      if (!playback) onRevealChrome();
     },
     [
       beginNavigation,
@@ -700,19 +724,65 @@ function VirtualizedReaderViewportComponent({
   );
 
   const scrollToParagraph = useCallback(
-    async (paragraphId: string, behavior: ScrollBehavior = 'smooth'): Promise<boolean> => {
+    async (paragraphId: string, behavior: ScrollBehavior = 'smooth', playback?: AbortSignal): Promise<boolean> => {
+      if (opening || playback?.aborted) return false;
+      const navigation = beginNavigation();
       const cached = pages.paragraphById(paragraphId);
       const paragraph =
         (cached && sequence ? sequence.original(cached) : cached) ?? (await repository.getParagraph(paragraphId));
-      if (!paragraph || (!sequence && paragraph.chapterId !== chapter.id)) return false;
+      if (
+        playback?.aborted ||
+        !isCurrentNavigation(navigation) ||
+        !paragraph ||
+        (!sequence && paragraph.chapterId !== chapter.id)
+      )
+        return false;
       const index = sequence ? sequence.index(paragraph.chapterId, paragraph.index - 1) : paragraph.index - 1;
       if (index === undefined) return false;
-      await scrollToParagraphIndex(index, 'center', behavior);
+      await scrollToParagraphIndex(index, 'center', behavior, navigation, playback);
       return true;
     },
-    [chapter.id, pages, repository, scrollToParagraphIndex, sequence],
+    [beginNavigation, chapter.id, isCurrentNavigation, opening, pages, repository, scrollToParagraphIndex, sequence],
   );
+  const seekPlaybackPosition = async (
+    target: string | number,
+    behavior: ScrollBehavior,
+    signal: AbortSignal,
+  ): Promise<unknown> => {
+    if (!isActive && seekPlaybackPage) return seekPlaybackPage(target, signal);
+    if (sequence && sequence.index(activeChapter.id, 0) === undefined) {
+      // The reader may have gone beyond the joined window's five-chapter cache.
+      // Rebuild from the live narration chapter without reopening the book or restarting audio.
+      flushSync(continuousState.reopen);
+      return signal.aborted ? false : apiRef.current?.seekPlaybackPosition?.(target, behavior, signal);
+    }
+    return typeof target === 'string'
+      ? scrollToParagraph(target, behavior, signal)
+      : scrollToParagraphIndex(
+          sequence?.index(activeChapter.id, target) ?? target,
+          'center',
+          behavior,
+          undefined,
+          signal,
+        );
+  };
+  const playbackFollow = useReaderPlaybackFollow(Boolean(ttsSessionActive), ttsIndex, seekPlaybackPosition);
 
+  const detachPlaybackFollow = () => {
+    if (!ttsSessionActive) return;
+    playbackFollow.detach();
+    if (playbackNavigation.current !== undefined && isCurrentNavigation(playbackNavigation.current)) {
+      scrollPosition.cancelNavigation();
+    }
+  };
+  const { isDetached } = playbackFollow;
+  const { readLocation } = progress;
+  const visualChapter = useCallback(() => {
+    const id = sequence && isDetached() ? readLocation()?.chapterId : undefined;
+    return id && id !== activeChapter.id
+      ? (sequence?.entries.find((entry) => entry.chapter.id === id)?.chapter ?? activeChapter)
+      : activeChapter;
+  }, [activeChapter, isDetached, readLocation, sequence]);
   const scrollByPixels = useCallback(
     (deltaY: number) => {
       if (opening) return;
@@ -763,7 +833,8 @@ function VirtualizedReaderViewportComponent({
   const goChapter = useCallback(
     async (direction: -1 | 1, openAtEnd = false) => {
       if (navigationBusy) return;
-      const next = chapters.find((candidate) => candidate.index === activeChapter.index + direction);
+      const current = visualChapter();
+      const next = chapters.find((candidate) => candidate.index === current.index + direction);
       if (!next) return;
       if (!openAtEnd) {
         await screenHandle.getActions().openChapter(next);
@@ -784,7 +855,7 @@ function VirtualizedReaderViewportComponent({
         },
       });
     },
-    [activeChapter.index, chapters, novel.id, screenHandle, navigationBusy],
+    [visualChapter, chapters, novel.id, screenHandle, navigationBusy],
   );
   const nextChapter = chapters.find((candidate) => candidate.index === chapter.index + 1);
   const nextChapterId = nextChapter?.id;
@@ -939,6 +1010,9 @@ function VirtualizedReaderViewportComponent({
 
   apiRef.current = {
     flow: 'scroll',
+    seekPlaybackPosition,
+    detachPlaybackFollow,
+    isPlaybackFollowDetached: playbackFollow.isDetached,
     resetContent: pages.reset,
     flushPosition: async () => {
       // Opening a chapter is read activity even when no scroll event occurred.
@@ -958,17 +1032,26 @@ function VirtualizedReaderViewportComponent({
         0,
         'search',
       ) ?? Promise.resolve(false),
-    scrollToParagraph,
-    scrollToParagraphIndex: (index, align, behavior) =>
-      scrollToParagraphIndex(sequence?.index(activeChapter.id, index) ?? index, align, behavior),
-    scrubTo: sequence
-      ? (value) =>
-          scrollToParagraphIndex(
-            sequence.index(activeChapter.id, Math.round(value * Math.max(0, activeChapter.paragraphCount - 1))) ?? 0,
+    scrollToParagraph: (id, source) => {
+      if (source === 'playback') return playbackFollow.follow(id);
+      detachPlaybackFollow();
+      return scrollToParagraph(id);
+    },
+    scrollToParagraphIndex: (index, align, behavior) => {
+      detachPlaybackFollow();
+      return scrollToParagraphIndex(sequence?.index(visualChapter().id, index) ?? index, align, behavior);
+    },
+    scrubTo: (value) => {
+      detachPlaybackFollow();
+      const current = visualChapter();
+      return sequence
+        ? scrollToParagraphIndex(
+            sequence.index(current.id, Math.round(value * Math.max(0, current.paragraphCount - 1))) ?? 0,
             'start',
             'auto',
           )
-      : scrubTo,
+        : scrubTo(value);
+    },
     pageJump: onPageIntent,
     goChapter: (direction) => goChapter(direction, direction < 0),
     scrollPageJump,
@@ -1213,28 +1296,6 @@ function VirtualizedReaderViewportComponent({
     }
   }, [opening, scrollSettled, virtualRangeKey, virtualizer]);
 
-  // Playback skips follow-scrolling while the page is hidden; catch up once on return.
-  const ttsPositionRef = useRef({ index: ttsIndex, paragraphId: ttsParagraphId });
-  ttsPositionRef.current = { index: ttsIndex, paragraphId: ttsParagraphId };
-  useEffect(() => {
-    if (!isActive) return;
-    let hiddenAt: typeof ttsPositionRef.current | undefined;
-    const onVisibility = () => {
-      if (document.visibilityState === 'hidden') {
-        hiddenAt = ttsPositionRef.current;
-        return;
-      }
-      const { index, paragraphId } = ttsPositionRef.current;
-      if (index !== undefined && (index !== hiddenAt?.index || paragraphId !== hiddenAt?.paragraphId)) {
-        if (sequence && paragraphId) void scrollToParagraph(paragraphId, 'auto');
-        else void scrollToParagraphIndex(sequence?.index(activeChapter.id, index) ?? index, 'center', 'auto');
-      }
-      hiddenAt = undefined;
-    };
-    document.addEventListener('visibilitychange', onVisibility);
-    return () => document.removeEventListener('visibilitychange', onVisibility);
-  }, [isActive, scrollToParagraph, scrollToParagraphIndex, sequence, activeChapter.id]);
-
   useEffect(() => {
     if (opening) return;
     const activeItems = virtualizer.getVirtualItems();
@@ -1380,6 +1441,11 @@ function VirtualizedReaderViewportComponent({
   return (
     <>
       <div ref={autoOverlayRef} className="reader-auto-reading-overlay" aria-hidden="true" hidden />
+      {ttsSessionActive && playbackFollow.detached && (
+        <button type="button" className="un-kit reader-playback-return" onClick={playbackFollow.resume}>
+          현재 듣는 위치로
+        </button>
+      )}
       {isActive && opening && (
         <div className="reader-opening" role={openError ? 'alert' : 'status'}>
           <p>{openError ? '읽던 위치를 불러오지 못했습니다.' : '본문을 준비하고 있습니다…'}</p>
@@ -1423,7 +1489,8 @@ function VirtualizedReaderViewportComponent({
           const top = rootRef.current?.scrollTop ?? 0;
           if (top < previousNativeOffset.current - 2) preparePreviousChapter();
           previousNativeOffset.current = top;
-          onRevealChrome();
+          if (playbackNavigation.current === undefined || !isCurrentNavigation(playbackNavigation.current))
+            onRevealChrome();
           progress.handleScroll();
           scrollChapterBoundary.onScroll();
         }}
@@ -1437,7 +1504,7 @@ function VirtualizedReaderViewportComponent({
             touch = event.touches[0];
           if (isActive && start && touch && touch.clientY > start.y + 10 && event.touches.length === 1)
             preparePreviousChapter();
-          if (isActive || !nativeScrollReady || !start || event.touches.length !== 1 || !touch) return;
+          if (!start || event.touches.length !== 1 || !touch) return;
           const dy = Math.abs(touch.clientY - start.y),
             dx = Math.abs(touch.clientX - start.x);
           if (
@@ -1446,8 +1513,11 @@ function VirtualizedReaderViewportComponent({
             !window.getSelection()?.toString() &&
             !rootRef.current?.querySelector('[data-turn-phase]')
           ) {
-            nativeInput.current = true;
-            enterNativeScroll();
+            if (isActive) detachPlaybackFollow();
+            else if (nativeScrollReady) {
+              nativeInput.current = true;
+              enterNativeScroll();
+            }
           }
         }}
         onTouchEndCapture={() => {
@@ -1459,13 +1529,20 @@ function VirtualizedReaderViewportComponent({
           if (!isActive) nativeInput.current = false;
         }}
         onKeyDownCapture={(event) => {
+          if (
+            event.target === event.currentTarget &&
+            ['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End', ' '].includes(event.key)
+          )
+            detachPlaybackFollow();
           if (event.target === event.currentTarget && ['ArrowUp', 'PageUp', 'Home'].includes(event.key))
             preparePreviousChapter();
         }}
         onWheelCapture={(event) => {
           if (!event.ctrlKey && event.deltaY < 0) preparePreviousChapter();
-          if (!isActive && nativeScrollReady && !event.ctrlKey && Math.abs(event.deltaY) > Math.abs(event.deltaX))
-            enterNativeScroll();
+          if (!event.ctrlKey && Math.abs(event.deltaY) > Math.abs(event.deltaX)) {
+            if (isActive && (event.deltaMode !== 0 || Math.abs(event.deltaY) >= 1)) detachPlaybackFollow();
+            else if (!isActive && nativeScrollReady) enterNativeScroll();
+          }
         }}
         onWheel={scrollChapterBoundary.onWheel}
         onKeyUp={updateSelection}
@@ -1473,6 +1550,14 @@ function VirtualizedReaderViewportComponent({
         onTouchEnd={updateSelection}
         onPointerDown={(event) => {
           if (!isActive) return;
+          const root = event.currentTarget;
+          if (event.pointerType === 'mouse' && event.target === root && root.offsetWidth > root.clientWidth) {
+            const x = event.clientX - root.getBoundingClientRect().left - root.clientLeft;
+            if (x < 0 || x >= root.clientWidth) {
+              detachPlaybackFollow();
+              return;
+            }
+          }
           const shouldCaptureBoundaryGesture = scrollChapterBoundary.onPointerDown(
             event.clientY,
             event.pointerType,
@@ -1653,6 +1738,16 @@ function ReaderViewportComponent(props: ReaderViewportProps) {
   const pageApi = useMemo(
     () => ({
       ...createViewportApiProxy(pageApiRef, 'paginated'),
+      detachPlaybackFollow: () => scrollApiRef.current?.detachPlaybackFollow?.(),
+      isPlaybackFollowDetached: () => scrollApiRef.current?.isPlaybackFollowDetached?.() ?? false,
+      scrollToParagraph: (id: string, source?: 'playback') =>
+        source === 'playback'
+          ? (scrollApiRef.current?.scrollToParagraph(id, source) ?? Promise.resolve(false))
+          : (pageApiRef.current?.scrollToParagraph(id) ?? Promise.resolve(false)),
+      scrubTo: (value: number) => {
+        scrollApiRef.current?.detachPlaybackFollow?.();
+        return pageApiRef.current?.scrubTo(value) ?? Promise.resolve();
+      },
       animateFlowEntry: async (direction: -1 | 1, signal: AbortSignal) => {
         flowAnimation.current?.abort();
         const controller = new AbortController();
@@ -1789,6 +1884,11 @@ function ReaderViewportComponent(props: ReaderViewportProps) {
         apiRef={scrollApiRef}
         onApiReady={handleScrollApiReady}
         isActive={!pageActive}
+        seekPlaybackPage={(target, signal) =>
+          typeof target === 'string'
+            ? (pageApiRef.current?.scrollToParagraph(target, 'playback', signal) ?? Promise.resolve(false))
+            : (pageApiRef.current?.scrollToParagraphIndex(target) ?? Promise.resolve())
+        }
         positionPersistence={positionPersistence}
         nativeScrollReady={pageActive && nativeScrollReady && !props.navigationBusy && !props.pageTransitionPending}
         onScrollHandoffInvalidated={() => {

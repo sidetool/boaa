@@ -1,3 +1,4 @@
+import { clearSessionNavigation } from '../../ui-next/search/route';
 import { invalidateSharedParagraphPages } from '../reader/shared-paragraph-pages';
 import { SelfHostSession, type SelfHostAuthenticatedContext } from './self-host-session';
 import {
@@ -277,6 +278,7 @@ export function SelfHostAccountGate({ runtime, apiBaseUrl, children }: SelfHostA
           }
           endSession(live);
           const nextSession = new SelfHostSession(context, baseUrl);
+          nextSession.signal.addEventListener('abort', clearSessionNavigation, { once: true });
           sessionRef.current = nextSession;
           setSession(nextSession);
           setAccount(status.account);
@@ -552,6 +554,7 @@ export function SelfHostAccountGate({ runtime, apiBaseUrl, children }: SelfHostA
       <Suspense fallback={null}>
         <UiNextAccountTokenScreen
           kind={redemption.kind}
+          setupRequired={mode === 'setup'}
           signedIn={mode === 'authenticated' ? account : undefined}
           password={password}
           passwordConfirmation={passwordConfirmation}
@@ -563,6 +566,8 @@ export function SelfHostAccountGate({ runtime, apiBaseUrl, children }: SelfHostA
           onSignOut={() => void logout().catch(() => undefined)}
           onDismiss={() => {
             setRedemption(undefined);
+            setPassword('');
+            setPasswordConfirmation('');
             setMessage('');
           }}
         />
@@ -572,7 +577,12 @@ export function SelfHostAccountGate({ runtime, apiBaseUrl, children }: SelfHostA
   if (mode === 'authenticated' && account) {
     return (
       <SelfHostAuthContext.Provider value={{ account, session, logout, revalidate: () => refresh() }}>
-        <div className="self-host-app" style={{ display: 'contents' }} {...(locked ? { inert: '' } : {})}>
+        <div
+          key={session?.epoch}
+          className="self-host-app"
+          style={{ display: 'contents' }}
+          {...(locked ? { inert: '' } : {})}
+        >
           {typeof children === 'function' ? session && children(session) : children}
         </div>
         {locked && (

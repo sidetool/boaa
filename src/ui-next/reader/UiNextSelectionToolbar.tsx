@@ -1,5 +1,5 @@
-import { AudioLines, Copy, Eraser, StickyNote, X } from 'lucide-react';
-import { useState } from 'react';
+import { AudioLines, Copy, Eraser, SpellCheck, Square, StickyNote, X } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
 import type { ReaderSelectionToolbarProps } from '../../features/reader/reader-selection-contract';
 import type { ReaderHighlightColor } from '../../features/reader/reader-screen-contract';
 import { formatCount } from '../../utils/format';
@@ -25,6 +25,32 @@ export function UiNextSelectionToolbar({
   const actions = screenHandle.getActions();
   const [busy, setBusy] = useState(false);
   const [copied, setCopied] = useState(false);
+  const preview = useRef<AbortController>();
+  const [listening, setListening] = useState(false);
+  useEffect(() => {
+    setListening(false);
+    return () => {
+      preview.current?.abort();
+      preview.current = undefined;
+    };
+  }, [selection.text, selection.paragraphId]);
+  const togglePreview = async () => {
+    if (preview.current) {
+      preview.current.abort();
+      return;
+    }
+    const request = new AbortController();
+    preview.current = request;
+    setListening(true);
+    try {
+      await actions.previewSelectionTTS(selection, request.signal);
+    } finally {
+      if (preview.current === request) {
+        preview.current = undefined;
+        setListening(false);
+      }
+    }
+  };
   const highlight = async (color: ReaderHighlightColor | 'remove') => {
     if (!location || busy) return;
     setBusy(true);
@@ -84,14 +110,23 @@ export function UiNextSelectionToolbar({
       <button
         type="button"
         className="un-textsel-action"
+        onClick={() => void togglePreview()}
+        aria-label={listening ? '선택 문장 듣기 정지' : '선택 문장 듣기'}
+        title="선택한 문장만 기기 목소리로 듣기"
+      >
+        {listening ? <Square size={18} aria-hidden="true" /> : <AudioLines size={18} aria-hidden="true" />}
+        {listening ? '정지' : '듣기'}
+      </button>
+      <button
+        type="button"
+        className="un-textsel-action"
         onClick={() => {
-          actions.previewSelectionTTS(selection);
+          actions.editSelectionPronunciation(selection);
           onClear();
         }}
-        aria-label="선택 문장 듣기"
       >
-        <AudioLines size={18} aria-hidden="true" />
-        듣기
+        <SpellCheck size={18} aria-hidden="true" />
+        발음 고치기
       </button>
       <button type="button" className="un-textsel-action" onClick={() => void copy()} aria-label="선택 문장 복사">
         <Copy size={18} aria-hidden="true" />

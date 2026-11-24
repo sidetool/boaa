@@ -344,6 +344,42 @@
   grid-column: 1 / -1;
 }
 
+.analysis-review-listeners {
+  min-width: 0;
+  padding: 0;
+  margin: 0;
+  border: 0;
+}
+
+.analysis-review-listeners legend {
+  padding: 0;
+  margin-bottom: 4px;
+  color: var(--text-2);
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+
+.analysis-review-selected-listeners {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 4px;
+}
+
+.analysis-review-selected-listeners button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 36px;
+  max-width: 100%;
+  padding-inline: 8px;
+  overflow-wrap: anywhere;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
 .analysis-review-issues {
   display: grid;
   gap: 5px;

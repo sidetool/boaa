@@ -1,3 +1,4 @@
+import { reviewValueLabel } from './analysis-review-labels';
 import { formatCount } from '../../utils/format';
 import type { LabelCorrectionReason } from '../../providers/label-correction-review';
 import { projectConfidenceRisk } from '../../providers/provider-capability';
@@ -42,7 +43,7 @@ export function AILabelCorrectionPanel({
               onClick={() => void actions.selectSegment(item.segment)}
             >
               <span>
-                {item.speakerLabel} · {item.segment.emotion || 'neutral'} ·{' '}
+                {item.speakerLabel} · {reviewValueLabel(item.segment.emotion || 'neutral')} ·{' '}
                 {confidenceRiskLabel(item.segment.confidence, item.reasons)}
               </span>
               <small>
@@ -118,7 +119,7 @@ export function AILabelCorrectionPanel({
             <select value={data.emotionDraft} onChange={(event) => actions.setEmotionDraft(event.target.value)}>
               {data.emotionOptions.map((emotion) => (
                 <option key={emotion} value={emotion}>
-                  {emotion}
+                  {reviewValueLabel(emotion)}
                 </option>
               ))}
             </select>

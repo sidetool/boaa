@@ -26,7 +26,7 @@ const GROUPS: readonly { title: string; icon: ReactNode; kinds: readonly Startup
   { title: '탐색', icon: <Compass size={16} />, kinds: ['discovery', 'tab'] },
 ];
 
-/** 모양 › 시작 화면: where the app opens. Shelves and discovery tabs join the list as they exist. */
+/** 시작 화면: where the app opens. Shelves and discovery tabs join the list as they exist. */
 export function StartupPage({
   controller,
   shelves,
@@ -39,7 +39,7 @@ export function StartupPage({
   const model = createStartupScreenSettingsModel({ controller, shelves, tabs });
   return (
     <>
-      <PrefSection title="시작 화면" hint="앱을 열 때 처음 보이는 화면이에요. 다음에 열 때부터 적용돼요.">
+      <PrefSection title="처음 열 화면" hint="앱을 열 때 처음 보이는 화면이에요. 다음에 열 때부터 적용돼요.">
         {model.missing && (
           <Notice tone="warning">
             고른 화면을 지금은 쓸 수 없어요. 책장이 없으면 서재 전체로, 탐색 탭이 없으면 첫 탭으로 열려요.

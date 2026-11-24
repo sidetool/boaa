@@ -12,6 +12,8 @@ import {
   INITIAL_BOOK_WORKSPACE_STATE,
   type BookWorkspaceLocationCommit,
   type BookWorkspacePorts,
+  type BookWorkspaceAnnotations,
+  type BookWorkspaceReaderArtifacts,
   type BookWorkspaceReaderOpenOptions,
   type BookWorkspaceSelectionReplacement,
   type BookWorkspaceState,
@@ -44,6 +46,7 @@ export class BookWorkspaceController {
   private ports: BookWorkspacePorts;
   private readonly listeners = new Set<Listener>();
   private navigationGeneration = 0;
+  private readerArtifactBaseline?: BookWorkspaceReaderArtifacts;
 
   constructor(
     ports: BookWorkspacePorts,
@@ -69,6 +72,10 @@ export class BookWorkspaceController {
   };
 
   private updateState(patch: Partial<BookWorkspaceState>): void {
+    if (patch.view && patch.view !== 'reader' && this.readerArtifactBaseline) {
+      this.readerArtifactBaseline = undefined;
+      patch = { ...patch, readerArtifactsStatus: undefined };
+    }
     const changed = (Object.keys(patch) as Array<keyof BookWorkspaceState>).some(
       (key) => !Object.is(this.state[key], patch[key]),
     );
@@ -191,6 +198,7 @@ export class BookWorkspaceController {
   readonly replaceSelection = (replacement: BookWorkspaceSelectionReplacement): void => {
     this.beginNavigation();
     const previousNovel = this.state.selectedNovel;
+    const previousChapter = this.state.currentChapter;
     const selectedNovel = 'selectedNovel' in replacement ? replacement.selectedNovel : previousNovel;
     const selectionTitleChanged =
       previousNovel?.id !== selectedNovel?.id || previousNovel?.title !== selectedNovel?.title;
@@ -199,10 +207,24 @@ export class BookWorkspaceController {
       ...(this.state.navigationPending ? { navigationPending: false } : undefined),
       ...(selectionTitleChanged ? { bookTitleDraft: selectedNovel?.title ?? '', bookTitleEditing: false } : undefined),
     });
+    if (
+      this.state.view === 'reader' &&
+      this.state.currentChapter &&
+      (previousNovel?.id !== selectedNovel?.id ||
+        previousNovel?.activeContentRevisionId !== selectedNovel?.activeContentRevisionId ||
+        previousChapter?.id !== this.state.currentChapter.id ||
+        previousChapter.textHash !== this.state.currentChapter.textHash)
+    )
+      this.loadCurrentReaderArtifacts();
   };
 
   readonly setLibraryQuery = (libraryQuery: string): void => this.updateState({ libraryQuery });
-  readonly setLibraryFilter = (libraryFilter: LibraryFilter): void => this.updateState({ libraryFilter });
+  readonly setLibraryFilter = (libraryFilter: LibraryFilter): void =>
+    this.updateState(
+      libraryFilter === 'favorite' ? { libraryFilter: 'all', libraryFavoritesOnly: true } : { libraryFilter },
+    );
+  readonly setLibraryFavoritesOnly = (libraryFavoritesOnly: boolean): void =>
+    this.updateState({ libraryFavoritesOnly });
   readonly setLibrarySort = (librarySort: LibrarySort): void => {
     this.updateState({ librarySort });
     saveLibraryViewPreferences({ librarySort }, this.preferenceStorage);
@@ -230,26 +252,38 @@ export class BookWorkspaceController {
     documentSectionId?: string,
     documentSectionTitle?: string,
     chapterControls?: Pick<BookWorkspaceState, 'chapterQuery' | 'chapterReadFilter' | 'chapterSort'>,
-    backgroundAnnotations = false,
+    detailBaseline?: BookWorkspaceAnnotations,
   ): Promise<boolean> {
-    const loadAnnotations = () =>
-      this.ports.adjacent.loadBookAnnotations(novel.id).then(
-        (value) => ({ value }),
-        (error: unknown) => ({ error }),
-      );
-    const annotationTask = backgroundAnnotations ? undefined : loadAnnotations();
+    const background = !isFixedDocumentFormat(novel.format);
+    const annotationTask = this.ports.adjacent.loadBookAnnotations(novel.id).then(
+      (value) => ({ value }),
+      (error: unknown) => ({ error }),
+    );
+    let baseline = detailBaseline;
     const [chapters, readingPosition] = await Promise.all([
       prefetched ? Promise.resolve(prefetched.chapters) : this.ports.repository.listChapters(novel.id),
       prefetched ? Promise.resolve(prefetched.readingPosition) : this.ports.repository.getReadingPosition(novel.id),
     ]);
     const applyAnnotations = async () => {
-      const result = await (annotationTask ?? loadAnnotations());
-      if (!this.navigationIsCurrent(generation)) return;
-      if ('value' in result) this.ports.adjacent.applyBookAnnotations(result.value);
+      const result = await annotationTask;
+      // Reading another chapter of the same revision still needs these book-wide annotations.
+      if (baseline) {
+        if (
+          this.state.view === 'library' ||
+          this.state.selectedNovel?.id !== novel.id ||
+          this.state.selectedNovel.activeContentRevisionId !== novel.activeContentRevisionId
+        )
+          return;
+      } else if (!this.navigationIsCurrent(generation)) return;
+      if ('value' in result) this.ports.adjacent.applyBookAnnotations(result.value, baseline);
       else this.ports.environment.notify('북마크와 메모를 불러오지 못했습니다.', 'warning');
     };
-    if (!backgroundAnnotations) await applyAnnotations();
+    if (!background) await applyAnnotations();
     if (!this.navigationIsCurrent(generation)) return false;
+    if (background && !baseline) {
+      baseline = { bookmarks: [], highlights: [], notes: [] };
+      this.ports.adjacent.applyBookAnnotations(baseline);
+    }
     const normalizedRequestedTitle = documentSectionTitle
       ? normalizedDocumentSectionTitle(documentSectionTitle)
       : undefined;
@@ -270,7 +304,7 @@ export class BookWorkspaceController {
       chapterQuery: '',
       chapterReadFilter: 'all',
       chapterSort: 'asc',
-      ...(backgroundAnnotations
+      ...(detailBaseline
         ? {
             chapterQuery: this.state.chapterQuery,
             chapterReadFilter: this.state.chapterReadFilter,
@@ -278,12 +312,12 @@ export class BookWorkspaceController {
           }
         : chapterControls),
       outlineQuery: '',
-      bookTitleDraft: backgroundAnnotations ? this.state.bookTitleDraft : novel.title,
-      bookTitleEditing: backgroundAnnotations ? this.state.bookTitleEditing : false,
+      bookTitleDraft: detailBaseline ? this.state.bookTitleDraft : novel.title,
+      bookTitleEditing: detailBaseline ? this.state.bookTitleEditing : false,
       fixedDocumentOpenChapterId: documentEntryChapter?.id,
       fixedDocumentOpenRequestVersion: (this.state.fixedDocumentOpenRequestVersion ?? 0) + 1,
     });
-    if (backgroundAnnotations) void applyAnnotations();
+    if (background) void applyAnnotations();
     this.updateState({
       currentChapter: isFixedDocumentFormat(novel.format)
         ? (documentEntryChapter ?? chapters.find((chapter) => chapter.id === readingPosition?.chapterId) ?? chapters[0])
@@ -298,9 +332,9 @@ export class BookWorkspaceController {
     chapterControls?: Pick<BookWorkspaceState, 'chapterQuery' | 'chapterReadFilter' | 'chapterSort'>,
   ): Promise<void> => {
     await this.navigate(async (generation) => {
-      const detail = !isFixedDocumentFormat(novel.format);
+      const detail = isFixedDocumentFormat(novel.format) ? undefined : { bookmarks: [], highlights: [], notes: [] };
       if (detail) {
-        this.ports.adjacent.applyBookAnnotations({ bookmarks: [], highlights: [], notes: [] });
+        this.ports.adjacent.applyBookAnnotations(detail);
         this.updateState({
           selectedNovel: novel,
           chapters: [],
@@ -385,12 +419,14 @@ export class BookWorkspaceController {
     if (!options.preserveTTS) this.ports.transition.stopChapterTTS();
     this.updateState({ remoteReadingPosition: undefined });
     const body = novel && this.ports.adjacent.preloadReaderBody?.(novel, chapter, options);
+    const preparation = preparedSource
+      ? { revision: novel?.activeContentRevisionId ?? chapter.textHash, consume: true }
+      : undefined;
+    const initialMode = options.listeningMode ? 'listen' : options.initialMode;
+    const needsArtifacts =
+      options.listeningMode !== 'plain' && (options.preserveTTS || (initialMode && initialMode !== 'read'));
     const [artifacts] = await Promise.all([
-      this.ports.adjacent.loadReaderArtifacts(
-        chapter.id,
-        novel?.id,
-        preparedSource ? { revision: novel?.activeContentRevisionId ?? chapter.textHash, consume: true } : undefined,
-      ),
+      needsArtifacts ? this.ports.adjacent.loadReaderArtifacts(chapter.id, novel?.id, preparation) : undefined,
       options.chapters ? body : undefined,
     ]);
     if (!this.navigationIsCurrent(generation)) return false;
@@ -401,21 +437,22 @@ export class BookWorkspaceController {
       fallbackScrollTop: restore && novel?.lastReadChapterId === chapter.id ? novel.lastReadOffset : 0,
       preserveSearch: options.preserveSearch,
       targetParagraphId: options.targetParagraphId,
-      initialMode: options.initialMode,
+      initialMode,
     });
+    this.readerArtifactBaseline = undefined;
+    if (artifacts) this.ports.adjacent.applyReaderArtifacts(artifacts);
+    this.ports.adjacent.resetCorrection();
+    this.ports.adjacent.resetAnnotationEditor();
     this.updateState({
       currentChapter: chapter,
       readerOpenRequestVersion: request.sequence,
       ...(options.chapters ? { selectedNovel: novel, chapters: options.chapters } : {}),
-    });
-    this.ports.adjacent.applyReaderArtifacts(artifacts);
-    this.ports.adjacent.resetCorrection();
-    this.ports.adjacent.resetAnnotationEditor();
-    this.updateState({
       readerMode: 'read',
       readerProgress: 0,
+      readerArtifactsStatus: artifacts ? undefined : 'loading',
       view: 'reader',
     });
+    if (!artifacts) this.loadCurrentReaderArtifacts(preparation);
     return true;
   }
 
@@ -836,10 +873,10 @@ export class BookWorkspaceController {
     await this.ports.adjacent.refreshAfterLocalMutation();
   };
 
-  readonly markChapterListRead = async (chapter: Chapter, previous: boolean): Promise<void> => {
+  readonly markChapterListRead = async (chapter: Chapter, previous: boolean, read = true): Promise<void> => {
     const novel = this.state.selectedNovel;
     if (!novel || chapter.novelId !== novel.id || !this.ports.repository.markChaptersRead) return;
-    await this.ports.repository.markChaptersRead(novel.id, chapter.id, previous, novel.activeContentRevisionId);
+    await this.ports.repository.markChaptersRead(novel.id, chapter.id, previous, novel.activeContentRevisionId, read);
     const chapters = await this.ports.repository.listChapters(novel.id);
     if (this.state.selectedNovel?.id === novel.id) this.updateState({ chapters });
     await this.ports.adjacent.refreshAfterLocalMutation();
@@ -870,33 +907,56 @@ export class BookWorkspaceController {
     const chapter = this.state.chapters.find((candidate) => candidate.id === observed.id);
     if (!chapter || chapter.novelId !== this.state.selectedNovel?.id || this.state.currentChapter?.id === chapter.id)
       return;
-    const generation = this.navigationGeneration;
-    const novel = this.state.selectedNovel!;
     this.updateState({ currentChapter: chapter });
-    void this.ports.adjacent
-      .loadReaderArtifacts(chapter.id, novel.id)
-      .then((artifacts) => {
-        if (
-          !this.navigationIsCurrent(generation) ||
-          this.state.currentChapter?.id !== chapter.id ||
-          this.state.selectedNovel?.id !== novel.id
-        )
-          return;
-        this.ports.adjacent.applyReaderArtifacts(artifacts);
-      })
-      .catch(() => undefined);
+    this.loadCurrentReaderArtifacts();
+  };
+
+  private loadCurrentReaderArtifacts(preparation?: { revision: string; consume?: boolean }, retry = false): void {
+    const { currentChapter: chapter, selectedNovel: novel } = this.state;
+    if (this.state.view !== 'reader' || !chapter) return;
+    const baseline = (retry && this.readerArtifactBaseline) || { segments: [], characters: [], voiceProfiles: [] };
+    this.readerArtifactBaseline = baseline;
+    if (!retry) this.ports.adjacent.applyReaderArtifacts(baseline);
+    this.updateState({ readerArtifactsStatus: 'loading' });
+    const current = () =>
+      this.readerArtifactBaseline === baseline &&
+      this.state.view === 'reader' &&
+      this.state.currentChapter?.id === chapter.id &&
+      this.state.selectedNovel?.id === novel?.id;
+    void this.ports.adjacent.loadReaderArtifacts(chapter.id, novel?.id, preparation).then(
+      (artifacts) => {
+        if (!current()) return;
+        this.ports.adjacent.applyReaderArtifacts(artifacts, baseline);
+        this.readerArtifactBaseline = undefined;
+        this.updateState({ readerArtifactsStatus: undefined });
+      },
+      () => {
+        if (current()) this.updateState({ readerArtifactsStatus: 'failed' });
+      },
+    );
+  }
+
+  readonly retryReaderArtifacts = (): void => {
+    if (this.state.readerArtifactsStatus === 'failed') this.loadCurrentReaderArtifacts(undefined, true);
   };
 
   readonly commitLocation = ({
     novelId,
     chapterId,
+    visibleListeningChapterId,
     location,
     bookProgress,
     updatedAt,
   }: BookWorkspaceLocationCommit): void => {
     const novel = this.state.selectedNovel;
-    const chapter = this.state.currentChapter;
-    if (!novel || !chapter || novel.id !== novelId || chapter.id !== chapterId) return;
+    if (!novel || novel.id !== novelId || !this.state.currentChapter) return;
+    const chapter =
+      chapterId === this.state.currentChapter.id
+        ? this.state.currentChapter
+        : visibleListeningChapterId === chapterId && location.chapterId === chapterId
+          ? this.state.chapters.find((candidate) => candidate.id === chapterId && candidate.novelId === novelId)
+          : undefined;
+    if (!chapter) return;
     const position: ReadingPosition = {
       id: `reading_position_${novel.id}`,
       novelId: novel.id,

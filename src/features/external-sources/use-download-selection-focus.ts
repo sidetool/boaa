@@ -16,10 +16,11 @@ export function useDownloadSelectionFocus(
   const applied = useRef<DownloadSelectionRequest>();
   useEffect(() => {
     if (!request || applied.current === request || request.workId !== workId || loading) return;
-    const panel = root.current?.querySelector<HTMLElement>('.source-hub-release-panel');
-    if (!panel) return;
+    const panel = root.current?.querySelector<HTMLElement>('[data-release-picker]');
+    const checkbox = panel?.querySelector<HTMLInputElement>('input[type="checkbox"]:not(:disabled)');
+    if (!panel || !checkbox) return;
     panel.scrollIntoView({ block: 'start' });
-    panel.querySelector<HTMLInputElement>('input[type="checkbox"]:not(:disabled)')?.focus({ preventScroll: true });
+    checkbox.focus({ preventScroll: true });
     applied.current = request;
   }, [root, request, workId, loading, itemCount]);
 }

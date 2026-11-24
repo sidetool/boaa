@@ -6,6 +6,7 @@ import type {
   Novel,
   ReaderHighlight,
   ReaderNote,
+  TTSPlaybackSettings,
   VoiceProfile,
 } from '../../domain/types';
 import type { ReadingPosition } from '../../sync/types';
@@ -24,6 +25,7 @@ export interface BookWorkspaceNoticeAction {
 
 export interface BookWorkspaceState {
   readonly navigationPending?: boolean;
+  readonly readerArtifactsStatus?: 'loading' | 'failed';
   readonly view: BookWorkspaceView;
   readonly novels: Novel[];
   readonly selectedNovel?: Novel;
@@ -33,6 +35,7 @@ export interface BookWorkspaceState {
   readonly remoteReadingPosition?: ReadingPosition;
   readonly libraryQuery: string;
   readonly libraryFilter: LibraryFilter;
+  readonly libraryFavoritesOnly: boolean;
   readonly librarySort: LibrarySort;
   readonly libraryViewMode: LibraryViewMode;
   readonly chapterQuery: string;
@@ -70,6 +73,7 @@ export interface BookWorkspaceRepositoryPort {
     chapterId: string,
     previous: boolean,
     expectedContentRevisionId?: string,
+    read?: boolean,
   ): Promise<void>;
   listChapters(novelId: string): Promise<Chapter[]>;
   getNovel(novelId: string): Promise<Novel | undefined>;
@@ -96,6 +100,7 @@ export interface BookWorkspaceReaderOpenOptions {
   readonly preserveSearch?: boolean;
   readonly targetParagraphId?: string;
   readonly initialMode?: ReaderMode;
+  readonly listeningMode?: NonNullable<TTSPlaybackSettings['mode']>;
   readonly preserveTTS?: boolean;
 }
 
@@ -120,14 +125,14 @@ export interface BookWorkspaceTransitionPort {
 
 export interface BookWorkspaceAdjacentFeaturePort {
   loadBookAnnotations(novelId: string): Promise<BookWorkspaceAnnotations>;
-  applyBookAnnotations(annotations: BookWorkspaceAnnotations): void;
+  applyBookAnnotations(annotations: BookWorkspaceAnnotations, expected?: BookWorkspaceAnnotations): void;
   preloadReaderBody?(novel: Novel, chapter: Chapter, options: BookWorkspaceReaderOpenOptions): void | Promise<void>;
   loadReaderArtifacts(
     chapterId: string,
     novelId?: string,
     preparation?: { revision: string; consume?: boolean },
   ): Promise<BookWorkspaceReaderArtifacts>;
-  applyReaderArtifacts(artifacts: BookWorkspaceReaderArtifacts): void;
+  applyReaderArtifacts(artifacts: BookWorkspaceReaderArtifacts, expected?: BookWorkspaceReaderArtifacts): void;
   resetCorrection(): void;
   resetAnnotationEditor(): void;
   refreshNovels(): Promise<unknown>;
@@ -151,6 +156,8 @@ export interface BookWorkspacePorts {
 }
 
 export interface BookWorkspaceLocationCommit {
+  /** Currently visible joined chapter when narration still owns the workspace's selected chapter. */
+  readonly visibleListeningChapterId?: string;
   readonly novelId: string;
   readonly chapterId: string;
   readonly location: ReaderLocationSnapshot;
@@ -171,6 +178,7 @@ export const INITIAL_BOOK_WORKSPACE_STATE: BookWorkspaceState = {
   chapters: [],
   libraryQuery: '',
   libraryFilter: 'all',
+  libraryFavoritesOnly: false,
   librarySort: 'recent',
   libraryViewMode: 'grid',
   chapterQuery: '',

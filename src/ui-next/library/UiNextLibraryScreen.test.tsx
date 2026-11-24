@@ -78,16 +78,28 @@ describe('UiNextLibraryScreen actions', () => {
     expect(actions.controls.setFilter).toHaveBeenCalledExactlyOnceWith(filter);
   });
 
-  it.each([
-    ['all', 'favorite'],
-    ['favorite', 'all'],
-  ] as const)('toggles the favorite chip from %s to %s', (filter, nextFilter) => {
-    const { root, actions } = mount(model([novel()], { filter }));
-    const shelves = byRole(root, 'toolbar', '책장');
-    const chip = byRole(shelves, 'button', /^즐겨찾기\s*\d+$/);
-    expect(chip.props['aria-pressed']).toBe(filter === 'favorite');
+  it.each([false, true])('toggles favorites independently of the reading tab (active=%s)', (favoritesOnly) => {
+    const { root, actions } = mount(model([novel()], { filter: 'reading', favoritesOnly }));
+    const chip = byRole(byRole(root, 'toolbar', '책장'), 'button', /^즐겨찾기\s*\d+$/);
+    expect(chip.props['aria-pressed']).toBe(favoritesOnly);
     click(chip);
-    expect(actions.controls.setFilter).toHaveBeenCalledExactlyOnceWith(nextFilter);
+    expect(actions.controls.setFavoritesOnly).toHaveBeenCalledExactlyOnceWith(!favoritesOnly);
+    expect(actions.controls.setFilter).not.toHaveBeenCalled();
+  });
+
+  it('confirms selected works before moving them to trash', () => {
+    const chosen = novel();
+    const view = model([chosen]);
+    view.management.selectionMode = true;
+    view.management.selectedBookIds = new Set([chosen.id]);
+    const { root, actions } = mount(view);
+    const open = () => click(byRole(root, 'button', '휴지통으로'));
+    open();
+    click(byRole(root, 'button', '취소'));
+    expect(actions.controls.applyBatch).not.toHaveBeenCalled();
+    open();
+    click(byRole(root, 'button', '휴지통으로 이동'));
+    expect(actions.controls.applyBatch).toHaveBeenCalledExactlyOnceWith({ kind: 'move_to_trash' });
   });
 
   it.each([false, true])('routes the shelf chip to setShelf (already active: %s)', (active) => {

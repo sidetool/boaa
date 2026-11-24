@@ -22,6 +22,9 @@ neutral sample과 smoke runner는 hardcoded MP3가 아니라 capability format�
 
 2026-07-11 durable review update: Hosted invalid pinned labeling output is stored as a normalized `analysis_review_artifacts` row with immutable input/staging lineage, validation/quality evidence, redacted provider execution metadata, content/graph/correction fences, and optimistic `review_revision`. User draft/reject/approve mutations append `analysis_review_decisions`; arbitrary candidate fields are discarded before persistence. An editing or rejected review fences automatic repair before the provider call and inside promotion. Approval revalidates the normalized candidate, locks the source fences and parent job, and atomically promotes only the target paragraphs while invalidating dependent Episode Context. The failed parent is marked manual-review promoted, repair children are cancelled or superseded, and the workflow resumes from the next dependent window. Stale fences make the review obsolete. A background approved/promoting reconciler, shared review workspace, and Native parity remain later Phase 3 slices.
 
+분석 검토 화면은 대사 유형·감정·발화 방식을 한국어로 표시하고, 대화 상대는 인물 이름으로 선택한다. 저장하는 값은 분석 원본의 인물 식별자와 발화 코드다. 같은 이름의 인물이 여럿일 때만 식별자를 함께 보여주며, 이름 정보가 없는 기존 구간도 편집할 수 있다. 같은 검토 버전을 새로고침하는 동안 작성 중인 변경을 유지한다.
+
+
 Status: AI/TTS v3 provider, review, voice, render lifecycle implemented; R8 evidence in progress
 Last verified: 2026-07-12
 

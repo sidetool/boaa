@@ -91,6 +91,15 @@ export class BrowserImportService implements ImportService {
               message.code === 'unsupported_archive'
             ) {
               reject(new ArchiveImportError(message.message, message.code));
+            } else if (
+              message.name === 'UnknownError' &&
+              /Error preparing Blob\/File data to be stored in object store/i.test(message.message)
+            ) {
+              reject(
+                new Error(
+                  '이 브라우저에서 원본 파일을 저장하지 못했습니다. 일반 브라우저 창에서 다시 가져오거나 이 사이트의 저장 공간과 권한을 확인해 주세요.',
+                ),
+              );
             } else {
               reject(
                 message.name === 'AbortError'

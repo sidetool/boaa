@@ -1,5 +1,7 @@
 import type { Chapter, Novel } from '../../domain/types';
-import { nextPlaybackChapter } from '../../providers/book-playback-coordinator';
+import { type BookPlaybackCoordinator, nextPlaybackChapter } from '../../providers/book-playback-coordinator';
+import type { BookWorkspaceController } from '../book-workspace/book-workspace-controller';
+import type { BookWorkspaceReaderOpenOptions } from '../book-workspace/book-workspace-contract';
 export interface PreparedTTSChapter {
   novel: Novel;
   chapter: Chapter;
@@ -34,4 +36,36 @@ export async function prepareNextTTSChapter(input: {
   const chapters = await input.listChapters(input.novel.id);
   const chapter = nextPlaybackChapter(chapters, input.current.id);
   return chapter ? { novel: input.novel, chapter } : undefined;
+}
+
+/** Resume the requested audio position as soon as its chapter commits to the reader. */
+export async function openChapterForPlayback(
+  coordinator: BookPlaybackCoordinator,
+  workspace: Pick<BookWorkspaceController, 'openChapter' | 'getSnapshot'>,
+  { novel, chapter, chapters }: PreparedTTSChapter,
+  options: {
+    listeningMode: NonNullable<BookWorkspaceReaderOpenOptions['listeningMode']>;
+    startIndex: number;
+    queueItemFingerprint?: string;
+    preserveTTS?: boolean;
+  },
+): Promise<void> {
+  const generation = coordinator.schedule({
+    bookId: novel.id,
+    chapterId: chapter.id,
+    startIndex: options.startIndex,
+    queueItemFingerprint: options.queueItemFingerprint,
+  });
+  if (workspace.getSnapshot().currentChapter?.id === chapter.id) return;
+  try {
+    await workspace.openChapter(chapter, {
+      novel,
+      chapters,
+      listeningMode: options.listeningMode,
+      preserveTTS: options.preserveTTS,
+    });
+  } finally {
+    if (coordinator.currentGeneration === generation && workspace.getSnapshot().currentChapter?.id !== chapter.id)
+      coordinator.cancel();
+  }
 }

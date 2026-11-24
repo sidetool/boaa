@@ -59,35 +59,35 @@ export function AIWorkflowPanel({
         <div className="ai-advanced-content">
           <div className="workflow-metrics">
             <span>
-              <strong>{formatCount(data.graphBundleCount)}</strong> Graph bundles
+              <strong>{formatCount(data.graphBundleCount)}</strong> 인물 관계 분석 묶음
             </span>
             <span>
-              <strong>{formatCount(data.labelingWindowCount)}</strong> Label windows
+              <strong>{formatCount(data.labelingWindowCount)}</strong> 화자 분석 구간
             </span>
             <span>
-              <strong>{formatCount(data.succeededJobCount)}</strong> Done jobs
+              <strong>{formatCount(data.succeededJobCount)}</strong> 완료한 작업
             </span>
             <span>
-              <strong>{formatCount(data.pendingJobCount)}</strong> Queued/running jobs
+              <strong>{formatCount(data.pendingJobCount)}</strong> 대기·진행 중인 작업
             </span>
           </div>
           {data.labelingBudget && (
             <div className="workflow-status-row">
-              <span>Model-aware labeling budget</span>
+              <span>모델별 분석 한도</span>
               <small>
-                window {formatCount(data.labelingBudget.targetCharacters)} chars · context{' '}
-                {formatCount(data.labelingBudget.contextWindowTokens)} tokens · output reserve{' '}
-                {formatCount(data.labelingBudget.reservedOutputTokens)}
-                {data.labelingBudget.estimated ? ' · estimated' : ''}
+                구간당 {formatCount(data.labelingBudget.targetCharacters)}자 · 문맥{' '}
+                {formatCount(data.labelingBudget.contextWindowTokens)} 토큰 · 응답용{' '}
+                {formatCount(data.labelingBudget.reservedOutputTokens)}토큰
+                {data.labelingBudget.estimated ? ' · 예상치' : ''}
               </small>
             </div>
           )}
           <div className="ai-action-grid">
             <button className="ghost-btn" onClick={() => void actions.retry()} disabled={data.retryDisabled}>
-              <RotateCcw size={18} /> Retry workflow
+              <RotateCcw size={18} /> 분석 재시도
             </button>
             <button className="ghost-btn" onClick={() => void actions.cancel()} disabled={data.cancelDisabled}>
-              <Square size={18} /> Request cancel
+              <Square size={18} /> 취소 요청
             </button>
             <button className="primary-btn" onClick={() => void actions.start()} disabled={data.startDisabled}>
               <Users size={18} /> 전체 분석 시작
@@ -102,18 +102,18 @@ export function AIWorkflowPanel({
                 {data.workflow.status} · {data.workflow.stage}
               </span>
               <small>
-                jobs {formatCount(data.workflow.jobCount)}
-                {data.failedJobCount > 0 ? ` · failed ${formatCount(data.failedJobCount)}` : ''}
+                작업 {formatCount(data.workflow.jobCount)}개
+                {data.failedJobCount > 0 ? ` · 실패 ${formatCount(data.failedJobCount)}개` : ''}
                 {data.workflow.modelId ? ` · ${data.workflow.modelId}` : ''}
               </small>
             </div>
           )}
           {data.compactSpeaker && (
-            <section className="compact-speaker-workflow" aria-label="화자 분리 workflow 상태">
+            <section className="compact-speaker-workflow" aria-label="화자 분리 진행 상태">
               <div className="compact-speaker-workflow-heading">
                 <strong>화자 분리 · {data.compactSpeaker.stageLabel}</strong>
                 <small>
-                  계약 {data.compactSpeaker.contractId}
+                  분석 방식 {data.compactSpeaker.contractId}
                   {data.compactSpeaker.requestProfileId ? ` · 프로필 ${data.compactSpeaker.requestProfileId}` : ''}
                 </small>
               </div>
@@ -144,23 +144,23 @@ export function AIWorkflowPanel({
           )}
           {data.labelVoiceReadiness && (
             <div className="workflow-status-row">
-              <span>Label/voice readiness {data.labelVoiceReadiness.ok ? 'passed' : 'needs review'}</span>
+              <span>화자·음성 연결 {data.labelVoiceReadiness.ok ? '확인 완료' : '검토 필요'}</span>
               <small>
-                segments {formatCount(data.labelVoiceReadiness.segmentCount)} · missing paragraphs{' '}
-                {formatCount(data.labelVoiceReadiness.missingParagraphCount)} · missing voices{' '}
-                {formatCount(data.labelVoiceReadiness.missingVoiceCount)} · unknown{' '}
+                분석 구간 {formatCount(data.labelVoiceReadiness.segmentCount)}개 · 누락 문단{' '}
+                {formatCount(data.labelVoiceReadiness.missingParagraphCount)} · 미지정 음성{' '}
+                {formatCount(data.labelVoiceReadiness.missingVoiceCount)} · 화자 미정{' '}
                 {data.labelVoiceReadiness.unknownPercent}%
               </small>
             </div>
           )}
           {data.cacheReadiness && (
             <div className="workflow-status-row">
-              <span>Audio cache readiness {data.cacheReadiness.ok ? 'passed' : 'not complete'}</span>
+              <span>듣기용 음성 {data.cacheReadiness.ok ? '준비 완료' : '준비 필요'}</span>
               <small>
-                cached {formatCount(data.cacheReadiness.cachedSegmentCount)}/
+                준비한 구간 {formatCount(data.cacheReadiness.cachedSegmentCount)}/
                 {formatCount(data.cacheReadiness.cacheableSegmentCount)}
-                {' · missing '}
-                {formatCount(data.cacheReadiness.missingCachedSegmentCount)} · items{' '}
+                {' · 남은 구간 '}
+                {formatCount(data.cacheReadiness.missingCachedSegmentCount)} · 저장 항목{' '}
                 {formatCount(data.cacheReadiness.cacheItemCount)} · {data.cacheReadiness.cachedByteSizeLabel}
               </small>
             </div>
@@ -168,11 +168,11 @@ export function AIWorkflowPanel({
           {data.labelVoiceReady && (
             <div className="workflow-next-action">
               <div>
-                <strong>{data.cacheReady ? 'TTS cache 준비됨' : '다음 단계: TTS cache'}</strong>
+                <strong>{data.cacheReady ? '듣기용 음성 준비 완료' : '듣기용 음성 준비'}</strong>
                 <span>
                   {data.cacheReady
-                    ? '오디오 cache evidence가 workflow에 기록되었습니다.'
-                    : '라벨/음성 매핑은 통과했습니다. 실제 오디오 cache는 별도로 준비해야 합니다.'}
+                    ? '작품의 듣기용 음성이 저장돼 있습니다.'
+                    : '화자와 목소리를 연결했습니다. 들으려면 작품 음성을 준비하세요.'}
                 </span>
               </div>
               <button
@@ -180,14 +180,14 @@ export function AIWorkflowPanel({
                 onClick={() => void actions.warmupBookCache()}
                 disabled={data.warmupDisabled}
               >
-                <RefreshCw size={16} /> 책 전체 cache 준비
+                <RefreshCw size={16} /> 책 전체 음성 준비
               </button>
               <button
                 className="ghost-btn"
                 onClick={() => void actions.refreshCacheReadiness()}
                 disabled={data.cacheRefreshDisabled}
               >
-                <RefreshCw size={16} /> cache 상태 확인
+                <RefreshCw size={16} /> 음성 준비 상태 확인
               </button>
             </div>
           )}
@@ -195,10 +195,10 @@ export function AIWorkflowPanel({
       </details>
       <AnalysisReviewWorkspace data={data.reviewWorkspace} actions={actions} />
       {data.reviewItems.length > 0 && (
-        <div className="workflow-review-list" aria-label="Workflow review items">
+        <div className="workflow-review-list" aria-label="분석 검토 항목">
           <div className="workflow-review-heading">
             <span>검토 항목</span>
-            <small>{formatCount(data.reviewItems.length)} items</small>
+            <small>{formatCount(data.reviewItems.length)}개</small>
           </div>
           {data.reviewItems.slice(0, 4).map((item) => (
             <div className="workflow-review-item" data-severity={item.severity} key={item.id}>

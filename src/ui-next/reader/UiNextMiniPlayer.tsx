@@ -1,5 +1,6 @@
 import { AudioLines, LoaderCircle, Pause, Play, SkipBack, SkipForward, Timer, X } from 'lucide-react';
 import type { TTSCompactBarProps } from '../../features/tts/tts-compact-contract';
+import { formatSleepTimerRemaining } from '../../providers/tts-sleep-timer';
 import { cx } from '../components/primitives';
 import '../styles/tokens.css';
 import './mini-player.css';
@@ -21,11 +22,6 @@ const TIMER_CYCLE: readonly TTSCompactBarProps['timerPreset'][] = [undefined, 10
 const timerName = (preset: TTSCompactBarProps['timerPreset']) =>
   preset === undefined ? '끔' : preset === 'end_of_chapter' ? '화 끝' : `${preset}분`;
 
-function remaining(seconds?: number, preset?: TTSCompactBarProps['timerPreset']): string | undefined {
-  if (seconds !== undefined) return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
-  return preset === 'end_of_chapter' ? '화 끝' : undefined;
-}
-
 /** ui-next listening mini player: stays on screen while reading so playback is always one tap away. */
 export default function UiNextMiniPlayer(props: TTSCompactBarProps) {
   // Waiting for this paragraph's audio outranks the speaker name; background preparation does not.
@@ -36,7 +32,7 @@ export default function UiNextMiniPlayer(props: TTSCompactBarProps) {
       ? statusText
       : '준비 중'
     : (props.speakerLabel ?? statusText);
-  const timer = remaining(props.timerRemainingSeconds, props.timerPreset);
+  const timer = formatSleepTimerRemaining(props.timerRemainingSeconds, props.timerPreset);
   const playingNow = props.playing && !props.paused;
 
   return (
@@ -52,10 +48,10 @@ export default function UiNextMiniPlayer(props: TTSCompactBarProps) {
         <span className="un-mini-text">
           <b>{props.chapterTitle}</b>
           <small>
-            {status ?? props.bookTitle}
+            <span className="un-mini-status">{status ?? props.bookTitle}</span>
             <em>{props.rate.toFixed(1)}x</em>
             {timer && (
-              <em>
+              <em className="un-mini-countdown">
                 <Timer size={12} aria-hidden="true" />
                 {timer}
               </em>

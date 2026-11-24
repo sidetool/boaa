@@ -1,5 +1,11 @@
+import { MAX_HOME_ROWS } from '@boaa/reader-core/settings';
 import { sourceRowInput } from './source-row';
-import { sourceCachePolicy, sourcePageTime } from '../../external-sources/cache-policy';
+import {
+  sourceCachePolicy,
+  sourcePageTime,
+  sourcePageFreshness,
+  transientSourceFailure,
+} from '../../external-sources/cache-policy';
 import {
   externalItemKeyId,
   type ExternalItemPage,
@@ -65,7 +71,9 @@ export function homeSourceSection(
 }
 
 interface Entry {
+  key: string;
   pending: boolean;
+  released?: boolean;
   refreshAt?: number;
   page?: ExternalItemPage;
   error?: string;
@@ -98,7 +106,12 @@ export class HomeDiscoveryLoader {
     const section = list.section;
     const input = sourceRowInput(section);
     const source = sources.sources.find((candidate) => candidate.id === section.sourceId);
-    const key = JSON.stringify([section, this.session.key(section.sourceId, input)]);
+    const policy = sourceCachePolicy(
+      input,
+      false,
+      this.session.scope?.startsWith('hosted-account:') ? this.session.scope : undefined,
+    );
+    const key = JSON.stringify([section, this.session.key(section.sourceId, input), policy.fresh]);
     const validate = (page: ExternalItemPage) => {
       if (page.browse && !page.browse.availableModes.includes(input.browseMode!))
         throw new Error('이 소스가 해당 목록을 지원하지 않습니다. 다른 목록을 선택해 주세요.');
@@ -115,17 +128,29 @@ export class HomeDiscoveryLoader {
         return undefined;
       }
     };
-    let entry = this.entries.get(key);
-    if (!entry) {
+    let entry = this.entries.get(config.id);
+    if (entry?.key !== key) {
       entry = {
+        key,
         pending: false,
         page: validCachedPage(this.session.peek(section.sourceId, input)?.page),
       };
-      this.entries.set(key, entry);
     }
+    // Row configurations and source generations can change during a long session.
+    this.entries.delete(config.id);
+    this.entries.set(config.id, entry);
+    if (this.entries.size > MAX_HOME_ROWS) this.entries.delete(this.entries.keys().next().value!);
+    if (entry.page && sourcePageTime(entry.page) + policy.keep <= Date.now()) entry.page = undefined;
     const current = entry;
     const load = (force: boolean) => {
+      if (
+        this.entries.get(config.id) !== current ||
+        key !== JSON.stringify([section, this.session.key(section.sourceId, input), policy.fresh])
+      )
+        return;
+      current.released = false;
       if (current.pending || (!force && current.refreshAt && current.refreshAt > Date.now())) return;
+      if (!policy.fresh) current.page = undefined;
       current.pending = true;
       current.error = undefined;
       this.changed();
@@ -153,20 +178,18 @@ export class HomeDiscoveryLoader {
           }
           const page = await this.session.list(section.sourceId, input, force);
           validate(page);
-          current.page = page;
+          if (!current.released) current.page = page;
           if (page.cache?.stale) current.error = '연결을 확인하지 못했습니다.';
         } catch (error) {
+          if (!transientSourceFailure(error)) current.page = undefined;
           current.error = error instanceof Error ? error.message : '목록을 불러오지 못했습니다.';
         } finally {
           current.pending = false;
-          const ttl = sourceCachePolicy(
-            input,
-            false,
-            this.session.scope?.startsWith('hosted-account:') ? this.session.scope : undefined,
-          ).fresh;
-          current.refreshAt = current.error
-            ? Date.now() + 60_000
-            : Math.max(Date.now() + 60_000, sourcePageTime(current.page ?? { items: [] }) + ttl);
+          const ttl = sourcePageFreshness(policy.fresh, current.page?.items.length ?? 0);
+          if (current.error) current.refreshAt = Date.now() + 60_000;
+          else if (ttl && current.page)
+            current.refreshAt = Math.max(Date.now() + 60_000, sourcePageTime(current.page) + ttl);
+          else current.refreshAt = undefined;
           this.changed();
         }
       })();
@@ -184,6 +207,13 @@ export class HomeDiscoveryLoader {
       updatedAt: current.page ? sourcePageTime(current.page) : undefined,
       stale: Boolean(current.page && current.error),
       requestLoad: () => load(false),
+      releaseLoad: policy.fresh
+        ? undefined
+        : () => {
+            current.released = true;
+            current.page = undefined;
+            current.refreshAt = undefined;
+          },
       retry: () => load(true),
       openAll:
         config.kind === 'source'

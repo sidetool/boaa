@@ -61,3 +61,25 @@ it('keeps failed restore results uncertain without a retry and rejects malformed
   await expect(client.createBackupDownload()).rejects.toThrow('다운로드 주소를 확인하지 못했습니다.');
   expect(fetch).toHaveBeenCalledTimes(2);
 });
+
+it('stages an uninspected ZIP once and sends large reviewed selections in the JSON body', async () => {
+  const fetch = vi
+    .fn()
+    .mockResolvedValueOnce(Response.json({ stagedId: 'stage' }))
+    .mockResolvedValueOnce(Response.json({ restoredBooks: 500 }));
+  vi.stubGlobal('fetch', fetch);
+  const client = new RemoteApiClient('https://fixture.invalid/api');
+  const archive = new Blob(['archive']);
+  const options = {
+    defaultConflictResolution: 'skip' as const,
+    conflictResolutions: Object.fromEntries(Array.from({ length: 500 }, (_, i) => [`book_${i}`, 'replace'] as const)),
+  };
+  await expect(client.restoreBackup(archive, options)).resolves.toEqual({ restoredBooks: 500 });
+  expect(fetch.mock.calls.map(([url]) => url)).toEqual([
+    'https://fixture.invalid/api/backups/inspect',
+    'https://fixture.invalid/api/backups/staged/stage/restore',
+  ]);
+  expect(fetch.mock.calls[0][1].body).toBe(archive);
+  expect(JSON.parse(fetch.mock.calls[1][1].body)).toEqual(options);
+  expect(fetch.mock.calls[1][1].headers).not.toHaveProperty('X-Backup-Conflict-Resolutions');
+});

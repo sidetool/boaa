@@ -10,6 +10,7 @@ const signal = () => new AbortController().signal;
 const cleanups: Array<() => void> = [];
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
   cleanups.splice(0).forEach((clean) => clean());
 });
 function fixture(owner?: symbol) {
@@ -67,6 +68,65 @@ function fixture(owner?: symbol) {
   };
 }
 describe('source cache policy', () => {
+  it('reuses popular and search pages for six hours while checking latest and release lists more often', () => {
+    const minute = 60_000,
+      day = 24 * 60 * minute;
+    for (const input of [{ browseMode: 'popular' as const }, { query: 'word' }, { browseMode: 'search' as const }])
+      expect(sourceCachePolicy(input)).toEqual({ fresh: 360 * minute, keep: 7 * day });
+    expect(sourceCachePolicy({ parentRef: 'catalog', query: 'word' }).fresh).toBe(360 * minute);
+    expect(sourceCachePolicy({ parentRef: 'folder', accountConnectionId: 'drive' }).fresh).toBe(2 * minute);
+    expect(sourceCachePolicy({ query: 'file', accountConnectionId: 'drive' }).fresh).toBe(10 * minute);
+    expect(sourceCachePolicy({ parentRef: 'catalog', browseMode: 'latest' }).fresh).toBe(5 * minute);
+    expect(sourceCachePolicy({ browseMode: 'latest' })).toEqual({ fresh: 5 * minute, keep: 2 * day });
+    expect(sourceCachePolicy({ parentRef: 'work' })).toEqual({ fresh: 15 * minute, keep: 7 * day });
+    expect(sourceCachePolicy({ query: 'word', cacheMaxAgeMs: 2 * minute }).fresh).toBe(2 * minute);
+  });
+  it('skips a repeat search after five hours and sees new results at six', async () => {
+    let now = Date.now();
+    vi.spyOn(Date, 'now').mockImplementation(() => now);
+    const f = fixture();
+    const input = { query: 'word' };
+    await f.list(input);
+    f.update();
+    now += 5 * 3600_000;
+    expect((await f.list(input)).items[0].key.remoteId).toBe('work-1');
+    expect(f.invoke).toHaveBeenCalledTimes(1);
+    now += 3600_000;
+    expect((await f.list(input)).items[0].key.remoteId).toBe('work-2');
+    expect(f.invoke).toHaveBeenCalledTimes(2);
+  });
+  it('keeps a saved account preference when the device default changes', () => {
+    const values = new Map([
+      ['boaa.source-reading.v1:hosted-account:a', '{"listMinutes":30}'],
+      ['boaa.source-reading.v1:hosted-account:b', '{"listMinutes":0}'],
+    ]);
+    vi.stubGlobal('localStorage', { getItem: (key: string) => values.get(key) ?? null });
+    for (const [account, minutes] of [
+      ['a', 30],
+      ['b', 0],
+      ['c', 360],
+    ] as const)
+      expect(sourceCachePolicy({ query: 'one' }, false, 'hosted-account:' + account).fresh).toBe(minutes * 60_000);
+  });
+  it('checks an empty page after a minute and preserves that expiry on disk', async () => {
+    let now = Date.now();
+    vi.spyOn(Date, 'now').mockImplementation(() => now);
+    const f = fixture();
+    f.invoke.mockResolvedValueOnce({
+      result: { items: [], nextCursor: undefined },
+      assets: new Map(),
+      options: undefined,
+    });
+    const input = { query: 'new work' };
+    const empty = await f.list(input);
+    const disk = storedSourcePage('empty', 'source', input, empty);
+    expect(Date.parse(disk.expiresAt) - now).toBe(60_000);
+    now += 59_999;
+    expect((await f.list(input)).items).toEqual([]);
+    now += 1;
+    expect((await f.list(input)).items).toHaveLength(1);
+    expect(f.invoke).toHaveBeenCalledTimes(2);
+  });
   it('changing freshness does not invalidate cursors and zero forces revalidation', async () => {
     const f = fixture();
     const first = await f.list();
@@ -112,13 +172,23 @@ describe('source cache policy', () => {
     vi.spyOn(Date, 'now').mockImplementation(() => now);
     const f = fixture(),
       a = await f.list({ browseMode: 'latest' });
-    now += 120001;
+    now += 5 * 60_000 + 1;
     f.fail();
     const b = await f.list({ browseMode: 'latest' });
     expect(b.cache).toEqual({ fetchedAt: a.cache!.fetchedAt, stale: true });
     await expect(f.list({ browseMode: 'latest', cacheMode: 'reload' })).rejects.toThrow('connection_failed');
-    now += 86400_000;
+    now += 2 * 86400_000;
     await expect(f.list({ browseMode: 'latest' })).rejects.toThrow('connection_failed');
+  });
+  it('evicts a successful page when a forced refresh reports a revoked permission', async () => {
+    const f = fixture();
+    const input = { browseMode: 'popular' as const };
+    await f.list(input);
+    f.invoke.mockRejectedValueOnce(Object.assign(new Error('Forbidden'), { status: 403 }));
+    await expect(f.list({ ...input, cacheMode: 'reload' })).rejects.toThrow('Forbidden');
+    f.update();
+    expect((await f.list(input)).items[0].key.remoteId).toBe('work-2');
+    expect(f.invoke).toHaveBeenCalledTimes(3);
   });
   it('isolates account caches and applies global as well as owner byte limits', async () => {
     const a = fixture(),
@@ -154,8 +224,6 @@ describe('source cache policy', () => {
     await store.saveCachePage({ ...page, id: 'large', queryFingerprint: 'x'.repeat(33 * 1024 * 1024) });
     expect(await store.getCachePage('large')).toBeUndefined();
     expect(await store.getCachePage('cache')).toBeDefined();
-    expect(sourceCachePolicy({ parentRef: 'work' }).fresh).toBe(120000);
-    expect(sourceCachePolicy({ query: 'word' }).keep).toBe(6 * 3600_000);
     const transientCover = storedSourcePage(
       'cover',
       'source',

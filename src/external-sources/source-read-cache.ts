@@ -9,7 +9,7 @@ export class SourceReadCache {
   constructor(private owner = Symbol('source-cache')) {}
   async read<T>(
     key: string,
-    fresh: number,
+    fresh: number | ((value: T) => number),
     keep: number,
     signal: AbortSignal,
     reload: boolean,
@@ -18,10 +18,14 @@ export class SourceReadCache {
     signal = AbortSignal.any([signal, this.lifetime.signal]);
     signal.throwIfAborted();
     const entry = pool.get(this.owner, key) as { value: T; fetchedAt: number } | undefined;
-    if (!reload && entry && entry.fetchedAt + fresh > Date.now()) return { ...entry, stale: false };
+    const maxAge = typeof fresh === 'number' ? fresh : entry ? fresh(entry.value) : 0;
+    if (!reload && entry && entry.fetchedAt + maxAge > Date.now()) return { ...entry, stale: false };
     try {
       return await joinTask(this.pending, key, signal, async (shared) => {
-        const value = await load(shared);
+        const value = await load(shared).catch((error: unknown) => {
+          if (!shared.aborted && !transientSourceFailure(error)) pool.delete(this.owner, key);
+          throw error;
+        });
         shared.throwIfAborted();
         const fetchedAt = Date.now();
         pool.set(
@@ -35,7 +39,7 @@ export class SourceReadCache {
       });
     } catch (error) {
       signal.throwIfAborted();
-      if (!reload && entry && entry.fetchedAt + keep > Date.now() && transientSourceFailure(error))
+      if (!reload && maxAge > 0 && entry && entry.fetchedAt + keep > Date.now() && transientSourceFailure(error))
         return { ...entry, stale: true };
       throw error;
     }

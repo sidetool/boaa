@@ -436,11 +436,15 @@ describe('chapter action sheet', () => {
     expect(root.findAllByProps({ role: 'dialog' })).toHaveLength(0);
   });
 
-  it('disables marking an already read chapter individually while allowing 여기까지 모두 읽음', () => {
-    const { root } = mount();
+  it('marks an already read chapter unread individually', async () => {
+    const { root, props } = mount();
     const sheet = chapterMenu(root, '1화 제목');
-    expect(button(sheet, '이미 읽은 회차예요').props.disabled).toBe(true);
-    expect(button(sheet, '여기까지 모두 읽음').props.disabled).toBe(false);
+    await clickAsync(button(sheet, '안 읽음으로 변경'));
+    expect(props.actions.chapterList.markRead).toHaveBeenCalledExactlyOnceWith(
+      props.model.chapterList.rows[0].chapter,
+      false,
+      false,
+    );
   });
 
   it('edits the chapter title and sends the draft to rename', async () => {

@@ -24,8 +24,8 @@ describe('paginated book search routes', () => {
   it('uses a query-bound keyset cursor for book search pages', async () => {
     const pool = {
       query: vi.fn(async (sql: string, params?: unknown[]) => {
-        expect(sql).toContain('c.chapter_index > $4');
-        expect(sql).toContain('ps.paragraph_index > $5');
+        expect(sql).toContain('c.book_id = ps.book_id');
+        expect(sql).toContain('(c.chapter_index, ps.paragraph_index) > ($4, $5::integer)');
         const afterParagraph = params?.[4];
         if (afterParagraph === null) {
           expect(params).toEqual(['user_test', 'book_1', '%needle%', null, null, 3]);
@@ -54,6 +54,7 @@ describe('paginated book search routes', () => {
       url: '/api/books/book_1/search?query=needle&pageSize=2',
     });
     expect(first.statusCode).toBe(200);
+    expect(first.headers['server-timing']).toMatch(/^db_search;dur=\d+\.\d{2}$/);
     expect(first.json()).toMatchObject({
       paragraphs: [paragraph(1), paragraph(2)],
       capped: false,

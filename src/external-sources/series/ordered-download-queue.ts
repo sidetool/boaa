@@ -1,5 +1,21 @@
 type Outcome<T> = { ok: true; value: T } | { ok: false; error: unknown };
 
+async function whileActive<T>(result: Promise<T>, signal: AbortSignal): Promise<T> {
+  signal.throwIfAborted();
+  let cancel!: () => void;
+  try {
+    return await Promise.race([
+      result,
+      new Promise<never>((_, reject) => {
+        cancel = () => reject(signal.reason);
+        signal.addEventListener('abort', cancel, { once: true });
+      }),
+    ]);
+  } finally {
+    signal.removeEventListener('abort', cancel);
+  }
+}
+
 /** Downloads ahead of a single ordered consumer. Completed values count toward admission. */
 export class OrderedDownloadQueue<T> {
   private readonly abort = new AbortController();
@@ -13,6 +29,7 @@ export class OrderedDownloadQueue<T> {
   constructor(
     private readonly options: {
       signal: AbortSignal;
+      itemSignal?(index: number): AbortSignal;
       concurrency: number;
       maxBufferedBytes: number;
       count(): number;
@@ -48,15 +65,17 @@ export class OrderedDownloadQueue<T> {
       const index = this.next++;
       const entry = { bytes, result: undefined as unknown as Promise<Outcome<T>> };
       this.entries.set(index, entry);
+      const item = this.options.itemSignal?.(index);
+      const signal = item ? AbortSignal.any([this.abort.signal, item]) : this.abort.signal;
       entry.result = Promise.resolve().then(async (): Promise<Outcome<T>> => {
         try {
-          this.abort.signal.throwIfAborted();
-          const value = await this.options.download(index, this.abort.signal);
-          this.abort.signal.throwIfAborted();
+          signal.throwIfAborted();
+          const value = await this.options.download(index, signal);
+          signal.throwIfAborted();
           entry.bytes = this.options.size(value);
           return { ok: true, value };
         } catch (error) {
-          this.failedAt = Math.min(this.failedAt, index);
+          if (!item?.aborted) this.failedAt = Math.min(this.failedAt, index);
           return { ok: false, error };
         }
       });
@@ -68,23 +87,32 @@ export class OrderedDownloadQueue<T> {
     if (index !== this.consumed || index >= this.options.count()) throw new Error('Invalid download queue order');
     this.pump();
     const entry = this.entries.get(index)!;
-    let onAbort: () => void = () => undefined;
-    const cancelled = new Promise<never>((_, reject) => {
-      onAbort = () => reject(this.abort.signal.reason);
-      this.abort.signal.addEventListener('abort', onAbort, { once: true });
-    });
-    try {
-      const result = await Promise.race([entry.result, cancelled]);
-      this.abort.signal.throwIfAborted();
-      if (!result.ok) throw result.error;
-      this.entries.delete(index);
-      this.consumed++;
-      // Fetch the next chapter while the caller verifies/commits this one.
-      this.pump();
-      return result.value;
-    } finally {
-      this.abort.signal.removeEventListener('abort', onAbort);
+    const item = this.options.itemSignal?.(index);
+    const signal = item ? AbortSignal.any([this.abort.signal, item]) : this.abort.signal;
+    const result = await whileActive(entry.result, signal);
+    signal.throwIfAborted();
+    if (!result.ok) throw result.error;
+    this.entries.delete(index);
+    this.consumed++;
+    // Fetch the next chapter while the caller verifies/commits this one.
+    this.pump();
+    return result.value;
+  }
+
+  /** Advance a cancelled episode that failed before delivery to the consumer. */
+  async skip(index: number): Promise<void> {
+    if (index !== this.consumed) return;
+    const entry = this.entries.get(index);
+    if (entry) {
+      // A provider can ignore an item abort. Keep its slot until it settles, while
+      // a whole-batch stop must still release the ordered consumer immediately.
+      await whileActive(entry.result, this.abort.signal);
     }
+    this.entries.delete(index);
+    this.consumed++;
+    this.next = Math.max(this.next, this.consumed);
+    if (this.failedAt === index) this.failedAt = Infinity;
+    this.pump();
   }
 
   close(): void {

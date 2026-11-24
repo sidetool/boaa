@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { SpokenTextRule } from '../../domain/types';
 import { createSpokenTextRuleStore } from '../../storage/spoken-text-rule-store';
 
@@ -25,26 +25,31 @@ export function useSpokenTextFilters(input: {
   onError.current = input.onError;
   const onChanged = useRef(input.onChanged);
   onChanged.current = input.onChanged;
-  const [snapshot, setSnapshot] = useState<{ owner: object; rules: SpokenTextRule[] }>();
+  const [snapshot, setSnapshot] = useState<{ owner: object; rules: SpokenTextRule[]; error?: string }>();
   const generation = useRef(0);
   const queue = useRef<Promise<unknown>>(Promise.resolve());
   const rules = snapshot?.owner === owner ? snapshot.rules : [];
+  const retry = useCallback(async () => {
+    if (currentOwner.current !== owner) return;
+    const token = ++generation.current;
+    setSnapshot(undefined);
+    try {
+      const loaded = await store.list(input.bookId);
+      if (generation.current === token && currentOwner.current === owner) setSnapshot({ owner, rules: loaded });
+    } catch {
+      if (generation.current !== token || currentOwner.current !== owner) return;
+      const error = '낭독 필터를 불러오지 못했어요. 듣기에서 다시 시도해 주세요.';
+      setSnapshot({ owner, rules: [], error });
+      onError.current?.(error);
+    }
+  }, [store, owner, input.bookId]);
   useEffect(() => {
     currentOwner.current = owner;
-    const token = ++generation.current;
-    void store
-      .list(input.bookId)
-      .then((loaded) => {
-        if (generation.current === token && currentOwner.current === owner) setSnapshot({ owner, rules: loaded });
-      })
-      .catch(() => {
-        if (currentOwner.current === owner)
-          onError.current?.('낭독 필터를 불러오지 못했어요. 듣기 화면을 다시 열어 주세요.');
-      });
+    void retry();
     return () => {
       if (currentOwner.current === owner) currentOwner.current = {};
     };
-  }, [store, owner, input.bookId]);
+  }, [owner, retry]);
 
   const mutate = (work: (existing: SpokenTextRule[]) => Promise<unknown>) => {
     const run = queue.current
@@ -97,7 +102,9 @@ export function useSpokenTextFilters(input: {
       await store.remove(id);
     });
   return {
-    ready: snapshot?.owner === owner,
+    ready: snapshot?.owner === owner && !snapshot.error,
+    error: snapshot?.owner === owner ? snapshot.error : undefined,
+    retry,
     rules,
     save: (draft: SpokenTextFilterDraft) => saveMany([draft]),
     saveMany,

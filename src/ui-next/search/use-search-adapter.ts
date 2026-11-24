@@ -12,28 +12,53 @@ import type { UiNextSearchAdapter } from './contract';
 import type { SearchData } from './data';
 import { searchLibrary } from './library-search';
 import { SourceSearch, type SearchSource } from './source-search';
-import { setSearchRoute } from './route';
+import { leaveSearchForResult, type SearchRoute } from './route';
+import type { DiscoverySession } from '../../features/discovery/discovery-session';
+
+// A history entry remembers its query. Only the bounded session cache retains pages while the screen is closed.
+const searchHistory = new WeakMap<DiscoverySession, WeakMap<SearchRoute, { sourceKey: string; query: string }>>();
 
 export function useSearchAdapter(
   props: LibraryScreenProps,
   catalog?: Pick<HomeAdapterInput, 'books' | 'externalWorks'>,
   data?: SearchData,
+  route?: SearchRoute,
 ): UiNextSearchAdapter {
   const session = data?.discovery?.session;
+  const searchable = new Set(
+    session?.registry
+      .getExternalSources()
+      .filter(({ descriptor }) => descriptor.capabilities.includes('search'))
+      .map(({ descriptor }) => descriptor.id),
+  );
   const sourceKey = JSON.stringify(
     (data?.externalSources.sources ?? [])
-      .filter(
-        (source) =>
-          source.connection.state === 'connected' &&
-          session?.registry
-            .getExternalSources()
-            .some(({ descriptor }) => descriptor.id === source.id && descriptor.capabilities.includes('search')),
-      )
+      .filter((source) => source.connection.state === 'connected' && searchable.has(source.id))
       .map(({ id, title }) => ({ id, title, identity: session!.key(id, { browseMode: 'search' }) })),
   );
-  const store = useMemo(() => new SourceSearch(session, JSON.parse(sourceKey) as SearchSource[]), [session, sourceKey]);
+  const store = useMemo(() => {
+    const retained = session && route && searchHistory.get(session)?.get(route);
+    return new SourceSearch(
+      session,
+      JSON.parse(sourceKey) as SearchSource[],
+      retained?.sourceKey === sourceKey ? retained.query : undefined,
+    );
+  }, [session, sourceKey, route]);
   const state = useSyncExternalStore(store.subscribe, store.getSnapshot, store.getSnapshot);
-  useEffect(() => () => store.cancel(), [store]);
+  useEffect(() => {
+    store.resume();
+    return () => {
+      if (route && session) {
+        let history = searchHistory.get(session);
+        if (!history) {
+          history = new WeakMap();
+          searchHistory.set(session, history);
+        }
+        history.set(route, { sourceKey, query: store.getSnapshot().submitted });
+      }
+      store.cancel();
+    };
+  }, [route, session, sourceKey, store]);
   const books = useMemo(
     () => catalog?.books ?? [...props.model.collection.booksByNovelId.values()],
     [catalog?.books, props.model.collection.booksByNovelId],
@@ -46,7 +71,6 @@ export function useSearchAdapter(
     () => orderedLibraryWorks(books, externalWorks, 'recent', props.model.externalSources.bookReadingActivity),
     [books, externalWorks, props.model.externalSources.bookReadingActivity],
   );
-  const leave = () => setSearchRoute(undefined);
   const libraryHelpers = createUiNextLibraryAdapter({
     ...props,
     model: {
@@ -60,20 +84,20 @@ export function useSearchAdapter(
       books: {
         ...props.actions.books,
         open: (book) => {
-          leave();
+          leaveSearchForResult();
           return props.actions.books.open(book);
         },
         continueReading: (book) => {
-          leave();
+          leaveSearchForResult();
           return props.actions.books.continueReading(book);
         },
         openExternal: (id) => {
-          leave();
+          leaveSearchForResult();
           return props.actions.books.openExternal(id);
         },
         continueExternal: props.actions.books.continueExternal
           ? (id) => {
-              leave();
+              leaveSearchForResult();
               return props.actions.books.continueExternal!(id);
             }
           : undefined,
@@ -86,25 +110,31 @@ export function useSearchAdapter(
       ...previous,
       recentSearches: normalizeRecentSearches(edit(normalizeRecentSearches(previous.recentSearches))),
     }));
+  const orderedAnswers = [...state.answers].sort((a, b) => (a.visibleOrder ?? Infinity) - (b.visibleOrder ?? Infinity));
   return {
     library: (query) => searchLibrary(works, query),
     libraryHelpers,
     submitted: state.submitted,
     recent,
-    removeRecent: (query) =>
+    removeRecent: (query) => {
+      store.forget(query);
       editRecent((previous) =>
         previous.filter(
           (entry) => entry.normalize('NFKC').toLowerCase() !== query.trim().normalize('NFKC').toLowerCase(),
         ),
-      ),
-    clearRecent: () => editRecent(() => []),
+      );
+    },
+    clearRecent: () => {
+      store.forget();
+      editRecent(() => []);
+    },
     submit: (value) => {
       const query = value.trim();
-      if (query) editRecent((previous) => [query, ...previous]);
+      if (query && recent[0] !== query) editRecent((previous) => [query, ...previous]);
       store.submit(query);
     },
     cancel: store.cancel,
-    sources: state.answers.map((answer) => ({
+    sources: orderedAnswers.map((answer) => ({
       sourceId: answer.id,
       title: answer.title,
       status: answer.status,
@@ -124,7 +154,7 @@ export function useSearchAdapter(
                 },
                 state.submitted,
               );
-              leave();
+              leaveSearchForResult();
               setHomeActive(false);
               data.controller.setView('library');
               data.externalSources.close();
@@ -147,7 +177,7 @@ export function useSearchAdapter(
           ) ?? false,
         loadCover: item.coverRef && session ? (signal) => session.cover(item.coverRef!, signal) : undefined,
         open: () => {
-          leave();
+          leaveSearchForResult();
           setHomeActive(false);
           data?.controller.setView('library');
           return data?.externalSources.openDiscovery?.(

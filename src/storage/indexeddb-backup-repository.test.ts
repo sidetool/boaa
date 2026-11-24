@@ -109,6 +109,39 @@ describe('IndexedDbBackupRepository', () => {
     vi.restoreAllMocks();
   });
 
+  it('preserves a book created by another tab after preview and immediately before restore writes', async () => {
+    const { novel } = await importFixture();
+    const db = await openReaderDb();
+    const add = db.transaction('novels', 'readwrite');
+    const second = { ...novel, id: 'late-book', title: 'Backed up B' };
+    add.objectStore('novels').add(second);
+    await transactionDone(add);
+    const repository = new IndexedDbBackupRepository();
+    const { blob } = await repository.exportBackup();
+    const edit = db.transaction('novels', 'readwrite');
+    edit.objectStore('novels').delete(second.id);
+    edit.objectStore('novels').put({ ...novel, title: 'Existing A' });
+    await transactionDone(edit);
+    expect((await repository.inspectBackup(blob)).conflicts.map(({ bookId }) => bookId)).toEqual([novel.id]);
+
+    const put = IDBObjectStore.prototype.put;
+    vi.spyOn(IDBObjectStore.prototype, 'put').mockImplementation(function (this: IDBObjectStore, value, key) {
+      if (this.name === 'backup_restore_runs' && value.status === 'validated') {
+        db.transaction('novels', 'readwrite')
+          .objectStore('novels')
+          .add({ ...second, title: 'New B' });
+      }
+      return put.call(this, value, key);
+    });
+    await expect(
+      repository.restoreBackup(blob, {
+        defaultConflictResolution: 'skip',
+        conflictResolutions: { [novel.id]: 'replace' },
+      }),
+    ).resolves.toMatchObject({ restoredBooks: 1, skippedBooks: 1, copiedBooks: 0 });
+    expect((await getNovels()).map(({ title }) => title).sort()).toEqual([novel.title, 'New B'].sort());
+  });
+
   it('restores a legacy backup archive with unchanged book identities and source bytes', async () => {
     const imported = await importFixture();
     const repository = new IndexedDbBackupRepository();
@@ -122,6 +155,20 @@ describe('IndexedDbBackupRepository', () => {
     });
     expect((await getNovels())[0].id).toBe(imported.novel.id);
     expect(await exportBookSource(imported.novel.id)).toBeDefined();
+  });
+
+  it('rejects a ZIP when the preview omits a catalog book', async () => {
+    const { novel } = await importFixture();
+    const repository = new IndexedDbBackupRepository();
+    const backup = await repository.exportBackup();
+    const incomplete = await rewriteManifest(backup.blob, (manifest) => {
+      manifest.books = [];
+    });
+    await expect(repository.inspectBackup(incomplete)).rejects.toThrow('book list does not match');
+    await expect(repository.restoreBackup(incomplete, { defaultConflictResolution: 'skip' })).rejects.toThrow(
+      'book list does not match',
+    );
+    expect((await getNovels()).map(({ id }) => id)).toEqual([novel.id]);
   });
 
   it('round-trips exactly 500 ZIP entries and rejects 501 before writing any ZIP data', async () => {

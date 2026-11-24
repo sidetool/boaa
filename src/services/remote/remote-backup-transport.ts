@@ -12,6 +12,11 @@ interface BackupTransportPort {
   ): Promise<{ blob: Blob; headers: Headers; status: number }>;
 }
 
+// Leave room for authentication, cookies and proxy headers on legacy uploads.
+function fitsRestoreHeaders(overrides: string): boolean {
+  return overrides.length <= 4096 && !/[^\x20-\x7e]/.test(overrides);
+}
+
 /** Backup wire protocol. Authentication, cancellation and timeout handling belong to the shared transport. */
 export class RemoteBackupTransport {
   constructor(
@@ -38,18 +43,23 @@ export class RemoteBackupTransport {
     options: BackupRestoreOptions,
     onProgress?: TaskProgressCallback,
   ): Promise<BackupRestoreResult> {
+    const overrides = JSON.stringify(options.conflictResolutions ?? {});
+    const init: RequestInit = fitsRestoreHeaders(overrides)
+      ? {
+          headers: {
+            'X-Backup-Default-Resolution': options.defaultConflictResolution,
+            'X-Backup-Conflict-Resolutions': overrides,
+          },
+        }
+      : {
+          // Older servers reject this marker before consuming the staged archive.
+          headers: { 'Content-Type': 'application/json', 'X-Backup-Default-Resolution': 'body' },
+          body: JSON.stringify(options),
+        };
     return withRequestProgress(
       this.transport.request,
       `/backups/staged/${encodeURIComponent(id)}/restore`,
-      {
-        method: 'POST',
-        headers: {
-          'X-Backup-Default-Resolution': options.defaultConflictResolution,
-          ...(options.conflictResolutions
-            ? { 'X-Backup-Conflict-Resolutions': JSON.stringify(options.conflictResolutions) }
-            : {}),
-        },
-      },
+      { method: 'POST', ...init },
       60 * 60_000,
       onProgress,
       '/backups/progress',
@@ -71,11 +81,21 @@ export class RemoteBackupTransport {
     );
   }
 
-  restoreBackup(
+  async restoreBackup(
     archive: Blob,
     options: BackupRestoreOptions,
     onProgress?: TaskProgressCallback,
   ): Promise<BackupRestoreResult> {
+    if (!fitsRestoreHeaders(JSON.stringify(options.conflictResolutions ?? {}))) {
+      const inspection = await this.inspectBackup(archive, onProgress);
+      if (!inspection.stagedId) throw new Error('서버가 대용량 복원 선택 목록을 지원하지 않습니다.');
+      try {
+        return await this.restoreInspectedBackup(inspection.stagedId, options, onProgress);
+      } catch (error) {
+        await this.discardBackupInspection(inspection.stagedId).catch(() => undefined);
+        throw error;
+      }
+    }
     return withRequestProgress(
       this.transport.request,
       '/backups/restore',

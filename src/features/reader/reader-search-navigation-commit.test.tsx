@@ -28,10 +28,17 @@ function setup(prepared: boolean) {
   const novel = testNovel({ format: 'txt' });
   const chapters = [1, 2, 3].map((index) => testChapter(index, { documentSectionId: `section-${index}` }));
   const h = createBookWorkspaceTestHarness({ novel, chapters });
-  const artifacts = { segments: [], characters: [], voiceProfiles: [] };
-  const loadingB = deferred<typeof artifacts>();
-  const loadingC = deferred<typeof artifacts>();
-  h.ports.adjacent.loadReaderArtifacts = vi.fn((id) => (id === chapters[1].id ? loadingB.promise : loadingC.promise));
+  const loadingB = deferred<void>();
+  const loadingC = deferred<void>();
+  // Prepared source opens wait for the body; ordinary opens flush the previous position.
+  // Neither navigation needs to wait for a voice-profile lookup.
+  h.ports.transition.flushReaderSession = vi
+    .fn<() => Promise<void>>()
+    .mockImplementationOnce(() => (prepared ? Promise.resolve() : loadingB.promise))
+    .mockImplementationOnce(() => loadingC.promise);
+  if (prepared)
+    h.ports.adjacent.preloadReaderBody = (_novel, chapter) =>
+      chapter.id === chapters[1].id ? loadingB.promise : undefined;
   const workspace = new BookWorkspaceController(
     h.ports,
     testWorkspaceState({
@@ -80,7 +87,6 @@ function setup(prepared: boolean) {
     workspace,
     paragraphs,
     chapters,
-    artifacts,
     loadingB,
     loadingC,
     scrollToMatch,
@@ -103,7 +109,7 @@ describe.each([false, true])('search navigation commit (prepared source: %s)', (
         await act(async () => {
           opening = t.search().goToResult(t.paragraphs[1], 1);
         });
-        expect(vi.mocked(t.h.ports.adjacent.loadReaderArtifacts).mock.calls[0]?.[0]).toBe(t.chapters[1].id);
+        expect(t.h.ports.transition.flushReaderSession).toHaveBeenCalledOnce();
         expect(t.workspace.getSnapshot().navigationPending).toBe(true);
         await act(async () => {
           if (action === 'same-chapter') await t.search().goToResult(t.paragraphs[0], 0);
@@ -114,7 +120,7 @@ describe.each([false, true])('search navigation commit (prepared source: %s)', (
         });
         expect(t.workspace.getSnapshot().navigationPending).toBe(false);
         await act(async () => {
-          t.loadingB.resolve(t.artifacts);
+          t.loadingB.resolve();
           await opening;
         });
         expect(t.workspace.getSnapshot().currentChapter?.id).toBe(t.chapters[0].id);
@@ -148,12 +154,12 @@ describe.each([false, true])('search navigation commit (prepared source: %s)', (
       await act(async () => t.search().clear());
       expect(t.workspace.getSnapshot().navigationPending).toBe(true);
       await act(async () => {
-        t.loadingB.resolve(t.artifacts);
+        t.loadingB.resolve();
         await searchOpen;
       });
       expect(t.workspace.getSnapshot().navigationPending).toBe(true);
       await act(async () => {
-        t.loadingC.resolve(t.artifacts);
+        t.loadingC.resolve();
         await ordinaryOpen;
       });
       expect(t.workspace.getSnapshot().currentChapter?.id).toBe(t.chapters[2].id);

@@ -100,6 +100,102 @@ async function waitForState(check: () => boolean) {
 
 afterEach(() => vi.unstubAllGlobals());
 
+it('revalidates the remaining files and preserves the import settings after an exclusion', async () => {
+  const h = await harness();
+  const files = Array.from({ length: 6 }, (_, index) => new File(['body'], `independent-${index}.txt`));
+  try {
+    await act(async () => h.controller.selectFiles(files));
+    act(() => h.controller.setEncoding('utf-8'));
+    await act(async () => h.controller.removePendingFile(files[4]));
+    expect(h.controller.pendingFiles).toEqual([files[0], files[1], files[2], files[3], files[5]]);
+    expect(h.controller.encoding).toBe('utf-8');
+    await act(async () => h.controller.selectFiles([files[4]]));
+    await act(async () => h.controller.removePendingFile(files[4]));
+    expect(h.controller.pendingFiles).toEqual([]);
+  } finally {
+    act(() => h.renderer.unmount());
+  }
+});
+
+it('discards excluded chapters when a library lookup fails and retries the remaining selection', async () => {
+  const novels = [existingBook('old', 'txt')];
+  const listNovels = vi.fn(async () => novels);
+  const h = await harness({ listNovels });
+  const files = [...(await selectedFiles('Old Title', 'txt')), new File(['Third chapter'], 'Old Title Chapter 3.txt')];
+  try {
+    await act(async () => h.controller.selectFiles(files));
+    await waitForState(() => !h.controller.seriesBusy && Boolean(h.controller.documentSeriesInspection));
+    await act(async () => h.controller.setSeriesTargetNovel(undefined));
+    expect(h.controller.documentSeriesPlan?.inspection.sources).toHaveLength(3);
+
+    listNovels.mockRejectedValueOnce(new Error('offline'));
+    await act(async () => h.controller.removePendingFile(files[1]));
+    await act(async () => h.controller.setSeriesTargetNovel(novels[0].id));
+    await act(async () => h.controller.setSeriesTargetNovel(undefined));
+    await act(async () => h.controller.startPendingImport());
+    expect(h.importFile).not.toHaveBeenCalled();
+    expect(h.controller.pendingFiles).toEqual([files[0], files[2]]);
+    expect(h.controller.documentSeriesInspection).toBeUndefined();
+    expect(h.controller.documentSeriesPlan).toBeUndefined();
+    expect(h.controller.preparationError).toBeTruthy();
+
+    await act(async () => h.controller.retryPreparation());
+    await waitForState(() => !h.controller.seriesBusy && Boolean(h.controller.documentSeriesPlan));
+    expect(h.controller.preparationError).toBeUndefined();
+    expect(h.controller.documentSeriesPlan?.targetNovel).toBeUndefined();
+    await act(async () => h.controller.startPendingImport());
+    expect(h.importFile).toHaveBeenCalledOnce();
+    const { readDocumentSeriesArchive } = await import('@boaa/document-series-core');
+    const archive = await readDocumentSeriesArchive(h.importFile.mock.calls[0]![0].file);
+    expect(archive?.manifest.sources.map((source) => source.fileName)).toEqual([files[0].name, files[2].name]);
+  } finally {
+    act(() => h.renderer.unmount());
+  }
+});
+
+it('rechecks a chosen series target when its chapter lookup temporarily fails', async () => {
+  const novels = ['first', 'second'].map((id) => existingBook(id, 'image_archive'));
+  const listChapters = vi.fn(async () => existingChapters);
+  const h = await harness({ novels, listChapters });
+  try {
+    await act(async () => h.controller.selectFiles(await selectedFiles('Old Title', 'image_archive')));
+    await waitForState(() => !h.controller.seriesBusy && Boolean(h.controller.seriesPlan));
+    listChapters.mockRejectedValueOnce(new Error('offline'));
+    await act(async () => h.controller.setSeriesTargetNovel('second'));
+    expect(h.controller.preparationError).toBeTruthy();
+    await act(async () => h.controller.retryPreparation());
+    await waitForState(() => !h.controller.seriesBusy && Boolean(h.controller.seriesPlan));
+    expect(h.controller.seriesPlan?.targetNovel?.id).toBe('second');
+    expect(h.controller.preparationError).toBeUndefined();
+  } finally {
+    act(() => h.renderer.unmount());
+  }
+});
+
+it.each(['close', 'replace'] as const)('ignores a failed inspection retry after %s', async (action) => {
+  const retry = deferred<Novel[]>();
+  const listNovels = vi.fn(async (): Promise<Novel[]> => []);
+  listNovels.mockRejectedValueOnce(new Error('offline')).mockImplementationOnce(() => retry.promise);
+  const h = await harness({ listNovels });
+  const replacement = new File(['other body'], 'Other.txt');
+  try {
+    await act(async () => h.controller.selectFiles([new File(['body'], 'Old.txt')]));
+    expect(h.controller.preparationError).toBeTruthy();
+    await act(async () => h.controller.retryPreparation());
+    if (action === 'close') await act(async () => h.controller.close());
+    else await act(async () => h.controller.selectFiles([replacement]));
+    await act(async () => retry.reject(new Error('late response')));
+    expect(h.controller.preparationError).toBeUndefined();
+    expect(h.controller.pendingFiles).toEqual(action === 'close' ? [] : [replacement]);
+    expect(h.controller.isOpen).toBe(action === 'replace');
+    await act(async () => h.controller.startPendingImport());
+    if (action === 'close') expect(h.importFile).not.toHaveBeenCalled();
+    else expect(h.importFile.mock.calls[0]![0].file).toBe(replacement);
+  } finally {
+    act(() => h.renderer.unmount());
+  }
+});
+
 const completedSession: StoredUploadSessionEntry = {
   key: 'completed',
   uploadId: 'upload',

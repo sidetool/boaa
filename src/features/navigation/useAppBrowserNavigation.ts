@@ -1,6 +1,12 @@
 import { isStreamDetailReturn, useSourceStreamEscape } from '../../ui-next/source/stream-navigation';
 import { getHomeActive, setHomeActive, useHomeActive } from '../../ui-next/home/route';
-import { getSearchRoute, setSearchRoute, useSearchRoute, type SearchRoute } from '../../ui-next/search/route';
+import {
+  getSearchRoute,
+  isSearchResultTransition,
+  setSearchRoute,
+  useSearchRoute,
+  type SearchRoute,
+} from '../../ui-next/search/route';
 
 import { useCallback, useLayoutEffect, useRef } from 'react';
 import type { Novel } from '../../domain/types';
@@ -24,7 +30,10 @@ type Snapshot = {
   bookId?: string;
   detailBookId?: string;
   source?: ExternalSourceNavigationSnapshot;
-  library: Pick<BookWorkspaceState, 'libraryQuery' | 'libraryFilter' | 'librarySort' | 'libraryViewMode'>;
+  library: Pick<
+    BookWorkspaceState,
+    'libraryQuery' | 'libraryFilter' | 'libraryFavoritesOnly' | 'librarySort' | 'libraryViewMode'
+  >;
   chapters: Pick<BookWorkspaceState, 'chapterQuery' | 'chapterReadFilter' | 'chapterSort'>;
   layers: readonly string[];
 };
@@ -55,6 +64,7 @@ export function useAppBrowserNavigation(options: {
   const latest = useRef(options);
   latest.current = options;
   const history = useRef<BrowserNavigation<Snapshot>>();
+  const lastSearch = useRef<Snapshot>();
   const capture = useCallback(() => {
     const { state, sources, layers } = latest.current;
     const source = state.view === 'library' && sources.open ? sources.captureNavigation?.() : undefined;
@@ -70,6 +80,7 @@ export function useAppBrowserNavigation(options: {
       library: {
         libraryQuery: state.libraryQuery,
         libraryFilter: state.libraryFilter,
+        libraryFavoritesOnly: state.libraryFavoritesOnly,
         librarySort: state.librarySort,
         libraryViewMode: state.libraryViewMode,
       },
@@ -165,6 +176,7 @@ export function useAppBrowserNavigation(options: {
         if (target.view === 'library') {
           latest.current.shelf?.setActiveShelf(target.shelfId);
           workspace.setLibraryQuery(target.library.libraryQuery);
+          workspace.setLibraryFavoritesOnly(target.library.libraryFavoritesOnly ?? false);
           workspace.setLibraryFilter(target.library.libraryFilter);
           workspace.setLibrarySort(target.library.librarySort);
           workspace.setLibraryViewMode(target.library.libraryViewMode);
@@ -197,6 +209,14 @@ export function useAppBrowserNavigation(options: {
   useLayoutEffect(() => {
     if (!getSearchRoute() && (options.state.navigationPending || (options.sources.open && options.sources.loading)))
       return;
-    history.current?.record(capture());
+    const entry = capture();
+    if (entry.snapshot.search) lastSearch.current = entry.snapshot;
+    else {
+      // Async book resolution briefly exposes the workspace underneath search before the actual detail opens.
+      const origin = lastSearch.current;
+      if (origin && isSearchResultTransition(origin.search) && searchOnlyTransition(origin, entry.snapshot)) return;
+      lastSearch.current = undefined;
+    }
+    history.current?.record(entry);
   });
 }

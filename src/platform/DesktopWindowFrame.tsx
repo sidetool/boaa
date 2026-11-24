@@ -1,7 +1,12 @@
-import type { MouseEvent, ReactNode } from 'react';
+import { lazy, Suspense, useContext, useState, type MouseEvent, type ReactNode } from 'react';
 import { Minus, Square, X } from 'lucide-react';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { detectPlatformRuntime } from './runtime';
+import { EmbeddedAccessContext } from './embedded-access-context';
+
+const EmbeddedServerSharing = lazy(() =>
+  import('./EmbeddedServerSharing').then((module) => ({ default: module.EmbeddedServerSharing })),
+);
 
 function runWindowAction(action: (window: ReturnType<typeof getCurrentWindow>) => Promise<void>): void {
   void action(getCurrentWindow()).catch((error) => {
@@ -15,16 +20,12 @@ function handleTitlebarPointer(event: MouseEvent<HTMLElement>): void {
   runWindowAction((window) => (event.detail === 2 ? window.toggleMaximize() : window.startDragging()));
 }
 
-function DesktopWindowFrame({ showSharing }: { readonly showSharing: boolean }) {
+function DesktopWindowFrame({ onOpenSharing }: { readonly onOpenSharing?: () => void }) {
   return (
     <header className="desktop-window-frame" onMouseDown={handleTitlebarPointer}>
       <span className="desktop-window-title">BOAA</span>
-      {showSharing && import.meta.env.VITE_DESKTOP_EMBEDDED_SERVER === 'true' && (
-        <button
-          className="desktop-server-sharing"
-          type="button"
-          onClick={() => window.dispatchEvent(new Event('boaa-open-server-sharing'))}
-        >
+      {onOpenSharing && (
+        <button className="desktop-server-sharing" type="button" onClick={onOpenSharing}>
           다른 기기 접속
         </button>
       )}
@@ -68,13 +69,9 @@ function DesktopWindowFrame({ showSharing }: { readonly showSharing: boolean }) 
   );
 }
 
-export function DesktopWindowShell({
-  children,
-  showSharing = true,
-}: {
-  readonly children: ReactNode;
-  readonly showSharing?: boolean;
-}) {
+export function DesktopWindowShell({ children }: { readonly children: ReactNode }) {
+  const embedded = useContext(EmbeddedAccessContext);
+  const [sharingOpen, setSharingOpen] = useState(false);
   const runtime = detectPlatformRuntime();
   const enabled =
     runtime.kind === 'tauri-desktop' &&
@@ -82,8 +79,15 @@ export function DesktopWindowShell({
   if (!enabled) return children;
   return (
     <div className="desktop-window-shell">
-      <DesktopWindowFrame showSharing={showSharing} />
-      <div className="desktop-window-content">{children}</div>
+      <DesktopWindowFrame onOpenSharing={embedded ? () => setSharingOpen(true) : undefined} />
+      <div className="desktop-window-content">
+        {children}
+        {embedded && sharingOpen && (
+          <Suspense fallback={null}>
+            <EmbeddedServerSharing {...embedded} onClose={() => setSharingOpen(false)} />
+          </Suspense>
+        )}
+      </div>
     </div>
   );
 }

@@ -29,7 +29,8 @@ function fixture(overrides: Partial<Props> = {}) {
     ...screenHandle.getActions(),
     highlightSelection: vi.fn().mockResolvedValue(undefined),
     openSelectionNote: vi.fn(),
-    previewSelectionTTS: vi.fn(),
+    previewSelectionTTS: vi.fn(async (_selection: Props['selection'], _signal: AbortSignal) => {}),
+    editSelectionPronunciation: vi.fn(),
   };
   screenHandle.setActions(actions);
   const props: Props = {
@@ -107,14 +108,29 @@ describe('UiNextSelectionToolbar actions', () => {
     expect(actions.openSelectionNote).toHaveBeenCalledExactlyOnceWith(props.selection);
     expect(props.onClear).not.toHaveBeenCalled();
   });
-  it('previews speech before clearing the selection', async () => {
-    const { root, props, actions } = mount();
-    await click(button(root, '선택 문장 듣기'));
-    expect(actions.previewSelectionTTS).toHaveBeenCalledExactlyOnceWith(props.selection);
-    expect(props.onClear).toHaveBeenCalledExactlyOnceWith();
-    expect(actions.previewSelectionTTS.mock.invocationCallOrder[0]).toBeLessThan(
-      vi.mocked(props.onClear).mock.invocationCallOrder[0],
+  it('keeps the selection available and stops the same preview on a second tap', async () => {
+    const value = fixture();
+    value.actions.previewSelectionTTS.mockImplementation(
+      (_selection, signal) =>
+        new Promise<void>((resolve) => signal.addEventListener('abort', () => resolve(), { once: true })),
     );
+    const { root, props, actions } = mount(value);
+    await click(button(root, '선택 문장 듣기'));
+    const [[selection, signal]] = actions.previewSelectionTTS.mock.calls;
+    expect(selection).toBe(props.selection);
+    expect(signal.aborted).toBe(false);
+    await click(button(root, '선택 문장 듣기 정지'));
+    expect(signal.aborted).toBe(true);
+    expect(button(root, '선택 문장 듣기')).toBeDefined();
+    expect(props.onClear).not.toHaveBeenCalled();
+    expect(actions.editSelectionPronunciation).not.toHaveBeenCalled();
+  });
+  it('opens the pronunciation editor with the selection independently of playback', async () => {
+    const { root, props, actions } = mount();
+    await click(button(root, '발음 고치기'));
+    expect(actions.editSelectionPronunciation).toHaveBeenCalledExactlyOnceWith(props.selection);
+    expect(actions.previewSelectionTTS).not.toHaveBeenCalled();
+    expect(props.onClear).toHaveBeenCalledOnce();
   });
   it('clears the selection with the close action', async () => {
     const { root, props } = mount();

@@ -17,13 +17,13 @@ import {
   analysisReviewSegmentText,
   analysisReviewSpeakerOptions,
   EDITABLE_ANALYSIS_REVIEW_STATUSES,
-  parseAnalysisReviewListeners,
   preferredAnalysisReview,
   prepareAnalysisReviewDraft,
   replaceAnalysisReviewParagraphWithNarration,
   updateAnalysisReviewProsody,
   updateAnalysisReviewSegment,
 } from './analysis-review-workspace-model';
+import { reviewValueLabel } from './analysis-review-labels';
 
 interface AnalysisReviewWorkspaceProps {
   readonly data: AIReviewWorkspaceData;
@@ -37,10 +37,8 @@ export function AnalysisReviewWorkspace({ data, actions }: AnalysisReviewWorkspa
   const [draft, setDraft] = useState<ChapterLabelingResult | undefined>(() =>
     review ? prepareAnalysisReviewDraft(review) : undefined,
   );
-  const draftRef = useRef(draft);
-  draftRef.current = draft;
+  const loadedReview = useRef(review);
   const [selectedSegmentId, setSelectedSegmentId] = useState(draft?.segments[0]?.id ?? '');
-  const [listenerDraft, setListenerDraft] = useState('');
   const [rejectionReason, setRejectionReason] = useState('');
   const [editIntents, setEditIntents] = useState<AnalysisReviewEditIntentMap>(review?.editIntents ?? {});
 
@@ -53,6 +51,17 @@ export function AnalysisReviewWorkspace({ data, actions }: AnalysisReviewWorkspa
   }, [data.reviews, preferred, selectedReviewId]);
 
   useEffect(() => {
+    const last = loadedReview.current;
+    loadedReview.current = review;
+    if (
+      last &&
+      review &&
+      last.id === review.id &&
+      last.reviewRevision === review.reviewRevision &&
+      last.candidateHash === review.candidateHash &&
+      last.inputRevisionId === review.inputRevisionId
+    )
+      return;
     if (!review) {
       setDraft(undefined);
       setSelectedSegmentId('');
@@ -63,7 +72,7 @@ export function AnalysisReviewWorkspace({ data, actions }: AnalysisReviewWorkspa
     setDraft(prepared);
     setSelectedSegmentId(prepared.segments[0]?.id ?? '');
     setRejectionReason('');
-    setEditIntents(review.editIntents);
+    setEditIntents(review.editIntents ?? {});
   }, [review]);
 
   const speakerOptions = useMemo(
@@ -71,10 +80,6 @@ export function AnalysisReviewWorkspace({ data, actions }: AnalysisReviewWorkspa
     [draft, review],
   );
   const selectedSegment = draft?.segments.find((segment) => segment.id === selectedSegmentId);
-  useEffect(() => {
-    const segment = draftRef.current?.segments.find((item) => item.id === selectedSegmentId);
-    setListenerDraft(segment?.listenerIds.join(', ') ?? '');
-  }, [review?.id, review?.reviewRevision, selectedSegmentId]);
   if (!data.available || (!data.loading && data.reviews.length === 0 && !data.error)) return null;
 
   const annotation = selectedSegment ? draft?.segmentAnnotations?.[selectedSegment.id] : undefined;
@@ -102,7 +107,7 @@ export function AnalysisReviewWorkspace({ data, actions }: AnalysisReviewWorkspa
     <section className="analysis-review-workspace" aria-label="분석 결과 검토">
       <div className="analysis-review-header">
         <div>
-          <strong>실패 window 검토</strong>
+          <strong>분석이 멈춘 구간 검토</strong>
           <span>{data.loading ? '불러오는 중' : `${data.reviews.length}개`}</span>
         </div>
         <button
@@ -123,12 +128,12 @@ export function AnalysisReviewWorkspace({ data, actions }: AnalysisReviewWorkspa
               className="select-input"
               value={review.id}
               onChange={(event) => setSelectedReviewId(event.target.value)}
-              aria-label="검토할 분석 window"
+              aria-label="검토할 분석 구간"
               disabled={busy}
             >
-              {data.reviews.map((item) => (
+              {data.reviews.map((item, index) => (
                 <option key={item.id} value={item.id}>
-                  {item.chapter.title || item.chapterId} · {item.windowId} ·{' '}
+                  {item.chapter.title || '제목 없는 회차'} · 검토 {index + 1} ·{' '}
                   {analysisReviewOperationalStatusLabel(item)}
                 </option>
               ))}
@@ -168,7 +173,7 @@ export function AnalysisReviewWorkspace({ data, actions }: AnalysisReviewWorkspa
             </details>
           )}
 
-          <div className="analysis-review-segments" aria-label="후보 segment">
+          <div className="analysis-review-segments" aria-label="검토할 대사와 서술">
             {draft.segments.map((segment) => (
               <button
                 type="button"
@@ -179,7 +184,7 @@ export function AnalysisReviewWorkspace({ data, actions }: AnalysisReviewWorkspa
                 <span>{analysisReviewSegmentText(review, segment) || segment.id}</span>
                 <small>
                   {speakerOptions.find((option) => option.id === segment.speakerId)?.label ?? segment.speakerId} ·{' '}
-                  {segment.emotion}
+                  {reviewValueLabel(segment.emotion)}
                 </small>
               </button>
             ))}
@@ -204,10 +209,10 @@ export function AnalysisReviewWorkspace({ data, actions }: AnalysisReviewWorkspa
                   }
                 >
                   <option value="segment_only">이 구간만</option>
-                  <option value="relabel_from_window">이 window부터 다시 분석</option>
+                  <option value="relabel_from_window">이 구간부터 다시 분석</option>
                 </select>
                 {editIntents[selectedSegment.id]?.kind === 'relabel_from_window' && (
-                  <small>현재 window 이후의 문맥과 라벨을 재계획합니다.</small>
+                  <small>이 구간부터 문맥과 화자를 다시 분석합니다.</small>
                 )}
               </label>
               <label>
@@ -228,7 +233,7 @@ export function AnalysisReviewWorkspace({ data, actions }: AnalysisReviewWorkspa
                 >
                   {CONTROLLED_TTS_SEGMENT_TYPES.map((type) => (
                     <option key={type} value={type}>
-                      {type}
+                      {reviewValueLabel(type)}
                     </option>
                   ))}
                 </select>
@@ -268,31 +273,66 @@ export function AnalysisReviewWorkspace({ data, actions }: AnalysisReviewWorkspa
                     )
                   }
                 >
+                  {selectedSegment.emotion &&
+                    !CONTROLLED_TTS_EMOTIONS.some((value) => value === selectedSegment.emotion) && (
+                      <option value={selectedSegment.emotion}>{selectedSegment.emotion}</option>
+                    )}
                   {CONTROLLED_TTS_EMOTIONS.map((emotion) => (
                     <option key={emotion} value={emotion}>
-                      {emotion}
+                      {reviewValueLabel(emotion)}
                     </option>
                   ))}
                 </select>
               </label>
-              <label className="analysis-review-wide-field">
-                <span>청자 ID</span>
-                <input
-                  className="text-input"
-                  value={listenerDraft}
-                  disabled={!editable || busy}
+              <fieldset className="analysis-review-listeners analysis-review-wide-field" disabled={!editable || busy}>
+                <legend>대화 상대</legend>
+                <select
+                  className="select-input"
+                  aria-label="대화 상대 추가"
+                  value=""
                   onChange={(event) => {
-                    setListenerDraft(event.target.value);
-                    setDraft((current) =>
-                      current
-                        ? updateAnalysisReviewSegment(current, selectedSegment.id, {
-                            listenerIds: parseAnalysisReviewListeners(event.target.value),
-                          })
-                        : current,
+                    const id = event.currentTarget.value;
+                    if (!id || selectedSegment.listenerIds.includes(id)) return;
+                    setDraft(
+                      updateAnalysisReviewSegment(draft, selectedSegment.id, {
+                        listenerIds: [...selectedSegment.listenerIds, id],
+                      }),
                     );
                   }}
-                />
-              </label>
+                >
+                  <option value="">인물 선택</option>
+                  {speakerOptions
+                    .filter((option) => !selectedSegment.listenerIds.includes(option.id))
+                    .map((option) => (
+                      <option key={option.id} value={option.id}>
+                        {option.label}
+                      </option>
+                    ))}
+                </select>
+                {selectedSegment.listenerIds.length > 0 && (
+                  <div className="analysis-review-selected-listeners">
+                    {[...new Set(selectedSegment.listenerIds)].map((id) => {
+                      const name = speakerOptions.find((option) => option.id === id)?.label ?? id;
+                      return (
+                        <button
+                          key={id}
+                          type="button"
+                          aria-label={`${name} 대화 상대에서 제외`}
+                          onClick={() =>
+                            setDraft(
+                              updateAnalysisReviewSegment(draft, selectedSegment.id, {
+                                listenerIds: selectedSegment.listenerIds.filter((item) => item !== id),
+                              }),
+                            )
+                          }
+                        >
+                          {name} <X size={14} aria-hidden="true" />
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+              </fieldset>
               {(
                 [
                   ['pace', '속도', CONTROLLED_TTS_PACES],
@@ -317,7 +357,7 @@ export function AnalysisReviewWorkspace({ data, actions }: AnalysisReviewWorkspa
                     <option value="">기본값</option>
                     {values.map((value) => (
                       <option key={value} value={value}>
-                        {value}
+                        {reviewValueLabel(value)}
                       </option>
                     ))}
                   </select>

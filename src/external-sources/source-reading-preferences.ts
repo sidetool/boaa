@@ -11,7 +11,7 @@ export interface SourceReadingPreferences {
 export const sourceReadingDefaults: SourceReadingPreferences = {
   mode: 'stream',
   textMode: 'library',
-  listMinutes: 30,
+  listMinutes: 360,
   coverHours: 720,
   imageMinutes: 2,
   prefetch: 5,
@@ -26,7 +26,7 @@ export function sourceReadingPreferences(scope?: string): SourceReadingPreferenc
     return {
       textMode: value.textMode === 'stream' ? 'stream' : 'library',
       mode: ['stream-save', 'stream', 'download'].includes(value.mode) ? value.mode : sourceReadingDefaults.mode,
-      listMinutes: [0, 2, 30, 360].includes(value.listMinutes) ? value.listMinutes : 30,
+      listMinutes: [0, 2, 30, 360].includes(value.listMinutes) ? value.listMinutes : sourceReadingDefaults.listMinutes,
       coverHours: [0, 1, 24, 168, 720, 2160].includes(value.coverHours)
         ? value.coverHours
         : sourceReadingDefaults.coverHours,

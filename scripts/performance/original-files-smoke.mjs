@@ -14,7 +14,7 @@ import '${root}src/ui-next/styles/tokens.css';
 import '${root}src/ui-next/styles/kit.css';
 import {RemoteBookAssetRepository} from '${root}src/repositories/remote-book-asset-repository.ts';
 import {RemoteApiClient} from '${root}src/services/remote/remote-api-client.ts';
-${[...readFileSync(root + 'src/main.tsx', 'utf8').matchAll(/import '\.\/styles\/([^']+)';/g)].map((m) => `import '${root}src/styles/${m[1]}';`).join('\n')}
+import '${root}src/reader-styles.ts';
 const repository=new RemoteBookAssetRepository(new RemoteApiClient('/api',{getAuthToken:()=> 'fixture'}));
 function Fixture(){const [open,setOpen]=useState(true);return React.createElement(React.Fragment,null,
 React.createElement('button',{onClick:()=>setOpen(true)},'원본 다운로드'),

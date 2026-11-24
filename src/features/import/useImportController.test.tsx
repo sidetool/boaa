@@ -2,7 +2,7 @@ import { BlobReader, BlobWriter, Uint8ArrayReader, ZipWriter } from '@zip.js/zip
 import { act, create, type ReactTestRenderer } from 'react-test-renderer';
 import { describe, expect, it, vi } from 'vitest';
 import type { Novel } from '../../domain/types';
-import { testChapter } from '../book-workspace/book-workspace-test-fixtures';
+import { testChapter, testNovel } from '../book-workspace/book-workspace-test-fixtures';
 import type { BookAssetRepository } from '../../repositories/book-asset-repository';
 import type { ImportService } from '../../services/import/import-service';
 import { inspectDocumentSeriesSource, materializeDocumentSeriesArchive } from '@boaa/document-series-core';
@@ -511,4 +511,55 @@ describe('useImportController background progress', () => {
     await act(async () => renderer.unmount());
     vi.unstubAllGlobals();
   });
+});
+
+it('keeps failed drops after the progress timeout and retries only the remaining files', async () => {
+  vi.stubGlobal('window', globalThis);
+  vi.useFakeTimers();
+  const files = ['done.txt', 'retry.pdf', 'dismiss.txt'].map((name) => new File([name], name));
+  let fail = true;
+  const novel = testNovel();
+  const importFile = vi.fn<ImportService['importFile']>(({ file }) => ({
+    jobId: file.name,
+    cancel: vi.fn(),
+    promise: fail && file !== files[0] ? Promise.reject(new Error('storage unavailable')) : Promise.resolve({ novel }),
+  }));
+  let controller!: ImportFeatureController;
+  function Harness() {
+    controller = useImportController({
+      importService: { importFile },
+      listNovels: async () => [],
+      getNovel: async () => novel,
+      listChapters: async () => [],
+      onImportCommitted: async () => {},
+      notify: vi.fn(),
+    });
+    return null;
+  }
+  let renderer!: ReactTestRenderer;
+  try {
+    await act(async () => {
+      renderer = create(<Harness />);
+    });
+    await act(async () => controller.importFiles(files));
+    await act(async () => {
+      vi.advanceTimersByTime(13_000);
+    });
+    await act(async () => controller.open());
+    expect(controller.pendingFiles).toEqual(files.slice(1));
+    expect(controller.tasks.map((task) => task.error)).toEqual([
+      expect.stringContaining('storage unavailable'),
+      expect.stringContaining('storage unavailable'),
+    ]);
+    await act(async () => controller.dismissTask(controller.tasks[1]!.id));
+    expect(controller.pendingFiles).toEqual([files[1]]);
+    fail = false;
+    await act(async () => controller.startPendingImport());
+    expect(importFile.mock.calls.map(([input]) => input.file)).toEqual([...files, files[1]]);
+    expect(controller.tasks).toEqual([]);
+  } finally {
+    await act(async () => renderer?.unmount());
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  }
 });

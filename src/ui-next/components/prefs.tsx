@@ -1,6 +1,6 @@
 import { AlertCircle, ChevronDown, ChevronRight, Info, Minus, Plus, RotateCcw, TriangleAlert } from 'lucide-react';
 import { useId, type ReactNode } from 'react';
-import { cx, Switch } from './primitives';
+import { cx, navigateChoices, Switch } from './primitives';
 import './prefs.css';
 
 /**
@@ -112,13 +112,18 @@ export function PrefChips<T extends string | number>({
   onChange(value: T): void;
   disabled?: boolean;
 }) {
+  const tabStop = Math.max(
+    0,
+    options.findIndex((option) => option.value === value),
+  );
   return (
-    <div className="un-pref-chips" role="radiogroup" aria-label={label}>
-      {options.map((option) => (
+    <div className="un-pref-chips" role="radiogroup" aria-label={label} onKeyDown={navigateChoices}>
+      {options.map((option, index) => (
         <button
           key={String(option.value)}
           type="button"
           role="radio"
+          tabIndex={index === tabStop ? 0 : -1}
           aria-checked={option.value === value}
           disabled={disabled}
           className={cx('un-chip', option.value === value && 'is-active')}
@@ -145,13 +150,18 @@ export function PrefOptions<T extends string>({
   onChange(value: T): void;
   disabled?: boolean;
 }) {
+  const tabStop = Math.max(
+    0,
+    options.findIndex((option) => option.value === value),
+  );
   return (
-    <div className="un-pref-options" role="radiogroup" aria-label={label}>
-      {options.map((option) => (
+    <div className="un-pref-options" role="radiogroup" aria-label={label} onKeyDown={navigateChoices}>
+      {options.map((option, index) => (
         <button
           key={option.value}
           type="button"
           role="radio"
+          tabIndex={index === tabStop ? 0 : -1}
           aria-checked={option.value === value}
           disabled={disabled}
           className={cx('un-pref-option', option.value === value && 'is-active')}

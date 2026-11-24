@@ -12,6 +12,7 @@ import type {
   HomeRowView,
   UiNextHomeAdapter,
 } from './contract';
+import { clearNavigationViewState } from '../../features/navigation/navigation-view-state';
 import { UiNextHomeScreen } from './UiNextHomeScreen';
 
 // Keep the real Sheet and HomeEditor; only adapt DOM portals to the Node renderer.
@@ -45,6 +46,7 @@ class ScrollElement extends EventTarget {
 
 let renderer: ReactTestRenderer | undefined;
 beforeEach(() => {
+  clearNavigationViewState();
   vi.stubGlobal('getComputedStyle', () => ({ columnGap: '16px', scrollPaddingLeft: '0px' }));
   vi.stubGlobal('document', {
     activeElement: null,
@@ -142,6 +144,7 @@ function row(overrides: Partial<HomeRowView> = {}): HomeRowView {
 
 function adapter(overrides: Partial<UiNextHomeAdapter> = {}): UiNextHomeAdapter {
   return {
+    retryBootstrap: vi.fn(),
     status: 'ready',
     hero: [],
     rows: [],
@@ -196,6 +199,7 @@ function mount(home = adapter()) {
     root: renderer!.root,
     home,
     track: nodes.get('un-continue-track'),
+    rowTrack: nodes.get('un-row-track'),
     update: (value: UiNextHomeAdapter) => act(() => renderer!.update(screen(value))),
   };
 }
@@ -214,10 +218,14 @@ describe('home bootstrap and empty state', () => {
   });
 
   it('shows a failure message instead of stale home content', () => {
-    const { root } = mount(adapter({ status: 'failed', hero: [hero()], rows: [row()] }));
+    const { root, home } = mount(
+      adapter({ status: 'failed', bootstrapMessage: '연결을 확인해 주세요.', hero: [hero()], rows: [row()] }),
+    );
     expect(byRole(root, 'main').props['aria-busy']).toBe(false);
     expect(text(root)).toContain('서재를 불러오지 못했어요');
-    expect(text(root)).toContain('잠시 뒤 다시 열어 주세요.');
+    expect(text(root)).toContain('연결을 확인해 주세요.');
+    click(byRole(root, 'button', '다시 시도'));
+    expect(home.retryBootstrap).toHaveBeenCalledOnce();
     expect(text(root)).not.toContain('테스트 소설');
     expect(skeletons(root)).toHaveLength(0);
   });
@@ -507,15 +515,38 @@ describe('home editor sheet', () => {
     expect(sheet.findAllByProps({ 'aria-label': '내 책장 표시' })).toHaveLength(0);
   });
 
-  it('delegates restoring defaults to resetConfig', () => {
+  it('keeps the edited rows when reset is cancelled and restores defaults after confirmation', () => {
     const { home, sheet } = editor();
     click(byRole(sheet, 'button', '기본값으로'));
+    expect(home.resetConfig).not.toHaveBeenCalled();
+    click(byRole(sheet, 'button', '취소'));
+    expect(home.resetConfig).not.toHaveBeenCalled();
+    click(byRole(sheet, 'button', '기본값으로'));
+    click(byRole(sheet, 'button', '기본 구성으로 복원'));
     expect(home.resetConfig).toHaveBeenCalledExactlyOnceWith();
     expect(home.setConfig).not.toHaveBeenCalled();
   });
 });
 
 describe('home hero late-arriving front card', () => {
+  it('restores lateral positions for the hero and a configured row after returning', () => {
+    vi.useFakeTimers();
+    const home = adapter({ hero: [hero(), hero(book('second', '두 번째'))], rows: [row()] });
+    const first = mount(home);
+    act(() => {
+      vi.advanceTimersByTime(32);
+    });
+    act(() => {
+      first.track!.scrollTo({ left: 336 });
+      first.rowTrack!.scrollTo({ left: 232 });
+      renderer!.unmount();
+    });
+    const back = mount(home);
+    expect(back.track!.scrollLeft).toBe(336);
+    expect(back.rowTrack!.scrollLeft).toBe(232);
+    expect(byRole(back.root, 'tab', '2번째 · 두 번째').props['aria-selected']).toBe(true);
+  });
+
   it('returns to scrollLeft zero when the first work changes before reader interaction', () => {
     const older = hero(book('older', '이전에 읽은 작품'));
     const newest = hero(book('newest', '가장 최근 작품'));

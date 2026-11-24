@@ -32,10 +32,10 @@ export function importFailureMessage(fileName: string, error: unknown): string {
         : `"${fileName}" 서버 접근이 거부됐습니다. Bearer token과 CORS 설정을 확인하세요.`;
     }
     if (error.status === 404) {
-      return `"${fileName}" 업로드 작업을 서버에서 찾지 못했습니다. 파일을 다시 선택해 이어서 시도하세요.`;
+      return `"${fileName}" 업로드 작업을 서버에서 찾지 못했습니다. 다시 시도해 주세요.`;
     }
     if (error.status === 409) {
-      return `"${fileName}" 업로드 상태가 서버와 충돌했습니다. 파일을 다시 선택해 이어서 시도하세요.`;
+      return `"${fileName}" 업로드 상태가 서버와 충돌했습니다. 다시 시도해 주세요.`;
     }
     if (error.status === 413) {
       return `"${fileName}"이 서버의 업로드 용량 한도를 넘었습니다.`;

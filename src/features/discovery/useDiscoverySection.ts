@@ -4,6 +4,7 @@
  * ref (near-observed section), rail (scroll-restored rail), near and itemOpenArgs(item).
  * itemOpenArgs returns [sourceId, input, title] for the existing open callback.
  */
+import { transientSourceFailure } from '../../external-sources/cache-policy';
 import { useEffect, useRef, useState } from 'react';
 import { useNear } from './useDiscoveryCover';
 import type { ExternalItemPage, ExternalItemSummary, ExternalSourceListInput } from '../../external-sources/contracts';
@@ -31,7 +32,7 @@ export function useDiscoverySection({
   const near = useNear(ref);
   const input: ExternalSourceListInput = {
     parentRef: section.parentRef,
-    browseMode: query ? 'search' : section.mode,
+    browseMode: query || section.filters?.length ? 'search' : section.mode,
     query: query || undefined,
     filters: section.filters,
   };
@@ -73,7 +74,7 @@ export function useDiscoverySection({
       if (section.filterSignature) {
         const schema = await session.schema(
           section.sourceId,
-          { parentRef: section.parentRef, browseMode: section.mode },
+          { parentRef: section.parentRef, browseMode: section.filters?.length ? 'popular' : section.mode },
           force,
           abort.signal,
         );
@@ -104,7 +105,12 @@ export function useDiscoverySection({
         }
       })
       .catch((reason) => {
-        if (active) setError(reason instanceof Error ? reason.message : '목록을 불러오지 못했습니다.');
+        if (!active) return;
+        if (!transientSourceFailure(reason)) {
+          setPage(undefined);
+          setCandidate(undefined);
+        }
+        setError(reason instanceof Error ? reason.message : '목록을 불러오지 못했습니다.');
       })
       .finally(() => {
         if (active) setLoading(false);
@@ -121,6 +127,7 @@ export function useDiscoverySection({
     section.parentRef,
     section.mode,
     section.filterSignature,
+    section.filters?.length,
     inputKey,
     source?.connection.state,
     query,

@@ -1,5 +1,6 @@
 .reader-screen {
   --reader-layout-margin-x: var(--reading-margin-x);
+  --reader-content-inset-right: var(--reader-layout-margin-x);
   position: relative;
   height: 100dvh;
   overflow: hidden;
@@ -59,6 +60,16 @@
   opacity: 1;
   pointer-events: auto;
   transform: translateY(0);
+  /* A revealed search field must accept focus immediately, even while the bar slides into view. */
+  transition-property: opacity, transform;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  /* The global reduced duration also applies to descendants, which would animate inherited visibility. */
+  .reader-screen :is(.reader-topbar, .reader-bottombar),
+  .reader-screen :is(.reader-topbar, .reader-bottombar) * {
+    transition-duration: 0s !important;
+  }
 }
 
 .reader-title {
@@ -88,7 +99,8 @@
   height: 100dvh;
   overflow: auto;
   overflow-anchor: none;
-  padding: var(--reader-content-inset-top) var(--reader-layout-margin-x) var(--reader-content-inset-bottom);
+  padding: var(--reader-content-inset-top) var(--reader-content-inset-right) var(--reader-content-inset-bottom)
+    var(--reader-layout-margin-x);
   background: var(--reading-background, var(--reader-canvas));
   filter: brightness(var(--reading-brightness, 1));
 }
@@ -162,8 +174,10 @@
   display: none;
 }
 
-.reader-screen.addon-open .reader-scroll {
-  padding-right: max(var(--reader-layout-margin-x), calc(var(--reader-panel-width) + 20px));
+@media (width > 980px) {
+  .reader-screen.addon-open:not(.immersive) {
+    --reader-content-inset-right: max(var(--reader-layout-margin-x), calc(var(--reader-panel-width) + 20px));
+  }
 }
 
 .reader-scroll.page-flow {
@@ -198,7 +212,6 @@
 .reader-screen.immersive .top-progress,
 .reader-screen.immersive .reader-mobile-search,
 .reader-screen.immersive .reader-search-results-layer,
-.reader-screen.immersive .reader-footnote-backdrop,
 .reader-screen.immersive .reader-pagination-controls {
   display: none;
 }
@@ -358,7 +371,7 @@
   margin-top: calc(-1 * var(--reader-content-inset-top));
   margin-bottom: calc(var(--reader-content-inset-top) - 100dvh);
   margin-left: calc(-1 * var(--reader-layout-margin-x));
-  margin-right: calc(-1 * var(--reader-layout-margin-x));
+  margin-right: calc(-1 * var(--reader-content-inset-right));
   z-index: 2;
   filter: none;
 }
@@ -374,13 +387,6 @@
 .reader-paginated-root.native-scroll-ready {
   touch-action: pan-y;
   overflow: clip;
-}
-
-.reader-screen.addon-open .reader-scroll > .reader-paginated-root {
-  margin-right: calc(-1 * max(var(--reader-layout-margin-x), calc(var(--reader-panel-width) + 20px)));
-}
-.reader-screen.immersive.addon-open .reader-scroll > .reader-paginated-root {
-  margin-right: calc(-1 * var(--reader-layout-margin-x));
 }
 
 .reader-screen.scroll-to-page-settling .reader-scroll.is-page-host {

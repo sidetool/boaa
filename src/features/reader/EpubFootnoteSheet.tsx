@@ -1,7 +1,8 @@
-import { useEffect, useRef } from 'react';
+import { useRef } from 'react';
 import { X } from 'lucide-react';
 import type { Paragraph } from '../../domain/types';
 import { uiNextKitClass } from '../../ui-next/app-presentation';
+import { useModalFocus } from '../../ui-next/components/primitives';
 
 export interface EpubFootnoteSheetProps {
   readonly paragraphs: readonly Paragraph[];
@@ -11,16 +12,8 @@ export interface EpubFootnoteSheetProps {
 
 export function EpubFootnoteSheet({ paragraphs, onClose, onOpenInDocument }: EpubFootnoteSheetProps) {
   const closeRef = useRef<HTMLButtonElement>(null);
-  useEffect(() => {
-    closeRef.current?.focus();
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== 'Escape') return;
-      event.preventDefault();
-      onClose();
-    };
-    window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
-  }, [onClose]);
+  const panelRef = useRef<HTMLElement>(null);
+  useModalFocus(panelRef, true, onClose, closeRef);
 
   return (
     <div
@@ -28,6 +21,8 @@ export function EpubFootnoteSheet({ paragraphs, onClose, onOpenInDocument }: Epu
       onMouseDown={(event) => event.target === event.currentTarget && onClose()}
     >
       <section
+        ref={panelRef}
+        tabIndex={-1}
         className="reader-footnote-sheet"
         role="dialog"
         aria-modal="true"

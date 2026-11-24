@@ -37,6 +37,8 @@ BrowserImportService
 
 The parser and IndexedDB write now run in Web Workers for browser import flows. The preview worker reads the selected file and returns chapter split metadata without saving, so users can switch split modes before starting the real import. The import worker reads the `File` in bounded chunks, reports byte-level reading progress, and checks cancellation at chunk boundaries before parsing. IndexedDB save writes chapter/page data in page batches and reports persisted paragraph progress. Cancel requests are delivered to the worker, and imports cancelled during reading or page writes are rolled back so partial chapter/page rows do not remain in the local library; replacement imports restore the previous local content snapshot. This removes parser/storage work from the React UI path. Parsing is still a whole-file worker-buffered import, but the worker releases the raw input `ArrayBuffer` after hashing/decoding and before import-ready normalization/splitting, the import-ready path releases the decoded raw string after normalization, no longer hands storage a full `ParsedNovel.paragraphs` array, stores chapter body ranges instead of keeping every chapter body string, counts paragraphs from source ranges, and consumes long chapters as range-based paragraph iterables while page batches are written. Chapter heading collection scans lines from the normalized string instead of building a full `text.split('\n')` line array.
 
+로컬 가져오기는 원본 파일을 IndexedDB에 함께 저장한다. WebKit이 원본 Blob/File 저장을 거부하면 일반 브라우저 창에서 다시 시도하거나 사이트 저장 공간과 권한을 확인하도록 안내한다.
+
 ### 중복 검사와 가져오기 완료 상태
 
 중복 검사는 SHA256의 tagged/bare 표기를 정규화한다. 같은 원본도 인코딩이나 화 분할을 다르게
@@ -50,6 +52,8 @@ The parser and IndexedDB write now run in Web Workers for browser import flows. 
 집계한다. 서버 job의 `done`과 canonical book ID를 확인하면 최초 manifest 조회보다 먼저 완료 기록을
 남긴다. 이후 조회·완료 callback 실패와 취소는 재업로드 실패로 집계하지 않는다. 정상 결과는 완전한
 `Novel`을 유지하며 파싱 결과나 임시 객체로 저장본을 대신하지 않는다.
+
+같은 세션에서 가져오기에 실패하면 시트를 닫아도 파일별 오류가 남는다. ‘다시 시도’는 보관한 파일로 작업을 이어가며, 제외한 파일과 저장이 확인된 파일은 다시 올리지 않는다. 서버에 저장했지만 목록 갱신이 실패한 경우에는 먼저 ‘목록 갱신 다시 시도’로 저장 결과를 확인한다.
 
 서버 업로드 재개/완료 기록은 서버·계정 scope로 분리한다. 완료 기록은 미완료 업로드의 7일 만료와
 별도로 보존하고, 앱 재시작 후에도 파일 없이 manifest만 다시 조회한다. 완료 기록을 지워도 서버에

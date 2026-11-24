@@ -476,9 +476,11 @@ export function useLibraryManagementController(
           await Promise.all([input.refreshNovels(), refresh(), input.refreshAfterMutation()]);
           const failed = receipt.results.filter((item) => item.status === 'failed').length;
           input.notify(
-            failed
-              ? `${receipt.results.length - failed}권 처리, ${failed}권 실패`
-              : `${receipt.results.length}권을 처리했습니다.`,
+            command.kind === 'move_to_trash'
+              ? `${receipt.results.filter((item) => item.status === 'applied').length}권을 휴지통으로 옮겼어요.${failed ? ` ${failed}권 실패` : ''}`
+              : failed
+                ? `${receipt.results.length - failed}권 처리, ${failed}권 실패`
+                : `${receipt.results.length}권을 처리했습니다.`,
             failed ? 'warning' : 'success',
           );
         });
